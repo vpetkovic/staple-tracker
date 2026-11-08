@@ -14,6 +14,7 @@ import type { PlanStore } from "../src/core/plan-store.js";
 import { migrateWorkspace } from "../src/core/schema.js";
 import { WorkspaceStore } from "../src/core/store.js";
 import { StapleError } from "../src/core/types.js";
+import { READY_PLAN } from "./fixtures/plan-ready.js";
 
 const PERSON = { person: { via: "plan_view" } } as const;
 
@@ -52,7 +53,7 @@ function horizon(name: string): string {
  * unless told otherwise: the state that may be scheduled, dated, linked and promoted.
  */
 function idea(title: string, extra: Parameters<PlanStore["capture"]>[0] extends infer I ? Partial<I> : never = {}): string {
-  return plan.capture({ title, maturity: "shaped", ...extra }, "vp", PERSON).id;
+  return plan.capture({ title, maturity: "shaped", plan: READY_PLAN, ...extra }, "vp", PERSON).id;
 }
 
 function counter(): string {
@@ -622,7 +623,7 @@ describe("Promote, Adopt and Unlink", () => {
 
   it("promotes a child whether or not its parent is promoted, and keeps it under its parent", () => {
     const parent = idea("Parent", { maturity: "shaped" });
-    const child = plan.capture({ title: "Child", parent, maturity: "shaped" }, "vp", PERSON).id;
+    const child = plan.capture({ title: "Child", parent, maturity: "shaped", plan: READY_PLAN }, "vp", PERSON).id;
     const promoted = plan.promote(child, "vp", PERSON);
     expect(promoted).toMatchObject({ promoted: true, parentId: parent });
     expect(plan.ideaView(parent).promoted).toBe(false);
@@ -640,7 +641,7 @@ describe("Promote, Adopt and Unlink", () => {
 
   it("derives progress, actual dates and shipped from linked work, and rolls a child's up to the parent's display", () => {
     const parent = idea("Release GA", { maturity: "shaped" });
-    const child = plan.capture({ title: "R0", parent, maturity: "shaped" }, "vp", PERSON).id;
+    const child = plan.capture({ title: "R0", parent, maturity: "shaped", plan: READY_PLAN }, "vp", PERSON).id;
     const epic = store.createIssue({ title: "EPIC-40", kind: "epic" });
     const a = store.createIssue({ title: "a", parent: epic.identifier });
     const b = store.createIssue({ title: "b", parent: epic.identifier });
@@ -822,14 +823,14 @@ describe("agents capture, the person steers", () => {
     expect(plan.detail(ref).idea.title).toBe("Agent idea, renamed");
     // Linking work is a shaped idea's: once the person has shaped it, the agent links and unlinks.
     plan.update(ref, { maturity: "exploring" }, "vp", PERSON);
-    plan.update(ref, { maturity: "shaped" }, "vp", PERSON);
+    plan.update(ref, { maturity: "shaped", plan: READY_PLAN }, "vp", PERSON);
     const task = store.createIssue({ title: "t" }).identifier;
     plan.adopt(ref, task, "agent");
     expect(plan.unlink(ref, task, "agent").links).toEqual([]);
   });
 
   it("refuses an agent's capture of anything but a raw, unscheduled, undated idea", () => {
-    steering(() => plan.capture({ title: "x", maturity: "shaped" }, "agent"));
+    steering(() => plan.capture({ title: "x", maturity: "shaped", plan: READY_PLAN }, "agent"));
     steering(() => plan.capture({ title: "x", horizon: horizon("Now") }, "agent"));
     steering(() => plan.capture({ title: "x", plannedTarget: "2026-12-01" }, "agent"));
   });
@@ -875,7 +876,7 @@ describe("agents capture, the person steers", () => {
     expect(plan.ideaView(raw)).toMatchObject({ promoted: false, identifier: null });
     plan.update(raw, { maturity: "exploring" }, "vp", PERSON);
     expect(refused(() => plan.promote(raw, "vp", PERSON)).message).toContain("is exploring; it cannot be promoted");
-    plan.update(raw, { maturity: "shaped" }, "vp", PERSON);
+    plan.update(raw, { maturity: "shaped", plan: READY_PLAN }, "vp", PERSON);
     expect(plan.promote(raw, "agent")).toMatchObject({ promoted: true, stage: "started" });
   });
 });
@@ -904,14 +905,14 @@ describe("the lifecycle in the store", () => {
     expect(plan.ideaView(promoted).actions.find((a) => a.id === "unlink")).toMatchObject({ disabledReason: "Nothing is linked to it." });
     // A parent that is not promoted holds nothing back: its sub-idea promotes on its own.
     const parent = idea("Parent, not promoted");
-    const child = plan.capture({ title: "Child", parent, maturity: "shaped" }, "vp", PERSON).id;
+    const child = plan.capture({ title: "Child", parent, maturity: "shaped", plan: READY_PLAN }, "vp", PERSON).id;
     expect(plan.ideaView(child).actions.find((a) => a.id === "promote")?.disabledReason).toBeUndefined();
     expect(plan.ideaView(parent).actions.find((a) => a.id === "promote")?.disabledReason).toBeUndefined();
   });
 
   it("holds a write that shapes an idea and schedules it to the state the shaping leads to", () => {
     const raw = plan.capture({ title: "Shaped and scheduled at once" }, "vp", PERSON).id;
-    expect(plan.update(raw, { maturity: "shaped", horizon: horizon("Now"), plannedTarget: "2026-12-01" }, "vp", PERSON)).toMatchObject({ state: "shaped", horizonId: horizon("Now") });
+    expect(plan.update(raw, { maturity: "shaped", horizon: horizon("Now"), plannedTarget: "2026-12-01", plan: READY_PLAN }, "vp", PERSON)).toMatchObject({ state: "shaped", horizonId: horizon("Now") });
     const dropping = idea("Dropped and scheduled at once");
     expect(refused(() => plan.update(dropping, { maturity: "dropped", horizon: horizon("Next") }, "vp", PERSON)).message).toContain("is dropped; it cannot be scheduled");
   });

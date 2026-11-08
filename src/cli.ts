@@ -1125,17 +1125,32 @@ The plan (ideas and horizons above the tracker)
               no ticket number until it is promoted: its <ref> is the id idea ls prints
   idea new <title> [--brief T] [--parent REF]
               capture a raw idea (an agent captures raw ideas only)
-  idea show <ref>                       stage, windows, brief, questions, decisions, links
+  idea show <ref>                       stage, windows, plan sections, questions, decisions, links
+  idea plan <ref> [--goal T] [--context T|-] [--acceptance T]... [--dependency T]...
+              [--out-of-scope T] [--risks T] [--source T]...
+              write plan sections; a list flag given replaces that list whole
+  idea task <ref> add|set|rm <key> [title] [--estimate E] [--depends K,K] [--acceptance T]
+              [--owner O] [--notes T]
+              one task breakdown row (key, title, estimate, depends-on, acceptance)
+  idea import <plan.md> [--parent REF] [--horizon H] [--maturity M]
+              capture an idea from a plan file: its sections and task table, with the
+              file attached; prints what it could not place
   idea set <ref> [--title T] [--brief T]
               the agent's edits; with --person also --maturity raw|exploring|shaped|dropped,
               --horizon H|none, --parent REF|none, --start D|none, --target D|none and
               --before REF|end
   idea promote <ref>                    the idea becomes an epic on the same record and takes
-              its ticket number; an agent promotes only an idea the person marked shaped
+              its ticket number; only a shaped idea offers it
+  idea scaffold <ref> [--preview]       promote it and turn its task breakdown into the epic's
+              tasks (estimate, blockers, acceptance, a context document each); --preview
+              shows what it would make; a retry makes only what is missing
   idea adopt <ref> <issue>              link existing work to the idea
   idea unlink <ref> <issue>
   idea ask <ref> <question>             add an open question
   idea resolve <ref> <n> [--reopen]     resolve question n (1-based)
+  idea defer <ref> <n> [--reopen]       leave question n open on purpose: it no longer holds
+              shaping back (shaping needs a goal, a task breakdown with acceptance on every
+              row, acceptance criteria, and every question answered or deferred)
   idea decide <ref> <decision>          record a decision
   idea reset-baseline <ref> --person    the current planned window becomes the baseline
   horizon ls

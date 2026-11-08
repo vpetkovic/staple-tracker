@@ -25,6 +25,7 @@ import { FakeSyncServer } from "./fixtures/fake-sync-server.js";
 import { OlderBuildDevice } from "./fixtures/older-build.js";
 import { Fleet, type Machine } from "./fixtures/sync-machines.js";
 import { differences, stateOf } from "./fixtures/synchronized-state.js";
+import { READY_PLAN } from "./fixtures/plan-ready.js";
 
 const REPO = "5eed0000-0000-4000-8000-000000000180";
 const ROOT = join(import.meta.dirname, "..");
@@ -101,7 +102,7 @@ const READS: Record<StoreName, readonly string[]> = {
   QueueStore: ["revision", "entries", "effectiveQueue", "view", "scopeMembership"],
   ProjectStore: ["list", "get", "issueCounts"],
   // The plan layer's reads, and the lifecycle checks the tracker asks of it: derived on every call, nothing stored.
-  PlanStore: ["today", "enabled", "view", "ideaView", "detail", "stateOf", "assertEditable", "assertQueueable"],
+  PlanStore: ["today", "enabled", "view", "ideaView", "detail", "stateOf", "assertEditable", "assertQueueable", "sectionsOf", "scaffoldPreview"],
 };
 
 interface World {
@@ -359,7 +360,7 @@ const SCENARIOS: readonly Scenario[] = [
     run: (w) => {
       const plan = w.a.store.plan();
       const now = plan.view().horizons[0]!.id;
-      w.ids["Idea"] = plan.capture({ title: "Idea", maturity: "shaped", horizon: now, plannedStart: "2026-10-01", plannedTarget: "2026-12-01", brief: "why" }, "alice", { person: { via: "test" } }).id;
+      w.ids["Idea"] = plan.capture({ title: "Idea", maturity: "shaped", plan: READY_PLAN, horizon: now, plannedStart: "2026-10-01", plannedTarget: "2026-12-01", brief: "why" }, "alice", { person: { via: "test" } }).id;
       w.ids["Child idea"] = plan.capture({ title: "Child idea", parent: w.ids["Idea"], maturity: "exploring" }, "alice", { person: { via: "test" } }).id;
     },
   },
@@ -367,12 +368,35 @@ const SCENARIOS: readonly Scenario[] = [
     method: "PlanStore.update",
     name: "re-plan, re-file and re-order an idea",
     run: (w) =>
-      void w.a.store.plan().update(w.ids["Child idea"]!, { maturity: "shaped", plannedTarget: "2026-11-20", parent: null, before: w.ids["Idea"]!, brief: "more" }, "alice", { person: { via: "test" } }),
+      void w.a.store.plan().update(w.ids["Child idea"]!, { maturity: "shaped", plan: READY_PLAN, plannedTarget: "2026-11-20", parent: null, before: w.ids["Idea"]!, brief: "more" }, "alice", { person: { via: "test" } }),
   },
   { method: "PlanStore.addQuestion", name: "ask on an idea", run: (w) => void w.a.store.plan().addQuestion(w.ids["Idea"]!, "Which units?", "alice") },
   { method: "PlanStore.resolveQuestion", name: "resolve a question", run: (w) => void w.a.store.plan().resolveQuestion(w.ids["Idea"]!, 1, "alice") },
+  { method: "PlanStore.deferQuestion", name: "defer a question", prep: (w) => void w.a.store.plan().addQuestion(w.ids["Idea"]!, "Later?", "alice"), run: (w) => void w.a.store.plan().deferQuestion(w.ids["Idea"]!, 2, "alice") },
   { method: "PlanStore.addDecision", name: "record a decision", run: (w) => void w.a.store.plan().addDecision(w.ids["Idea"]!, "Metric only", "alice") },
   { method: "PlanStore.promote", name: "promote an idea in place", run: (w) => void w.a.store.plan().promote(w.ids["Idea"]!, "alice", { person: { via: "test" } }) },
+  {
+    method: "PlanStore.scaffold",
+    name: "scaffold an idea into its epic and tasks",
+    prep: (w) =>
+      void (w.ids["Scaffolded"] = w.a.store.plan().capture(
+        {
+          title: "Scaffolded",
+          maturity: "shaped",
+          plan: {
+            goal: "Two tasks, one waiting on the other.",
+            acceptance: ["Both done"],
+            breakdown: [
+              { key: "1", title: "First", estimate: "2h", dependsOn: [], acceptance: "First done", owner: null, notes: null },
+              { key: "2", title: "Second", estimate: "1h", dependsOn: ["1"], acceptance: "Second done", owner: null, notes: null },
+            ],
+          },
+        },
+        "alice",
+        { person: { via: "test" } },
+      ).id),
+    run: (w) => void w.a.store.plan().scaffold(w.ids["Scaffolded"]!, "alice"),
+  },
   {
     method: "WorkspaceStore.promoteInPlace",
     name: "number and re-kind an idea on its own record",

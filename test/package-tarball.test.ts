@@ -370,8 +370,8 @@ describe("the installed binary, run from outside this repository", () => {
       // progress view's show_progress (72), the queue view's show_queue (73), and the
       // app-only approve_gate_from_view and request_changes_from_view the views' buttons call (75).
     // The plan layer then added list_ideas, get_idea, list_horizons, capture_idea, update_idea,
-    // start_idea, unlink_idea and the app-only reset_idea_baseline (83).
-      expect(tools).toHaveLength(83);
+    // start_idea, unlink_idea and the app-only reset_idea_baseline (83), and scaffold_idea (84).
+      expect(tools).toHaveLength(84);
       expect(tools.map((tool) => tool.name)).toContain("list_tasks");
 
       // A real call, so this proves the workspace path too, not just the handshake.

@@ -23,8 +23,8 @@ describe("the idea table", () => {
     expect(IDEA_LIFECYCLE).toEqual({
       raw: ["edit", "ask", "decide", "explore", "shape", "drop", "reparent", "reorder"],
       exploring: ["edit", "ask", "decide", "shape", "drop", "schedule", "plan_dates", "reparent", "reorder"],
-      shaped: ["edit", "ask", "decide", "unshape", "drop", "schedule", "plan_dates", "reparent", "reorder", "promote", "adopt"],
-      started: ["edit", "ask", "decide", "schedule", "plan_dates", "reorder", "adopt", "unlink", "reset_baseline", "open_epic"],
+      shaped: ["edit", "ask", "decide", "unshape", "drop", "schedule", "plan_dates", "reparent", "reorder", "promote", "scaffold", "adopt"],
+      started: ["edit", "ask", "decide", "schedule", "plan_dates", "reorder", "scaffold", "adopt", "unlink", "reset_baseline", "open_epic"],
       shipped: ["adopt", "open_epic"],
       dropped: ["restore"],
     });

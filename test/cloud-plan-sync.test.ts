@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { FakeSyncServer } from "./fixtures/fake-sync-server.js";
 import { Fleet, type Machine } from "./fixtures/sync-machines.js";
 import { formerHolders } from "../src/core/identifier-moves.js";
+import { READY_PLAN } from "./fixtures/plan-ready.js";
 
 const REPO = "5eed0000-0000-4000-8000-0000000001a2";
 const PERSON = { person: { via: "plan_view" } } as const;
@@ -74,7 +75,7 @@ describe("links merge across devices: one field per link", () => {
       fleet = new Fleet(server, REPO);
       const a = fleet.machine("a");
       a.store.plan().enable("vp");
-      const idea = a.store.plan().capture({ title: "Idea", maturity: "shaped" }, "vp", PERSON).id;
+      const idea = a.store.plan().capture({ title: "Idea", maturity: "shaped", plan: READY_PLAN }, "vp", PERSON).id;
       const x = a.store.createIssue({ title: "Epic X", kind: "epic" }).identifier;
       const y = a.store.createIssue({ title: "Epic Y", kind: "epic" }).identifier;
       await a.sync();
@@ -102,7 +103,7 @@ describe("links merge across devices: one field per link", () => {
     fleet = new Fleet(server, REPO);
     const a = fleet.machine("a");
     a.store.plan().enable("vp");
-    const idea = a.store.plan().capture({ title: "Idea", maturity: "shaped" }, "vp", PERSON).id;
+    const idea = a.store.plan().capture({ title: "Idea", maturity: "shaped", plan: READY_PLAN }, "vp", PERSON).id;
     const x = a.store.createIssue({ title: "Epic X", kind: "epic" }).identifier;
     const y = a.store.createIssue({ title: "Epic Y", kind: "epic" }).identifier;
     a.store.plan().adopt(idea, x, "vp");
@@ -135,7 +136,7 @@ describe("the plan synchronizes with no new entity", () => {
       const plan = a.store.plan();
       plan.enable("vp");
       const now = plan.view().horizons[0]!;
-      const ga = plan.capture({ title: "Exercise GA", maturity: "shaped", horizon: now.id, plannedStart: "2026-10-01", plannedTarget: "2026-12-31" }, "vp", PERSON);
+      const ga = plan.capture({ title: "Exercise GA", maturity: "shaped", plan: READY_PLAN, horizon: now.id, plannedStart: "2026-10-01", plannedTarget: "2026-12-31" }, "vp", PERSON);
       plan.capture({ title: "R8 Mobile", parent: ga.id, maturity: "exploring" }, "vp", PERSON);
       const epic = a.store.createIssue({ title: "EPIC-40", kind: "epic" });
       plan.adopt(ga.id, epic.identifier, "agent");
@@ -175,9 +176,9 @@ describe("membership is derived on every device, so moves made offline never con
       const plan = a.store.plan();
       plan.enable("vp");
       const [now, next, later] = plan.view().horizons.map((h) => h.id) as [string, string, string];
-      const first = plan.capture({ title: "First", maturity: "shaped", horizon: now }, "vp", PERSON).id;
-      const second = plan.capture({ title: "Second", maturity: "shaped", horizon: next }, "vp", PERSON).id;
-      const third = plan.capture({ title: "Third", maturity: "shaped", horizon: later }, "vp", PERSON).id;
+      const first = plan.capture({ title: "First", maturity: "shaped", plan: READY_PLAN, horizon: now }, "vp", PERSON).id;
+      const second = plan.capture({ title: "Second", maturity: "shaped", plan: READY_PLAN, horizon: next }, "vp", PERSON).id;
+      const third = plan.capture({ title: "Third", maturity: "shaped", plan: READY_PLAN, horizon: later }, "vp", PERSON).id;
       const x = a.store.createIssue({ title: "Epic X", kind: "epic" }).identifier;
       const y = a.store.createIssue({ title: "Epic Y", kind: "epic" }).identifier;
       const z = a.store.createIssue({ title: "Epic Z", kind: "epic" }).identifier;
@@ -221,8 +222,8 @@ describe("promotion takes a real number once, even on two devices offline", () =
       const a = fleet.machine("a");
       a.store.plan().enable("vp");
       const now = a.store.plan().view().horizons[0]!.id;
-      const p = a.store.plan().capture({ title: "Promoted on A", maturity: "shaped", horizon: now }, "vp", PERSON).id;
-      const q = a.store.plan().capture({ title: "Promoted on B", maturity: "shaped", horizon: now }, "vp", PERSON).id;
+      const p = a.store.plan().capture({ title: "Promoted on A", maturity: "shaped", plan: READY_PLAN, horizon: now }, "vp", PERSON).id;
+      const q = a.store.plan().capture({ title: "Promoted on B", maturity: "shaped", plan: READY_PLAN, horizon: now }, "vp", PERSON).id;
       await a.sync();
       const b = fleet.machine("b");
       await b.sync();
@@ -261,8 +262,8 @@ describe("promotion takes a real number once, even on two devices offline", () =
     fleet = new Fleet(server, REPO);
     const a = fleet.machine("a");
     a.store.plan().enable("vp");
-    const p = a.store.plan().capture({ title: "Promoted on A", maturity: "shaped" }, "vp", PERSON).id;
-    const q = a.store.plan().capture({ title: "Promoted on B", maturity: "shaped" }, "vp", PERSON).id;
+    const p = a.store.plan().capture({ title: "Promoted on A", maturity: "shaped", plan: READY_PLAN }, "vp", PERSON).id;
+    const q = a.store.plan().capture({ title: "Promoted on B", maturity: "shaped", plan: READY_PLAN }, "vp", PERSON).id;
     await a.sync();
     const b = fleet.machine("b");
     await b.sync();
@@ -322,7 +323,7 @@ describe("a horizon's status over sync", () => {
       const a = fleet.machine("a");
       a.store.plan().enable("vp");
       const now = a.store.plan().view().horizons[0]!.id;
-      const p = a.store.plan().capture({ title: "Only work on Now", maturity: "shaped", horizon: now }, "vp", PERSON).id;
+      const p = a.store.plan().capture({ title: "Only work on Now", maturity: "shaped", plan: READY_PLAN, horizon: now }, "vp", PERSON).id;
       a.store.plan().promote(p, "vp", PERSON);
       await a.sync();
       const b = fleet.machine("b");
@@ -356,8 +357,8 @@ describe("a horizon's status over sync", () => {
       const a = fleet.machine("a");
       a.store.plan().enable("vp");
       const [now, next] = a.store.plan().view().horizons.map((h) => h.id);
-      const p = a.store.plan().capture({ title: "Underway", maturity: "shaped", horizon: now }, "vp", PERSON).id;
-      const q = a.store.plan().capture({ title: "Not started", maturity: "shaped", horizon: next }, "vp", PERSON).id;
+      const p = a.store.plan().capture({ title: "Underway", maturity: "shaped", plan: READY_PLAN, horizon: now }, "vp", PERSON).id;
+      const q = a.store.plan().capture({ title: "Not started", maturity: "shaped", plan: READY_PLAN, horizon: next }, "vp", PERSON).id;
       a.store.plan().promote(p, "vp", PERSON);
       a.store.plan().promote(q, "vp", PERSON);
       a.store.checkoutIssue(p, "agent");
@@ -421,7 +422,7 @@ describe("a horizon cancelled by an older build's derivation", () => {
     const a = fleet.machine("a");
     a.store.plan().enable("vp");
     const now = a.store.plan().view().horizons[0]!.id;
-    const p = a.store.plan().capture({ title: "Open work on Now", maturity: "shaped", horizon: now }, "vp", PERSON).id;
+    const p = a.store.plan().capture({ title: "Open work on Now", maturity: "shaped", plan: READY_PLAN, horizon: now }, "vp", PERSON).id;
     a.store.plan().promote(p, "vp", PERSON);
     await a.sync();
     const b = fleet.machine("b");

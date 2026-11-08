@@ -54,6 +54,7 @@ import { registerTelemetryReadTools } from "./core/telemetry/mcp-read-tools.js";
 import type { PlanComparison, PlanSummary } from "./core/plan-rollup.js";
 import { takeRenumberNotices, withRenumberAcknowledged } from "./core/identifier-moves.js";
 import { publicOutput, publicValue } from "./core/plan.js";
+import type { PlanSections } from "./core/plan-sections.js";
 import type { CrossBlockerState } from "./core/hub.js";
 import { requireMineLens } from "./core/cloud/member-lens.js";
 import { CONTINUE_STOP_REASONS, RUN_STATES, RUN_STOP_REASONS, RUN_TICKET_OUTCOMES, RUN_WAIT_REASONS } from "./core/run-store.js";
@@ -3236,7 +3237,7 @@ server.registerTool(
   "update_idea",
   {
     description:
-      "Edit an idea as an agent may: title, brief, add_question, resolve_question (1-based; reopen with resolved: false), add_decision, as its lifecycle state offers them (a shipped or dropped idea offers no edits; see the record's actions). maturity, horizon, parent, planned_start and planned_target are accepted only to be refused with validation: they are the person's, set in the Plan view. Answers the idea's detail.",
+      "Edit an idea as an agent may: title, brief, its plan sections (plan: goal, context, breakdown rows {key, title, estimate, dependsOn, acceptance, owner, notes}, acceptance, dependencies, outOfScope, risks, sources; each section given replaces that section whole), add_question, resolve_question (1-based; reopen with resolved: false), defer_question (left open on purpose, it no longer holds shaping back), add_decision, as its lifecycle state offers them (a shipped or dropped idea offers no edits; see the record's actions). maturity, horizon, parent, planned_start and planned_target are accepted only to be refused with validation: they are the person's, set in the Plan view. Answers the idea's detail.",
     inputSchema: {
       ref: ideaRefSchema,
       title: z.string().optional(),
@@ -3245,6 +3246,32 @@ server.registerTool(
       resolve_question: z.number().int().min(1).optional(),
       resolved: z.boolean().optional().describe("With resolve_question: false reopens it"),
       add_decision: z.string().optional(),
+      defer_question: z.number().int().min(1).optional().describe("The 1-based question to defer; with resolved: false it is reopened instead"),
+      plan: z
+        .object({
+          goal: z.string().nullable().optional(),
+          context: z.string().nullable().optional(),
+          breakdown: z
+            .array(
+              z.object({
+                key: z.string(),
+                title: z.string(),
+                estimate: z.string().nullable().optional(),
+                dependsOn: z.array(z.string()).optional(),
+                acceptance: z.string().nullable().optional(),
+                owner: z.string().nullable().optional(),
+                notes: z.string().nullable().optional(),
+              }),
+            )
+            .optional(),
+          acceptance: z.array(z.string()).optional(),
+          dependencies: z.array(z.string()).optional(),
+          outOfScope: z.string().nullable().optional(),
+          risks: z.string().nullable().optional(),
+          sources: z.array(z.string()).optional(),
+        })
+        .optional()
+        .describe("Plan sections to replace; a section left out is left alone"),
       maturity: z.enum(["raw", "exploring", "shaped", "dropped"]).optional(),
       horizon: z.string().nullable().optional(),
       parent: z.string().nullable().optional(),
@@ -3259,12 +3286,43 @@ server.registerTool(
     run(() => {
       const plan = storeFor(input.ws).plan();
       const actor = requireActor(input.actor);
-      const fields = { title: input.title, brief: input.brief, maturity: input.maturity, horizon: input.horizon, parent: input.parent, plannedStart: input.planned_start, plannedTarget: input.planned_target };
+      const fields = {
+        title: input.title,
+        brief: input.brief,
+        maturity: input.maturity,
+        horizon: input.horizon,
+        parent: input.parent,
+        plannedStart: input.planned_start,
+        plannedTarget: input.planned_target,
+        plan: input.plan as Partial<PlanSections> | undefined,
+      };
       if (Object.values(fields).some((value) => value !== undefined)) plan.update(input.ref, fields, actor);
       if (input.add_question !== undefined) plan.addQuestion(input.ref, input.add_question, actor);
       if (input.resolve_question !== undefined) plan.resolveQuestion(input.ref, input.resolve_question, actor, input.resolved !== false);
+      if (input.defer_question !== undefined) plan.deferQuestion(input.ref, input.defer_question, actor, input.resolved !== false);
       if (input.add_decision !== undefined) plan.addDecision(input.ref, input.add_decision, actor);
       return plan.detail(input.ref);
+    }),
+);
+
+server.registerTool(
+  "scaffold_idea",
+  {
+    description:
+      "Scaffold a shaped idea: it is promoted in place into the epic (its goal, context, decisions, scope and risks become the epic's plan document, its acceptance criteria the epic's), and each task breakdown row becomes a child task with its estimate, blockers from depends-on, acceptance and a context document; each shaped sub-idea becomes a child epic the same way. Without confirm: true it only answers the preview (the epic and every task it would create), writing nothing. Idempotent: a row already scaffolded is not created again, so a retry or a scaffold after rows were added creates only what is missing. Only a shaped idea offers it (or one scaffolded before); see the idea's actions.",
+    inputSchema: {
+      ref: ideaRefSchema,
+      confirm: z.boolean().optional().describe("true creates what the preview shows; absent or false only previews"),
+      actor: actorSchema,
+      ws: wsSchema,
+    },
+    annotations: { title: "Scaffold idea", ...milestoneWriteAnnotations },
+  },
+  ({ ref, confirm, actor, ws }) =>
+    run(() => {
+      const plan = storeFor(ws).plan();
+      if (confirm !== true) return { preview: true, scaffold: plan.scaffoldPreview(ref) };
+      return { preview: false, scaffold: plan.scaffold(ref, requireActor(actor)) };
     }),
 );
 

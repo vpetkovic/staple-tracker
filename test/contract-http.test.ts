@@ -816,6 +816,7 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/plan/question",
       "/api/plan/reset-baseline",
       "/api/plan/resolve",
+      "/api/plan/scaffold",
       "/api/plan/unlink",
       "/api/plan/update",
       "/api/poll",

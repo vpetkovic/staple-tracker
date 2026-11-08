@@ -5057,6 +5057,7 @@ export function startUiServer(options: UiOptions): UiHandle {
                 horizon: optional<string | null>("horizon"),
                 plannedStart: optional<string | null>("plannedStart"),
                 plannedTarget: optional<string | null>("plannedTarget"),
+                plan: optional<Record<string, unknown>>("plan") as never,
               },
               actor,
               person,
@@ -5074,6 +5075,7 @@ export function startUiServer(options: UiOptions): UiHandle {
                 plannedStart: optional<string | null>("plannedStart"),
                 plannedTarget: optional<string | null>("plannedTarget"),
                 before: optional<string | null>("before"),
+                plan: optional<Record<string, unknown>>("plan") as never,
               },
               actor,
               person,
@@ -5083,8 +5085,17 @@ export function startUiServer(options: UiOptions): UiHandle {
             plan.addQuestion(ref, (body.text as string) ?? "", actor);
             break;
           case "/api/plan/resolve":
-            plan.resolveQuestion(ref, Number(body.position), actor, body.resolved !== false);
+            if (body.deferred !== undefined) plan.deferQuestion(ref, Number(body.position), actor, body.deferred === true);
+            else plan.resolveQuestion(ref, Number(body.position), actor, body.resolved !== false);
             break;
+          case "/api/plan/scaffold":
+            // A preview writes nothing; the confirm creates what the preview showed.
+            if (body.preview === true) {
+              json(res, 200, { plan: plan.view(), idea: plan.detail(ref), scaffold: plan.scaffoldPreview(ref) });
+              return;
+            }
+            json(res, 200, { scaffold: plan.scaffold(ref, actor, person), plan: plan.view(), idea: plan.detail(ref) });
+            return;
           case "/api/plan/decision":
             plan.addDecision(ref, (body.text as string) ?? "", actor);
             break;

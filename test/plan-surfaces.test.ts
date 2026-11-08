@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
 import { CONTRACT_AGENT, runCliAsync, startMcpClient, toolPayload, type CliResult, type McpHarness } from "./fixtures/contract-support.js";
+import { READY_PLAN } from "./fixtures/plan-ready.js";
 
 const WS = "planws";
 
@@ -102,7 +103,7 @@ describe("the plan on every surface", () => {
   it("captures on every surface and reads the same plan three ways", async () => {
     await cliJson("idea", "new", "From the CLI");
     expect((await mcpCall("capture_idea", { title: "From MCP", brief: "why" })).isError).toBeFalsy();
-    expect((await http("/api/plan/capture", { title: "From the page", maturity: "shaped" })).status).toBe(200);
+    expect((await http("/api/plan/capture", { title: "From the page", maturity: "shaped", plan: READY_PLAN })).status).toBe(200);
     const fromCli = (await cliJson("plan", "show")) as Plan;
     const fromMcp = toolPayload(await mcpCall("list_ideas", {})) as Plan;
     const fromHttp = (await http(`/api/plan?ws=${WS}`)).body as unknown as Plan;

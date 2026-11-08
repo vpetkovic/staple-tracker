@@ -36,6 +36,7 @@ export const IDEA_ACTIONS = {
   reorder: { label: "Reorder", verb: "reordered", who: "person" },
   reparent: { label: "Move under another idea", verb: "moved under another idea", who: "person" },
   promote: { label: "Promote to epic", verb: "promoted", who: "anyone" },
+  scaffold: { label: "Scaffold epic and tasks", verb: "scaffolded", who: "anyone" },
   adopt: { label: "Adopt existing work", verb: "linked to work", who: "anyone" },
   unlink: { label: "Unlink work", verb: "unlinked from work", who: "anyone" },
   reset_baseline: { label: "Reset baseline to the plan", verb: "re-baselined", who: "person" },
@@ -47,8 +48,9 @@ export const IDEA_ACTION_IDS = Object.keys(IDEA_ACTIONS) as IdeaAction[];
 /**
  * The idea table. Raw is captured thinking: it is refined, explored, shaped or dropped, never
  * scheduled or promoted while it is raw. Exploring may reserve a horizon slot. Shaped is ready: it is scheduled, promoted or
- * linked to existing work. Started (promoted, or linked to work) is re-planned, not re-shaped,
- * and never promoted again. Shipped offers no edits: only linking more work (history that landed
+ * linked to existing work, or scaffolded: promoted with its task breakdown as the epic's tasks.
+ * Started (promoted, or linked to work) is re-planned, not re-shaped, and never promoted again;
+ * one that was scaffolded scaffolds again only to add the rows written since. Shipped offers no edits: only linking more work (history that landed
  * elsewhere, or new work, which reopens it) and opening the epic. Dropped can only be restored.
  *
  * A state is the record's own: its maturity, its own promotion and its own links. Work under its
@@ -57,8 +59,8 @@ export const IDEA_ACTION_IDS = Object.keys(IDEA_ACTIONS) as IdeaAction[];
 export const IDEA_LIFECYCLE: Readonly<Record<IdeaState, readonly IdeaAction[]>> = {
   raw: ["edit", "ask", "decide", "explore", "shape", "drop", "reparent", "reorder"],
   exploring: ["edit", "ask", "decide", "shape", "drop", "schedule", "plan_dates", "reparent", "reorder"],
-  shaped: ["edit", "ask", "decide", "unshape", "drop", "schedule", "plan_dates", "reparent", "reorder", "promote", "adopt"],
-  started: ["edit", "ask", "decide", "schedule", "plan_dates", "reorder", "adopt", "unlink", "reset_baseline", "open_epic"],
+  shaped: ["edit", "ask", "decide", "unshape", "drop", "schedule", "plan_dates", "reparent", "reorder", "promote", "scaffold", "adopt"],
+  started: ["edit", "ask", "decide", "schedule", "plan_dates", "reorder", "scaffold", "adopt", "unlink", "reset_baseline", "open_epic"],
   shipped: ["adopt", "open_epic"],
   dropped: ["restore"],
 };

@@ -68,6 +68,21 @@ import {
   type OfferedAction,
 } from "./plan-lifecycle.js";
 import { planLinkField, planLinksOf, writePlanLink } from "./plan-links.js";
+import {
+  SECTION_KEYS,
+  SECTION_NAMES,
+  completeness,
+  emptySections,
+  estimateSeconds,
+  gateSentence,
+  normalizeRow,
+  readSection,
+  renderSection,
+  parsePlanMarkdown,
+  shapedGate,
+  type BreakdownRow,
+  type PlanSections,
+} from "./plan-sections.js";
 import { LISTED_HORIZON, rebuildPlanMembers } from "./plan-members.js";
 import type { WorkspaceStore } from "./store.js";
 import { StapleError, type PersonDecision } from "./types.js";
@@ -176,6 +191,8 @@ export interface LinkView {
 export interface Question {
   text: string;
   resolved: boolean;
+  /** Left open on purpose: it does not hold the idea back from being shaped. */
+  deferred?: boolean;
 }
 
 export interface IdeaDetail {
@@ -187,11 +204,46 @@ export interface IdeaDetail {
   questions: Question[];
   decisions: string[];
   linked: LinkView[];
+  /** The plan sections (design/plan.md, "Plan sections"). */
+  plan: PlanSections;
+  /** How much of the plan is written: starred sections and all ten. */
+  completeness: { starred: number; starredTotal: number; filled: number; total: number };
+  /** What the shaped gate still needs; empty when it may be shaped. */
+  missingForShaped: string[];
+  /** What scaffolding it would create, while its state offers scaffolding; else null. */
+  scaffold: ScaffoldPreview | null;
   today: string;
+}
+
+/** One task Scaffold creates from a breakdown row. */
+export interface ScaffoldTask {
+  key: string;
+  title: string;
+  estimate: string | null;
+  estimatedSeconds: number | null;
+  /** Keys of rows in this breakdown it waits on: they become its blockers. */
+  blockedBy: string[];
+  /** What it waits on outside this breakdown: carried in its context, not as blockers. */
+  waitsOutside: string[];
+  acceptance: string[];
+  /** The context document it gets: workable from the ticket alone. */
+  context: string;
+  /** Already created by an earlier scaffold of this idea (then it is not created again). */
+  existing: string | null;
+}
+
+/** What Scaffold creates: the idea promoted into the epic, its tasks, and its shaped sub-ideas'. */
+export interface ScaffoldPreview {
+  idea: { id: string; title: string };
+  epic: { identifier: string | null; kind: string; planDocument: string; acceptance: string[]; promoted: boolean };
+  tasks: ScaffoldTask[];
+  children: ScaffoldPreview[];
 }
 
 export interface CaptureInput {
   title: string;
+  /** Plan sections to start with; the shaped gate reads them when it is captured shaped. */
+  plan?: Partial<PlanSections> | null;
   parent?: string | null;
   brief?: string | null;
   maturity?: string;
@@ -210,6 +262,8 @@ export interface IdeaPatch {
   plannedTarget?: string | null;
   /** Place this record immediately before that one in the plan order; null moves it to the end. */
   before?: string | null;
+  /** Plan sections to replace, each whole; a section left out is left alone. The edit action. */
+  plan?: Partial<PlanSections>;
 }
 
 export interface HorizonPatch {
@@ -274,19 +328,21 @@ const FIELD_OF: Record<string, string> = {
 const QUESTIONS_KEY = "questions";
 const DECISIONS_KEY = "decisions";
 const BRIEF_KEY = "brief";
+/** Which breakdown rows Scaffold created, and as which tasks: `{ "42.1": "<issue id>" }`. */
+const SCAFFOLD_KEY = "scaffold";
 
 export function parseQuestions(body: string | null): Question[] {
   if (!body) return [];
   const out: Question[] = [];
   for (const line of body.split("\n")) {
-    const match = /^\s*[-*]\s+\[( |x|X)\]\s+(.*)$/.exec(line);
-    if (match) out.push({ text: match[2]!.trim(), resolved: match[1] !== " " });
+    const match = /^\s*[-*]\s+\[( |x|X|~)\]\s+(.*)$/.exec(line);
+    if (match) out.push({ text: match[2]!.trim(), resolved: match[1] === "x" || match[1] === "X", ...(match[1] === "~" ? { deferred: true } : {}) });
   }
   return out;
 }
 
 export function renderQuestions(questions: readonly Question[]): string {
-  return questions.map((q) => `- [${q.resolved ? "x" : " "}] ${q.text}`).join("\n") + "\n";
+  return questions.map((q) => `- [${q.resolved ? "x" : q.deferred ? "~" : " "}] ${q.text}`).join("\n") + "\n";
 }
 
 export function parseDecisions(body: string | null): string[] {
@@ -717,7 +773,13 @@ export class PlanStore {
         notStarted: isNotStarted({ plannedStart: row.plan_start, links: workIds.length, dropped: maturity === "dropped", today }),
         childIds: childIds.get(row.id) ?? [],
         openQuestions: parseQuestions(this.documentBody(row.id, QUESTIONS_KEY)).filter((q) => !q.resolved).length,
-        ...ideaLifecycle({ state: ideaState({ stage, maturity }), promoted, ownLinks: ownLinks.length }),
+        ...ideaLifecycle({
+          state: ideaState({ stage, maturity }),
+          promoted,
+          ownLinks: ownLinks.length,
+          gate: maturity === "raw" || maturity === "exploring" ? () => shapedGate(this.sectionsOf(row.id), parseQuestions(this.documentBody(row.id, QUESTIONS_KEY))) : () => [],
+          scaffolded: this.documentBody(row.id, SCAFFOLD_KEY) !== null,
+        }),
         createdAt: row.created_at,
         updatedAt: row.updated_at,
       };
@@ -751,7 +813,28 @@ export class PlanStore {
       questions: parseQuestions(this.documentBody(row.id, QUESTIONS_KEY)),
       decisions: parseDecisions(this.documentBody(row.id, DECISIONS_KEY)),
       linked: idea.links.map((id) => this.linkView(id, work)),
+      ...this.planOf(row.id, idea),
       today,
+    };
+  }
+
+  /** A record's plan sections, as stored. */
+  sectionsOf(id: string): PlanSections {
+    const sections = emptySections();
+    for (const name of SECTION_NAMES) (sections as unknown as Record<string, unknown>)[name] = readSection(name, this.documentBody(id, SECTION_KEYS[name]));
+    return sections;
+  }
+
+  private planOf(id: string, idea: IdeaView): Pick<IdeaDetail, "plan" | "completeness" | "missingForShaped" | "scaffold"> {
+    const plan = this.sectionsOf(id);
+    const questions = parseQuestions(this.documentBody(id, QUESTIONS_KEY));
+    const decisions = parseDecisions(this.documentBody(id, DECISIONS_KEY));
+    const offersScaffold = idea.actions.some((action) => action.id === "scaffold" && !action.disabledReason);
+    return {
+      plan,
+      completeness: completeness(plan, questions, decisions),
+      missingForShaped: shapedGate(plan, questions),
+      scaffold: offersScaffold ? this.scaffoldPreview(id) : null,
     };
   }
 
@@ -837,6 +920,8 @@ export class PlanStore {
       assertIdeaAction(subject, maturity, "plan_dates");
       this.steer("planned dates", null, options);
     }
+    const sections = mergeSections(emptySections(), input.plan ?? {});
+    if (maturity === "shaped") assertShaped(subject, sections, []);
     const id = this.store.journaled(() => {
       const issue = this.store.createIssue({ title, kind: IDEA_KIND, parent: input.parent ?? null, createdBy: actor, allowDuplicate: true }, { plan: true });
       const columns: Record<string, unknown> = { plan_maturity: maturity, plan_rank: this.nextRecordRank() };
@@ -850,6 +935,7 @@ export class PlanStore {
       if (window.target) columns.plan_target = window.target;
       this.write(issue.id, columns, actor, "idea_captured", { maturity });
       if (input.brief?.trim()) this.store.putDocument(issue.id, BRIEF_KEY, input.brief, { author: actor }, { plan: true });
+      if (input.plan) this.writeSections(issue.id, emptySections(), sections, actor);
       this.settleMembership(actor);
       return issue.id;
     });
@@ -862,13 +948,17 @@ export class PlanStore {
     const before = this.stateOf(row.id);
     let state = before;
     const allow = (action: IdeaAction) => this.allowIdea(row, action, options, state);
-    if (patch.title !== undefined || patch.brief !== undefined) allow("edit");
+    if (patch.title !== undefined || patch.brief !== undefined || patch.plan !== undefined) allow("edit");
+    const current = this.sectionsOf(row.id);
+    const sections = patch.plan ? mergeSections(current, patch.plan) : current;
     // A maturity it already has is no change: nothing to allow and nothing to write.
     const maturity = patch.maturity === undefined ? undefined : parseMaturity(patch.maturity);
     const moves = maturity !== undefined && maturity !== readMaturity(row.plan_maturity);
     if (moves) {
       const action = maturityAction({ state: before, maturity: readMaturity(row.plan_maturity) }, maturity);
       if (action !== null) allow(action);
+      // Shaped only when the plan, as this write leaves it, passes the gate.
+      if (action === "shape") assertShaped(displayRef(row), sections, parseQuestions(this.documentBody(row.id, QUESTIONS_KEY)));
       // The rest of one write is held to the state its maturity change leads to: shaping a raw idea
       // and scheduling it is one decision. A started or shipped record keeps its state.
       if (before !== "started" && before !== "shipped") state = maturity;
@@ -880,6 +970,7 @@ export class PlanStore {
     this.store.journaled(() => {
       if (patch.title !== undefined) this.store.updateIssue(row.id, { title: oneLine(patch.title, "An idea's title") }, actor);
       if (patch.brief !== undefined) this.store.putDocument(row.id, BRIEF_KEY, patch.brief ?? "", { author: actor }, { plan: true });
+      if (patch.plan) this.writeSections(row.id, current, sections, actor);
       const columns: Record<string, unknown> = {};
       if (moves) columns.plan_maturity = maturity;
       if (patch.horizon !== undefined) columns.plan_horizon_id = patch.horizon === null ? null : this.horizonRow(patch.horizon).id;
@@ -899,6 +990,15 @@ export class PlanStore {
       this.settleMembership(actor);
     });
     return this.ideaView(row.id);
+  }
+
+  /** Each section that changed, as its own revisioned document; an emptied one keeps an empty revision. */
+  private writeSections(id: string, before: PlanSections, after: PlanSections, actor: string | null): void {
+    for (const name of SECTION_NAMES) {
+      const body = renderSection(name, after);
+      if (body === renderSection(name, before)) continue;
+      this.store.putDocument(id, SECTION_KEYS[name], body, { author: actor, changeSummary: `${name} updated` }, { plan: true });
+    }
   }
 
   /** Re-file a record under another record (or at the top), moving its subtree's depth with it. */
@@ -945,6 +1045,21 @@ export class PlanStore {
     return this.detail(row.id);
   }
 
+  /** Defer (or un-defer) the question at a 1-based position: left open on purpose, it no longer holds shaping back. */
+  deferQuestion(ref: string, position: number, actor: string | null, deferred = true): IdeaDetail {
+    const row = this.recordRow(ref);
+    this.allowIdea(row, "ask", {});
+    const questions = parseQuestions(this.documentBody(row.id, QUESTIONS_KEY));
+    const question = questions[position - 1];
+    if (!question) {
+      throw new StapleError("validation", `${displayRef(row)} has ${questions.length} question${questions.length === 1 ? "" : "s"}; there is no #${position}.`);
+    }
+    question.deferred = deferred;
+    if (deferred) question.resolved = false;
+    this.store.putDocument(row.id, QUESTIONS_KEY, renderQuestions(questions), { author: actor, changeSummary: deferred ? "question deferred" : "question reopened" }, { plan: true });
+    return this.detail(row.id);
+  }
+
   addDecision(ref: string, text: string, actor: string | null): IdeaDetail {
     const row = this.recordRow(ref);
     this.allowIdea(row, "decide", {});
@@ -975,18 +1090,184 @@ export class PlanStore {
       throw new StapleError("validation", `${row.identifier} is already promoted: it is ${aKind(row.kind)} in the tracker now.`, { identifier: row.identifier });
     }
     this.allowIdea(row, "promote", options);
-    const kinds = this.store.getKinds().map((kind) => kind.id);
-    const kind = kinds.includes(PROMOTED_KIND) ? PROMOTED_KIND : this.store.defaultKind();
     this.store.journaled(() => {
-      this.store.promoteInPlace(row.id, kind, actor);
-      const promotedChildren = this.db
-        .prepare("SELECT id FROM issues WHERE parent_id = ? AND plan_maturity IS NOT NULL AND kind <> ?")
-        .all(row.id, IDEA_KIND) as Array<{ id: string }>;
-      if (promotedChildren.length > 0) this.store.rederiveParents(promotedChildren.map((child) => child.id), "plan", actor);
-      this.keepBaselines(row.id, actor);
+      this.promoteRecord(row.id, this.promotedKind(), actor);
       this.settleMembership(actor);
     });
     return this.ideaView(row.id);
+  }
+
+  /**
+   * The record becomes its epic in place, and sub-records promoted before it now hang under that
+   * epic, which derives its status from theirs in the same write. Promotion and Scaffold share it.
+   */
+  private promoteRecord(id: string, kind: string, actor: string | null): void {
+    this.store.promoteInPlace(id, kind, actor);
+    const promotedChildren = this.db
+      .prepare("SELECT id FROM issues WHERE parent_id = ? AND plan_maturity IS NOT NULL AND kind <> ?")
+      .all(id, IDEA_KIND) as Array<{ id: string }>;
+    if (promotedChildren.length > 0) this.store.rederiveParents(promotedChildren.map((child) => child.id), "plan", actor);
+    this.keepBaselines(id, actor);
+  }
+
+  // ---------- import: a plan file becomes an idea ----------
+
+  /**
+   * Import a plan written as markdown (`staple idea import`): one idea captured with the file's
+   * title, its sections, open questions and decisions, and the file itself attached as its source.
+   * Captured raw unless a maturity is given (a person's call, held to the shaped gate like any).
+   * Answers the idea, how many breakdown rows were read, and what could not be placed.
+   */
+  importPlan(
+    file: { name: string; markdown: string },
+    input: { parent?: string | null; horizon?: string | null; maturity?: string },
+    actor: string | null,
+    options: PlanWriteOptions = {},
+  ): { idea: IdeaDetail; rows: number; warnings: string[] } {
+    this.assertEnabled();
+    const parsed = parsePlanMarkdown(file.markdown, file.name.replace(/\.md$/i, ""));
+    const sources = [`${file.name} (attached)`, ...parsed.sections.sources];
+    const id = this.store.journaled(() => {
+      const idea = this.capture(
+        {
+          title: parsed.title,
+          brief: parsed.brief,
+          parent: input.parent ?? null,
+          horizon: input.horizon ?? null,
+          maturity: input.maturity,
+          plan: { ...parsed.sections, sources },
+        },
+        actor,
+        options,
+      );
+      if (parsed.questions.length > 0) {
+        this.store.putDocument(idea.id, QUESTIONS_KEY, renderQuestions(parsed.questions), { author: actor, changeSummary: "imported" }, { plan: true });
+      }
+      if (parsed.decisions.length > 0) {
+        this.store.putDocument(idea.id, DECISIONS_KEY, parsed.decisions.map((line) => `- ${line}`).join("\n") + "\n", { author: actor, changeSummary: "imported" }, { plan: true });
+      }
+      this.store.attachFile(idea.id, { filename: file.name, bytes: new TextEncoder().encode(file.markdown), caption: "The plan this idea was imported from", author: actor });
+      return idea.id;
+    });
+    return { idea: this.detail(id), rows: parsed.sections.breakdown.length, warnings: parsed.warnings };
+  }
+
+  // ---------- Scaffold: promote, and the breakdown becomes the epic's tasks ----------
+
+  /** Which breakdown rows were scaffolded, and into which tasks. */
+  private scaffoldMap(id: string): Record<string, string> {
+    const body = this.documentBody(id, SCAFFOLD_KEY);
+    if (!body) return {};
+    try {
+      const parsed = JSON.parse(body) as unknown;
+      return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, string>) : {};
+    } catch {
+      return {};
+    }
+  }
+
+  private promotedKind(): string {
+    return this.store.getKinds().some((kind) => kind.id === PROMOTED_KIND) ? PROMOTED_KIND : this.store.defaultKind();
+  }
+
+  /**
+   * What Scaffold would create, read from the plan as it stands: the epic (this record, promoted),
+   * its plan document and acceptance criteria, one task per breakdown row with its estimate,
+   * blockers, acceptance and context, and the same for each shaped sub-idea. The create path
+   * builds from this very preview, so what is shown is what is made.
+   */
+  scaffoldPreview(ref: string): ScaffoldPreview {
+    const row = this.row(ref, false);
+    const sections = this.sectionsOf(row.id);
+    const decisions = parseDecisions(this.documentBody(row.id, DECISIONS_KEY));
+    const created = this.scaffoldMap(row.id);
+    const keys = new Set(sections.breakdown.map((task) => task.key));
+    const titles = new Map(sections.breakdown.map((task) => [task.key, task.title]));
+    const identifierOf = (id: string | undefined) =>
+      id === undefined ? null : ((this.db.prepare("SELECT identifier FROM issues WHERE id = ?").get(id) as { identifier: string } | undefined)?.identifier ?? null);
+    const children = (this.db.prepare(`SELECT id FROM issues WHERE parent_id = ? AND plan_maturity IS NOT NULL ORDER BY plan_rank`).all(row.id) as Array<{ id: string }>)
+      .map((child) => this.ideaView(child.id))
+      .filter((child) => child.actions.some((action) => action.id === "scaffold") || (!child.promoted && child.state === "shaped"))
+      .map((child) => this.scaffoldPreview(child.id));
+    return {
+      idea: { id: row.id, title: row.title },
+      epic: {
+        identifier: row.kind === IDEA_KIND ? null : row.identifier,
+        kind: row.kind === IDEA_KIND ? this.promotedKind() : row.kind,
+        planDocument: epicPlanDocument(row.title, sections, decisions),
+        acceptance: sections.acceptance,
+        promoted: row.kind !== IDEA_KIND,
+      },
+      tasks: sections.breakdown.map((task) => ({
+        key: task.key,
+        title: taskTitle(task),
+        estimate: task.estimate,
+        estimatedSeconds: estimateSeconds(task.estimate),
+        blockedBy: task.dependsOn.filter((dep) => keys.has(dep) && dep !== task.key),
+        waitsOutside: task.dependsOn.filter((dep) => !keys.has(dep)),
+        acceptance: task.acceptance ? [task.acceptance] : [],
+        context: taskContextDocument(row.title, sections, task, titles),
+        existing: identifierOf(created[task.key]),
+      })),
+      children,
+    };
+  }
+
+  /**
+   * Scaffold: the idea promotes in place into the epic (stage A), takes its plan document and
+   * acceptance criteria, and each breakdown row becomes a child task with its estimate, its
+   * blockers (the rows it depends on), its acceptance and a context document. Each shaped
+   * sub-idea is scaffolded under it as a child epic. Idempotent: a row already scaffolded is not
+   * created again (each task is created under a key the store replays), so a retry, or a
+   * scaffold after rows were added, creates only what is missing.
+   */
+  scaffold(ref: string, actor: string | null, options: PlanWriteOptions = {}): ScaffoldPreview {
+    this.assertEnabled();
+    const row = this.recordRow(ref);
+    this.allowIdea(row, "scaffold", options);
+    const offer = this.ideaView(row.id).actions.find((action) => action.id === "scaffold");
+    if (offer === undefined) {
+      throw new StapleError("validation", `${displayRef(row)} cannot be scaffolded: it was started by promotion or linked work, not by a scaffold. Add tasks to its epic, or adopt more work.`);
+    }
+    if (offer.disabledReason) throw new StapleError("validation", `${displayRef(row)} cannot be scaffolded yet. ${offer.disabledReason}`);
+    const preview = this.scaffoldPreview(row.id);
+    this.store.journaled(() => {
+      if (row.kind === IDEA_KIND) this.promoteRecord(row.id, preview.epic.kind, actor);
+      const epic = this.store.getIssue(row.id);
+      if (this.documentBody(row.id, "plan") === null) this.store.putDocument(row.id, "plan", preview.epic.planDocument, { author: actor, changeSummary: "scaffolded from the idea" });
+      if (preview.epic.acceptance.length > 0 && (epic.acceptanceCriteria ?? []).length === 0) {
+        this.store.updateIssue(row.id, { acceptanceCriteria: preview.epic.acceptance }, actor);
+      }
+      const map = this.scaffoldMap(row.id);
+      for (const task of preview.tasks) {
+        const made = this.store.createIssueResult(
+          {
+            title: task.title,
+            parent: epic.identifier,
+            createdBy: actor,
+            acceptanceCriteria: task.acceptance,
+            estimatedSeconds: task.estimatedSeconds,
+            idempotencyKey: `plan-scaffold:${row.id}:${task.key}`,
+            allowDuplicate: true,
+          },
+          { plan: true },
+        );
+        map[task.key] = made.issue.id;
+        if (!made.replayed) this.store.putDocument(made.issue.id, "context", task.context, { author: actor, changeSummary: "scaffolded from the idea" });
+      }
+      for (const task of preview.tasks) {
+        if (task.blockedBy.length === 0) continue;
+        const blockers = task.blockedBy.map((key) => map[key]).filter((id): id is string => id !== undefined).sort();
+        const current = this.store.blockersOf(map[task.key]!).map((blocker) => blocker.id).sort();
+        if (blockers.join() !== current.join()) this.store.setBlockedBy(map[task.key]!, blockers, actor ?? "staple");
+      }
+      const body = JSON.stringify(map, null, 2) + "\n";
+      if (this.documentBody(row.id, SCAFFOLD_KEY) !== body) this.store.putDocument(row.id, SCAFFOLD_KEY, body, { author: actor, changeSummary: "scaffold" });
+      insertEvent(this.db, { kind: "idea_scaffolded", issueId: row.id, actor, payload: { tasks: preview.tasks.length } });
+      this.settleMembership(actor);
+      for (const child of preview.children) this.scaffold(child.idea.id, actor, options);
+    });
+    return this.scaffoldPreview(row.id);
   }
 
   /** Adopt: link an existing issue (an epic or a ticket) to a plan record. */
@@ -1215,13 +1496,27 @@ export class PlanStore {
  * A record's state and the actions it offers, with the preconditions the table cannot know: the
  * epic opens only once promoted, and unlinking needs a link.
  */
-function ideaLifecycle(input: { state: IdeaState; promoted: boolean; ownLinks: number }): { state: IdeaState; actions: OfferedAction[] } {
+function ideaLifecycle(input: {
+  state: IdeaState;
+  promoted: boolean;
+  ownLinks: number;
+  /** What the shaped gate still needs, read only when the state offers shaping. */
+  gate: () => string[];
+  /** Scaffolded before: a started record scaffolds again only then, to add new rows. */
+  scaffolded: boolean;
+}): { state: IdeaState; actions: OfferedAction[] } {
   const actions: OfferedAction[] = [];
   for (const id of ideaOffered(input.state, input.promoted)) {
     if (id === "open_epic" && !input.promoted) continue;
+    // A started record that was promoted or linked some other way has nothing to scaffold into.
+    if (id === "scaffold" && input.state === "started" && !input.scaffolded) continue;
     const rule = IDEA_ACTIONS[id];
     const offered: OfferedAction = { id, label: rule.label, who: rule.who };
     if (id === "unlink" && input.ownLinks === 0) offered.disabledReason = "Nothing is linked to it.";
+    if (id === "shape") {
+      const missing = input.gate();
+      if (missing.length > 0) offered.disabledReason = `It needs ${gateSentence(missing).replace(/^it needs /, "")}.`;
+    }
     actions.push(offered);
   }
   return { state: input.state, actions };
@@ -1239,4 +1534,79 @@ function horizonLifecycle(shipped: boolean, openWork: number, queued: boolean): 
       ...(id === "remove" && queued ? { disabledReason: "It is in the queue; take it off first." } : {}),
     })),
   };
+}
+
+/** Sections with a partial patch applied: each section given replaces the stored one whole. */
+export function mergeSections(base: PlanSections, patch: Partial<PlanSections>): PlanSections {
+  const out: PlanSections = { ...base };
+  const text = (value: unknown): string | null => (typeof value === "string" && value.trim() ? value.trim() : null);
+  const list = (value: unknown): string[] => (Array.isArray(value) ? value.map((item) => String(item).trim()).filter(Boolean) : []);
+  if (patch.goal !== undefined) out.goal = text(patch.goal);
+  if (patch.context !== undefined) out.context = text(patch.context);
+  if (patch.outOfScope !== undefined) out.outOfScope = text(patch.outOfScope);
+  if (patch.risks !== undefined) out.risks = text(patch.risks);
+  if (patch.acceptance !== undefined) out.acceptance = list(patch.acceptance);
+  if (patch.dependencies !== undefined) out.dependencies = list(patch.dependencies);
+  if (patch.sources !== undefined) out.sources = list(patch.sources);
+  if (patch.breakdown !== undefined) {
+    const rows = (Array.isArray(patch.breakdown) ? patch.breakdown : []).map((row) => normalizeRow(row)).filter((row): row is BreakdownRow => row !== null);
+    const keys = new Set<string>();
+    for (const row of rows) {
+      if (keys.has(row.key)) throw new StapleError("validation", `Two task breakdown rows share the key ${row.key}; each row needs its own.`);
+      keys.add(row.key);
+    }
+    out.breakdown = rows;
+  }
+  return out;
+}
+
+/** The shaped gate as a refusal: what the plan still needs, named. */
+function assertShaped(subject: string, sections: PlanSections, questions: readonly Question[]): void {
+  const missing = shapedGate(sections, questions);
+  if (missing.length === 0) return;
+  throw new StapleError("validation", `${subject.charAt(0).toUpperCase()}${subject.slice(1)} cannot be marked shaped yet: ${gateSentence(missing)}.`, { missing });
+}
+
+/** A task's title from its row: the key leads, so the plan and the tracker name it alike. */
+function taskTitle(row: BreakdownRow): string {
+  const clean = row.title.replace(/\*\*(.*?)\*\*/g, "$1").replace(/\s+/g, " ").trim();
+  return /^\d/.test(row.key) ? `${row.key} ${clean}` : clean;
+}
+
+/** The epic's plan document: the idea's goal, context, decisions, scope and risks, as one page. */
+function epicPlanDocument(title: string, sections: PlanSections, decisions: readonly string[]): string {
+  const parts = [`# ${title}`];
+  if (sections.goal) parts.push(`## Goal\n\n${sections.goal}`);
+  if (sections.context) parts.push(`## Context and constraints\n\n${sections.context}`);
+  if (decisions.length > 0) parts.push(`## Decisions\n\n${decisions.map((decision) => `- ${decision}`).join("\n")}`);
+  if (sections.dependencies.length > 0) parts.push(`## Dependencies\n\n${sections.dependencies.map((dep) => `- ${dep}`).join("\n")}`);
+  if (sections.outOfScope) parts.push(`## Out of scope\n\n${sections.outOfScope}`);
+  if (sections.risks) parts.push(`## Risks\n\n${sections.risks}`);
+  if (sections.sources.length > 0) parts.push(`## Sources\n\n${sections.sources.map((source) => `- ${source}`).join("\n")}`);
+  return parts.join("\n\n") + "\n";
+}
+
+/** The most of the idea's context a task's own page carries; the epic's plan holds all of it. */
+const CONTEXT_EXCERPT = 2000;
+
+/**
+ * A task's context document: workable from the ticket alone. What the epic is for, this task,
+ * what done means, what it waits on, and the constraints and scope it must respect.
+ */
+function taskContextDocument(epicTitle: string, sections: PlanSections, row: BreakdownRow, titles: ReadonlyMap<string, string>): string {
+  const parts = [`# ${taskTitle(row)}`, `Part of **${epicTitle}**. The epic's plan document holds the whole plan.`];
+  if (sections.goal) parts.push(`## What the epic is for\n\n${sections.goal}`);
+  const facts = [row.estimate ? `Estimate: ${row.estimate}` : null, row.owner ? `Owner: ${row.owner}` : null, row.notes ? `Notes: ${row.notes}` : null].filter(Boolean);
+  if (facts.length > 0) parts.push(`## This task\n\n${facts.join("\n\n")}`);
+  parts.push(`## Done when\n\n${row.acceptance ?? "No acceptance was written for this row; agree it before starting."}`);
+  if (row.dependsOn.length > 0) {
+    const lines = row.dependsOn.map((dep) => (titles.has(dep) ? `- ${dep} ${titles.get(dep)} (a blocker in this epic)` : `- ${dep} (outside this plan)`));
+    parts.push(`## Waits on\n\n${lines.join("\n")}`);
+  }
+  if (sections.context) {
+    const excerpt = sections.context.length > CONTEXT_EXCERPT ? `${sections.context.slice(0, CONTEXT_EXCERPT).trimEnd()}\n\n(continued in the epic's plan document)` : sections.context;
+    parts.push(`## Context and constraints\n\n${excerpt}`);
+  }
+  if (sections.outOfScope) parts.push(`## Out of scope\n\n${sections.outOfScope}`);
+  return parts.join("\n\n") + "\n";
 }

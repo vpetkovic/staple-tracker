@@ -32,6 +32,7 @@ import {
   type IdeaState,
 } from "../src/core/plan-lifecycle.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
+import { READY_PLAN } from "./fixtures/plan-ready.js";
 import { CONTRACT_AGENT, runCliAsync, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
 
 const WS = "cyclews";
@@ -111,7 +112,8 @@ const maturityOf = (state: IdeaState) => (state === "raw" ? "raw" : state === "e
 /** A fresh idea in `state`, made as the person; its id, and the task it links when it has one. */
 async function fixture(state: IdeaState): Promise<{ id: string; linked: string | null }> {
   const maturity = maturityOf(state);
-  const captured = await http("/api/plan/capture", { title: unique(`A ${state} idea`), maturity, brief: "The first brief." });
+  // Every fixture carries a plan that passes the shaped gate, so a shaping cell measures the lifecycle alone.
+  const captured = await http("/api/plan/capture", { title: unique(`A ${state} idea`), maturity, brief: "The first brief.", plan: READY_PLAN });
   expect(captured.status, JSON.stringify(captured.body)).toBe(200);
   const id = (captured.body.idea as { idea: { id: string } }).idea.id;
   let linked: string | null = null;
@@ -220,7 +222,8 @@ describe("the idea lifecycle on every surface", () => {
       const { id } = await fixture(state);
       const row = (await plan()).ideas.find((idea) => idea.id === id)!;
       expect(row.state).toBe(state);
-      const table = ideaOffered(state, row.promoted).filter((action) => action !== "open_epic" || row.promoted);
+      // The epic opens once promoted; a started record scaffolds again only if it was scaffolded.
+      const table = ideaOffered(state, row.promoted).filter((action) => (action !== "open_epic" || row.promoted) && !(action === "scaffold" && state === "started"));
       expect(row.actions.map((action) => action.id), state).toEqual(table);
       for (const action of row.actions) expect(action.who, `${state}/${action.id}`).toBe(IDEA_ACTIONS[action.id as IdeaAction].who);
     }

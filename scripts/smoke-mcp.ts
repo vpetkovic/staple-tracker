@@ -997,8 +997,8 @@ try {
   // The app-only approve_gate_from_view and request_changes_from_view the views' buttons call
   // decide a gate in the view's workspace, 65. The plan tools list_ideas, get_idea,
   // list_horizons, capture_idea, update_idea, start_idea, unlink_idea and the app-only
-  // reset_idea_baseline read and write one workspace's ideas, 73.
-  assert(wsTargetable.length === 73, `73 workspace tools accept ws targeting (${wsTargetable.length} found)`);
+  // reset_idea_baseline read and write one workspace's ideas, 73, and scaffold_idea, 74.
+  assert(wsTargetable.length === 74, `74 workspace tools accept ws targeting (${wsTargetable.length} found)`);
   // A person's click in a view is recorded under the person only while hosts keep these two
   // away from the model: both declare MCP Apps visibility ["app"] and take no actor.
   for (const name of ["approve_gate_from_view", "request_changes_from_view"]) {
@@ -1235,6 +1235,8 @@ try {
         "reorder_queue",
         "request_changes",
         "resume_run",
+        // Scaffolding creates an epic's tasks: attributed like any write.
+        "scaffold_idea",
         "set_blocked_by",
         // The explicit estimate write names who changed the plan.
         "set_estimate",
