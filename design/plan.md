@@ -101,11 +101,12 @@ number per record, no number naming two records, and no open conflict
 identifier is an existing field, the settlement an existing verb, and last-write-wins per field
 is what the fold already does.
 
-## Storage: seven columns on `issues`, two tables, no new entity
+## Storage: seven columns on `issues`, three tables, no new entity
 
 What an issue cannot already say lives in seven nullable `issues` columns added by workspace
-migration **020** (`020-plan-fields.ts`), NULL on every row outside the plan, and two tables:
-`plan_links` (synchronized) and `plan_members` (derived on each device, never sent).
+migration **020** (`020-plan-fields.ts`), NULL on every row outside the plan, and three tables:
+`plan_links` and `plan_rows` (synchronized, one field per link and per breakdown row) and
+`plan_members` (derived on each device, never sent).
 
 | column | on | meaning |
 |---|---|---|
@@ -216,51 +217,128 @@ from the start.
 
 ## Plan sections: an idea an agent can build from
 
-An idea is a plan. Besides its brief, open questions and decisions it holds ten sections, each
-a revisioned document on the record (`plan-sections.ts`), so they are versioned and synchronize
-as documents already do: **Goal**★, **Context and constraints**, **Decisions**, **Open
-questions** (answered, open, or deferred: left open on purpose), **Task breakdown**★,
-**Acceptance criteria**★, **Dependencies**, **Out of scope**, **Risks** and **Sources and
-files**. Text sections are markdown; list sections one `- item` per line. The task breakdown is
-structured, a JSON array of rows `{ key, title, estimate, dependsOn, acceptance, owner, notes }`,
-because a row's fields become a task's when the idea is scaffolded. Writing a section is the
-edit action (anyone's); a write replaces each section it names whole, and two rows may not share
-a key. The detail carries the sections, a completeness count (★ sections, and all ten) and what
-the shaped gate still needs.
+An idea is a plan. Besides its brief, open questions and decisions it holds ten sections
+(`plan-sections.ts`): **Goal**★, **Context and constraints**, **Decisions**, **Open questions**
+(answered, open, or deferred: left open on purpose), **Task breakdown**★, **Acceptance
+criteria**★, **Dependencies**, **Out of scope**, **Risks** and **Sources and files**. Text and
+list sections are revisioned documents on the record, versioned and synchronized as documents
+already are: text sections are markdown, list sections one `- item` per line. Writing a section
+is the edit action (anyone's); a write replaces each section it names whole. The detail carries
+the sections, a completeness count (★ sections, and all ten), what the shaped gate still needs,
+estimate warnings and the breakdown's revision.
 
-**The shaped gate.** An idea is shaped only with a goal, a task breakdown of at least one row
-with a title and acceptance on every row, acceptance criteria, and no open question that is not
-deferred (`shapedGate`). It holds on every way to shaped: a maturity change, a capture straight
-into shaped, and a raw idea shaped in the same write that gives it its plan (the gate reads the
-plan as that write leaves it). The lifecycle offers Mark shaped held back with what is missing,
-and the refusal names it.
+Every surface writes sections through one check (`checkPlanPatch`): a text section is text or
+null, a list section a list of text, the breakdown a list of rows, and anything else (a string
+where a list belongs, an unknown section, a row without a key or a title) is refused by name
+before anything is written. A raw document write on a plan record (`put_document`, `staple doc
+put`, a restore) is held to the same shapes: the breakdown is not a document and is refused
+there, and a list section or the questions checklist must read as the list it holds, so a body
+can never read back as fewer items than it was given.
+
+### Task breakdown rows: one synced field per row
+
+The task breakdown is structured: rows `{ id, key, title, estimate, dependsOn, acceptance,
+owner, notes }`, because a row's fields become a task's when the idea is scaffolded. `key` is how
+rows depend on each other (`42.1`) and may be renamed; `id` is the row's own and never changes.
+Rows live in `plan_rows (idea_id, row_id, body, rank)` (`plan-rows.ts`), and on the wire each row
+is one field of the record's `milestone` entity, `planRow.<row id>`, whose value is the row with
+its rank and whose `null` removes it: the shape links use (above).
+
+Why this shape. With the breakdown as one document, two devices editing two different rows each
+wrote a whole new revision, and the log kept one of them as the head: an edit was lost with no
+conflict to say so. As one field per row, the service folds the entity's keys one by one, so:
+
+- two devices editing different rows, or each adding a row, write different fields, and both
+  edits arrive, with no conflict;
+- two devices editing the same row write one field, and that is a conflict recorded like any
+  other (`conflict_list` / `conflict_resolve`), never a silent overwrite;
+- a write sends only the rows it changed, and a row keeps its rank while the order allows, so an
+  edit to one row never rewrites the others.
+
+No protocol bump and no Worker change: these are fields of an existing entity, carried and
+folded verbatim. The apply, seed, snapshot comparison, conflict, rewind and quarantine paths read
+row fields wherever they read link fields; an idea holding only links and rows is seeded as
+those fields alone.
+
+On one device, a breakdown write may name the `breakdownRevision` it read (`breakdownBase`;
+`breakdown_base` on MCP); it is refused with `revision_conflict` when the breakdown changed
+since, so a stale editor never overwrites a newer edit. The Plan tab and `staple idea task` always
+send it. A write without it replaces the breakdown, keeping each row's id: the id it names, else
+the stored row with its key, else a new one.
+
+### The shaped gate
+
+An idea is shaped only with a goal; a task breakdown of at least one row, every row titled, no
+two rows on one key, no row waiting on a key the breakdown does not hold, and no depends-on cycle;
+acceptance criteria; and no open question that is not deferred (`shapedGate`). A row without
+its own "done when" inherits the plan's acceptance criteria, so it needs none. A key "the
+breakdown does not hold" is one shaped like this plan's keys (`42.9` in a plan of `42.x` rows);
+another plan's key (`39.4`) or an outside event waits outside the plan instead. A cycle is named
+by its rows (`1 → 2 → 1`). The gate holds on every way to shaped: a maturity change, a capture
+straight into shaped, a raw idea shaped in the same write that gives it its plan, and an import
+into shaped, where it reads everything the import writes, its open questions included, before
+any of it is written. The lifecycle offers Mark shaped held back with what is missing.
+
+**A shaped plan edited since.** Agents may edit a shaped idea's plan, and an edit can leave it
+failing the gate: a cleared goal, an emptied breakdown, an added or reopened question, a removed
+row, an old revision restored. Its maturity stays: maturity is the person's, and no edit moves it
+as a side effect. The record says so instead (`planIncomplete`), shown as "shaped · plan
+incomplete" with what it lacks in the drawer, on the card and in the For agents view, and
+Scaffold and Promote are held back with that reason and refused at confirm, naming what is
+missing.
+
+### Scaffold
 
 **Scaffold** (`PlanStore.scaffold`) is Promote plus the breakdown: the idea promotes in place
 into the epic, the epic's `plan` document is composed from the goal, context, decisions,
 dependencies, scope, risks and sources, its acceptance criteria are the idea's, and each row
-becomes a child task with its estimate (`3h`, `1.5h`, `30m`, `2d`), blockers from the rows it
-depends on, its acceptance, and a `context` document that makes it workable alone (what the
-epic is for, done-when, what it waits on inside and outside the plan, the constraints, scope).
+becomes a child task with its estimate, blockers from the rows it depends on, its acceptance, and
+a `context` document that makes it workable alone (what the epic is for, done-when, what it waits
+on inside and outside the plan, the constraints, scope). A row without its own done-when gives
+its task the plan's acceptance criteria, labels it `acceptance-inherited`, and says so in its
+context, so whoever takes it sharpens it and removes the label; the plan's row shows it inherits.
 Each shaped sub-idea is scaffolded the same way under it. A sub-idea can be scaffolded before its
 parent, as it can be promoted before it: its epic is top-level work until the parent is
-scaffolded or promoted, and that write files it under the parent's epic (Scaffold promotes through
-the same `promoteRecord` as Promote). Its own rows replay, so nothing is created twice. `scaffoldPreview` computes exactly
-what the create path writes, and the create path builds from it. Idempotent: each task is created
-under the key `plan-scaffold:<idea>:<row>`, which the store replays, and the record keeps which
-row became which task (`scaffold` document), so a retry creates nothing and a scaffold after
-rows were added creates only those. A started record offers Scaffold again only if it was
-scaffolded. Two devices scaffolding the same idea offline each create the tasks; sync settles the
-key as it settles any claimed key, so both devices converge, but on the same tasks twice.
+scaffolded or promoted, and that write files it under the parent's epic (Scaffold promotes
+through the same `promoteRecord` as Promote).
+
+**Preview, then confirm.** `scaffoldPreview` computes exactly what the create path writes, and
+the create path builds from it. The preview carries the problems that hold the confirm back
+(the gate, here and in each sub-idea it carries), warnings (an estimate that is not a duration),
+and a fingerprint: a digest of everything it shows. A confirm names that fingerprint, and is
+refused without one ("preview first") and when the plan changed since ("the plan changed since
+the preview"), on the page, over MCP and on the CLI (`staple idea scaffold <ref>` previews and
+prints the confirm; `--confirm <fingerprint>` creates). Only a state that offers Scaffold has a
+preview: a raw or exploring idea and a plain task are refused, preview included.
+
+**Task identity: the idea and the row.** A row's task has an id that follows from the idea's id
+and the row's (`scaffoldTaskId`, a digest shaped as a UUID). So a retry, a scaffold after rows
+were added, a key renamed since, and a second device scaffolding the same idea offline all name
+the same task: whatever has a task already is not created again, and two devices that created it
+offline sent two creates of one record, which sync merges as it merges any record written on two
+devices (identical fields, one number settled as a promotion's is). No scaffold map is kept and
+no idempotency key is claimed. Scaffold adds the blockers its rows' depends-on name to a task that
+exists, and never removes a blocker someone else set. A started record offers Scaffold again only
+if it was scaffolded (a task of one of its rows exists).
+
+**Estimates** read as a plan writes them: `3h`, `3 hours`, `3hrs`, `30m`, `30 mins`, `90s`,
+`2h30m`, `1 day`, `2 days`, `1.5d`, `1w`, `~4h`, `2-3h` (its top), a working day of eight hours
+and a week of five days. One that does not read is never a silent null: the plan and the preview
+show why.
+
+### Import
 
 **Import** (`staple idea import <plan.md>`, `PlanStore.importPlan`) reads a plan file into one
-idea: the first heading is the title, front matter is skipped, the text before the first section
-is the brief, and each `##` heading is mapped by its words (Goal, Task or Step breakdown,
-Acceptance criteria, Out of scope, Risk, Open questions, Dependencies, Decisions or ruling,
-Sources). Breakdown tables are read by their header row whatever their columns; a list line like
-`42.1 — Title` works too, but never repeats a key a table gave. Every other heading lands in
-Context under its own heading, so nothing is dropped; what a row waits on outside the plan
-becomes a dependency; the file is attached and listed as a source; anything that could not be
-placed is reported.
+idea, in one transaction: the first heading outside a code fence is the title, the text before
+the first section is the brief, and each `##` heading is mapped by its words (Goal, Task or Step
+breakdown, Acceptance criteria, Out of scope, Risk, Open questions, Dependencies, Decisions or
+ruling, Sources). Headings inside code fences are text. Breakdown tables are read by their header
+row whatever their columns, an escaped `\|` inside a cell; a list line like `42.1 — Title` works
+too. A list item's wrapped line joins it, and a nested item folds into its parent. Every other
+heading lands in Context under its own heading, front matter too. What a section cannot hold
+(prose under a list heading, a table row without a key, a key a table already gave) is kept in
+Context and reported as a warning: nothing is dropped. What a row waits on outside the plan
+becomes a dependency; the file is attached and listed as a source.
 
 ## Lifecycle: one table drives every action
 
@@ -424,6 +502,18 @@ Late and not started are separate facts with separate counts, on cards, horizon 
 the timeline, and never one number. Dates are calendar days in UTC, inclusive, as for
 milestones ([milestones.md](milestones.md#dates-calendar-days-utc-inclusive)).
 
+### Reads
+
+Every derived fact is read from the plan as it stands, so a read must stay cheap as the plan
+grows: the page's server answers every plan write with the whole plan and the record's detail,
+on one event loop shared by every request. A record's documents are read by its id in one
+statement each, never by resolving a reference, and the records' views are derived once per state
+of the database (keyed on the connection's `total_changes()`, SQLite's `data_version` and the
+day): a request that checks a state, writes and answers rebuilds them once for its write. The
+server holds an idle kept-alive connection for 65 seconds (`KEEP_ALIVE_MS`), well past SQLite's
+five-second busy timeout, so a request a client sent on a reused socket while the loop was busy
+is read and answered, never reset.
+
 ## The baseline
 
 The first planned window a record has once it is started itself is kept as its baseline
@@ -441,9 +531,10 @@ the plan as an outline behind it.
 - **MCP** `list_ideas`, `get_idea`, `list_horizons` (reads); `capture_idea`, `update_idea`,
   `start_idea` (promote in place, or with `adopt` link an existing issue; answers the promoted
   `{ id, identifier, kind }` or `null`), `unlink_idea`, `scaffold_idea` (preview without
-  `confirm`, create with it); `update_idea` also takes `plan` (sections) and `defer_question`;
+  `confirm`; with it and the preview's `fingerprint`, create); `update_idea` also takes `plan`
+  (sections), `breakdown_base` and `defer_question`;
   `reset_idea_baseline` (a view button).
-- **HTTP** `GET /api/plan`, `GET /api/plan-idea?ref=`; `POST /api/plan/{enable, capture, update, question, resolve, decision, promote, scaffold, adopt, unlink, reset-baseline, horizon-create, horizon-update, horizon-remove, horizon-queue}`; `update` and `capture` take `plan`, `resolve` takes `deferred`, `scaffold` takes `preview`.
+- **HTTP** `GET /api/plan`, `GET /api/plan-idea?ref=`; `POST /api/plan/{enable, capture, update, question, resolve, decision, promote, scaffold, adopt, unlink, reset-baseline, horizon-create, horizon-update, horizon-remove, horizon-queue}`; `update` and `capture` take `plan`, `update` takes `breakdownBase`, `resolve` takes `deferred`, `scaffold` takes `preview` or the preview's `fingerprint`.
   Every write answers `{ plan, idea }`. `GET /api/issue` adds `planRecord` and `horizonPlan`.
 - **Web UI** the Plan view ([web-ui.md](web-ui.md)): Ideas (columns by maturity, capture),
   Horizons (Unscheduled and each horizon), Timeline (planned, baseline and actual windows on a
@@ -458,16 +549,20 @@ the plan as an outline behind it.
 | test | proves |
 |---|---|
 | `test/store-plan.test.ts` | enabling and its refusal; identity (no counter consumed, never a ref, never shown, numbered at promotion, earlier builds' numbers drafted); every guard; the tracker's own writes, horizon dates included; dependencies; nesting and stage; horizons as milestones; membership (move, unschedule, unlink, plan order, hand-placed members stay, a promoted record counted, a queued horizon expanding); a horizon's own status (its only work cancelled with and without a rebuild between, reopened; shipped on done work only; an earlier build's derived cancel taken back; removal refused while it holds open work or is queued; an edit of a removed horizon refused before any write); Promote in place, under a promoted parent, refused when dropped or already promoted; Adopt on a promoted record; missing links; actual windows on real-shaped data; late vs not started; the baseline; every steering refusal |
-| `test/plan-sections.test.ts` | the importer on fixtures shaped like real plan files (lane tables, a step breakdown with other columns, revision notes naming keys, decision subsections, checklists, a risk note): every row kept, sections mapped, nothing dropped, what it cannot place reported; sections round-trip through their documents; estimates and depends-on cells; the gate's phrases; completeness |
+| `test/plan-sections.test.ts` | the importer on fixtures shaped like real plan files (lane tables, a step breakdown with other columns, revision notes naming keys, decision subsections, checklists, a risk note): every row kept, sections mapped, nothing dropped, what it cannot place reported; wrapped and nested items, prose under list headings, headings and comments inside code fences, escaped pipes, repeated keys and front matter kept, each said; unknown keys named; sections round-trip through their documents; every estimate form, and why one reads as none; cycles, unknown and repeated keys in the gate; the gate's phrases; completeness |
 | `test/plan-scaffold.test.ts` | sections persist as revisions, an agent writes them, duplicate keys refused; the gate on every path to shaped, deferred questions let through; Scaffold creates exactly its preview (epic, plan document, acceptance, tasks with estimate, blockers, acceptance, context), idempotently and for rows added later, nested sub-ideas as child epics (one scaffolded before its parent is filed under it later, created once), never where the lifecycle does not offer it; import with its file attached |
 | `test/plan-scaffold-surfaces.test.ts` | the gate on the page, the CLI with `--person` and an agent over MCP; the three Scaffold previews agree and write nothing; a confirm creates once whichever surface retries; CLI import |
 | `test/cloud-plan-sync.test.ts` | under both folds: the plan, its membership and its numbers converge on a tail device and a hydrated one; two offline adopts both arrive; an unlink racing an adopt converges; offline moves on two devices derive the same membership with no conflict and nothing sent for it; two offline promotions end with two distinct numbers, no draft and no open conflict; a third device reading both claims before the settlement shows a recorded stand-in, never a numberless epic; a horizon whose only work is cancelled stays listed on every device and derives again when another device reopens the work; two offline moves re-derive each horizon from the merged membership; an idea an earlier build numbered resolves by its old number on every device |
 | `test/cloud-plan-promotion-identity.test.ts` | under both folds: one idea promoted on two devices offline (with a ticket made offline on one, with a third device ahead, with equal counters, whichever device sends first) ends on one number per record on every device and a fresh one, no number on two records, no open conflict |
+| `test/cloud-plan-breakdown-sync.test.ts` | under both folds: two devices editing different breakdown rows offline, or each adding one, keep both with no conflict, on a hydrated device too; one row edited on both is a recorded conflict holding both values, and resolving it settles both; two devices scaffolding one idea offline create the same tasks (same ids), merged into one set, and a later scaffold adds only the new row |
+| `test/plan-scaffold-guards.test.ts` | a shaped plan hollowed by an edit (goal, breakdown, acceptance, an added or reopened question, a restored empty revision, an unknown key) stays shaped, says what it lacks, holds Scaffold and Promote back and refuses both; a breakdown never written as a document, list sections and questions written as lists only; every malformed plan payload refused by name; import into shaped held to the gate with its questions, writing nothing when refused; the source file attached byte for byte; a confirm refused without a fingerprint and on a changed plan; no preview where Scaffold is not offered; inherited acceptance, labelled; blockers added and never removed; a renamed key keeps its task; tasks named by idea and row; cycles named; a stale breakdown save refused; one row edited writes one row |
+| `test/plan-read-cost.test.ts` | a plan read never resolves a reference per document, derives the plan once per state of the database, and once more for a write as the server answers it; a change made outside the plan layer and a new day are read |
+| `test/ui-server-keep-alive.test.ts` | the page's server holds kept-alive sockets past SQLite's busy timeout and says so in its `Keep-Alive` header; a socket idle longer than Node's default is reused and answered |
 | `test/sync-mutation-convergence.test.ts` | every `PlanStore` mutation, and `promoteInPlace`, converges column for column |
 | `test/plan-surfaces.test.ts` | CLI, MCP and HTTP read one plan with no idea numbers and no draft shown, walk every surface that prints or serializes an issue (CLI text and JSON, MCP tools, HTTP routes, events, refusals) and find no draft, with `identifier: null, draft: true` on every issue object, consume no number at capture, refuse the same agent writes (plain tracker tools and `update_milestone` included), promote into the horizon's milestone, and let the person steer |
 | `test/plan-lifecycle.test.ts` | the table itself, pinned: every state's actions, who takes each, the promoted record's epic edits, back to raw offered nowhere, how a maturity change is named (a no-op included), how states are read |
 | `test/plan-own-state.test.ts` | with hand-written expectations, not the table's: a parent's own state against its rollup (a raw parent with work underway or landed beneath it, a dropped one restored, its sub-ideas left alone, no baseline, late rolled up); a sub-idea promoted or adopted on its own and re-parented by its parent's promotion, its tree and derived status; a promoted record edited as an epic once shipped; the maturity no-op; every document key, restore and file on a shipped, dropped or raw idea |
-| `test/plan-lifecycle-surfaces.test.ts` | every idea (state, write) cell and every horizon (state, action) cell agrees with the lifecycle table on HTTP, MCP and the CLI with and without `--person`; every payload carries exactly the table's row, promoted records and parents with sub-ideas included; every document and file write (MCP `put_document`, `attach_file`, `doc_restore`, `staple doc --put`) in every state; the no-op maturity; a horizon's milestone route refusing a start date before any write |
+| `test/plan-lifecycle-surfaces.test.ts` | every idea (state, write) cell and every horizon (state, action) cell agrees with the lifecycle table on HTTP, MCP and the CLI with and without `--person` (the CLI bundled once per run, so the walk takes seconds); every payload carries exactly the table's row, promoted records and parents with sub-ideas included; every document and file write (MCP `put_document`, `attach_file`, `doc_restore`, `staple doc --put`) in every state; the no-op maturity; a horizon's milestone route refusing a start date before any write |
 | `src/ui/app/src/detail/plan-drawer.test.tsx` | an idea's tab strip, the epic's strip once promoted, no ticket number in any presentation, actions exactly as offered, a read-only title where the state offers no edit, idea wording in Activity, Documents and Files, a horizon's section and a held-back action's reason |
 | `src/ui/app/src/components/command-palette/commands.test.ts` | a plan record's palette commands are its one-click offered actions only (no status, start or stop for an idea; a promoted one keeps its epic commands), with its title as the hint, never its id |
 | `src/ui/app/src/views/plan/plan-model.test.ts` | board columns and nesting, the Ideas lens, the late/not-started split, timeline groups, range and dragging |

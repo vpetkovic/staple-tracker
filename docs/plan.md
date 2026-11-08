@@ -72,8 +72,13 @@ An idea is a plan an agent can build from. Its **Plan** tab holds the sections: 
 and constraints, Decisions, Open questions, the **Task breakdown** (a row per task: key, title,
 estimate, what it waits on, when it is done, owner, notes), Acceptance criteria, Dependencies,
 Out of scope, Risks, and Sources and files. The three marked ★ are required before it can be
-shaped: a goal, a breakdown with a "done when" on every row, and acceptance criteria. Every open
-question must be answered or deferred too. The meter at the top says what is still missing.
+shaped: a goal, a breakdown of titled rows, and acceptance criteria. A row without its own "done
+when" inherits the plan's acceptance criteria and says so; its task is labelled
+`acceptance-inherited` until someone sharpens it. Rows may not wait on a key the breakdown does
+not hold, or on each other in a circle. Every open question must be answered or deferred too.
+The meter at the top says what is still missing. If a shaped idea is edited so it no longer
+passes, it stays shaped and reads **shaped · plan incomplete**, with Scaffold and Promote held
+back until it passes again.
 
 Agents can write all of it. A plan you already have as a file comes in whole:
 
@@ -81,11 +86,14 @@ Agents can write all of it. A plan you already have as a file comes in whole:
 staple idea import Plans/PLAN-7-checkout.md --parent <id> --horizon Now --maturity exploring --person
 ```
 
-It reads the headings and task tables, attaches the file, and says what it could not place.
+It reads the headings and task tables, attaches the file, and lists anything it kept in Context
+instead of the section it was under.
 
 ## 6. Start the work
 
-Open a shaped idea and press **Scaffold epic and tasks**. It shows first what it will create:
+Open a shaped idea and press **Scaffold epic and tasks**. It shows first what it will create, and
+confirming creates exactly that: if the plan changed since the preview, the confirm is refused
+and you preview again. The preview shows
 the epic (this same record, now with a ticket number) and a task for every breakdown row, with
 its estimate, what it waits on, and when it is done. Confirm, and each task gets those fields and
 a context page, so an agent can work it from the ticket alone. Shaped sub-ideas become child
@@ -161,7 +169,7 @@ An agent trying any of these gets a `validation` refusal that says so.
 | `staple idea new` | `capture_idea` | Capture a raw idea |
 | `staple idea set`, `ask`, `resolve`, `decide` | `update_idea` | Edit an idea |
 | `staple idea promote`, `adopt` | `start_idea` | Promote the idea to an epic, or adopt an issue |
-| `staple idea scaffold [--preview]` | `scaffold_idea` | Promote it and create its tasks from the breakdown |
+| `staple idea scaffold [--confirm FP]` | `scaffold_idea` (`confirm`, `fingerprint`) | Preview, then promote it and create its tasks from the breakdown |
 | `staple idea plan`, `task`, `defer` | `update_idea` (`plan`, `defer_question`) | Write plan sections and breakdown rows; defer a question |
 | `staple idea import <plan.md>` | | Capture an idea from a plan file |
 | `staple idea unlink` | `unlink_idea` | Remove a link |
