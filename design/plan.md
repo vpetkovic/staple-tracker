@@ -220,14 +220,14 @@ promoted record is an ordinary epic in the tracker; its plan record reads starte
 | exploring | edit, ask, decide, shape, drop, schedule, plan dates, reparent, reorder |
 | shaped | edit, ask, decide, back to exploring, drop, schedule, plan dates, reparent, reorder, promote, adopt |
 | started | edit, ask, decide, schedule, plan dates, reorder, adopt, unlink, reset baseline, open the epic |
-| shipped | open the epic |
+| shipped | adopt (linking more work: landed work keeps it shipped, open work reopens it), open the epic |
 | dropped | restore |
 | horizon planned | rename, date, reorder, remove |
 | horizon active | rename, date, reorder, queue |
 | horizon shipped | nothing |
 
 So raw is never scheduled or promoted, a started or promoted idea never offers promotion again,
-shipped offers no edits, and a horizon is removed only while it holds no work and queued only
+shipped offers no edits (only linking more work), and a horizon is removed only while it holds no work and queued only
 while it does. Each action also says who may take it: the steering actions (maturity moves,
 schedule, dates, order, parent, baseline, every horizon definition) are the person's; the rest
 are anyone's. A few preconditions need data and travel with the offer as a `disabledReason`:

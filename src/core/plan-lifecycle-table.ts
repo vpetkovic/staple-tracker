@@ -46,14 +46,15 @@ export const IDEA_ACTION_IDS = Object.keys(IDEA_ACTIONS) as IdeaAction[];
  * The idea table. Raw is captured thinking: it is refined, explored or dropped, never scheduled
  * or promoted. Exploring may reserve a horizon slot. Shaped is ready: it is scheduled, promoted or
  * linked to existing work. Started (promoted, or linked to work) is re-planned, not re-shaped,
- * and never promoted again. Shipped offers no edits. Dropped can only be restored.
+ * and never promoted again. Shipped offers no edits: only linking more work (history that landed
+ * elsewhere, or new work, which reopens it) and opening the epic. Dropped can only be restored.
  */
 export const IDEA_LIFECYCLE: Readonly<Record<IdeaState, readonly IdeaAction[]>> = {
   raw: ["edit", "ask", "decide", "explore", "drop", "reparent", "reorder"],
   exploring: ["edit", "ask", "decide", "shape", "drop", "schedule", "plan_dates", "reparent", "reorder"],
   shaped: ["edit", "ask", "decide", "unshape", "drop", "schedule", "plan_dates", "reparent", "reorder", "promote", "adopt"],
   started: ["edit", "ask", "decide", "schedule", "plan_dates", "reorder", "adopt", "unlink", "reset_baseline", "open_epic"],
-  shipped: ["open_epic"],
+  shipped: ["adopt", "open_epic"],
   dropped: ["restore"],
 };
 

@@ -91,7 +91,7 @@ follows the same rules:
 | Exploring | everything raw can, plus reserve a horizon and plan dates, then mark it shaped |
 | Shaped | schedule and date it, promote it, adopt existing work, or send it back to exploring |
 | Started | re-plan it, adopt more work, unlink work, reset the baseline, open the epic |
-| Shipped | open the epic; nothing is edited any more |
+| Shipped | open the epic, or link more work (open work reopens it); nothing is edited any more |
 | Dropped | restore it |
 
 A raw idea is never scheduled or promoted, and an idea already started or promoted never offers
