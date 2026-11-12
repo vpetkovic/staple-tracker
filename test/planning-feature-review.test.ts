@@ -58,6 +58,19 @@ describe("record identity protects hidden planning data", () => {
       expect(accepted).toEqual([]); expect(bytes()).toBe(before); expect(s.plan().view()).toEqual(view);
     } finally { s.db.close(); }
   });
+  it("OFF goal run refuses before writes and the person's goal still runs after ON", () => {
+    const { s, now } = setup();
+    try {
+      const before = JSON.stringify(s.db.prepare("SELECT * FROM issues ORDER BY rowid").all());
+      s.setSetting("features.planning", false, "Mira", PERSON);
+      expect(() => s.runs().start({ actor: "worker", scope: now.id })).toThrow(/Planning is off in this workspace/);
+      expect(s.db.prepare("SELECT COUNT(*) AS n FROM runs").get()).toMatchObject({ n: 0 });
+      expect(JSON.stringify(s.db.prepare("SELECT * FROM issues ORDER BY rowid").all())).toBe(before);
+      s.setSetting("features.planning", true, "Mira", PERSON);
+      expect(() => s.runs().start({ actor: "worker", scope: now.id })).not.toThrow();
+      expect(s.db.prepare("SELECT COUNT(*) AS n FROM runs").get()).toMatchObject({ n: 1 });
+    } finally { s.db.close(); }
+  });
   for (const enabled of [true, false]) {
     it(`reserved kinds survive removal attempts with planning ${enabled}`, () => {
       const w = setup();
