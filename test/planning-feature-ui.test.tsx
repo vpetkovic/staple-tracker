@@ -19,7 +19,7 @@ it("OFF removes Plan navigation and its lenses; ON restores navigation", () => {
     expect(markup.includes('data-view-tab="plan"')).toBe(planningEnabled);
     expect(markup.includes('data-nav-item="view:plan"')).toBe(planningEnabled);
   }
-  const off = renderToStaticMarkup(<SessionContext.Provider value={fakeSession({ planningEnabled: false })}><PlanView onAuthError={() => {}} /></SessionContext.Provider>);
+  const off = renderToStaticMarkup(<SessionContext.Provider value={fakeSession({ planningEnabled: false, mode: "hub", ws: "", workspaces: [{ slug: "larkspur", prefix: "LAR" }, { slug: "larkspur-sandbox", prefix: "SAN" }] })}><PlanView onAuthError={() => {}} /></SessionContext.Provider>);
   expect(off).not.toMatch(/data-plan-|Ideas|Horizons|Timeline|Enable planning/);
 });
 
