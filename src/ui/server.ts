@@ -912,7 +912,9 @@ export function startUiServer(options: UiOptions): UiHandle {
           .prepare("SELECT COUNT(*) AS c, COALESCE(MAX(updated_at),'') AS u FROM issues")
           .get() as { c: number; u: string };
         const comments = h.store.db.prepare("SELECT COUNT(*) AS c FROM comments").get() as { c: number };
-        return `${h.slug}:${events.s}:${issues.c}:${issues.u}:${comments.c}${driverFingerprint(h)}${clockFingerprint(h)}${membersFingerprint(h)}`;
+        // Sync invalidates settings without writing local issue or event rows.
+        const settings = h.store.db.prepare("SELECT value FROM meta WHERE key = 'settings_revision'").get() as { value: string } | undefined;
+        return `${h.slug}:${events.s}:${issues.c}:${issues.u}:${comments.c}:s${settings?.value ?? "0"}${driverFingerprint(h)}${clockFingerprint(h)}${membersFingerprint(h)}`;
       })
       .join("|");
   }
