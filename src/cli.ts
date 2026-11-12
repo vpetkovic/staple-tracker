@@ -1116,12 +1116,12 @@ Milestones
               refused (exit 7) and the order stands. Membership never changes an
               issue's parent, blockers, status or claim
 
-The plan (ideas and horizons above the tracker)
-  plan enable --person (experimental)                           turn planning on: adds the "idea" and "milestone"
-              kinds and the horizons Now, Next and Later, which are milestones
-  plan show (experimental)                             the horizons in order with their late and
+The plan (experimental; features.planning defaults off)
+  plan enable --person                 turn planning on: adds the "idea" and "milestone"
+              kinds and the horizons Now and Next, which are milestones
+  plan show                            the horizons in order with their late and
               not-started counts
-  idea ls (experimental) [--maturity M] [--horizon H]  ideas with stage, horizon and progress; ideas are
+  idea ls [--maturity M] [--horizon H]  ideas with stage, horizon and progress; ideas are
               never queued, checked out, picked by next or listed by ls. An idea has
               no ticket number until it is promoted: its <ref> is the id idea ls prints
   idea new <title> [--brief T] [--parent REF]
@@ -1155,7 +1155,7 @@ The plan (ideas and horizons above the tracker)
               row, acceptance criteria, and every question answered or deferred)
   idea decide <ref> <decision>          record a decision
   idea reset-baseline <ref> --person    the current planned window becomes the baseline
-  horizon ls (experimental)
+  horizon ls
   horizon new <name> [--date D] --person
   horizon set <ref> [--name N] [--date D|none] [--run work|goal|epic|none] [--goal TEXT]... [--no-goal] --person
   horizon mv <ref> (--before H|--end) --person

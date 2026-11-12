@@ -287,7 +287,7 @@ describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
       expect(response.status).toBe(200);
       return await response.json();
     };
-    await post("/api/plan/enable", {});
+    await post("/api/settings", { target: "settings", ops: [{ op: "set", key: "features.planning", value: true }] });
     const captured = await post("/api/plan/capture", { title: "Larkspur visitor welcome" });
     const id = captured.idea.idea.id as string;
     for (const colorScheme of ["light", "dark"] as const) {
