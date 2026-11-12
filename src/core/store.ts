@@ -8054,7 +8054,7 @@ export class WorkspaceStore {
    */
   instructions(ref: string, opts: { runId?: string | null } = {}): ResolvedInstruction[] {
     const row = this.requireRow(ref);
-    return resolveInstructions(this.db, row.id, { runId: opts.runId ?? null });
+    return resolveInstructions(this.db, row.id, { runId: opts.runId ?? null, planning: this.planningOn() });
   }
 
   /**
@@ -8114,7 +8114,7 @@ export class WorkspaceStore {
         ? documents.map((doc) => ({ ...doc, body: this.getDocument(row.id, doc.key).body }))
         : documents,
       attachments: listAttachments(this.db, row.id),
-      instructions: resolveInstructions(this.db, row.id, { runId: opts.runId ?? null }),
+      instructions: resolveInstructions(this.db, row.id, { runId: opts.runId ?? null, planning: this.planningOn() }),
     };
   }
 

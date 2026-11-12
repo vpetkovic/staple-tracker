@@ -48,8 +48,10 @@ function writer(person: boolean | undefined): { actor: string; options: PlanWrit
   return { actor: name, options: { person: { via: "cli" } } };
 }
 
-function planFor(values: { db?: string; ws?: string }) {
-  return resolveWorkspace({ db: values.db, ws: values.ws }).store.plan();
+function planFor(values: { db?: string; ws?: string }, enabling = false) {
+  const plan = resolveWorkspace({ db: values.db, ws: values.ws }).store.plan();
+  if (!enabling) plan.assertEnabled();
+  return plan;
 }
 
 function ideaLine(idea: IdeaView, plan: PlanView): string {
@@ -127,12 +129,12 @@ function offeredLine(actions: IdeaDetail["idea"]["actions"]): string {
 export function runPlanCommand(rest: string[]): void {
   const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: COMMON });
   const [sub = "show"] = positionals;
-  const plan = planFor(values);
-  const { actor } = writer(values.person);
+  const plan = planFor(values, sub === "enable");
+  const { actor, options } = writer(values.person);
   let view: PlanView;
   switch (sub) {
     case "enable":
-      view = plan.enable(actor);
+      view = plan.enable(actor, options);
       break;
     case "show":
       view = plan.view();

@@ -1082,9 +1082,9 @@ export function startUiServer(options: UiOptions): UiHandle {
    * these, never from the issue's own fields, so an unpromoted idea's stored identifier is never
    * what it shows.
    */
-  function planDetail(handle: ReturnType<typeof handleFor>, issueId: string): { planRecord: unknown; horizonPlan: unknown } {
+  function planDetail(handle: ReturnType<typeof handleFor>, issueId: string): { planRecord?: unknown; horizonPlan?: unknown } {
     const plan = handle.store.plan();
-    if (!plan.enabled()) return { planRecord: null, horizonPlan: null };
+    if (!plan.enabled()) return {};
     const view = plan.view();
     const horizon = view.horizons.find((h) => h.id === issueId) ?? null;
     if (horizon) return { planRecord: null, horizonPlan: { horizon, ideas: view.ideas.filter((idea) => idea.horizonId === issueId) } };
@@ -1955,6 +1955,7 @@ export function startUiServer(options: UiOptions): UiHandle {
         json(res, 200, {
           mode: options.hub ? "hub" : "workspace",
           workspaces: handles.map((h) => ({ slug: h.slug, prefix: h.prefix })),
+          features: Object.fromEntries(handles.map(h => [h.slug, { planning: h.store.planningOn() }])),
           /**
            * The origins a write is accepted from (the Origin check below). A page compares
            * its own origin against these to know, before pressing anything, that it is
@@ -3981,7 +3982,7 @@ export function startUiServer(options: UiOptions): UiHandle {
               blocks: blocks.get(issue.id) ?? [],
             },
             milestoneId: milestoneOf.get(issue.id) ?? null,
-            horizon: horizons.get(issue.id) ?? null,
+            ...(h.store.planningOn() ? { horizon: horizons.get(issue.id) ?? null } : {}),
           }));
         });
         json(res, 200, out);
@@ -4647,7 +4648,7 @@ export function startUiServer(options: UiOptions): UiHandle {
         // an op means or about which of them is refused. `settings` (R6a) writes
         // registered WORKSPACE values the same way; a global key is refused by the
         // store with the sentence that names `staple config set`.
-        if (target === "settings") writeHandle.store.applySettingOps(ops as SettingOp[], actor);
+        if (target === "settings") writeHandle.store.applySettingOps(ops as SettingOp[], actor, { via: "settings" });
         else if (target === "statuses") writeHandle.store.applyStatusOps(ops as VocabularyOp[], actor);
         else writeHandle.store.applyKindOps(ops as VocabularyOp[], actor);
         json(res, 200, envelope(writeHandle));
@@ -5041,12 +5042,14 @@ export function startUiServer(options: UiOptions): UiHandle {
        */
       if (url.pathname === "/api/plan") {
         const handle = handleFor(url.searchParams.get("ws") ?? undefined);
+        handle.store.plan().assertEnabled();
         json(res, 200, handle.store.plan().view());
         return;
       }
 
       if (url.pathname === "/api/plan-idea") {
         const handle = handleFor(url.searchParams.get("ws") ?? undefined);
+        handle.store.plan().assertEnabled();
         json(res, 200, handle.store.plan().detail(url.searchParams.get("ref") ?? ""));
         return;
       }
@@ -5055,6 +5058,7 @@ export function startUiServer(options: UiOptions): UiHandle {
         const body = await readBody(req);
         const handle = handleFor((body.ws as string) ?? undefined);
         const plan = handle.store.plan();
+        plan.assertEnabled();
         const actor = bodyActor(body);
         const person = { person: { via: "plan_view" } };
         const ref = body.ref as string;
@@ -5062,7 +5066,7 @@ export function startUiServer(options: UiOptions): UiHandle {
         let idea: string | null = ref ?? null;
         switch (url.pathname) {
           case "/api/plan/enable":
-            plan.enable(actor);
+            plan.enable(actor, person);
             break;
           case "/api/plan/capture":
             idea = plan.capture(

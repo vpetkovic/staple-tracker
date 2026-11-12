@@ -1,3 +1,4 @@
+import { configuredHumanName } from "./mcp-view-actions.js";
 /**
  * staple CLI — the human/CI surface. Mirrors the MCP tools.
  * Ships as the `staple` bin of the `staple-cli` npm package (`npx staple-cli`);
@@ -1116,11 +1117,11 @@ Milestones
               issue's parent, blockers, status or claim
 
 The plan (ideas and horizons above the tracker)
-  plan enable                           turn planning on: adds the "idea" and "milestone"
+  plan enable --person (experimental)                           turn planning on: adds the "idea" and "milestone"
               kinds and the horizons Now, Next and Later, which are milestones
-  plan show                             the horizons in order with their late and
+  plan show (experimental)                             the horizons in order with their late and
               not-started counts
-  idea ls [--maturity M] [--horizon H]  ideas with stage, horizon and progress; ideas are
+  idea ls (experimental) [--maturity M] [--horizon H]  ideas with stage, horizon and progress; ideas are
               never queued, checked out, picked by next or listed by ls. An idea has
               no ticket number until it is promoted: its <ref> is the id idea ls prints
   idea new <title> [--brief T] [--parent REF]
@@ -1154,7 +1155,7 @@ The plan (ideas and horizons above the tracker)
               row, acceptance criteria, and every question answered or deferred)
   idea decide <ref> <decision>          record a decision
   idea reset-baseline <ref> --person    the current planned window becomes the baseline
-  horizon ls
+  horizon ls (experimental)
   horizon new <name> [--date D] --person
   horizon set <ref> [--name N] [--date D|none] [--run work|goal|epic|none] [--goal TEXT]... [--no-goal] --person
   horizon mv <ref> (--before H|--end) --person
@@ -2892,7 +2893,7 @@ function main() {
      * refused with the sentence that names `staple config set`.
      */
     case "settings": {
-      const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: common });
+      const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { ...common, person: { type: "boolean" } } });
       const { store } = getStore(values);
       const sub = positionals[0] ?? "ls";
       // A structured value (kinds.appearance is a map) prints as JSON rather
@@ -2921,7 +2922,9 @@ function main() {
           const raw = positionals[2];
           if (!key || raw === undefined) throw new StapleError("validation", "usage: staple settings set <key> <value>");
           const definition = requireSettingDefinition(key, "workspace");
-          const view = store.setSetting(key, coerceSettingInput(definition, raw, `workspace ${store.slug}`), agentName());
+          const name = values.person ? configuredHumanName() : null;
+          if (values.person && !name) throw new StapleError("validation", '--person needs your name: run `staple config set humanName "Your Name"` first.');
+          const view = store.setSetting(key, coerceSettingInput(definition, raw, `workspace ${store.slug}`), name ?? agentName(), values.person ? { via: "cli" } : null);
           if (values.json) outJson(view);
           else line(view);
           break;

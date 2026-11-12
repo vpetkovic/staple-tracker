@@ -197,7 +197,14 @@ function resetWorkspaceCache(): void {
   byAlias.clear();
 }
 
-const server = new McpServer({ name: "staple", version: "0.1.0" });
+const featureInstructions = (() => {
+  try { return `This workspace has features.planning ${storeFor().planningOn() ? "on" : "off"}.`; }
+  catch { return "Resolve the workspace and read get_setting features.planning first."; }
+})();
+const server = new McpServer({ name: "staple", version: "0.1.0" }, {
+  instructions: `${featureInstructions} Planning is experimental, defaults off, and only a person changes it in Settings → Experimental or with staple settings set features.planning true --person. Read get_setting or show_about for the current workspace state; explicit ws may differ from this handshake. When off, use ordinary tasks and milestones; plan tools refuse. Ideas remain drafts and are never pickup work.`,
+});
+const PLANNING_TOOLS = new Set(["list_ideas", "get_idea", "list_horizons", "capture_idea", "update_idea", "scaffold_idea", "start_idea", "unlink_idea", "reset_idea_baseline"]);
 
 /**
  * S10: this server's automatic-sync registration.
@@ -245,6 +252,7 @@ const autoSync = new SurfaceAutoSync({
 const MACHINE_LOCAL_WRITES = new Set(["record_budget_sample", "stop_run", "pause_run", "resume_run"]);
 {
   type ToolConfig = {
+    description?: string;
     annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean };
     inputSchema?: Record<string, unknown>;
     outputSchema?: unknown;
@@ -387,6 +395,15 @@ const MACHINE_LOCAL_WRITES = new Set(["record_budget_sample", "stop_run", "pause
     rawCb: ToolCallback,
   ) => {
     assertAnnotated(name, rawConfig);
+    if (PLANNING_TOOLS.has(name)) {
+      rawConfig = { ...rawConfig, description: `Experimental, only when features.planning is on. ${rawConfig.description ?? ""}` };
+      const planCallback = rawCb;
+      rawCb = (...args: unknown[]) => {
+        const ws = (args[0] as { ws?: string } | undefined)?.ws;
+        try { storeFor(ws).plan().assertEnabled(); } catch (error) { return fail(error); }
+        return planCallback(...args);
+      };
+    }
     // A tool that declares an MCP Apps view: checked, both meta spellings, results stamped.
     const [viewConfig, cb] = linkToolView(name, rawConfig, rawCb);
     const config = declaringNotices(viewConfig);
@@ -4215,6 +4232,7 @@ server.registerTool(
     inputSchema: { ws: wsSchema },
     outputSchema: {
       server: z.object({ name: z.string(), version: z.string() }),
+      features: z.object({ planning: z.boolean() }).nullable(),
       workspace: z
         .object({ slug: z.string(), prefix: z.string(), total: z.number().int(), statuses: z.array(z.object(aboutStatusShape)) })
         .nullable()
@@ -4242,7 +4260,8 @@ server.registerTool(
       workspace = null;
     }
     const views = VIEWS.map((view) => ({ name: view.name, uri: viewUri(view.name), title: view.title }));
-    const payload = { server: { name: "staple", version: STAPLE_VERSION }, workspace, views };
+    const features = workspace === null ? null : { planning: storeFor(ws).planningOn() };
+    const payload = { server: { name: "staple", version: STAPLE_VERSION }, workspace, views, features };
     // The text is the whole answer for a host without MCP Apps, so it is prose, not JSON.
     const lines = [
       `staple ${STAPLE_VERSION}`,
@@ -4255,6 +4274,7 @@ server.registerTool(
                 .filter((status) => status.count > 0)
                 .map((status) => `${status.count} ${status.label.toLowerCase()}`)
                 .join(", ")}.`),
+      `Experimental features: planning ${features?.planning ? "on" : "off"}. Only a person changes features.planning.`,
       `Views: ${views.map((view) => `${view.name} (${view.uri})`).join(", ")}.`,
     ];
     return { content: [{ type: "text" as const, text: lines.join("\n") }], structuredContent: payload };

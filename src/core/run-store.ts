@@ -709,7 +709,7 @@ export class RunStore {
    * instruction document on a sibling the run has not reached yet.
    */
   private takeInstructions(row: RunRow, issueId: string, run: Run): { instructions: ResolvedInstruction[]; instructionsChanged: InstructionChange[] } {
-    const instructions = resolveInstructions(this.db, issueId, { runId: row.id });
+    const instructions = resolveInstructions(this.db, issueId, { runId: row.id, planning: this.store.planningOn() });
     const instructionsChanged = this.pendingInstructionChanges(run);
     this.db.prepare("UPDATE runs SET instructions_seq = ? WHERE id = ?").run(latestEventSeq(this.db), row.id);
     return { instructions, instructionsChanged };
@@ -1541,6 +1541,7 @@ export class RunStore {
    * epic, is not to get (design/plan.md, "Lenses"). Its work is taken from the queue instead.
    */
   private assertHorizonRunsToGoal(issueId: string, identifier: string): void {
+    if (!this.store.planningOn()) return;
     const row = this.db.prepare("SELECT plan_run_mode FROM issues WHERE id = ? AND kind = ? AND plan_rank IS NOT NULL").get(issueId, MILESTONE_KIND) as
       | { plan_run_mode: string | null }
       | undefined;
