@@ -487,7 +487,7 @@ export class PlanStore {
     return this.store.planningOn();
   }
 
-  private assertEnabled(): void {
+  assertEnabled(): void {
     if (!this.store.planningOn()) throw new StapleError("validation", PLAN_KINDS_MISSING_MESSAGE, { kinds: [IDEA_KIND, MILESTONE_KIND] });
   }
 
@@ -617,14 +617,20 @@ export class PlanStore {
    * Run again on a workspace where planning is on, it converts what an earlier build left: a
    * numbered idea back to a draft identifier.
    */
-  enable(actor: string | null): PlanView {
-    if (this.store.planningOn()) {
+  enable(actor: string | null, options: PlanWriteOptions = {}): PlanView {
+    this.store.setSetting("features.planning", true, actor, options.person);
+    return this.view();
+  }
+
+  /** Only the feature-setting transaction calls this structural upgrade. */
+  initialize(actor: string | null): void {
+    if (this.store.planningInitialized()) {
       this.store.journaled(() => {
         this.migrateLegacyLater();
         this.draftNumberedIdeas(actor);
         this.settleMembership(actor);
       });
-      return this.view();
+      return;
     }
     const unrelated = this.db.prepare("SELECT identifier FROM issues WHERE kind = ? ORDER BY identifier").all(IDEA_KIND) as Array<{ identifier: string }>;
     if (unrelated.length > 0) {
@@ -635,7 +641,7 @@ export class PlanStore {
         { issues: names },
       );
     }
-    return this.store.journaled(() => {
+    this.store.journaled(() => {
       const ids = this.store.getKinds().map((kind) => kind.id);
       if (!ids.includes(IDEA_KIND)) this.store.addKind({ id: IDEA_KIND, label: "Idea" }, actor);
       if (!ids.includes(MILESTONE_KIND)) this.store.addKind({ id: MILESTONE_KIND, label: "Milestone" }, actor);

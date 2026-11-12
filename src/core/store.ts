@@ -95,7 +95,7 @@ import {
   type KindWithAppearance,
 } from "./kind-appearance.js";
 import { MILESTONE_KIND, MILESTONE_MEMBERSHIP, assertNotReservedActor, isGoalRunGate } from "./milestones.js";
-import { IDEA_KIND, PLAN_KINDS, assertPlanParent, assertPlanRekind, displayRef, draftIdentifier, isPlanKind, planKindRefusal, steeringRefusal } from "./plan.js";
+import { IDEA_KIND, PLAN_KINDS_MISSING_MESSAGE, PLAN_KINDS, assertPlanParent, assertPlanRekind, displayRef, draftIdentifier, isPlanKind, planKindRefusal, steeringRefusal } from "./plan.js";
 import { PlanStore } from "./plan-store.js";
 import { fallbackTarget, recordRemovalTarget } from "./vocabulary-targets.js";
 import { ProjectStore } from "./project-store.js";
@@ -1992,7 +1992,7 @@ export class WorkspaceStore {
        * The plan kinds go only when nothing uses them: `--migrate-to` would turn every idea
        * into tracker work at once, which is the move `assertPlanRekind` refuses one at a time.
        */
-      if (isPlanKind(id) && this.planningOn() && this.kindUsageCount(id) > 0) {
+      if (isPlanKind(id) && this.planningInitialized() && this.kindUsageCount(id) > 0) {
         throw new StapleError(
           "validation",
           `Cannot remove the ${id} kind while ${this.kindUsageCount(id)} ${id === IDEA_KIND ? "idea" : "horizon"}${this.kindUsageCount(id) === 1 ? "" : "s"} still use it.`,
@@ -2163,7 +2163,8 @@ export class WorkspaceStore {
    * every other connection's snapshot is stale, and logs actor, previous and
    * new value as a `setting_changed` event.
    */
-  setSetting(key: string, value: unknown, actor?: string | null): SettingValueView {
+  setSetting(key: string, value: unknown, actor?: string | null, person?: PersonDecision | null): SettingValueView {
+    if (key === "features.planning" && !person) throw new StapleError("validation", "Only a person can change features.planning, in Settings → Experimental or with `staple settings set features.planning true --person`.");
     const definition = requireSettingDefinition(key, "workspace");
     const next = validateSettingValue(definition, value, `workspace ${this.slug}`);
     if (key === "kinds.default") this.assertConfiguredKind(next as string);
@@ -2196,12 +2197,14 @@ export class WorkspaceStore {
         payload: { value: next },
         actor: actor ?? null,
       });
+      if (key === "features.planning" && next === true) this.plan().initialize(actor ?? null);
       return settingValueView(definition, next, "workspace");
     });
   }
 
   /** Clear a stored value so the definition's default applies again. A no-op when nothing is stored. */
-  resetSetting(key: string, actor?: string | null): SettingValueView {
+  resetSetting(key: string, actor?: string | null, person?: PersonDecision | null): SettingValueView {
+    if (key === "features.planning" && !person) throw new StapleError("validation", "Only a person can change features.planning, in Settings → Experimental or with `staple settings set features.planning false --person`.");
     const definition = requireSettingDefinition(key, "workspace");
     return this.atomically(() => {
       const stored = this.settings().values.get(key);
@@ -2226,15 +2229,15 @@ export class WorkspaceStore {
   }
 
   /** Apply a batch of setting ops in ONE transaction, in order — the `target: "settings"` twin of `applyStatusOps`. */
-  applySettingOps(ops: readonly SettingOp[], actor?: string | null): SettingValueView[] {
+  applySettingOps(ops: readonly SettingOp[], actor?: string | null, person?: PersonDecision | null): SettingValueView[] {
     return this.atomically(() => {
       for (const op of ops) {
         switch (op.op) {
           case "set":
-            this.setSetting(op.key, op.value, actor);
+            this.setSetting(op.key, op.value, actor, person);
             break;
           case "reset":
-            this.resetSetting(op.key, actor);
+            this.resetSetting(op.key, actor, person);
             break;
           default:
             throw new StapleError("validation", `Unknown setting op "${(op as { op: string }).op}"`);
@@ -2637,7 +2640,8 @@ export class WorkspaceStore {
           throw new StapleError("validation", `Tree depth cap (${MAX_TREE_DEPTH}) exceeded`);
         }
       }
-      if (this.planningOn()) {
+      if (kind === IDEA_KIND && !internal.plan && this.planningInitialized() && !this.planningOn()) throw new StapleError("validation", PLAN_KINDS_MISSING_MESSAGE);
+      if (this.planningInitialized()) {
         // A promoted idea is still a plan record, so its sub-ideas may stay under it.
         assertPlanParent({ kind }, parent === null ? null : { ...parent, planRecord: (parent as unknown as { plan_maturity: string | null }).plan_maturity !== null });
       }
@@ -2669,7 +2673,7 @@ export class WorkspaceStore {
        * An idea holds no ticket number until it is promoted: a draft identifier made from its own
        * UUID, which consumes nothing from the counter and is never shown (design/plan.md, "Identity").
        */
-      const draft = kind === IDEA_KIND && (internal.plan === true || this.planningOn());
+      const draft = kind === IDEA_KIND && (internal.plan === true || this.planningInitialized());
       const identifier = draft ? draftIdentifier(id) : `${this.prefix}-${this.nextIssueNumber()}`;
       const now = this.journal.mutationAt();
       const row = this.db
@@ -2815,7 +2819,7 @@ export class WorkspaceStore {
        * An idea made through the tracker's own create (`create_task` with kind idea) is a captured
        * idea: raw, at the end of the plan, as `capture_idea` would make it.
        */
-      if (kind === IDEA_KIND && !internal.plan && this.planningOn()) {
+      if (kind === IDEA_KIND && !internal.plan && this.planningInitialized()) {
         const rank = (this.db.prepare("SELECT MAX(plan_rank) AS rank FROM issues WHERE kind = ?").get(IDEA_KIND) as { rank: number | null }).rank;
         this.db.prepare("UPDATE issues SET plan_maturity = 'raw', plan_rank = ? WHERE id = ?").run((rank ?? 0) + 1024, id);
       }
@@ -3525,7 +3529,7 @@ export class WorkspaceStore {
      * an idea or a horizon that reached a task's subtree (a sync from a device without the
      * parent guard, say) must not move that task's status.
      */
-    const planning = this.planningOn();
+    const planning = this.planningInitialized();
     if (planning && isPlanKind(ancestor.kind)) return [];
     const rows =
       ancestor.kind === MILESTONE_KIND
@@ -4710,7 +4714,7 @@ export class WorkspaceStore {
        * the board by being dropped, from the plan). Its title and description are its edit
        * action, which its lifecycle state offers or not (`plan-lifecycle.ts`).
        */
-      if (!internal.plan && this.planningOn()) {
+      if (!internal.plan && this.planningInitialized()) {
         if (this.isHorizon(row.id)) throw steeringRefusal("horizons", row.identifier);
         if (isPlanKind(row.kind) && patch.status !== undefined && patch.status !== row.status) throw steeringRefusal("status", displayRef(row));
         if (isPlanKind(row.kind) && (patch.title !== undefined || patch.description !== undefined)) this.plan().assertEditable(row.id);
@@ -4741,7 +4745,7 @@ export class WorkspaceStore {
       // documented exception (design/milestones.md): a milestone that still owns
       // members or dates cannot stop being one.
       if (patch.kind !== undefined && patch.kind !== row.kind) {
-        if (this.planningOn()) assertPlanRekind(row, patch.kind);
+        if (this.planningInitialized()) assertPlanRekind(row, patch.kind);
         assertRekindAllowed(this.db, row, patch.kind);
       }
       if (patch.kind !== undefined) next.kind = patch.kind;
@@ -7376,7 +7380,7 @@ export class WorkspaceStore {
    * no edit, as `update_idea` refuses a brief. The plan layer's own writes have already asked.
    */
   private assertIdeaContentWrite(row: Pick<IssueRow, "id" | "kind">): void {
-    if (row.kind === IDEA_KIND && this.planningOn()) this.plan().assertEditable(row.id);
+    if (row.kind === IDEA_KIND && this.planningInitialized()) this.plan().assertEditable(row.id);
   }
 
   putDocument(
@@ -7405,7 +7409,7 @@ export class WorkspaceStore {
       const row = this.requireTarget(ref);
       if (!internal.plan) {
         this.assertIdeaContentWrite(row);
-        if (this.planningOn()) this.plan().assertDocumentWrite(row.id, cleanKey, body);
+        if (this.planningInitialized()) this.plan().assertDocumentWrite(row.id, cleanKey, body);
       }
       const current = this.db
         .prepare(
@@ -7840,10 +7844,14 @@ export class WorkspaceStore {
     } else if (!filters.includeResolved) {
       where.push(`status NOT IN ${this.resolvedSql()}`);
     }
+    if (!this.planningOn() && this.planningInitialized()) {
+      where.push("kind <> ?");
+      params.push(IDEA_KIND);
+    }
     if (filters.kind && filters.kind.length > 0) {
       where.push(`kind IN (${filters.kind.map(() => "?").join(",")})`);
       params.push(...filters.kind);
-    } else if (!filters.includePlan && this.planningOn()) {
+    } else if (!filters.includePlan && this.planningInitialized()) {
       // Ideas and horizons live in the Plan view; a task view lists them only when asked by kind.
       where.push(`kind NOT IN (${[...PLAN_KINDS].map(() => "?").join(",")})`);
       params.push(...PLAN_KINDS);
@@ -8112,7 +8120,7 @@ export class WorkspaceStore {
 
   /** Nested subtree (or all roots when no ref given). */
   tree(ref?: string): Array<{ issue: Issue; children: unknown[] }> {
-    const planning = this.planningOn();
+    const planning = this.planningInitialized();
     const build = (parentId: string | null, depth: number): Array<{ issue: Issue; children: unknown[] }> => {
       if (depth > MAX_TREE_DEPTH) return [];
       // A sub-idea promoted before its parent is top-level work until that parent is promoted too.
@@ -8174,6 +8182,11 @@ export class WorkspaceStore {
    * plan guard until planning is turned on, which refuses while such issues exist.
    */
   planningOn(): boolean {
+    return this.getSetting("features.planning") === true && this.planningInitialized();
+  }
+
+  /** Structural identity survives disabling the UI and tools, so idea guards remain active. */
+  planningInitialized(): boolean {
     const kinds = this.settings().kinds;
     if (!kinds.some((k) => k.id === IDEA_KIND) || !kinds.some((k) => k.id === MILESTONE_KIND)) return false;
     return this.db.prepare("SELECT 1 AS hit FROM issues WHERE kind = ? AND plan_rank IS NOT NULL LIMIT 1").get(MILESTONE_KIND) !== undefined;
@@ -8208,7 +8221,7 @@ export class WorkspaceStore {
 
   /** An issue of a plan kind, in a workspace where planning is on. */
   isPlanIssue(kind: string): boolean {
-    return isPlanKind(kind) && this.planningOn();
+    return isPlanKind(kind) && this.planningInitialized();
   }
 
   /** Dependencies are tracker work: a plan neither blocks nor waits (design/plan.md, "Guards"). */
@@ -8217,7 +8230,7 @@ export class WorkspaceStore {
     blockers: ReadonlyArray<{ identifier: string; kind: string; title: string }>,
     self?: { identifier: string; title: string },
   ): void {
-    if (blockers.length === 0 || !this.planningOn()) return;
+    if (blockers.length === 0 || !this.planningInitialized()) return;
     if (isPlanKind(kind)) {
       throw planKindRefusal({ identifier: self?.identifier ?? "~", title: self?.title ?? "this one", kind }, "blocked by other work");
     }
