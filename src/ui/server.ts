@@ -5222,7 +5222,8 @@ export function startUiServer(options: UiOptions): UiHandle {
              * date goes through the plan (its lifecycle and steering rules), the rest as for any
              * milestone.
              */
-            const horizon = handle.store.planningOn() && handle.store.isHorizon(handle.store.getIssue(ref).id);
+            const horizon = handle.store.isHorizon(handle.store.getIssue(ref).id);
+            if (horizon) handle.store.plan().assertEnabled();
             const goal = { description: body.description as string | null | undefined, acceptanceCriteria: body.acceptanceCriteria as string[] | undefined };
             if (!horizon) {
               payload = milestones.update(

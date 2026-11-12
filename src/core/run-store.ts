@@ -1541,11 +1541,12 @@ export class RunStore {
    * epic, is not to get (design/plan.md, "Lenses"). Its work is taken from the queue instead.
    */
   private assertHorizonRunsToGoal(issueId: string, identifier: string): void {
-    if (!this.store.planningOn()) return;
     const row = this.db.prepare("SELECT plan_run_mode FROM issues WHERE id = ? AND kind = ? AND plan_rank IS NOT NULL").get(issueId, MILESTONE_KIND) as
       | { plan_run_mode: string | null }
       | undefined;
-    if (row === undefined || row.plan_run_mode === "goal") return;
+    if (row === undefined) return;
+    this.store.plan().assertEnabled();
+    if (row.plan_run_mode === "goal") return;
     throw new StapleError(
       "validation",
       `${identifier} is a horizon set to run ${isRunMode(row.plan_run_mode) ? RUN_MODES[row.plan_run_mode].label.toLowerCase() : "not set"}, and a goal run would hold it for a goal check it is not set to make. Take its work from the queue (staple queue next); the person changes how far it runs in the Plan view.`,

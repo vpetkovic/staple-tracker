@@ -1169,7 +1169,7 @@ export class MilestoneStore {
     const milestone = this.requireMilestone(ref);
     // A horizon's dates are the person's, set from the plan (design/plan.md, "Who steers").
     // So is its goal: what agents work it toward is the person's, set with its run setting.
-    if (this.store.planningOn() && !internal.plan && (patch.targetDate !== undefined || patch.startDate !== undefined || goalPatch) && this.store.isHorizon(milestone.id)) {
+    if (!internal.plan && (patch.targetDate !== undefined || patch.startDate !== undefined || goalPatch) && this.store.isHorizon(milestone.id)) {
       throw steeringRefusal("horizons", milestone.identifier);
     }
     return this.journaled(() => {
@@ -1359,7 +1359,7 @@ export class MilestoneStore {
           identifier: member.identifier,
         });
       }
-      const from = this.store.getIssue(current.milestone_id);
+      const from = this.store.writeTarget(current.milestone_id);
       if (target === null || target.id === from.id) {
         if (!hasPosition(options)) return this.view(from.id);
         this.assertBase(from, options.baseRevision);

@@ -12,10 +12,11 @@ function setup() {
   const idea = s.plan().capture({ title: "Larkspur launch", maturity: "shaped", plan: READY_PLAN, horizon: now!.id }, "Mira", { person: PERSON });
   const task = s.createIssue({ title: "Larkspur checkout" });
   const other = s.createIssue({ title: "Larkspur theme" });
+  const ordinary = s.createIssue({ title: "Larkspur ordinary milestone", kind: "milestone" });
   s.plan().adopt(idea.id, task.id, "worker");
   s.milestones().addMember(now!.id, other.id, {}, "Mira");
   s.plan().setHorizonRun(now!.id, { mode: "goal", goal: ["A merchant accepts an order"] }, "Mira", { person: PERSON });
-  return { s, now: now!, next: next!, idea, task, other };
+  return { s, now: now!, next: next!, idea, task, other, ordinary };
 }
 type World = ReturnType<typeof setup>;
 const attempts: Record<string, (w: World) => unknown> = {
@@ -30,6 +31,10 @@ const attempts: Record<string, (w: World) => unknown> = {
   "member add": ({ s, next, task }) => s.milestones().addMember(next.id, task.id, {}, "worker"),
   "member remove": ({ s, now, other }) => s.milestones().removeMember(now.id, other.id, {}, "worker"),
   "member move": ({ s, next, other }) => s.milestones().moveMember(other.id, { to: next.id }, "worker"),
+  "member move out": ({ s, other, ordinary }) => {
+    return s.milestones().moveMember(other.id, { to: ordinary.id }, "worker");
+  },
+  "kind removal": ({ s }) => s.removeKind("milestone", { migrateTo: "task" }, "worker"),
   "member reorder": ({ s, now, other }) => s.milestones().reorderMembers(now.id, [other.id], {}, "worker"),
   "horizon dependencies": ({ s, now, task }) => s.setBlockedBy(now.id, [task.id], "worker"),
   "horizon as blocker": ({ s, now, task }) => s.setBlockedBy(task.id, [now.id], "worker"),

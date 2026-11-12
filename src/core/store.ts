@@ -1968,6 +1968,10 @@ export class WorkspaceStore {
        * which `staple milestone rm`/`set --target none` to run first.
        */
       if (id === MILESTONE_KIND) {
+        const horizons = this.db.prepare("SELECT identifier, title FROM issues WHERE kind = ? AND plan_rank IS NOT NULL").all(MILESTONE_KIND) as Array<{ identifier: string; title: string }>;
+        if (horizons.length) throw new StapleError("validation", `Cannot remove the milestone kind while horizons ${horizons.map(h => `${h.identifier} ${h.title}`).join(", ")} still exist.`);
+      }
+      if (id === MILESTONE_KIND) {
         const owning = this.db
           .prepare(
             `SELECT i.identifier FROM issues i
@@ -2344,6 +2348,7 @@ export class WorkspaceStore {
    */
   private requireTarget(ref: string): IssueRow {
     const row = this.requireRow(ref);
+    if (this.isHorizon(row.id)) this.plan().assertEnabled();
     if (renumbersAcknowledged()) return row;
     const trimmed = ref.trim();
     if (trimmed === row.id) return row;
@@ -4714,8 +4719,8 @@ export class WorkspaceStore {
        * the board by being dropped, from the plan). Its title and description are its edit
        * action, which its lifecycle state offers or not (`plan-lifecycle.ts`).
        */
-      if (!internal.plan && this.planningInitialized()) {
-        if (this.planningOn() && this.isHorizon(row.id)) throw steeringRefusal("horizons", row.identifier);
+      if (!internal.plan) {
+        if (this.isHorizon(row.id)) throw steeringRefusal("horizons", row.identifier);
         if (isPlanKind(row.kind) && patch.status !== undefined && patch.status !== row.status) throw steeringRefusal("status", displayRef(row));
         if (isPlanKind(row.kind) && (patch.title !== undefined || patch.description !== undefined)) this.plan().assertEditable(row.id);
       }
