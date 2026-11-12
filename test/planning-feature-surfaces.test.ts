@@ -40,7 +40,7 @@ it("CLI, MCP and HTTP refuse OFF, report the readable flag, and restore ON", asy
   const tools = await mcp.client.listTools();
   expect(tools.tools.find(t => t.name === "list_ideas")?.description).toMatch(/^Experimental, only when features.planning is on\./);
   expect(toolPayload(await mcp.call("get_setting", { ws: WS, key: "features.planning" }))).toMatchObject({ value: false });
-  expect(toolPayload(await mcp.call("show_about", { ws: WS }))).toMatchObject({ features: { planning: false } });
+  expect((await mcp.call("show_about", { ws: WS })).structuredContent).toMatchObject({ features: { planning: false } });
   const refused = await mcp.call("set_setting", { ws: WS, key: "features.planning", value: true, actor: "Larkspur owner" });
   expect(refused.isError).toBe(true);
   expect(JSON.stringify(refused)).toContain("Only a person");
