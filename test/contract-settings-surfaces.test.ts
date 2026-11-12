@@ -171,6 +171,7 @@ describe("the queue policy is the same object on every surface", () => {
     expect(shown.stdout.trim()).toBe("queue.policy = strict  (workspace)");
     const listed = await cli("settings", "--ws", WS);
     expect(listed.stdout.trim().split("\n")).toEqual([
+      "features.planning = false  (default)",
       "kinds.default = task  (default)",
       // R5a's glyph map is structured, so the line prints it as JSON.
       "kinds.appearance = {}  (default)",

@@ -541,6 +541,7 @@ describe("registered workspace settings", () => {
   it("answers the definition's default with source default until something is stored", () => {
     expect(store.getSetting("kinds.default")).toBe("task");
     expect(store.settingValues()).toEqual([
+      { key: "features.planning", scope: "workspace", value: false, source: "default", version: 1 },
       { key: "kinds.default", scope: "workspace", value: "task", source: "default", version: 1 },
       { key: "kinds.appearance", scope: "workspace", value: {}, source: "default", version: 1 },
       { key: "queue.policy", scope: "workspace", value: "advisory", source: "default", version: 1 },
@@ -597,6 +598,7 @@ describe("registered workspace settings", () => {
       .run(JSON.stringify({ v: 3, value: { anything: true } }));
     expect(store.unknownSettingKeys()).toEqual(["future.flag"]);
     expect(store.settingValues().map((v) => v.key)).toEqual([
+      "features.planning",
       "kinds.default",
       "kinds.appearance",
       "queue.policy",
@@ -697,6 +699,7 @@ describe("registered workspace settings", () => {
     ).toThrow(/Unknown kind/);
     expect(store.getSetting("kinds.default")).toBe("task");
     expect(store.applySettingOps([{ op: "set", key: "kinds.default", value: "spike" }])).toEqual([
+      { key: "features.planning", scope: "workspace", value: false, source: "default", version: 1 },
       { key: "kinds.default", scope: "workspace", value: "spike", source: "workspace", version: 1 },
       { key: "kinds.appearance", scope: "workspace", value: {}, source: "default", version: 1 },
       { key: "queue.policy", scope: "workspace", value: "advisory", source: "default", version: 1 },
