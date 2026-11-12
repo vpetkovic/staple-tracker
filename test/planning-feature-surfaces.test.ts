@@ -47,6 +47,7 @@ it("CLI, MCP and HTTP refuse OFF, report the readable flag, and restore ON", asy
   expect(JSON.stringify(refused)).toContain("Only a person");
   expect((await cli("settings", "set", "features.planning", "true")).status).toBe(2);
   expect((await http("/api/plan")).status).toBe(409);
+  expect((await http("/api/plan-idea?ref=5eed0000-0000-4000-8000-000000000001")).status).toBe(409);
   expect((await http("/api/plan/enable", {})).status).toBe(409);
   expect((await http("/api/plan/capture", { title: "Larkspur idea" })).status).toBe(409);
   expect((await cli("settings", "set", "features.planning", "true", "--person")).status).toBe(0);
@@ -54,8 +55,10 @@ it("CLI, MCP and HTTP refuse OFF, report the readable flag, and restore ON", asy
   expect((await mcp.call("list_ideas", { ws: WS })).isError).toBeFalsy();
   expect((await http("/api/plan")).status).toBe(200);
   expect((await http("/api/bootstrap")).body.features[WS]).toMatchObject({ planning: true });
+  expect((await mcp.call("show_about", { ws: WS })).structuredContent).toMatchObject({ features: { planning: true } });
   expect((await http("/api/settings", { target: "settings", ops: [{ op: "set", key: "features.planning", value: false }] })).status).toBe(200);
   expect((await http("/api/plan")).status).toBe(409);
+  expect((await http("/api/bootstrap")).body.features[WS]).toMatchObject({ planning: false });
 });
 
 it("OFF omits plan detail and horizon fields from task and pickup payloads", async () => {
