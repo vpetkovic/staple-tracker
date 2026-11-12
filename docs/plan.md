@@ -13,11 +13,22 @@ when it is ready. From then on its progress and real dates come from that work.
 
 ## 1. Turn planning on
 
-Open **Plan** in the web UI and press **Turn on planning**, or run:
+Planning is **experimental** and may change. The workspace setting `features.planning`
+defaults to **false** and synchronizes across devices. In **Settings → Experimental**, turn
+on **Planning (experimental)**. At the terminal, a person with a configured humanName can run:
 
 ```bash
-staple plan enable
+staple settings set features.planning true --person
 ```
+
+`staple plan enable --person` sets the same flag. Agents read it with `get_setting` or
+`staple settings get features.planning`; they cannot change it. `show_about` reports its state.
+
+With the flag off, Plan and its lenses, drawer tabs, palette commands and Tasks horizon
+chip, axis and filter are absent. CLI, MCP and HTTP planning operations refuse. Pickup
+answers and run briefs carry no horizon-run instructions. Existing horizons appear as
+plain milestones and promoted epics as ordinary epics. Ideas remain unnumbered drafts,
+never tasks or pickup work. Disabling deletes nothing; enabling restores all planning data.
 
 This adds the `idea` and `milestone` kinds and two horizons: Now and Next. A horizon
 is a milestone, so it also shows under **Milestones** with its progress, and queueing it queues

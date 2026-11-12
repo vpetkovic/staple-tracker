@@ -4715,7 +4715,7 @@ export class WorkspaceStore {
        * action, which its lifecycle state offers or not (`plan-lifecycle.ts`).
        */
       if (!internal.plan && this.planningInitialized()) {
-        if (this.isHorizon(row.id)) throw steeringRefusal("horizons", row.identifier);
+        if (this.planningOn() && this.isHorizon(row.id)) throw steeringRefusal("horizons", row.identifier);
         if (isPlanKind(row.kind) && patch.status !== undefined && patch.status !== row.status) throw steeringRefusal("status", displayRef(row));
         if (isPlanKind(row.kind) && (patch.title !== undefined || patch.description !== undefined)) this.plan().assertEditable(row.id);
       }

@@ -44,20 +44,25 @@ it ships only on work that was done, and reopening the work derives it again. Me
 rebuilt over the same listed horizons, so no rebuild drops a horizon's rows for its status, and
 the outcome does not depend on when rebuilds run.
 
-**Planning is on** once the `idea` and `milestone` kinds exist and a milestone carries a plan
-rank (`WorkspaceStore.planningOn`). Only the plan layer writes one, it synchronizes as data,
-and no setting can switch it. Every guard below applies only while planning is on, so a
-workspace that already used `idea` as a kind of its own keeps every such issue a numbered
-tracker issue after upgrading.
+**Planning is experimental** and may change. One synchronized workspace setting,
+`features.planning`, defaults false. Only a person changes it in Settings → Experimental
+or with `staple settings set features.planning true --person` under their humanName.
+Agents read it through `get_setting` and `show_about`; agent `set_setting` refuses.
 
-**Turning planning on.** `staple plan enable` (and "Turn on planning" in the web UI) adds the
-two kinds when they are missing and creates Now and Next as milestones. While any issue
-already has kind `idea`, it is refused with `validation` naming those issues: they are someone's
-work, and planning would take them out of every task view. Re-kind them, then turn planning on.
-Every plan write before then is refused with `validation` naming the command
-(`PLAN_KINDS_MISSING_MESSAGE`). Run again where planning is on, `enable` gives any idea an
-earlier build numbered its draft identifier (below), and records the number it gave up as an
-alias, as every device that applies the move does, so the old number names the idea everywhere.
+**Planning is on** when the flag is true AND the existing structural check holds: the
+idea and milestone kinds exist and a milestone carries a plan rank. Setting true runs the
+existing enable path in the same transaction, including default horizons, legacy-Later
+migration and drafting. `staple plan enable --person` is an alias for this same setting.
+There is no second switch. Migration 020 runs for every workspace regardless of the flag:
+it is additive and nullable; the setting gates behavior, not schema installation.
+
+**Off hides the whole layer and keeps its data.** Plan, its lenses, drawer tabs, palette
+actions and Tasks horizon chip/axis/filter disappear. Planning CLI, MCP and HTTP operations
+refuse with one validation sentence. `/api/issues` omits horizon fields, and pickup answers
+and run briefs omit horizon-run instructions. Horizons appear as plain milestones; promoted
+epics are ordinary epics. Ideas remain unnumbered drafts, never task-list or pickup work,
+with idea guards active in both states. Re-enabling restores ideas, horizons, sections,
+links and run settings without deleting or rewriting their data.
 
 ## Unscheduled and optional dates
 

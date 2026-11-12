@@ -54,6 +54,7 @@ Those six are every registered setting today:
 | `machine.setupComplete` | global | `true`, `false` | `false` | `staple config set setupComplete <value>` |
 | `kinds.default` | workspace | a configured kind id | `task` | `staple settings set kinds.default <kind>` |
 | `kinds.appearance` | workspace | a map of kind id to glyph (below) | `{}` | the web Settings → Task types; a map cannot be typed at `settings set` or sent through `set_setting` |
+| `features.planning` | workspace | boolean, experimental | `false` | Person only: Settings → Experimental or `staple settings set features.planning true --person` |
 | `queue.policy` | workspace | `advisory`, `strict` | `advisory` | `staple settings set queue.policy <value>` |
 
 A workspace key is refused on the config surface and a global key is refused
@@ -418,3 +419,12 @@ harness connector is implemented, so it only lists any receipts already in
 `doctor` exits 1 when a check fails and prints the exact repair command. A bare
 `--fix` is refused with or without `--yes`; `--only` without `--yes` previews.
 A failed migration additionally needs `--keep legacy|new`.
+
+### Experimental planning
+
+`features.planning` synchronizes with workspace settings and defaults false. Only a person
+changes it; agent `set_setting` refuses, while `get_setting` and `show_about` report it.
+Turning it on initializes planning in the same transaction. Turning it off hides and refuses
+the planning layer on UI, CLI, MCP and HTTP, including horizon-run instructions, without
+deleting data. Ideas stay unnumbered and unavailable for pickup in either state. See
+[the plan](plan.md) for the behavior and schema contract. This feature may change.
