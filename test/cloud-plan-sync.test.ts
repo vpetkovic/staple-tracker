@@ -65,7 +65,7 @@ describe("a horizon's run setting across devices", () => {
     const server = new FakeSyncServer({ repositoryId: REPO });
     fleet = new Fleet(server, REPO);
     const a = fleet.machine("a");
-    a.store.plan().enable("vp");
+    a.store.plan().enable("vp", { person: { via: "settings" } });
     const now = a.store.plan().view().horizons[0]!;
     await a.sync();
     const b = fleet.machine("b");
@@ -96,7 +96,7 @@ describe("links merge across devices: one field per link", () => {
       const server = new FakeSyncServer({ repositoryId: REPO, ...(fold === "tail" ? { maxSnapshotFoldOps: 3 } : {}) });
       fleet = new Fleet(server, REPO);
       const a = fleet.machine("a");
-      a.store.plan().enable("vp");
+      a.store.plan().enable("vp", { person: { via: "settings" } });
       const idea = a.store.plan().capture({ title: "Idea", maturity: "shaped", plan: READY_PLAN }, "vp", PERSON).id;
       const x = a.store.createIssue({ title: "Epic X", kind: "epic" }).identifier;
       const y = a.store.createIssue({ title: "Epic Y", kind: "epic" }).identifier;
@@ -124,7 +124,7 @@ describe("links merge across devices: one field per link", () => {
     const server = new FakeSyncServer({ repositoryId: REPO });
     fleet = new Fleet(server, REPO);
     const a = fleet.machine("a");
-    a.store.plan().enable("vp");
+    a.store.plan().enable("vp", { person: { via: "settings" } });
     const idea = a.store.plan().capture({ title: "Idea", maturity: "shaped", plan: READY_PLAN }, "vp", PERSON).id;
     const x = a.store.createIssue({ title: "Epic X", kind: "epic" }).identifier;
     const y = a.store.createIssue({ title: "Epic Y", kind: "epic" }).identifier;
@@ -156,7 +156,7 @@ describe("the plan synchronizes with no new entity", () => {
       fleet = new Fleet(server, REPO);
       const a = fleet.machine("a");
       const plan = a.store.plan();
-      plan.enable("vp");
+      plan.enable("vp", { person: { via: "settings" } });
       const now = plan.view().horizons[0]!;
       const ga = plan.capture({ title: "Exercise GA", maturity: "shaped", plan: READY_PLAN, horizon: now.id, plannedStart: "2026-10-01", plannedTarget: "2026-12-31" }, "vp", PERSON);
       plan.capture({ title: "R8 Mobile", parent: ga.id, maturity: "exploring" }, "vp", PERSON);
@@ -196,7 +196,7 @@ describe("membership is derived on every device, so moves made offline never con
       fleet = new Fleet(server, REPO);
       const a = fleet.machine("a");
       const plan = a.store.plan();
-      plan.enable("vp");
+      plan.enable("vp", { person: { via: "settings" } });
       const [now, next] = plan.view().horizons.map((h) => h.id) as [string, string];
       const later = plan.createHorizon({ name: "Later", date: "2027-02-01" }, "vp", PERSON).id;
       const first = plan.capture({ title: "First", maturity: "shaped", plan: READY_PLAN, horizon: now }, "vp", PERSON).id;
@@ -243,7 +243,7 @@ describe("promotion takes a real number once, even on two devices offline", () =
       const server = new FakeSyncServer({ repositoryId: REPO, ...(fold === "tail" ? { maxSnapshotFoldOps: 3 } : {}) });
       fleet = new Fleet(server, REPO);
       const a = fleet.machine("a");
-      a.store.plan().enable("vp");
+      a.store.plan().enable("vp", { person: { via: "settings" } });
       const now = a.store.plan().view().horizons[0]!.id;
       const p = a.store.plan().capture({ title: "Promoted on A", maturity: "shaped", plan: READY_PLAN, horizon: now }, "vp", PERSON).id;
       const q = a.store.plan().capture({ title: "Promoted on B", maturity: "shaped", plan: READY_PLAN, horizon: now }, "vp", PERSON).id;
@@ -284,7 +284,7 @@ describe("promotion takes a real number once, even on two devices offline", () =
     const server = new FakeSyncServer({ repositoryId: REPO });
     fleet = new Fleet(server, REPO);
     const a = fleet.machine("a");
-    a.store.plan().enable("vp");
+    a.store.plan().enable("vp", { person: { via: "settings" } });
     const p = a.store.plan().capture({ title: "Promoted on A", maturity: "shaped", plan: READY_PLAN }, "vp", PERSON).id;
     const q = a.store.plan().capture({ title: "Promoted on B", maturity: "shaped", plan: READY_PLAN }, "vp", PERSON).id;
     await a.sync();
@@ -344,7 +344,7 @@ describe("a horizon's status over sync", () => {
       const server = new FakeSyncServer({ repositoryId: REPO, ...(fold === "tail" ? { maxSnapshotFoldOps: 3 } : {}) });
       fleet = new Fleet(server, REPO);
       const a = fleet.machine("a");
-      a.store.plan().enable("vp");
+      a.store.plan().enable("vp", { person: { via: "settings" } });
       const now = a.store.plan().view().horizons[0]!.id;
       const p = a.store.plan().capture({ title: "Only work on Now", maturity: "shaped", plan: READY_PLAN, horizon: now }, "vp", PERSON).id;
       a.store.plan().promote(p, "vp", PERSON);
@@ -378,7 +378,7 @@ describe("a horizon's status over sync", () => {
       const server = new FakeSyncServer({ repositoryId: REPO, ...(fold === "tail" ? { maxSnapshotFoldOps: 3 } : {}) });
       fleet = new Fleet(server, REPO);
       const a = fleet.machine("a");
-      a.store.plan().enable("vp");
+      a.store.plan().enable("vp", { person: { via: "settings" } });
       const [now, next] = a.store.plan().view().horizons.map((h) => h.id);
       const p = a.store.plan().capture({ title: "Underway", maturity: "shaped", plan: READY_PLAN, horizon: now }, "vp", PERSON).id;
       const q = a.store.plan().capture({ title: "Not started", maturity: "shaped", plan: READY_PLAN, horizon: next }, "vp", PERSON).id;
@@ -417,7 +417,7 @@ describe("an idea an earlier build numbered", () => {
     const server = new FakeSyncServer({ repositoryId: REPO });
     fleet = new Fleet(server, REPO);
     const a = fleet.machine("a");
-    a.store.plan().enable("vp");
+    a.store.plan().enable("vp", { person: { via: "settings" } });
     const p = a.store.plan().capture({ title: "Numbered by an earlier build" }, "vp", PERSON).id;
     // What an earlier build sent: the idea took a ticket number at capture.
     a.db.prepare("UPDATE issues SET identifier = 'TRA-77' WHERE id = ?").run(p);
@@ -428,7 +428,7 @@ describe("an idea an earlier build numbered", () => {
     expect(b.store.getIssue(p).identifier).toBe("TRA-77");
 
     a.use();
-    a.store.plan().enable("vp");
+    a.store.plan().enable("vp", { person: { via: "settings" } });
     await both(a, b);
     for (const machine of [a, b]) {
       expect(machine.store.getIssue(p).identifier.startsWith("~")).toBe(true);
@@ -443,7 +443,7 @@ describe("a horizon cancelled by an older build's derivation", () => {
     const server = new FakeSyncServer({ repositoryId: REPO });
     fleet = new Fleet(server, REPO);
     const a = fleet.machine("a");
-    a.store.plan().enable("vp");
+    a.store.plan().enable("vp", { person: { via: "settings" } });
     const now = a.store.plan().view().horizons[0]!.id;
     const p = a.store.plan().capture({ title: "Open work on Now", maturity: "shaped", plan: READY_PLAN, horizon: now }, "vp", PERSON).id;
     a.store.plan().promote(p, "vp", PERSON);

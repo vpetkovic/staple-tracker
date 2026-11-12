@@ -24,7 +24,7 @@ beforeEach(() => {
   store = new WorkspaceStore(db, "test", "TST");
   plan = store.plan();
   plan.clock = () => new Date("2026-11-08T12:00:00.000Z");
-  plan.enable("vp");
+  plan.enable("vp", { person: { via: "settings" } });
 });
 
 const horizon = (name: string) => plan.view().horizons.find((h) => h.name === name)!;
@@ -109,14 +109,14 @@ describe("a horizon's run setting", () => {
     const record = plan.capture({ title: "Epic on Now", maturity: "shaped", plan: READY_PLAN, horizon: now.id }, "vp", PERSON).id;
     const epic = plan.promote(record, "vp", PERSON).identifier!;
     const task = store.createIssue({ title: "A task under it", parent: epic });
-    expect(resolveInstructions(store.db, task.id).find((entry) => entry.key === "horizon-run")).toBeUndefined();
+    expect(resolveInstructions(store.db, task.id, { planning: store.planningOn() }).find((entry) => entry.key === "horizon-run")).toBeUndefined();
     plan.setHorizonRun(now.id, { mode: "epic", goal: ["Checkout works end to end"] }, "vp", PERSON);
-    const instruction = resolveInstructions(store.db, task.id).find((entry) => entry.key === "horizon-run")!;
+    const instruction = resolveInstructions(store.db, task.id, { planning: store.planningOn() }).find((entry) => entry.key === "horizon-run")!;
     expect(instruction).toMatchObject({ source: { kind: "milestone", ref: now.identifier }, effective: true });
     expect(instruction.body).toContain("Stop for review after each epic");
     expect(instruction.body).toContain("Checkout works end to end");
     // The horizon's own For agents view carries it too.
-    expect(resolveInstructions(store.db, now.id).find((entry) => entry.key === "horizon-run")?.source.kind).toBe("self");
+    expect(resolveInstructions(store.db, now.id, { planning: store.planningOn() }).find((entry) => entry.key === "horizon-run")?.source.kind).toBe("self");
   });
 
   it("allows a goal run only on a horizon set to run until its goal is met", () => {

@@ -15,7 +15,7 @@ function fixture() {
   const db = openDb(":memory:");
   migrateWorkspace(db);
   const store = new WorkspaceStore(db, "larkspur", "LAR");
-  store.plan().enable("Mira");
+  store.plan().enable("Mira", { person: { via: "settings" } });
   return { db, store, plan: store.plan() };
 }
 describe("the owner's plan tweaks", () => {

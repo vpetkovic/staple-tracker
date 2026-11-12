@@ -45,15 +45,15 @@ it("CLI, MCP and HTTP refuse OFF, report the readable flag, and restore ON", asy
   expect(refused.isError).toBe(true);
   expect(JSON.stringify(refused)).toContain("Only a person");
   expect((await cli("settings", "set", "features.planning", "true")).status).toBe(2);
-  expect((await http("/api/plan")).status).toBe(400);
-  expect((await http("/api/plan/capture", { title: "Larkspur idea" })).status).toBe(400);
+  expect((await http("/api/plan")).status).toBe(409);
+  expect((await http("/api/plan/capture", { title: "Larkspur idea" })).status).toBe(409);
   expect((await cli("settings", "set", "features.planning", "true", "--person")).status).toBe(0);
   expect((await cli("plan", "show")).status).toBe(0);
   expect((await mcp.call("list_ideas", { ws: WS })).isError).toBeFalsy();
   expect((await http("/api/plan")).status).toBe(200);
   expect((await http("/api/bootstrap")).body.features[WS]).toMatchObject({ planning: true });
   expect((await http("/api/settings", { target: "settings", ops: [{ op: "set", key: "features.planning", value: false }] })).status).toBe(200);
-  expect((await http("/api/plan")).status).toBe(400);
+  expect((await http("/api/plan")).status).toBe(409);
 });
 
 it("OFF omits plan detail and horizon fields from task and pickup payloads", async () => {

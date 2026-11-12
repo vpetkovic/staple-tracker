@@ -29,7 +29,7 @@ beforeAll(async () => {
   const ws = initWorkspace({ global: true, slug: "larkspur" });
   const plan = ws.store.plan();
   const person = { person: { via: "plan_view" } } as const;
-  plan.enable("Mira");
+  plan.enable("Mira", { person: { via: "settings" } });
   const launch = plan.view().horizons[0]!;
   horizon = launch.identifier;
   plan.updateHorizon(launch.id, { date: "2027-02-01" }, "Mira", person);
@@ -42,7 +42,7 @@ beforeAll(async () => {
   singleUi = startUiServer({ port: 0, hub: false, db: ws.dbPath });
   await once(singleUi.server, "listening");
   const other = initWorkspace({ global: true, slug: "meadow" });
-  other.store.plan().enable("Mira");
+  other.store.plan().enable("Mira", { person: { via: "settings" } });
   secondWorkspace = other.store.slug;
   other.store.db.close();
   ui = startUiServer({ port: 0, hub: true });

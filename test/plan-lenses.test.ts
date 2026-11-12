@@ -22,7 +22,7 @@ beforeEach(() => {
   store = new WorkspaceStore(db, "test", "TST");
   plan = store.plan();
   plan.clock = () => new Date("2026-11-08T12:00:00.000Z");
-  plan.enable("vp");
+  plan.enable("vp", { person: { via: "settings" } });
 });
 
 const horizon = (name: string) => plan.view().horizons.find((h) => h.name === name)!;

@@ -30,7 +30,7 @@ beforeEach(() => {
   store = memStore();
   plan = store.plan();
   plan.clock = () => new Date("2026-11-07T12:00:00.000Z");
-  plan.enable("vp");
+  plan.enable("vp", { person: { via: "settings" } });
 });
 
 function refused(fn: () => unknown, code = "validation"): StapleError {
@@ -77,7 +77,7 @@ describe("enabling", () => {
     expect(horizons.map((h) => h.name)).toEqual(["Now", "Next"]);
     for (const h of horizons) expect(store.getIssue(h.id).kind).toBe(MILESTONE_KIND);
     expect(store.milestones().list()).toEqual([]);
-    plan.enable("vp");
+    plan.enable("vp", { person: { via: "settings" } });
     expect(plan.view().horizons).toHaveLength(2);
   });
 
@@ -140,7 +140,7 @@ describe("identity: an idea holds no ticket number until it is promoted", () => 
     const id = idea("Numbered by v1");
     // What an earlier build left: the idea took a ticket number at capture.
     store.db.prepare("UPDATE issues SET identifier = 'TST-77' WHERE id = ?").run(id);
-    plan.enable("vp");
+    plan.enable("vp", { person: { via: "settings" } });
     expect(isDraftIdentifier(store.getIssue(id).identifier)).toBe(true);
     expect(store.db.prepare("SELECT 1 FROM issues WHERE identifier = 'TST-77'").get()).toBeUndefined();
     const event = store.db.prepare("SELECT payload FROM events WHERE kind = 'idea_drafted' AND issue_id = ?").get(id) as { payload: string } | undefined;
@@ -173,7 +173,7 @@ describe("guards: an idea never enters the tracker", () => {
     expect(rows.map((r) => r.identifier)).toContain(task);
     expect(rows.map((r) => r.issueId)).not.toContain(ref);
     const ideaOnly = memStore();
-    ideaOnly.plan().enable("vp");
+    ideaOnly.plan().enable("vp", { person: { via: "settings" } });
     ideaOnly.plan().capture({ title: "Alone" }, "vp", PERSON);
     expect(ideaOnly.queue().effectiveQueue({ actor: "agent" }).rows).toHaveLength(0);
   });
@@ -309,11 +309,11 @@ describe("a workspace that already had its own idea kind", () => {
   it("refuses to turn planning on while such issues exist, naming them, and turns on once they are re-kinded", () => {
     const own = custom();
     const mine = own.createIssue({ title: "My idea ticket", kind: IDEA_KIND });
-    const error = refused(() => own.plan().enable("vp"));
+    const error = refused(() => own.plan().enable("vp", { person: { via: "settings" } }));
     expect(error.message).toContain(mine.identifier);
     expect(own.planningOn()).toBe(false);
     own.updateIssue(mine.identifier, { kind: "task" }, "vp");
-    expect(own.plan().enable("vp").enabled).toBe(true);
+    expect(own.plan().enable("vp", { person: { via: "settings" } }).enabled).toBe(true);
     expect(own.planningOn()).toBe(true);
     expect(own.getIssue(mine.identifier).kind).toBe("task");
   });

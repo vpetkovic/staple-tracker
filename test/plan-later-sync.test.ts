@@ -13,7 +13,7 @@ it("upgrades Later on open and synchronizes Unscheduled ideas and retained hand 
   const a = fleet.machine("a");
   const person = { person: { via: "plan_view" } } as const;
   const plan = a.store.plan();
-  plan.enable("Mira");
+  plan.enable("Mira", { person: { via: "settings" } });
   const later = plan.createHorizon({ name: "Later" }, "Mira", person);
   const idea = plan.capture({ title: "Merchant checkout", maturity: "shaped", plan: READY_PLAN, horizon: later.id }, "Mira", person);
   const task = a.store.createIssue({ title: "Take payment" });

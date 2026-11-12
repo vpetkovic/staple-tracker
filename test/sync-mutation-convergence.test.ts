@@ -353,7 +353,7 @@ const SCENARIOS: readonly Scenario[] = [
   { method: "WorkspaceStore.restoreDocumentRevision", name: "restore a revision", run: (w) => void w.a.store.restoreDocumentRevision(w.ids["Everything"]!, "spec", 1, "carol") },
 
   // ---- the plan layer: every write is issue fields, documents or a new issue
-  { method: "PlanStore.enable", name: "turn planning on", run: (w) => void w.a.store.plan().enable("alice") },
+  { method: "PlanStore.enable", name: "turn planning on", run: (w) => void w.a.store.plan().enable("alice", { person: { via: "settings" } }) },
   { method: "PlanStore.migrateLegacyLater", name: "upgrade the undated Later bucket without losing hand membership", run: (w) => {
     const plan = w.a.store.plan();
     const later = plan.createHorizon({ name: "Later" }, "alice", { person: { via: "test" } });

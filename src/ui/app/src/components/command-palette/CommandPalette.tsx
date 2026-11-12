@@ -105,7 +105,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const selected = session.selection;
   // The selection's plan record, if it is one: its actions come from its lifecycle state.
   const selectedWs = selected?.workspace ?? null;
-  const loadPlan = useCallback(() => (selectedWs ? getPlan({ ws: selectedWs }) : Promise.resolve(null)), [selectedWs]);
+  const loadPlan = useCallback(() => (selectedWs && session.planningEnabled === true ? getPlan({ ws: selectedWs }) : Promise.resolve(null)), [selectedWs, session.planningEnabled]);
   const plan = useResource(loadPlan, [selectedWs, session.version], () => undefined);
   const planRecord = useMemo(() => {
     if (!selected || !plan.data?.enabled) return null;

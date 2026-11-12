@@ -8,6 +8,7 @@ import { ViewTabBar } from "../src/ui/app/src/components/nav/ViewTabBar.js";
 import { FilterMenuBody } from "../src/ui/app/src/components/filters/FilterMenu.js";
 import { buildCommands } from "../src/ui/app/src/components/command-palette/commands.js";
 import { PlanView } from "../src/ui/app/src/views/plan/PlanView.js";
+import { groupByOptions } from "../src/ui/app/src/lib/view-prefs.js";
 import { emptyFilters } from "../src/ui/app/src/lib/filters.js";
 import { SETTING_CATEGORIES, SETTING_DEFINITIONS } from "../src/core/settings-registry.js";
 
@@ -38,4 +39,9 @@ it("OFF removes the Horizon filter even when old row data survives; ON restores 
 it("Settings labels the person-controlled planning toggle experimental", () => {
   expect(SETTING_CATEGORIES.find(c => c.id === "features")?.label).toBe("Experimental");
   expect(SETTING_DEFINITIONS.find(d => d.key === "features.planning")).toMatchObject({ default: false, scope: "workspace", ui: { control: "toggle", label: "Planning (experimental)" } });
+});
+
+it("OFF removes the Horizon grouping axis and ON restores it", () => {
+  expect(groupByOptions(false).some(o => o.id === "horizon")).toBe(false);
+  expect(groupByOptions(true).some(o => o.id === "horizon")).toBe(true);
 });
