@@ -236,7 +236,7 @@ export function isNotStarted(input: { plannedStart: string | null; links: number
 
 // ---------- guards ----------
 
-export const PLAN_KINDS_MISSING_MESSAGE = "Planning is off in this workspace; a person turns it on in Settings → Experimental or with `staple settings set features.planning true --person`."; undated work starts in Unscheduled).";
+export const PLAN_KINDS_MISSING_MESSAGE = "Planning is off in this workspace; a person turns it on in Settings → Experimental or with `staple settings set features.planning true --person`.";
 
 /** The one sentence every tracker door gives an unpromoted idea. */
 export function planKindRefusal(issue: { identifier: string; kind: string; title?: string | null }, action: string): StapleError {
