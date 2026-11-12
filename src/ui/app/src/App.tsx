@@ -110,7 +110,7 @@ import { LoadingState, ProblemState } from "@/components/plain/States";
  * its entry goes too, which is how the inbox and the board left without leaving a
  * dangling route behind them.
  */
-const VIEW_COMPONENTS: Record<ViewName, typeof TreeView> = {
+const VIEW_COMPONENTS: Record<ViewName, typeof TreeView | typeof PlanView> = {
   tree: TreeView,
   graph: GraphView,
   milestones: MilestonesView,
