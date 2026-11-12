@@ -636,6 +636,8 @@ export class QueueStore {
         .map((row, index) => ({ row, position: index + 1 }))
         .filter(({ row }) => this.store.isResolvedStatus(row.status));
       if (resolved.length === 0) return this.plan();
+      // A bulk prune has the same record protections as an explicit dequeue.
+      for (const { row } of resolved) this.requireIssue(row.issue_id);
       for (const { row } of resolved) this.remove(row.issue_id);
       const revision = this.bumpRevision();
       for (const { row, position } of resolved) {

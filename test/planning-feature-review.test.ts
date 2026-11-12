@@ -102,6 +102,32 @@ describe("record identity protects hidden planning data", () => {
       expect(s.listIssues({ includeResolved: true }).some(i => i.id === idea.id)).toBe(false);
     } finally { s.db.close(); }
   });
+  it("OFF queue prune cannot remove a retained shipped horizon", () => {
+    const { s, now, task, other } = setup();
+    try {
+      s.queue().enqueue(now.id, {}, "Mira");
+      s.updateIssue(task.id, { status: "done" }, "worker");
+      s.updateIssue(other.id, { status: "done" }, "worker");
+      expect(s.getIssue(now.id).status).toBe("done");
+      s.setSetting("features.planning", false, "Mira", PERSON);
+      const before = JSON.stringify(s.db.prepare("SELECT * FROM queue_entries").all());
+      expect(() => s.queue().prune({}, "worker")).toThrow(/Planning is off/);
+      expect(JSON.stringify(s.db.prepare("SELECT * FROM queue_entries").all())).toBe(before);
+    } finally { s.db.close(); }
+  });
+  it("OFF omits nested ideas from generic task detail and explicit subtrees", () => {
+    const { s } = setup();
+    try {
+      const idea = s.plan().capture({ title: "Larkspur parent plan", maturity: "shaped", plan: READY_PLAN }, "Mira", { person: PERSON });
+      s.plan().promote(idea.id, "Mira", { person: PERSON });
+      const child = s.plan().capture({ title: "Larkspur nested idea", parent: idea.id }, "worker");
+      expect(s.context(idea.id).children.some(i => i.id === child.id)).toBe(true);
+      s.setSetting("features.planning", false, "Mira", PERSON);
+      expect(s.context(idea.id).children.some(i => i.id === child.id)).toBe(false);
+      expect(JSON.stringify(s.tree(idea.id))).not.toContain(child.id);
+      expect(() => s.tree(child.id)).toThrow(/Planning is off/);
+    } finally { s.db.close(); }
+  });
   it("OFF generic idea detail refuses rather than exposing a hidden idea as a task", () => {
     const w = setup();
     try { w.s.setSetting("features.planning", false, "Mira", PERSON); expect(() => w.s.context(w.idea.id)).toThrow(/Planning is off/); }

@@ -69,7 +69,9 @@ refuse with one validation sentence. `/api/issues` omits horizon fields, and pic
 and run briefs omit horizon-run instructions. Horizons appear as plain milestones; promoted
 epics are ordinary epics. Ideas remain unnumbered drafts, never task-list or pickup work,
 with idea guards active in both states. Direct generic idea reads (`get_task` and
-`/api/issue`) refuse with the same planning-off sentence. Agents can still read the flag
+`/api/issue`) refuse with the same planning-off sentence. Generic task detail and
+explicit subtrees also omit nested ideas while off. Queue pruning cannot remove a retained
+horizon while off. Agents can still read the flag
 with `get_setting`. Horizon identity and idea-kind guards never depend on the flag or
 structural readiness; hidden horizons refuse generic writes, including goal runs. Re-enabling restores ideas, horizons, sections,
 links and run settings without deleting or rewriting their data.

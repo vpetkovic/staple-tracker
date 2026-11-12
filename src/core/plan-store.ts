@@ -646,7 +646,7 @@ export class PlanStore {
       const names = unrelated.map((row) => row.identifier);
       throw new StapleError(
         "validation",
-        `Planning uses the kind "idea", and ${names.slice(0, 10).join(", ")}${names.length > 10 ? ` and ${names.length - 10} more` : ""} already use it for other work. Re-kind ${names.length === 1 ? "it" : "them"} first (staple set <ref> --kind <other>), then turn planning on.`,
+        `Planning uses the kind "idea", and ${names.slice(0, 10).join(", ")}${names.length > 10 ? ` and ${names.length - 10} more` : ""} already use it for other work. The idea kind is reserved; these legacy records are kept intact and generic kind migration is refused. A person must resolve the legacy vocabulary before enabling planning.`,
         { issues: names },
       );
     }

@@ -625,7 +625,8 @@ describe("a v6 workspace — the last shape before milestones", () => {
         // Re-kind rather than create: the fixture predates the issue-number
         // counter, so a create would mint LEG-1 again. The point is the same —
         // a milestone-kinded row exists BEFORE 007 runs.
-        store.updateIssue("LEG-1", { kind: "milestone" }, "vlad");
+        expect(() => store.updateIssue("LEG-1", { kind: "milestone" }, "vlad")).not.toThrow();
+        expect(store.isHorizon(store.getIssue("LEG-1").id)).toBe(false);
         const kindsBefore = store.getKinds();
         const issuesBefore = db.prepare("SELECT * FROM issues ORDER BY identifier").all();
         expect(kindsBefore.map((k) => k.id)).toContain("milestone");

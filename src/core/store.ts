@@ -8080,6 +8080,7 @@ export class WorkspaceStore {
   } {
     const row = this.requireRow(ref);
     if (row.kind === IDEA_KIND) this.plan().assertEnabled();
+    const planningVisible = this.planningOn();
     const ancestors: Issue[] = [];
     let cursor = row.parent_id;
     let hops = 0;
@@ -8088,7 +8089,7 @@ export class WorkspaceStore {
         | IssueRow
         | undefined;
       if (!parent) break;
-      ancestors.unshift(rowToIssue(parent));
+      if (planningVisible || parent.kind !== IDEA_KIND) ancestors.unshift(rowToIssue(parent));
       cursor = parent.parent_id;
       hops += 1;
     }
@@ -8096,7 +8097,7 @@ export class WorkspaceStore {
       this.db
         .prepare("SELECT * FROM issues WHERE parent_id = ? ORDER BY created_at")
         .all(row.id) as unknown as IssueRow[]
-    ).map(rowToIssue);
+    ).filter(child => planningVisible || child.kind !== IDEA_KIND).map(rowToIssue);
     const toRef = (r: IssueRow) => ({
       identifier: r.identifier,
       title: r.title,
@@ -8120,6 +8121,7 @@ export class WorkspaceStore {
 
   /** Nested subtree (or all roots when no ref given). */
   tree(ref?: string): Array<{ issue: Issue; children: unknown[] }> {
+    const planningVisible = this.planningOn();
     const build = (parentId: string | null, depth: number): Array<{ issue: Issue; children: unknown[] }> => {
       if (depth > MAX_TREE_DEPTH) return [];
       // A sub-idea promoted before its parent is top-level work until that parent is promoted too.
@@ -8128,11 +8130,12 @@ export class WorkspaceStore {
         .prepare(parentId === null ? roots : "SELECT * FROM issues WHERE parent_id = ? ORDER BY created_at")
         .all(...(parentId === null ? [IDEA_KIND, IDEA_KIND] : [parentId])) as unknown as IssueRow[];
       return rows
-        .filter((r) => !isPlanKind(r.kind) || (ref !== undefined && depth > 0))
+        .filter((r) => !isPlanKind(r.kind) || (planningVisible && ref !== undefined && depth > 0))
         .map((r) => ({ issue: rowToIssue(r), children: build(r.id, depth + 1) }));
     };
     if (ref) {
       const row = this.requireRow(ref);
+      if (row.kind === IDEA_KIND) this.plan().assertEnabled();
       return [{ issue: rowToIssue(row), children: build(row.id, 1) }];
     }
     return build(null, 0);
@@ -8211,7 +8214,10 @@ export class WorkspaceStore {
 
   /** A horizon: a milestone the plan ranks as a column. Its name, date, order and removal are the person's. */
   isHorizon(issueId: string): boolean {
-    return this.db.prepare("SELECT 1 AS hit FROM issues WHERE id = ? AND kind = ? AND plan_rank IS NOT NULL").get(issueId, MILESTONE_KIND) !== undefined;
+    // Migration fixtures may predate the plan columns. Without a rank a row cannot be
+    // a horizon; SELECT * keeps the identity check valid on those earlier schemas too.
+    const row = this.db.prepare("SELECT * FROM issues WHERE id = ? AND kind = ?").get(issueId, MILESTONE_KIND) as { plan_rank?: number | null } | undefined;
+    return row?.plan_rank != null;
   }
 
   /** Reserved idea identity is independent of feature state and structural readiness. */
