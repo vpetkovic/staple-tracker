@@ -17,7 +17,7 @@ it("OFF removes Plan navigation and its lenses; ON restores navigation", () => {
   for (const planningEnabled of [false, true]) {
     const markup = renderToStaticMarkup(<SessionContext.Provider value={fakeSession({ planningEnabled })}><ViewTabBar /><NavRail onHide={() => {}} /></SessionContext.Provider>);
     expect(markup.includes('data-view-tab="plan"')).toBe(planningEnabled);
-    expect(markup.includes('data-nav-view="plan"')).toBe(planningEnabled);
+    expect(markup.includes('data-nav-item="view:plan"')).toBe(planningEnabled);
   }
   const off = renderToStaticMarkup(<SessionContext.Provider value={fakeSession({ planningEnabled: false })}><PlanView onAuthError={() => {}} /></SessionContext.Provider>);
   expect(off).not.toMatch(/data-plan-|Ideas|Horizons|Timeline|Enable planning/);
