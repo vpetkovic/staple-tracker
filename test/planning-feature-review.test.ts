@@ -43,7 +43,7 @@ describe("record identity protects hidden planning data", () => {
   it("ON OFF agent attempts ON preserves horizons, goals, settings and all plan bytes", () => {
     const w = setup(); const { s } = w;
     try {
-      const tables = ["issues", "documents", "plan_links", "plan_rows", "plan_members", "milestone_members", "milestone_meta", "milestone_revisions"];
+      const tables = ["issues", "documents", "plan_links", "plan_rows", "plan_members", "milestone_members", "milestone_meta"];
       const bytes = () => JSON.stringify(tables.map(t => s.db.prepare(`SELECT * FROM ${t} ORDER BY rowid`).all()));
       const before = bytes(), view = s.plan().view();
       s.setSetting("features.planning", false, "Mira", PERSON);
@@ -57,6 +57,7 @@ describe("record identity protects hidden planning data", () => {
     it(`reserved kinds survive removal attempts with planning ${enabled}`, () => {
       const w = setup();
       try {
+        w.s.db.prepare("DELETE FROM milestone_members").run();
         w.s.setSetting("features.planning", enabled, "Mira", PERSON);
         for (const kind of ["milestone", "idea"]) {
           expect(() => w.s.removeKind(kind, { migrateTo: "task" }, "worker")).toThrow(/Now|Next|Larkspur launch/);

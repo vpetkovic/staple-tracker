@@ -54,6 +54,8 @@ it("CLI, MCP and HTTP refuse OFF, report the readable flag, and restore ON", asy
   expect((await cli("plan", "show")).status).toBe(0);
   expect((await mcp.call("list_ideas", { ws: WS })).isError).toBeFalsy();
   expect((await http("/api/plan")).status).toBe(200);
+  expect((await http("/api/plan/enable", {})).status).toBe(404);
+  expect(mcp.client.getInstructions()).toContain("get_setting");
   expect((await http("/api/bootstrap")).body.features[WS]).toMatchObject({ planning: true });
   expect((await mcp.call("show_about", { ws: WS })).structuredContent).toMatchObject({ features: { planning: true } });
   expect((await http("/api/settings", { target: "settings", ops: [{ op: "set", key: "features.planning", value: false }] })).status).toBe(200);
@@ -74,6 +76,8 @@ it("OFF omits plan detail and horizon fields from task and pickup payloads", asy
   expect(JSON.stringify(toolPayload(await mcp.call("next_task", { ws: WS })))).toContain("horizon-run");
   expect(JSON.stringify(JSON.parse((await cli("queue", "next")).stdout))).toContain("horizon-run");
   expect((await cli("settings", "set", "features.planning", "false", "--person")).status).toBe(0);
+  expect((await http(`/api/issue?ref=${idea.id}`)).status).toBe(409);
+  expect((await mcp.call("get_task", { ws: WS, ref: idea.id })).isError).toBe(true);
   const rows = (await http("/api/issues")).body;
   expect(rows.some((r: { issue: { id: string } }) => r.issue.id === idea.id)).toBe(false);
   expect(rows.every((r: Record<string, unknown>) => !("horizon" in r))).toBe(true);

@@ -47,3 +47,12 @@ it("OFF removes the Horizon grouping axis and ON restores it", () => {
   expect(groupByOptions(false).some(o => o.id === "horizon")).toBe(false);
   expect(groupByOptions(true).some(o => o.id === "horizon")).toBe(true);
 });
+
+it("the hidden Plan URL rewrites to the Tasks view actually shown and drops its lens", async () => {
+  const { withShellState } = await import("../src/ui/app/src/lib/session-url.js");
+  const state = { ws: "larkspur", view: "plan" as const, filters: emptyFilters(), focus: null };
+  const off = new URL(withShellState("http://larkspur.test/?view=plan&plan-lens=timeline", state, { planningEnabled: false } as never));
+  expect(off.searchParams.get("view")).toBe("tasks"); expect(off.searchParams.has("plan-lens")).toBe(false);
+  const on = new URL(withShellState("http://larkspur.test/?view=plan&plan-lens=timeline", state, { planningEnabled: true } as never));
+  expect(on.searchParams.get("view")).toBe("plan"); expect(on.searchParams.get("plan-lens")).toBe("timeline");
+});
