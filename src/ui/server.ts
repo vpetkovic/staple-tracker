@@ -5068,9 +5068,6 @@ export function startUiServer(options: UiOptions): UiHandle {
         const optional = <T>(key: string): T | undefined => (key in body ? (body[key] as T) : undefined);
         let idea: string | null = ref ?? null;
         switch (url.pathname) {
-          case "/api/plan/enable":
-            plan.enable(actor, person);
-            break;
           case "/api/plan/capture":
             idea = plan.capture(
               {

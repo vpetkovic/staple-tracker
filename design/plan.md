@@ -68,7 +68,10 @@ actions and Tasks horizon chip/axis/filter disappear. Planning CLI, MCP and HTTP
 refuse with one validation sentence. `/api/issues` omits horizon fields, and pickup answers
 and run briefs omit horizon-run instructions. Horizons appear as plain milestones; promoted
 epics are ordinary epics. Ideas remain unnumbered drafts, never task-list or pickup work,
-with idea guards active in both states. Re-enabling restores ideas, horizons, sections,
+with idea guards active in both states. Direct generic idea reads (`get_task` and
+`/api/issue`) refuse with the same planning-off sentence. Agents can still read the flag
+with `get_setting`. Horizon identity and idea-kind guards never depend on the flag or
+structural readiness; hidden horizons refuse generic writes, including goal runs. Re-enabling restores ideas, horizons, sections,
 links and run settings without deleting or rewriting their data.
 
 ## Unscheduled and optional dates
@@ -82,7 +85,7 @@ The same lifecycle, Tasks chip/group/filter, CLI and MCP operations apply with o
 Only **dated horizons** appear in the Milestones list, alongside plain milestones as before.
 Clearing a horizon date removes it from that list; it remains in Plan and Tasks grouping.
 
-**Upgrade.** On workspace open, on `plan enable`, and after sync binds its device journal,
+**Upgrade.** When the person turns the flag on, and after sync binds its device journal while the flag is on,
 `migrateLegacyLater` finds listed, undated horizons named exactly Later. In one journaled
 transaction it unschedules every plan record on them, including promoted records, then clears
 the old milestone's plan rank. Derived membership rebuilds; hand-placed members, queue position,

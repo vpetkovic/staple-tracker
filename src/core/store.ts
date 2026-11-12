@@ -313,6 +313,7 @@ export type InboxEntry = Issue & {
 };
 
 interface IssueRow {
+  plan_maturity: string | null;
   id: string;
   identifier: string;
   title: string;
@@ -8078,6 +8079,7 @@ export class WorkspaceStore {
     instructions: ResolvedInstruction[];
   } {
     const row = this.requireRow(ref);
+    if (row.kind === IDEA_KIND) this.plan().assertEnabled();
     const ancestors: Issue[] = [];
     let cursor = row.parent_id;
     let hops = 0;

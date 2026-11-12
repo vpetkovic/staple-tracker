@@ -143,7 +143,6 @@ export function runPlanCommand(rest: string[]): void {
       throw new StapleError("validation", `Unknown plan verb "${sub}". Use: enable, show`);
   }
   if (values.json) return console.log(JSON.stringify(view));
-  if (!view.enabled) return console.log("Planning is not turned on. Run `staple plan enable`.");
   for (const horizon of view.horizons) console.log(horizonLine(horizon));
   console.log(`${view.ideas.length} ${view.ideas.length === 1 ? "idea" : "ideas"} · today ${view.today}`);
 }
@@ -201,7 +200,6 @@ export function runIdeaCommand(rest: string[]): void {
         ideas = ideas.filter((idea) => idea.horizonId === (horizon?.id ?? null));
       }
       if (values.json) return console.log(JSON.stringify(ideas));
-      if (!view.enabled) return console.log("Planning is not turned on. Run `staple plan enable`.");
       if (ideas.length === 0) return console.log("no ideas");
       for (const idea of ideas) console.log(ideaLine(idea, view));
       return;
@@ -369,7 +367,6 @@ export function runHorizonCommand(rest: string[]): void {
   const list = () => {
     const view = plan.view();
     if (values.json) return console.log(JSON.stringify(view.horizons));
-    if (!view.enabled) return console.log("Planning is not turned on. Run `staple plan enable`.");
     for (const horizon of view.horizons) console.log(horizonLine(horizon));
   };
   switch (sub) {

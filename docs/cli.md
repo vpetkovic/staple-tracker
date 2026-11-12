@@ -178,7 +178,7 @@ need `--person`, which records the change under `humanName`.
 
 | Command | What it does |
 |---|---|
-| `staple plan enable` | Turn planning on: the `idea` and `milestone` kinds and the horizons Now, Next and Later, which are milestones. |
+| `staple plan enable --person` | Set `features.planning` true, initializing the `idea` and `milestone` kinds and the default horizons Now and Next. The same experimental switch is in Settings. |
 | `staple plan show` / `staple horizon ls` | Horizons in order, with their late and not-started counts and their run setting. |
 | `staple idea ls` | Ideas with stage, horizon and progress. `--maturity M`, `--horizon H` filter. An idea has no ticket number until it is promoted; its `<ref>` is the id this prints. |
 | `staple idea new <title>` | Capture a raw idea. `--brief T`, `--parent REF`. |

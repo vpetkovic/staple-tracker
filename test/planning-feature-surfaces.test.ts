@@ -78,6 +78,11 @@ it("OFF omits plan detail and horizon fields from task and pickup payloads", asy
   expect((await cli("settings", "set", "features.planning", "false", "--person")).status).toBe(0);
   expect((await http(`/api/issue?ref=${idea.id}`)).status).toBe(409);
   expect((await mcp.call("get_task", { ws: WS, ref: idea.id })).isError).toBe(true);
+  expect((await http(`/api/issue?ref=${horizon.id}`)).body.issue.kind).toBe("milestone");
+  const milestoneWrite = await http("/api/milestone/update", { ref: horizon.id, targetDate: "2027-01-01" });
+  expect(milestoneWrite.status).toBe(409); expect(JSON.stringify(milestoneWrite.body)).toContain("Planning is off");
+  expect((await mcp.call("update_task", { ws: WS, ref: horizon.id, title: "Agent rename" })).isError).toBe(true);
+  expect((await cli("set", horizon.id, "--title", "Agent rename")).status).toBe(2);
   const rows = (await http("/api/issues")).body;
   expect(rows.some((r: { issue: { id: string } }) => r.issue.id === idea.id)).toBe(false);
   expect(rows.every((r: Record<string, unknown>) => !("horizon" in r))).toBe(true);

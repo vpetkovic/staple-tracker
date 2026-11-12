@@ -256,6 +256,9 @@ export function App() {
 
   const { version, bump } = useDataVersion(onAuthError);
   const bootstrap = useResource(() => getBootstrap(), [version], onAuthError);
+  const featureWorkspace = ws || (bootstrap.data?.mode === "workspace" ? bootstrap.data.workspaces[0]?.slug : "");
+  const planningEnabled = bootstrap.data?.features?.[featureWorkspace ?? ""]?.planning === true;
+  const planningResolved = bootstrap.data !== undefined;
 
   /**
    * The page's one issue fetch. Scoped by workspace only — every other dimension is
@@ -544,8 +547,8 @@ export function App() {
       // The page being left forgets the ticket too, the way it does for one opened from the
       // page (whose entry was stepped past): Back returns to the page, not to the ticket.
       if (navigating && from !== window.location.href) replaceUrl(from);
-      const shellHref = withShellState(from, shellState);
-      const href = navigating && shellState.view === "plan" ? withPlanLens(shellHref, loadPlanMemory(planWorkspace).lens) : shellHref;
+      const shellHref = withShellState(from, shellState, { planningEnabled: planningResolved ? planningEnabled : undefined });
+      const href = navigating && shellState.view === "plan" && planningEnabled ? withPlanLens(shellHref, loadPlanMemory(planWorkspace).lens) : shellHref;
       if (href === window.location.href) return;
       if (navigating) pushPage(href);
       else replaceUrl(href);
@@ -554,7 +557,7 @@ export function App() {
     // returns to the old page and not to a stale overlay entry of it.
     if (navigating) leaveOverlays(write);
     else afterHistorySettles(write);
-  }, [shellState, planWorkspace]);
+  }, [shellState, planWorkspace, planningResolved, planningEnabled]);
 
   useEffect(() => {
     const onPop = () => {
@@ -573,7 +576,7 @@ export function App() {
         // whose new page is about to be pushed — and with the state as it is then.
         whenHistoryIsFree(() => {
           const keep = lastSynced.current;
-          if (keep) replaceUrl(withShellState(window.location.href, keep));
+          if (keep) replaceUrl(withShellState(window.location.href, keep, { planningEnabled: planningResolved ? planningEnabled : undefined }));
         });
         return;
       }
@@ -587,7 +590,7 @@ export function App() {
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
-  }, []);
+  }, [planningResolved, planningEnabled]);
 
   /**
    * An address naming a workspace this hub does not have (a link from another machine, a
@@ -611,8 +614,6 @@ export function App() {
   const close = useCallback(() => setSelection(null), []);
 
   const settingsSnapshot = settings.settings;
-  const featureWorkspace = ws || (bootstrap.data?.mode === "workspace" ? bootstrap.data.workspaces[0]?.slug : "");
-  const planningEnabled = bootstrap.data?.features?.[featureWorkspace ?? ""]?.planning === true;
   const effectiveFilters = useMemo(() => {
     if (planningEnabled || !filters.dims.horizon) return filters;
     const { horizon: _horizon, ...dims } = filters.dims;
