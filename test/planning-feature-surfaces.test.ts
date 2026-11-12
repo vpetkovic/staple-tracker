@@ -33,8 +33,8 @@ it("CLI, MCP and HTTP refuse OFF, report the readable flag, and restore ON", asy
     expect(result.status).toBe(2);
     expect(result.stderr).toContain("Planning is off in this workspace");
   }
-  for (const name of ["list_ideas", "list_horizons", "capture_idea"]) {
-    const result = await mcp.call(name, { ws: WS, ...(name === "capture_idea" ? { title: "Larkspur idea" } : {}) });
+  for (const name of ["list_ideas", "get_idea", "list_horizons", "capture_idea", "update_idea", "scaffold_idea", "start_idea", "unlink_idea", "reset_idea_baseline"]) {
+    const result = await mcp.call(name, { ws: WS, ref: "5eed0000-0000-4000-8000-000000000001", issue: "LAR-1", title: "Larkspur idea" });
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result)).toContain("Planning is off in this workspace");
   }
