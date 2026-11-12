@@ -127,7 +127,6 @@ export interface SettingDefinition<T = unknown> {
  * it is `registerSettingCategory`, which also grows the index (R6f, STA-243).
  */
 const categories: SettingCategory[] = [
-  { id: "features", label: "Experimental", description: "Experimental workspace features may change.", scope: "workspace", editor: "fields", order: 40 },
   {
     id: "statuses",
     label: "Statuses",
@@ -155,6 +154,7 @@ const categories: SettingCategory[] = [
     editor: "fields",
     order: 30,
   },
+  { id: "features", label: "Experimental", description: "Experimental workspace features may change.", scope: "workspace", editor: "fields", order: 40 },
   {
     id: "machine",
     label: "This machine",
@@ -190,11 +190,6 @@ export type QueuePolicy = (typeof QUEUE_POLICIES)[number];
 
 /** The mutable backing of `SETTING_DEFINITIONS`; grown only by `registerSettingDefinition`. */
 const definitions: SettingDefinition[] = [
-  {
-    key: "features.planning", category: "features", scope: "workspace",
-    schema: { type: "boolean" }, default: false, version: 1, sensitivity: "normal",
-    ui: { label: "Planning (experimental)", description: "Ideas, horizons and the Plan view. Only a person can change this; turning it off keeps all planning data.", control: "toggle", order: 10 },
-  },
   {
     key: "kinds.default",
     category: "kinds",
@@ -249,6 +244,11 @@ const definitions: SettingDefinition[] = [
       control: "select",
       order: 10
     },
+  },
+  {
+    key: "features.planning", category: "features", scope: "workspace",
+    schema: { type: "boolean" }, default: false, version: 1, sensitivity: "normal",
+    ui: { label: "Planning (experimental)", description: "Ideas, horizons and the Plan view. Only a person can change this; turning it off keeps all planning data.", control: "toggle", order: 10 },
   },
   {
     key: "machine.browser",

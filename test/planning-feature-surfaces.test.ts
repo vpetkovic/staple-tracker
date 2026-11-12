@@ -47,6 +47,7 @@ it("CLI, MCP and HTTP refuse OFF, report the readable flag, and restore ON", asy
   expect(JSON.stringify(refused)).toContain("Only a person");
   expect((await cli("settings", "set", "features.planning", "true")).status).toBe(2);
   expect((await http("/api/plan")).status).toBe(409);
+  expect((await http("/api/plan/enable", {})).status).toBe(409);
   expect((await http("/api/plan/capture", { title: "Larkspur idea" })).status).toBe(409);
   expect((await cli("settings", "set", "features.planning", "true", "--person")).status).toBe(0);
   expect((await cli("plan", "show")).status).toBe(0);
