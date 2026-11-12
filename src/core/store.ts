@@ -2159,7 +2159,7 @@ export class WorkspaceStore {
    * new value as a `setting_changed` event.
    */
   setSetting(key: string, value: unknown, actor?: string | null, person?: PersonDecision | null): SettingValueView {
-    if (key === "features.planning" && !person) throw new StapleError("validation", "Only a person can change features.planning, in Settings → Experimental or with `staple settings set features.planning true --person`.");
+    if (key === "features.planning" && !person) throw new StapleError("validation", "Only a person can change features.planning, in Settings → Experimental or with `staple settings set features.planning true --person`. The UI is the person and its token is the person's; agents are trusted not to impersonate the person through that token or --person.");
     const definition = requireSettingDefinition(key, "workspace");
     const next = validateSettingValue(definition, value, `workspace ${this.slug}`);
     if (key === "kinds.default") this.assertConfiguredKind(next as string);
@@ -2199,7 +2199,7 @@ export class WorkspaceStore {
 
   /** Clear a stored value so the definition's default applies again. A no-op when nothing is stored. */
   resetSetting(key: string, actor?: string | null, person?: PersonDecision | null): SettingValueView {
-    if (key === "features.planning" && !person) throw new StapleError("validation", "Only a person can change features.planning, in Settings → Experimental or with `staple settings set features.planning false --person`.");
+    if (key === "features.planning" && !person) throw new StapleError("validation", "Only a person can change features.planning, in Settings → Experimental or with `staple settings set features.planning false --person`. The UI is the person and its token is the person's; agents are trusted not to impersonate the person through that token or --person.");
     const definition = requireSettingDefinition(key, "workspace");
     return this.atomically(() => {
       const stored = this.settings().values.get(key);

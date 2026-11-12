@@ -49,6 +49,13 @@ the outcome does not depend on when rebuilds run.
 or with `staple settings set features.planning true --person` under their humanName.
 Agents read it through `get_setting` and `show_about`; agent `set_setting` refuses.
 
+The UI is the person, and the UI token is the person's. An authenticated HTTP
+`/api/settings` request therefore declares a person decision. The CLI's `--person`
+declares the configured `humanName`. These declarations use the existing person
+model, not a separate authentication boundary: agents are trusted not to impersonate
+the person by using that token or `--person`. Agent tools can read `features.planning`
+with `get_setting`; they must ask the person to change it.
+
 **Planning is on** when the flag is true AND the existing structural check holds: the
 idea and milestone kinds exist and a milestone carries a plan rank. Setting true runs the
 existing enable path in the same transaction, including default horizons, legacy-Later

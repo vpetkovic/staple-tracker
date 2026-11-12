@@ -17,9 +17,9 @@ describe("experimental planning workspace flag", () => {
   it("defaults off, is readable, and only a person can change or reset it", () => {
     const store = workspace();
     expect(store.settingValue("features.planning")).toMatchObject({ value: false, source: "default" });
-    expect(() => store.setSetting("features.planning", true, "agent")).toThrow(/person/);
-    expect(() => store.resetSetting("features.planning", "agent")).toThrow(/person/);
-    expect(() => store.plan().enable("agent")).toThrow(/person/);
+    expect(() => store.setSetting("features.planning", true, "agent")).toThrow(/trusted not to impersonate/);
+    expect(() => store.resetSetting("features.planning", "agent")).toThrow(/trusted not to impersonate/);
+    expect(() => store.plan().enable("agent")).toThrow(/trusted not to impersonate/);
     store.setSetting("features.planning", true, "Larkspur owner", PERSON);
     expect(store.planningOn()).toBe(true);
     store.resetSetting("features.planning", "Larkspur owner", PERSON);

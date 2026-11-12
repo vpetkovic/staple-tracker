@@ -428,3 +428,10 @@ Turning it on initializes planning in the same transaction. Turning it off hides
 the planning layer on UI, CLI, MCP and HTTP, including horizon-run instructions, without
 deleting data. Ideas stay unnumbered and unavailable for pickup in either state. See
 [the plan](plan.md) for the behavior and schema contract. This feature may change.
+
+The UI is the person, and the UI token is the person's. An authenticated HTTP
+`/api/settings` request therefore declares a person decision. The CLI's `--person`
+declares the configured `humanName`. These declarations use the existing person
+model, not a separate authentication boundary: agents are trusted not to impersonate
+the person by using that token or `--person`. Agent tools can read `features.planning`
+with `get_setting`; they must ask the person to change it.
