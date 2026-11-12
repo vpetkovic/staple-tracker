@@ -72,6 +72,7 @@ import {
   type OfferedAction,
 } from "./plan-lifecycle.js";
 import { createHash, randomUUID } from "node:crypto";
+import { readStoredRepositoryId } from "./repo-identity.js";
 import { planLinkField, planLinksOf, writePlanLink } from "./plan-links.js";
 import { planRowField, planRowsOf, planRowValue, writePlanRow, type PlanRowValue } from "./plan-rows.js";
 import {
@@ -415,6 +416,13 @@ export function scaffoldTaskId(ideaId: string, rowId: string): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
+/** Stable within a repository, separate from user-created horizons and scaffolded work. */
+function defaultHorizonId(repositoryId: string, name: string): string {
+  const hex = createHash("sha256").update(`staple:default-horizon:${repositoryId}:${name}`).digest("hex");
+  const variant = ((parseInt(hex[16]!, 16) & 0x3) | 0x8).toString(16);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
 /** A short digest of a value, as previews and the breakdown name what they showed. */
 function digest(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
@@ -646,7 +654,13 @@ export class PlanStore {
       const ids = this.store.getKinds().map((kind) => kind.id);
       if (!ids.includes(IDEA_KIND)) this.store.addKind({ id: IDEA_KIND, label: "Idea" }, actor);
       if (!ids.includes(MILESTONE_KIND)) this.store.addKind({ id: MILESTONE_KIND, label: "Milestone" }, actor);
-      DEFAULT_HORIZONS.forEach((name, index) => this.insertHorizon(name, null, (index + 1) * RANK_STEP, actor));
+      const repositoryId = readStoredRepositoryId(this.db);
+      DEFAULT_HORIZONS.forEach((name, index) => {
+        // Concurrent first enables create the same records, including before either syncs.
+        // Isolated in-memory stores without repository identity keep independent random ids.
+        const id = repositoryId === null ? undefined : defaultHorizonId(repositoryId, name);
+        this.insertHorizon(name, null, (index + 1) * RANK_STEP, actor, id);
+      });
       return this.view();
     });
   }
@@ -1730,8 +1744,8 @@ export class PlanStore {
 
   // ---------- horizons: milestones the plan shows as columns (all the person's) ----------
 
-  private insertHorizon(name: string, date: string | null, rank: number, actor: string | null): string {
-    const issue = this.store.createIssue({ title: name, kind: MILESTONE_KIND, createdBy: actor, allowDuplicate: true }, { plan: true });
+  private insertHorizon(name: string, date: string | null, rank: number, actor: string | null, id?: string): string {
+    const issue = this.store.createIssue({ title: name, kind: MILESTONE_KIND, createdBy: actor, allowDuplicate: true }, { plan: true, id });
     this.write(issue.id, { plan_rank: rank }, actor, "horizon_created", { date });
     if (date !== null) this.store.milestones().update(issue.id, { targetDate: date }, actor, { plan: true });
     return issue.id;

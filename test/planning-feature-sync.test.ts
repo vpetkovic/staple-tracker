@@ -35,7 +35,8 @@ for (const legacyFold of [false, true]) it(`concurrent first enable converges to
   try {
     const a = fleet.machine("a"); a.store.createIssue({ title: "Larkspur seed" }); await a.sync();
     const b = fleet.machine("b"); await b.sync();
-    b.store.setSetting("features.planning", true, "Mira", { via: "settings" });
+    a.use(); a.store.createIssue({ title: "Larkspur offline task" });
+    b.use(); b.store.setSetting("features.planning", true, "Mira", { via: "settings" });
     a.use(); a.store.setSetting("features.planning", true, "Mira", { via: "settings" });
     await a.sync(); await b.sync(); await a.sync();
     for (const machine of [a, b]) {
