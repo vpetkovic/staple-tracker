@@ -194,6 +194,8 @@ export interface CreateIssueInput {
 }
 
 export interface UpdateIssueInput {
+  /** Explicitly validated; generic updates do not support changing parent. */
+  parent?: string | null;
   title?: string;
   description?: string | null;
   status?: IssueStatus;
@@ -1967,9 +1969,9 @@ export class WorkspaceStore {
        * than migrated, and the refusal names the milestones so the operator knows
        * which `staple milestone rm`/`set --target none` to run first.
        */
-      if (id === MILESTONE_KIND) {
-        const horizons = this.db.prepare("SELECT identifier, title FROM issues WHERE kind = ? AND plan_rank IS NOT NULL").all(MILESTONE_KIND) as Array<{ identifier: string; title: string }>;
-        if (horizons.length) throw new StapleError("validation", `Cannot remove the milestone kind while horizons ${horizons.map(h => `${h.identifier} ${h.title}`).join(", ")} still exist.`);
+      if (id === IDEA_KIND || id === MILESTONE_KIND) {
+        const records = this.db.prepare("SELECT identifier, title FROM issues WHERE kind = ? OR (kind = ? AND plan_rank IS NOT NULL) ORDER BY identifier").all(IDEA_KIND, MILESTONE_KIND) as Array<{ identifier: string; title: string }>;
+        if (records.length) throw new StapleError("validation", `Cannot remove the ${id} kind while planning records ${records.map(r => `${r.title} (${displayRef(r)})`).join(", ")} still exist.`);
       }
       if (id === MILESTONE_KIND) {
         const owning = this.db
@@ -1991,17 +1993,6 @@ export class WorkspaceStore {
             { milestones: owning },
           );
         }
-      }
-      /**
-       * The plan kinds go only when nothing uses them: `--migrate-to` would turn every idea
-       * into tracker work at once, which is the move `assertPlanRekind` refuses one at a time.
-       */
-      if (isPlanKind(id) && this.planningInitialized() && this.kindUsageCount(id) > 0) {
-        throw new StapleError(
-          "validation",
-          `Cannot remove the ${id} kind while ${this.kindUsageCount(id)} ${id === IDEA_KIND ? "idea" : "horizon"}${this.kindUsageCount(id) === 1 ? "" : "s"} still use it.`,
-          { kind: id },
-        );
       }
       if (this.settings().kinds.length === 1) {
         throw new StapleError("validation", `"${id}" is the only kind left; a workspace needs at least one.`);
@@ -2348,7 +2339,7 @@ export class WorkspaceStore {
    */
   private requireTarget(ref: string): IssueRow {
     const row = this.requireRow(ref);
-    if (this.isHorizon(row.id)) this.plan().assertEnabled();
+    if (row.kind === IDEA_KIND || this.isHorizon(row.id)) this.plan().assertEnabled();
     if (renumbersAcknowledged()) return row;
     const trimmed = ref.trim();
     if (trimmed === row.id) return row;
@@ -2645,11 +2636,9 @@ export class WorkspaceStore {
           throw new StapleError("validation", `Tree depth cap (${MAX_TREE_DEPTH}) exceeded`);
         }
       }
-      if (kind === IDEA_KIND && !internal.plan && this.planningInitialized() && !this.planningOn()) throw new StapleError("validation", PLAN_KINDS_MISSING_MESSAGE);
-      if (this.planningInitialized()) {
-        // A promoted idea is still a plan record, so its sub-ideas may stay under it.
-        assertPlanParent({ kind }, parent === null ? null : { ...parent, planRecord: (parent as unknown as { plan_maturity: string | null }).plan_maturity !== null });
-      }
+      if (kind === IDEA_KIND && !internal.plan && !this.planningOn()) throw new StapleError("validation", PLAN_KINDS_MISSING_MESSAGE);
+      // Parent authority follows record identity, including while planning is hidden.
+      assertPlanParent({ kind }, parent === null ? null : { ...parent, planRecord: parent.plan_maturity !== null });
 
       // Duplicate guard: same normalized title among open siblings.
       const normalized = normalizeTitle(title);
@@ -2678,7 +2667,7 @@ export class WorkspaceStore {
        * An idea holds no ticket number until it is promoted: a draft identifier made from its own
        * UUID, which consumes nothing from the counter and is never shown (design/plan.md, "Identity").
        */
-      const draft = kind === IDEA_KIND && (internal.plan === true || this.planningInitialized());
+      const draft = kind === IDEA_KIND;
       const identifier = draft ? draftIdentifier(id) : `${this.prefix}-${this.nextIssueNumber()}`;
       const now = this.journal.mutationAt();
       const row = this.db
@@ -2824,7 +2813,7 @@ export class WorkspaceStore {
        * An idea made through the tracker's own create (`create_task` with kind idea) is a captured
        * idea: raw, at the end of the plan, as `capture_idea` would make it.
        */
-      if (kind === IDEA_KIND && !internal.plan && this.planningInitialized()) {
+      if (kind === IDEA_KIND && !internal.plan) {
         const rank = (this.db.prepare("SELECT MAX(plan_rank) AS rank FROM issues WHERE kind = ?").get(IDEA_KIND) as { rank: number | null }).rank;
         this.db.prepare("UPDATE issues SET plan_maturity = 'raw', plan_rank = ? WHERE id = ?").run((rank ?? 0) + 1024, id);
       }
@@ -3534,8 +3523,7 @@ export class WorkspaceStore {
      * an idea or a horizon that reached a task's subtree (a sync from a device without the
      * parent guard, say) must not move that task's status.
      */
-    const planning = this.planningInitialized();
-    if (planning && isPlanKind(ancestor.kind)) return [];
+    if (isPlanKind(ancestor.kind)) return [];
     const rows =
       ancestor.kind === MILESTONE_KIND
         ? this.db
@@ -3550,7 +3538,7 @@ export class WorkspaceStore {
             .prepare("SELECT id, identifier, status, title, kind FROM issues WHERE parent_id = ?")
             .all(ancestor.id);
     const typed = (rows as Array<{ id: string; identifier: string; status: string; title: string; kind: string }>)
-      .filter((row) => !(planning && isPlanKind(row.kind)))
+      .filter((row) => !isPlanKind(row.kind))
       .map(({ kind: _kind, ...row }) => row);
     if (ancestor.kind !== MILESTONE_KIND) return typed;
     /**
@@ -4724,6 +4712,11 @@ export class WorkspaceStore {
         if (isPlanKind(row.kind) && patch.status !== undefined && patch.status !== row.status) throw steeringRefusal("status", displayRef(row));
         if (isPlanKind(row.kind) && (patch.title !== undefined || patch.description !== undefined)) this.plan().assertEditable(row.id);
       }
+      if (patch.parent !== undefined) {
+        const parent = patch.parent === null ? null : this.requireRow(patch.parent);
+        assertPlanParent({ kind: patch.kind ?? row.kind }, parent === null ? null : { ...parent, planRecord: parent.plan_maturity !== null });
+        if ((parent?.id ?? null) !== row.parent_id) throw new StapleError("validation", "Changing parent through update_task is not supported.");
+      }
       if (
         patch.expectedStatusVersion !== undefined &&
         patch.expectedStatusVersion !== row.status_version
@@ -4750,7 +4743,7 @@ export class WorkspaceStore {
       // documented exception (design/milestones.md): a milestone that still owns
       // members or dates cannot stop being one.
       if (patch.kind !== undefined && patch.kind !== row.kind) {
-        if (this.planningInitialized()) assertPlanRekind(row, patch.kind);
+        assertPlanRekind(row, patch.kind);
         assertRekindAllowed(this.db, row, patch.kind);
       }
       if (patch.kind !== undefined) next.kind = patch.kind;
@@ -7385,7 +7378,7 @@ export class WorkspaceStore {
    * no edit, as `update_idea` refuses a brief. The plan layer's own writes have already asked.
    */
   private assertIdeaContentWrite(row: Pick<IssueRow, "id" | "kind">): void {
-    if (row.kind === IDEA_KIND && this.planningInitialized()) this.plan().assertEditable(row.id);
+    if (row.kind === IDEA_KIND) this.plan().assertEditable(row.id);
   }
 
   putDocument(
@@ -7414,7 +7407,7 @@ export class WorkspaceStore {
       const row = this.requireTarget(ref);
       if (!internal.plan) {
         this.assertIdeaContentWrite(row);
-        if (this.planningInitialized()) this.plan().assertDocumentWrite(row.id, cleanKey, body);
+        this.plan().assertDocumentWrite(row.id, cleanKey, body);
       }
       const current = this.db
         .prepare(
@@ -7849,14 +7842,14 @@ export class WorkspaceStore {
     } else if (!filters.includeResolved) {
       where.push(`status NOT IN ${this.resolvedSql()}`);
     }
-    if (!this.planningOn() && this.planningInitialized()) {
+    if (!this.planningOn()) {
       where.push("kind <> ?");
       params.push(IDEA_KIND);
     }
     if (filters.kind && filters.kind.length > 0) {
       where.push(`kind IN (${filters.kind.map(() => "?").join(",")})`);
       params.push(...filters.kind);
-    } else if (!filters.includePlan && this.planningInitialized()) {
+    } else if (!filters.includePlan) {
       // Ideas and horizons live in the Plan view; a task view lists them only when asked by kind.
       where.push(`kind NOT IN (${[...PLAN_KINDS].map(() => "?").join(",")})`);
       params.push(...PLAN_KINDS);
@@ -8125,19 +8118,15 @@ export class WorkspaceStore {
 
   /** Nested subtree (or all roots when no ref given). */
   tree(ref?: string): Array<{ issue: Issue; children: unknown[] }> {
-    const planning = this.planningInitialized();
     const build = (parentId: string | null, depth: number): Array<{ issue: Issue; children: unknown[] }> => {
       if (depth > MAX_TREE_DEPTH) return [];
       // A sub-idea promoted before its parent is top-level work until that parent is promoted too.
-      const roots =
-        planning
-          ? "SELECT * FROM issues WHERE parent_id IS NULL OR (kind <> ? AND parent_id IN (SELECT id FROM issues WHERE kind = ?)) ORDER BY created_at"
-          : "SELECT * FROM issues WHERE parent_id IS NULL ORDER BY created_at";
+      const roots = "SELECT * FROM issues WHERE parent_id IS NULL OR (kind <> ? AND parent_id IN (SELECT id FROM issues WHERE kind = ?)) ORDER BY created_at";
       const rows = this.db
         .prepare(parentId === null ? roots : "SELECT * FROM issues WHERE parent_id = ? ORDER BY created_at")
-        .all(...(parentId === null ? (planning ? [IDEA_KIND, IDEA_KIND] : []) : [parentId])) as unknown as IssueRow[];
+        .all(...(parentId === null ? [IDEA_KIND, IDEA_KIND] : [parentId])) as unknown as IssueRow[];
       return rows
-        .filter((r) => !(planning && isPlanKind(r.kind)) || (ref !== undefined && depth > 0))
+        .filter((r) => !isPlanKind(r.kind) || (ref !== undefined && depth > 0))
         .map((r) => ({ issue: rowToIssue(r), children: build(r.id, depth + 1) }));
     };
     if (ref) {
@@ -8182,14 +8171,14 @@ export class WorkspaceStore {
   // ---------- the plan layer (design/plan.md) ----------
 
   /**
-   * The feature setting controls visibility and plan operations. The structural check below
-   * identifies reserved ideas even while disabled, so drafts never become pickup work.
+   * The feature setting and structural readiness control feature availability.
+   * Record identity alone protects ideas and horizons, including during partial sync.
    */
   planningOn(): boolean {
     return this.getSetting("features.planning") === true && this.planningInitialized();
   }
 
-  /** Structural identity survives disabling the UI and tools, so idea guards remain active. */
+  /** Structural readiness for feature use and initialization, never record protection. */
   planningInitialized(): boolean {
     const kinds = this.settings().kinds;
     if (!kinds.some((k) => k.id === IDEA_KIND) || !kinds.some((k) => k.id === MILESTONE_KIND)) return false;
@@ -8223,9 +8212,9 @@ export class WorkspaceStore {
     return this.db.prepare("SELECT 1 AS hit FROM issues WHERE id = ? AND kind = ? AND plan_rank IS NOT NULL").get(issueId, MILESTONE_KIND) !== undefined;
   }
 
-  /** An issue of a plan kind, in a workspace where planning is on. */
+  /** Reserved idea identity is independent of feature state and structural readiness. */
   isPlanIssue(kind: string): boolean {
-    return isPlanKind(kind) && this.planningInitialized();
+    return isPlanKind(kind);
   }
 
   /** Dependencies are tracker work: a plan neither blocks nor waits (design/plan.md, "Guards"). */
@@ -8234,7 +8223,7 @@ export class WorkspaceStore {
     blockers: ReadonlyArray<{ identifier: string; kind: string; title: string }>,
     self?: { identifier: string; title: string },
   ): void {
-    if (blockers.length === 0 || !this.planningInitialized()) return;
+    if (blockers.length === 0) return;
     if (isPlanKind(kind)) {
       throw planKindRefusal({ identifier: self?.identifier ?? "~", title: self?.title ?? "this one", kind }, "blocked by other work");
     }

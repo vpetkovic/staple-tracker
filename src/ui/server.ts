@@ -4934,6 +4934,7 @@ export function startUiServer(options: UiOptions): UiHandle {
            * to refuse, not this branch's.
            */
           if (body.kind !== undefined) patch.kind = body.kind as string;
+          if (body.parent !== undefined) patch.parent = body.parent as string | null;
           if (body.labels !== undefined) {
             const labels = stringList(body.labels);
             // A present-but-malformed labels value must not collapse to "delete all".

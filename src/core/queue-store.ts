@@ -661,8 +661,7 @@ export class QueueStore {
       .prepare("SELECT id, identifier, title, kind, status, parent_id, checkout_agent, assignee FROM issues")
       .all() as unknown as IssueNode[];
     // The resolver never sees a plan: no idea or horizon is ever an effective row.
-    const planning = this.store.planningInitialized();
-    return new Map(rows.filter((row) => !(planning && isPlanKind(row.kind))).map((row) => [row.id, row]));
+    return new Map(rows.filter((row) => !isPlanKind(row.kind)).map((row) => [row.id, row]));
   }
 
   /**

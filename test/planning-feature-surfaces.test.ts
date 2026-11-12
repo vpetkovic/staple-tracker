@@ -90,3 +90,18 @@ it("OFF omits plan detail and horizon fields from task and pickup payloads", asy
     expect(JSON.stringify(payload)).not.toMatch(/horizon|planRecord|runMode|plan_maturity/);
   }
 });
+
+
+it("generic parent requests refuse idea parenting over MCP and HTTP in both states", async () => {
+  expect((await cli("settings", "set", "features.planning", "true", "--person")).status).toBe(0);
+  const task = JSON.parse((await cli("new", "Larkspur parent guard work")).stdout);
+  const captured = await http("/api/plan/capture", { title: "Larkspur parent guard idea" });
+  const idea = captured.body.idea.idea;
+  for (const enabled of [true, false]) {
+    expect((await cli("settings", "set", "features.planning", String(enabled), "--person")).status).toBe(0);
+    const response = await mcp.call("update_task", { ws: WS, ref: task.id, parent: idea.id });
+    expect(response.isError).toBe(true); expect(JSON.stringify(response)).toContain("idea");
+    const page = await http("/api/action", { type: "update", ref: task.id, parent: idea.id });
+    expect(page.status).toBe(409); expect(JSON.stringify(page.body)).toContain("idea");
+  }
+});

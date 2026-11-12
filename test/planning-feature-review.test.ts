@@ -76,6 +76,19 @@ describe("record identity protects hidden planning data", () => {
       finally { w.s.db.close(); }
     });
   }
+  it("idea identity guards survive incomplete structural readiness", () => {
+    const { s, idea, task } = setup();
+    try {
+      s.db.prepare("UPDATE issues SET plan_rank = NULL WHERE kind = 'milestone'").run();
+      expect(s.planningInitialized()).toBe(false);
+      expect(() => s.removeKind("idea", { migrateTo: "task" }, "worker")).toThrow(/Larkspur launch/);
+      expect(() => s.updateIssue(idea.id, { kind: "task" }, "worker")).toThrow();
+      expect(() => s.setBlockedBy(task.id, [idea.id], "worker")).toThrow();
+      expect(() => s.createIssue({ title: "Hidden child", parent: idea.id })).toThrow(/idea|Planning is off/);
+      expect(s.isPlanIssue("idea")).toBe(true);
+      expect(s.listIssues({ includeResolved: true }).some(i => i.id === idea.id)).toBe(false);
+    } finally { s.db.close(); }
+  });
   it("OFF generic idea detail refuses rather than exposing a hidden idea as a task", () => {
     const w = setup();
     try { w.s.setSetting("features.planning", false, "Mira", PERSON); expect(() => w.s.context(w.idea.id)).toThrow(/Planning is off/); }
