@@ -80,10 +80,29 @@ it("horizon-run instructions are absent from next, detail, continue and run brie
     store.setSetting("features.planning", enabled, "owner", PERSON);
     const instructions = store.instructions(task.id);
     expect(instructions.some(i => i.key === "horizon-run")).toBe(enabled);
-    const context = store.agentContext(task.id);
+    const context = store.context(task.id);
     expect(context.instructions.some(i => i.key === "horizon-run")).toBe(enabled);
     const brief = buildBrief({ ref: task.identifier, title: task.title, workspace: "/tmp/larkspur", db: "/tmp/larkspur.db", runId: "larkspur", actor: "worker", finish: "in_review", instructions: null, ticketInstructions: instructions });
     expect(brief.includes("Stop for review after each epic")).toBe(enabled);
+  }
+  store.db.close();
+});
+
+it("continue_run omits horizon instructions while OFF", () => {
+  const store = workspace();
+  store.setSetting("features.planning", true, "owner", PERSON);
+  const horizon = store.plan().view().horizons[0]!;
+  const idea = store.plan().capture({ title: "Larkspur goal", maturity: "shaped", plan: READY_PLAN, horizon: horizon.id }, "owner", { person: PERSON });
+  const epic = store.plan().promote(idea.id, "owner", { person: PERSON });
+  const task = store.createIssue({ title: "Larkspur pickup", parent: epic.id });
+  store.plan().setHorizonRun(horizon.id, { mode: "epic", goal: ["Larkspur ships"] }, "owner", { person: PERSON });
+  store.setSetting("features.planning", false, "owner", PERSON);
+  store.runs().start({ actor: "worker", scope: epic.id });
+  const answer = store.runs().continue({ actor: "worker" });
+  expect(answer.action).toBe("take");
+  if (answer.action === "take") {
+    expect(answer.issueId).toBe(task.id);
+    expect(answer.instructions.some(i => i.key === "horizon-run")).toBe(false);
   }
   store.db.close();
 });
