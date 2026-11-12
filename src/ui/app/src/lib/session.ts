@@ -177,6 +177,8 @@ export function pinSelection(current: Selection | null, loaded: { workspace: str
 }
 
 export interface StapleSession {
+  /** Effective workspace flag; absent and all-workspace scope default to off. */
+  planningEnabled?: boolean;
   mode: UiMode;
   workspaces: WorkspaceRef[];
 

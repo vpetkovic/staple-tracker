@@ -419,3 +419,8 @@ export function saveViewPrefs(storage: Storage, prefs: ViewPrefs): void {
 export function groupByLabel(groupBy: GroupBy): string {
   return GROUP_BY_OPTIONS.find((option) => option.id === groupBy)?.label ?? "No grouping";
 }
+
+/** The Horizon axis is part of experimental planning, including for saved preferences. */
+export function groupByOptions(planningEnabled: boolean) {
+  return GROUP_BY_OPTIONS.filter(option => option.id !== "horizon" || planningEnabled);
+}

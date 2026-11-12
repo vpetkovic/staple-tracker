@@ -1,3 +1,5 @@
+import React from "react";
+
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it } from "vitest";
 import { SessionContext } from "../src/ui/app/src/lib/session.js";

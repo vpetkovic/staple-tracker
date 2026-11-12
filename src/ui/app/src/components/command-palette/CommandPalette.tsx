@@ -120,6 +120,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
     () =>
       orderCommands(
         buildCommands({
+          planningEnabled: session.planningEnabled,
           selection: selected,
           selectionStatus: selectedStatus,
           planRecord,
@@ -150,6 +151,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
       selected,
       selectedStatus,
       planRecord,
+      session.planningEnabled,
       session.view,
       session.ws,
       session.assignee,

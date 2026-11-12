@@ -820,6 +820,7 @@ export interface WorkspaceRef {
 
 /** GET /api/bootstrap */
 export interface Bootstrap {
+  features?: Record<string, { planning: boolean }>;
   mode: UiMode;
   workspaces: WorkspaceRef[];
   /** The page origins the server accepts writes from (its Origin check). */

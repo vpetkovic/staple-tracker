@@ -255,7 +255,7 @@ export function App() {
   }, []);
 
   const { version, bump } = useDataVersion(onAuthError);
-  const bootstrap = useResource(() => getBootstrap(), [], onAuthError);
+  const bootstrap = useResource(() => getBootstrap(), [version], onAuthError);
 
   /**
    * The page's one issue fetch. Scoped by workspace only — every other dimension is
@@ -611,13 +611,21 @@ export function App() {
   const close = useCallback(() => setSelection(null), []);
 
   const settingsSnapshot = settings.settings;
+  const featureWorkspace = ws || (bootstrap.data?.mode === "workspace" ? bootstrap.data.workspaces[0]?.slug : "");
+  const planningEnabled = bootstrap.data?.features?.[featureWorkspace ?? ""]?.planning === true;
+  const effectiveFilters = useMemo(() => {
+    if (planningEnabled || !filters.dims.horizon) return filters;
+    const { horizon: _horizon, ...dims } = filters.dims;
+    return { ...filters, dims };
+  }, [filters, planningEnabled]);
 
   const session = useMemo<StapleSession | null>(() => {
     if (!bootstrap.data) return null;
     return {
+      planningEnabled,
       mode: bootstrap.data.mode,
       workspaces: bootstrap.data.workspaces,
-      view,
+      view: view === "plan" && !planningEnabled ? "tree" : view,
       setView: goToView,
       milestoneFocus,
       focusMilestone,
@@ -626,10 +634,10 @@ export function App() {
       ws,
       setWs,
       issues,
-      filters,
+      filters: effectiveFilters,
       setFilters,
       filterContext,
-      groupBy,
+      groupBy: groupBy === "horizon" && !planningEnabled ? "none" : groupBy,
       setGroupBy,
       sort,
       setSort,
@@ -645,6 +653,8 @@ export function App() {
       refresh: bump,
     };
   }, [
+    planningEnabled,
+    effectiveFilters,
     bootstrap.data,
     // Not read by the session — held as a dependency so that a vocabulary change
     // rebuilds it and every view re-renders against the new statuses. See above.

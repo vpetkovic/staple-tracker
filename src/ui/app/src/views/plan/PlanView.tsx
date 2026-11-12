@@ -35,6 +35,7 @@ import { loadPlanMemory, readPlanLens, savePlanMemory, withPlanLens } from "./pl
 
 export function PlanView({ onAuthError }: { onAuthError: (error: AuthError) => void }) {
   const session = useSession();
+  if (session.planningEnabled !== true) return null;
   const scope = workspaceScope(session.mode, session.ws, session.workspaces);
   if (scope.kind === "choose") {
     return (
