@@ -8177,9 +8177,8 @@ export class WorkspaceStore {
   // ---------- the plan layer (design/plan.md) ----------
 
   /**
-   * Planning is on once a milestone carries a plan rank (a horizon). Only the plan layer writes
-   * one, so a workspace that kept its own `idea` kind before this build is untouched by every
-   * plan guard until planning is turned on, which refuses while such issues exist.
+   * The feature setting controls visibility and plan operations. The structural check below
+   * identifies reserved ideas even while disabled, so drafts never become pickup work.
    */
   planningOn(): boolean {
     return this.getSetting("features.planning") === true && this.planningInitialized();

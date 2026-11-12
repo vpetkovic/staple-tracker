@@ -519,6 +519,7 @@ export class PlanStore {
   assertEditable(ref: string): void {
     const row = this.row(ref, false);
     if (row.plan_maturity === null || row.kind !== IDEA_KIND) return;
+    this.assertEnabled();
     this.allowIdea(row, "edit", {});
   }
 
