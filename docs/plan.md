@@ -302,7 +302,9 @@ and stop for you on the rest.
 
 A shaped idea with no tickets is not a to-do: it **waits** until its planned start (or its
 parent's, when it has none) or until the ideas it depends on ship, and agents never scaffold it
-before then. To release one early, move its planned start. When a horizon has no ticket left and
+before then. A parent whose sub-ideas are not all due waits too, since scaffolding it would build
+them; agents scaffold its due sub-ideas one by one instead. To release one early, move its planned
+start. When a horizon has no ticket left and
 its remaining steps are yours or are waiting, a run over it stops with `planning_needed`, lists the
 steps and, when they all wait, says when the earliest one starts. The horizon itself stays
 *planned* (nothing to queue) until its ideas become tickets.
