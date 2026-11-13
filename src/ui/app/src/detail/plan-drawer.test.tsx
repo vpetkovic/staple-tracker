@@ -18,6 +18,7 @@ import { visibleTabs } from "./tabs/registry";
 import { DocumentsTab } from "./tabs/DocumentsTab";
 import { FilesTab } from "./tabs/FilesTab";
 import { PlanTab } from "./tabs/PlanTab";
+import { PlanTimeTab } from "./tabs/PlanTimeTab";
 import { describeEvent } from "./timeline";
 import { addressDrafts } from "@/lib/api";
 
@@ -327,6 +328,21 @@ describe("the Plan tab", () => {
     expect(offered).toContain("data-plan-delivered-on");
     expect(offered).toContain('data-plan-action="mark_delivered"');
     expect(renderTab(planned("shaped"))).not.toContain('data-plan-section="delivered"');
+  });
+
+  it("says on the Time tab that a marked record was delivered outside the tracker, and reads its work once some is linked", () => {
+    const time = (view: IdeaData) =>
+      renderToStaticMarkup(<PlanTimeTab detail={ideaDetail(view)} workspace="ws" onAuthError={noop} refresh={noop} />)
+        .replace(/<[^>]*>/g, " ")
+        .replace(/\s+/g, " ");
+    const marked = { state: "shipped" as const, stage: "shipped" as const, linkCount: 0, delivered: { on: "2026-10-12", note: null }, actual: { start: null, end: "2026-10-12", forecastEnd: null } };
+    expect(time(idea("shipped", { ...marked, planned: { start: "2026-09-01", target: "2026-10-15" } }))).toContain("Delivered outside the tracker Oct 12, 2026.");
+    expect(time(idea("shipped", { ...marked, planned: { start: null, target: null } }))).toContain("Delivered outside the tracker Oct 12, 2026.");
+    expect(time(idea("shipped", { ...marked, late: true, planned: { start: null, target: "2026-10-01" } }))).toContain("Delivered outside the tracker Oct 12, 2026, later than planned.");
+    // Work linked since: the ordinary sentences, from the work's window.
+    const reopened = idea("started", { ...marked, state: "started", stage: "started", linkCount: 1, progress: 0, actual: { start: "2026-11-13", end: null, forecastEnd: null } });
+    expect(time(reopened)).toContain("Underway since Nov 13, 2026");
+    expect(time(reopened)).not.toContain("not started");
   });
 
   it("shows the lifecycle as phases, so a scheduled idea still reads as thinking, with its maturity", () => {

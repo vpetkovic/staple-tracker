@@ -222,7 +222,9 @@ staple idea set <id> --undelivered --person      # clear the mark
 An exploring or shaped idea offers the mark. The delivery day is the idea's actual end, so it reads
 **late** only when that day is after its planned end or its horizon's date. A marked idea can still
 be renamed and given a new brief, questions and decisions; **Clear the delivered mark** puts it back
-where it was. Linking open work to it later reopens it, as it would any shipped idea.
+where it was. Linking open work to it later reopens it, as it would any shipped idea; from then on
+its window and lateness follow that work, and once it lands the idea's end is the later of the
+delivery day and the work's end.
 
 ## 8. Read the Timeline
 

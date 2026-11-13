@@ -987,12 +987,15 @@ export class PlanStore {
       const present = workIds.filter((id) => work.rows.has(id));
       const measured = this.measure(present, work);
       const rolledShipped = present.length > 0 && measured.resolved >= present.length;
-      // Delivered outside the tracker: the delivery day is its actual end, and nothing is forecast.
-      const actual: ActualWindow = delivered
-        ? { start: measured.start, end: delivered.on, forecastEnd: null }
+      // Delivered outside the tracker with no work present: the delivery day is its actual end,
+      // and nothing is forecast. Once work is linked, the window is that work's, as for any
+      // record, ending no earlier than the delivery day once it has all landed.
+      const deliveredAlone = delivered !== null && present.length === 0;
+      const actual: ActualWindow = deliveredAlone
+        ? { start: null, end: delivered.on, forecastEnd: null }
         : {
             start: measured.start,
-            end: measured.end,
+            end: delivered !== null && measured.end !== null && delivered.on > measured.end ? delivered.on : measured.end,
             forecastEnd: forecastEnd({ start: measured.start, end: measured.end, progress: measured.progress ?? 0, today }),
           };
       const started = workIds.length > 0;
@@ -1036,7 +1039,8 @@ export class PlanStore {
           links: workIds.length,
           open: !rolledShipped && stage !== "dropped",
           today,
-          deliveredOn: row.plan_delivered_on,
+          // With work present, late reads that work's window, which the delivery day already bounds.
+          deliveredOn: deliveredAlone ? delivered.on : null,
         }),
         notStarted: isNotStarted({ plannedStart: row.plan_start, links: workIds.length, dropped: maturity === "dropped", today, deliveredOn: row.plan_delivered_on }),
         delivered,

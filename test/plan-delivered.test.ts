@@ -191,6 +191,27 @@ describe("a marked record", () => {
     finish(work);
     expect(plan.ideaView(id)).toMatchObject({ state: "shipped" });
   });
+
+  it("follows its linked work's window once reopened: never inverted, open while the work is, late when that work runs past its line", () => {
+    const id = idea("Reopened late", "shaped", { horizon: now().id, plannedTarget: "2026-11-03" });
+    mark(id, "2026-11-01");
+    expect(plan.ideaView(id)).toMatchObject({ late: false, actual: { start: null, end: "2026-11-01", forecastEnd: null } });
+    const work = store.createIssue({ title: "Follow-up" }).identifier;
+    plan.adopt(id, work, "agent");
+    store.checkoutIssue(work, "agent");
+    const open = plan.ideaView(id);
+    expect(open.state).toBe("started");
+    expect(open.actual.start).not.toBeNull();
+    expect(open.actual.end).toBeNull();
+    // The target has passed while the work is open: late, as for any started record.
+    expect(open.late).toBe(true);
+    store.updateIssue(work, { status: "done" }, "agent");
+    const landed = plan.ideaView(id);
+    expect(landed.state).toBe("shipped");
+    expect(landed.actual.end).not.toBeNull();
+    expect(landed.actual.end! >= landed.actual.start!).toBe(true);
+    expect(landed.actual.end! >= "2026-11-01").toBe(true);
+  });
 });
 
 describe("with planning off", () => {

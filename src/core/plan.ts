@@ -216,8 +216,9 @@ export function forecastEnd(input: { start: string | null; end: string | null; p
  * planned target and the horizon's date, or that day has passed while it is still open. An
  * idea with nothing linked is never late; see {@link isNotStarted}.
  *
- * A record delivered outside the tracker landed on its delivery day: it is late only when that
- * day is after the line, whatever else it links.
+ * A record delivered outside the tracker with no work present landed on its delivery day: it is
+ * late only when that day is after the line. Once work is present, the caller passes no delivery
+ * day and that work's window, which ends no earlier than the delivery day, decides as for any record.
  */
 export function isLate(input: {
   plannedTarget: string | null;

@@ -437,9 +437,11 @@ never a member, queued or checked out (every guard below holds; it is still an u
   the work instead, or to tell the person.
 - **What it derives.** One rule each, in `plan.ts`: `deriveStage` reads a marked record shipped
   whatever its maturity, unless work linked to it since is open (open work reopens it, as it
-  reopens any shipped record); its actual end is the delivery day, with no forecast; `isLate` is
-  true only when that day is after the earlier of its planned target and its horizon's date; and
-  `isNotStarted` is false. Its maturity stays what the person last set.
+  reopens any shipped record); while no work is present its actual window ends on the delivery
+  day, with no start and no forecast, and `isLate` is true only when that day is after the earlier
+  of its planned target and its horizon's date; once work is present the window and lateness are
+  that work's, as for any record, the window ending no earlier than the delivery day once it has
+  all landed; and `isNotStarted` is false. Its maturity stays what the person last set.
 
 **Every write on an idea's own content is its edit action.** A document under any key, a restore
 of an old revision, and adding or removing a file are refused where the idea's state offers no
@@ -519,9 +521,9 @@ well as on (`test/planning-feature*.test.ts`).
 |---|---|
 | stage | from its own facts only: `shipped` when the person marked it delivered outside the tracker and no work linked since is open, `started` when it is promoted or links work itself, `shipped` when every issue of its own work that is present is resolved, `dropped`, `scheduled` when it has a horizon, otherwise its maturity (`deriveStage`) |
 | progress | done leaves over counted leaves of the record's work (itself once promoted, its links, its sub-records'), each leaf once, cancelled leaves not counted |
-| actual window | the first `started_at` anywhere under that work (an epic whose own start is null reads its children's) to the last `completed_at`/`cancelled_at` once all are resolved; work nobody started draws no actual window. A record delivered outside the tracker ends on its delivery day |
+| actual window | the first `started_at` anywhere under that work (an epic whose own start is null reads its children's) to the last `completed_at`/`cancelled_at` once all are resolved; work nobody started draws no actual window. A record delivered outside the tracker with no work present ends on its delivery day with no start; with work present, its window is that work's, ending no earlier than the delivery day once it has all landed |
 | forecast end | a straight line from the days spent and the share done, while open and partly done |
-| late | the work landed, or is forecast to land, after the earlier of the planned end and the horizon's date, or that day has passed while it is open; a record delivered outside the tracker only when its delivery day is after that line (`isLate`) |
+| late | the work landed, or is forecast to land, after the earlier of the planned end and the horizon's date, or that day has passed while it is open; a record delivered outside the tracker with no work present only when its delivery day is after that line; with work present, that work's window as for any record (`isLate`) |
 | not started | nothing linked or promoted, not delivered outside the tracker, and the planned start has passed (`isNotStarted`) |
 | rollups | a parent record reads its sub-records' work for progress, dates, the forecast and late / not started, which it displays; never for its stage, state or actions |
 | horizon shipped | its milestone's derived status is done, derived from its open and done work only (cancelled work is not counted, so a horizon never derives to cancelled) |
