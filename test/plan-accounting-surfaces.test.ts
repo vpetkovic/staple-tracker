@@ -49,6 +49,8 @@ interface Horizon {
   name: string;
   units: { done: number; open: number; planned: number; total: number };
   unsizedCount: number;
+  ideaCount: number;
+  records: { leaves: number; parentCount: number };
   progress: number | null;
 }
 interface Progress {
@@ -87,6 +89,9 @@ beforeAll(async () => {
   await cliJson("checkout", cart.identifier);
   await cliJson("done", cart.identifier, "-m", "landed");
   expect((await http("/api/plan/capture", { title: "Invoice search", maturity: "shaped", plan: { ...READY_PLAN, breakdown: rows(3) }, horizon: now.id })).status).toBe(200);
+  // And an umbrella being explored, over a sub-idea with nothing written yet: a parent and an unsized leaf.
+  const reporting = (await http("/api/plan/capture", { title: "Reporting", maturity: "exploring", horizon: now.id })).body as { idea: { idea: { id: string } } };
+  expect((await http("/api/plan/capture", { title: "Audit trail", maturity: "exploring", horizon: now.id, parent: reporting.idea.idea.id })).status).toBe(200);
 }, 90_000);
 
 afterAll(async () => {
@@ -98,13 +103,13 @@ afterAll(async () => {
 
 describe("a horizon's accounting on every surface", () => {
   it("reads the same units and percentage on the CLI, MCP and the page", async () => {
-    const expected = { units: { done: 1, open: 1, planned: 3, total: 5 }, unsizedCount: 0, progress: 0.2 };
+    const expected = { units: { done: 1, open: 1, planned: 3, total: 5 }, unsizedCount: 1, progress: 0.2, ideaCount: 4, records: { leaves: 3, parentCount: 1 } };
     const fromCli = ((await cliJson("horizon", "ls")) as Horizon[]).find((h) => h.identifier === horizonRef)!;
     const fromMcp = (toolPayload(await mcp.call("list_horizons", { ws: WS })) as Horizon[]).find((h) => h.identifier === horizonRef)!;
     const fromPage = ((await http(`/api/plan?ws=${WS}`)).body as unknown as { horizons: Horizon[] }).horizons.find((h) => h.identifier === horizonRef)!;
     for (const horizon of [fromCli, fromMcp, fromPage]) expect(horizon).toMatchObject(expected);
 
-    const milestone = { countable: 2, planned: 3, unsized: 0, percent: 20, counts: { done: 1 } };
+    const milestone = { countable: 2, planned: 3, unsized: 1, percent: 20, counts: { done: 1 } };
     expect(((await cliJson("milestone", "show", horizonRef)) as { progress: Progress }).progress).toMatchObject(milestone);
     const listed = (await cliJson("milestone", "ls")) as Array<{ milestone: { identifier: string }; progress: Progress }>;
     expect(listed.find((row) => row.milestone.identifier === horizonRef)!.progress).toMatchObject(milestone);
@@ -115,9 +120,9 @@ describe("a horizon's accounting on every surface", () => {
 
   it("prints leaf ideas, the units and the planned work in the CLI's text", async () => {
     const horizons = await cli("horizon", "ls", "--ws", WS);
-    expect(horizons.stdout).toMatch(/2 ideas\s+1\/5 20% · 3 planned/);
+    expect(horizons.stdout).toMatch(/3 ideas \(\+1 parent\)\s+1\/5 20% · 3 planned · 1 unsized/);
     const shown = await cli("milestone", "show", horizonRef, "--ws", WS);
-    expect(shown.stdout).toContain("progress 1/5 20% · 3 planned · 2 leaves");
+    expect(shown.stdout).toContain("progress 1/5 20% · 3 planned · 1 unsized · 2 leaves");
   });
 
   it("reads as a plain milestone with planning off: ticket leaves only, no planned work", async () => {
