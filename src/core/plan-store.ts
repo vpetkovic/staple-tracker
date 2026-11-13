@@ -101,6 +101,7 @@ import {
   type PlanSections,
 } from "./plan-sections.js";
 import { LISTED_HORIZON, rebuildPlanMembers } from "./plan-members.js";
+import { orderPlanSteps, planStepOf, type PlanStep } from "./plan-steps.js";
 import { holdsHorizon, horizonAccounting, ownUnits, unitPercent, unitProgress, units, type HorizonAccounting, type OwnUnits, type RecordCounts, type RecordSize, type ScheduledRecord, type Units } from "./plan-accounting.js";
 import type { MilestoneProgress } from "./milestones.js";
 import type { WorkspaceStore } from "./store.js";
@@ -157,6 +158,8 @@ export interface HorizonView {
   /** Its lifecycle state, and the actions that state offers (`plan-lifecycle.ts`). */
   state: HorizonState;
   actions: OfferedAction[];
+  /** What its planned work still needs, in plan order (`plan-steps.ts`); [] when nothing does. */
+  planSteps: PlanStep[];
 }
 
 /** The horizon a task's work belongs to, as the task list shows it. */
@@ -230,6 +233,8 @@ export interface IdeaView {
   /** Its lifecycle state, and the actions that state offers (`plan-lifecycle.ts`). */
   state: IdeaState;
   actions: OfferedAction[];
+  /** What it needs next from planning, while a horizon carries it (`plan-steps.ts`); else null. */
+  nextStep: PlanStep | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -277,6 +282,8 @@ interface PlanFacts {
   sizes: Map<string, RecordSizeView>;
   /** Each horizon's carried records: those scheduled on it, and their descendants scheduled on none. */
   carried: Map<string, ScheduledRecord[]>;
+  /** The horizon carrying each carried record, by record id. */
+  carrier: Map<string, string>;
   /** Each horizon's accounting, filled on first read in this state (its tickets cost a read). */
   accounting: Map<string, HorizonAccounting>;
 }
@@ -885,7 +892,13 @@ export class PlanStore {
       awaitingApproval: own.gate_state === "pending",
       late: lateCount > 0,
       ...horizonLifecycle(shipped, open, this.isQueued(row.id)),
+      planSteps: this.stepsIn(facts, ideas, row.id),
     };
+  }
+
+  /** A horizon's plan steps in plan order, from the views of the records it carries. */
+  private stepsIn(facts: PlanFacts, ideas: readonly IdeaView[], horizonId: string): PlanStep[] {
+    return orderPlanSteps(ideas.filter((idea) => facts.carrier.get(idea.id) === horizonId).map((idea) => ({ id: idea.id, rank: idea.rank, parentId: idea.parentId, step: idea.nextStep })));
   }
 
   /**
@@ -927,6 +940,42 @@ export class PlanStore {
   holdsByHorizon(): Map<string, number> {
     const facts = this.facts();
     return new Map(facts.horizons.map((row) => [row.id, (facts.carried.get(row.id) ?? []).filter((record) => record.holds).length]));
+  }
+
+  /** One horizon's plan steps in plan order (`plan-steps.ts`); [] with planning off or for an issue that is not a horizon. */
+  planStepsOf(horizonId: string): PlanStep[] {
+    return this.pickupSteps([horizonId]);
+  }
+
+  /**
+   * The plan steps a pickup answer carries (design/plan.md, "Plan steps"): those of the horizon it
+   * is scoped to, of the horizon of the ticket it answers, and, unscoped, of every queued horizon;
+   * each horizon once, in the plan's horizon order. Undefined with planning off, so the answer
+   * carries no field at all.
+   */
+  pickupPlanSteps(input: { scope: string | null; next: string | null }): PlanStep[] | undefined {
+    if (!this.enabled()) return undefined;
+    const wanted: string[] = [];
+    if (input.scope !== null) wanted.push(input.scope);
+    else {
+      const queued = this.db.prepare("SELECT issue_id FROM queue_entries").all() as Array<{ issue_id: string }>;
+      wanted.push(...queued.map((row) => row.issue_id));
+    }
+    if (input.next !== null) {
+      const horizon = this.horizonsOf([input.next]).get(input.next);
+      if (horizon) wanted.push(horizon.id);
+    }
+    return this.pickupSteps(wanted);
+  }
+
+  /** The steps of each horizon named (anything else is skipped), in the plan's horizon order. */
+  private pickupSteps(horizonIds: Iterable<string>): PlanStep[] {
+    if (!this.enabled()) return [];
+    const wanted = new Set(horizonIds);
+    if (wanted.size === 0) return [];
+    const facts = this.facts();
+    const ideas = this.viewsOf(facts, this.today());
+    return facts.horizons.filter((row) => wanted.has(row.id)).flatMap((row) => this.stepsIn(facts, ideas, row.id));
   }
 
   /** Members of a horizon, put there or derived, that are not resolved: the work removing it would strand. */
@@ -1111,21 +1160,23 @@ export class PlanStore {
       return null;
     };
     const carried = new Map<string, ScheduledRecord[]>();
+    const carrier = new Map<string, string>();
     for (const row of rows) {
       const facts = records.get(row.id)!;
       if (facts.stage === "dropped") continue;
       const horizonId = carrierOf(row.id);
       if (horizonId === null) continue;
+      carrier.set(row.id, horizonId);
       const { size, own } = sizes.get(row.id)!;
       const list = carried.get(horizonId) ?? [];
       list.push({ state: facts.state, own, liveSubRecords: size.liveSubRecords, holds: holdsHorizon(facts.stage, size) });
       carried.set(horizonId, list);
     }
-    return { rows, byId, childIds, horizons, horizonDates, work, links, categoryOf, records, sizes, carried, accounting: new Map() };
+    return { rows, byId, childIds, horizons, horizonDates, work, links, categoryOf, records, sizes, carried, carrier, accounting: new Map() };
   }
 
   private buildIdeaViews(today: string, facts: PlanFacts): IdeaView[] {
-    const { rows, byId, childIds, horizonDates, work, links, categoryOf, records, sizes } = facts;
+    const { rows, byId, childIds, horizonDates, work, links, categoryOf, records, sizes, carrier } = facts;
     /** The work a record stands for: itself once promoted, its links, and its sub-records' work. */
     const rolledWork = (id: string, seen = new Set<string>()): Set<string> => {
       const out = new Set<string>();
@@ -1149,6 +1200,15 @@ export class PlanStore {
       seen.add(id);
       const own = records.get(id)!.stage === "dropped" ? 0 : sizes.get(id)!.own.planned;
       return own + (childIds.get(id) ?? []).reduce((sum, child) => sum + rolledPlanned(child, seen), 0);
+    };
+    /** The day a record may start: its own planned start, else its nearest ancestor's. */
+    const startOf = (id: string): string | null => {
+      const seen = new Set<string>();
+      for (let cursor = byId.get(id); cursor !== undefined && !seen.has(cursor.id); cursor = cursor.parent_id === null ? undefined : byId.get(cursor.parent_id)) {
+        seen.add(cursor.id);
+        if (cursor.plan_start !== null) return cursor.plan_start;
+      }
+      return null;
     };
     return rows.map((row) => {
       const { promoted, ownLinks, ownWork, maturity, horizonId, stage, state } = records.get(row.id)!;
@@ -1178,6 +1238,33 @@ export class PlanStore {
         (sections.breakdown.length === 0 ? subIdea : planRowsOf(this.db, row.id).some((planRow) => this.issueExists(scaffoldTaskId(row.id, planRow.id))));
       // A shaped plan is held to the gate again before anything is built from it.
       const planIncomplete = maturity === "shaped" && (state === "shaped" || scaffolded) ? this.gateOf(row.id, undefined, subIdea) : [];
+      const recordDependsOn = dependsOn(row.id, sections);
+      const parentId = row.parent_id !== null && byId.has(row.parent_id) ? row.parent_id : null;
+      const carriedBy = carrier.get(row.id);
+      const nextStep =
+        carriedBy === undefined
+          ? null
+          : planStepOf({
+              id: row.id,
+              ref: shownIdentifier(row.identifier) ?? row.id,
+              title: row.title,
+              parentId,
+              parentTitle: parentId === null ? null : byId.get(parentId)!.title,
+              horizonId: carriedBy,
+              scheduled: horizonId !== null,
+              state,
+              maturity,
+              ownWork: ownWork.length > 0,
+              openQuestions: questions.filter((q) => !q.resolved && !q.deferred).map((q) => q.text),
+              gate: () => shapedGate(sections, questions, { subIdea }),
+              planIncomplete,
+              start: startOf(row.id),
+              dependsOn: recordDependsOn.flatMap((id) => {
+                const dep = records.get(id);
+                return dep === undefined ? [] : [{ id, title: byId.get(id)!.title, state: dep.state }];
+              }),
+              today,
+            });
       return {
         id: row.id,
         identifier: shownIdentifier(row.identifier),
@@ -1187,7 +1274,7 @@ export class PlanStore {
         description: row.description,
         maturity,
         stage,
-        parentId: row.parent_id !== null && byId.has(row.parent_id) ? row.parent_id : null,
+        parentId,
         horizonId,
         planned: { start: row.plan_start, target: row.plan_target },
         baseline: hasBaseline ? { start: row.plan_baseline_start, target: row.plan_baseline_target } : null,
@@ -1213,7 +1300,7 @@ export class PlanStore {
         childIds: childIds.get(row.id) ?? [],
         openQuestions: questions.filter((q) => !q.resolved).length,
         completeness: completeness(sections, questions, parseDecisions(this.documentBody(row.id, DECISIONS_KEY))),
-        dependsOn: dependsOn(row.id, sections),
+        dependsOn: recordDependsOn,
         planIncomplete,
         ...ideaLifecycle({
           state,
@@ -1224,6 +1311,7 @@ export class PlanStore {
           scaffolded,
           planIncomplete,
         }),
+        nextStep,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
       };
