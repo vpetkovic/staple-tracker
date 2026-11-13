@@ -780,6 +780,7 @@ function contest(
 
   const contested = new Set<string>();
   const detectedAt = nowIso();
+  const horizonDerived = op.entity === "issue" && derivedHorizonWrite(db, op.entityId, op.payload);
 
   for (const [key, carried] of Object.entries(op.payload)) {
     const named = policy(op.entity, key);
@@ -798,8 +799,10 @@ function contest(
 
     const local = readField(db, op.entity, op.entityId, named.name);
     if (!local.present) continue;
-    // Two devices' derivations of one horizon re-derive here after the pull, never a record (`derivedHorizonStatus`).
-    if (op.entity === "issue" && named.name === "status" && derivedHorizonStatus(db, op.entityId, local.value, carried, op.payload)) continue;
+    // Two devices' derivations of one horizon re-derive here after the pull, never a record (`derivedHorizonWrite`).
+    if (horizonDerived && named.name === "status") continue;
+    // And so are the timestamps derivation writes with it (`DERIVATION_COMPANIONS`).
+    if (horizonDerived && DERIVATION_COMPANIONS.includes(named.name)) continue;
     const endUnit = op.entity === "attempt" && named.name === "end";
     const remoteValue = endUnit ? attemptEndValue({ ...(local.value as Record<string, unknown>), ...op.payload }) : carried;
     if (sameValue(local.value, remoteValue)) continue;
@@ -958,22 +961,39 @@ function keepStatusOwners(db: DatabaseSync, id: string, issueId: string, local: 
 }
 
 /**
- * Whether a contested status is a horizon's, written by derivation on both sides (design/plan.md,
- * "Accounting"). A horizon's status is a function of synchronized facts (its members, and the
- * plan records that hold it), and every device re-derives it after each pull
- * (`rederivePlanMilestonesAfterPull`): two derivations made from two halves of the facts are
- * settled by deriving again from the merged ones, which every device does alike, so neither is a
- * value a person must choose. The remote value is applied, and the re-derivation after the pull
- * writes the merged answer where it differs. A status a person set, on either side, is still a
- * conflict, and a plain milestone's is unchanged.
+ * Whether an operation on a horizon is derivation's write, and the horizon's status here is
+ * derivation's too (design/plan.md, "Accounting"). A horizon's status is a function of
+ * synchronized facts (its members, and the plan records that hold it), and every device
+ * re-derives it after each pull (`rederivePlanMilestonesAfterPull`): two derivations made from
+ * two halves of the facts are settled by deriving again from the merged ones, which every device
+ * does alike, so neither is a value a person must choose. The remote status is applied, and the
+ * re-derivation after the pull writes the merged answer where it differs. What derivation writes
+ * with the status (`DERIVATION_COMPANIONS`) is no choice either: it is applied, and a device's
+ * own operations replay in the log's order on its next pull, so every device ends on the last
+ * write in the log, as the service's fold does. A horizon left open with a completion time has it
+ * cleared after the pull (`clearDerivedCompletion`, `store.ts`). A status a person set, on either
+ * side, is still a conflict, and a plain milestone's is unchanged.
  */
-function derivedHorizonStatus(db: DatabaseSync, issueId: string, local: unknown, carried: unknown, payload: Record<string, unknown>): boolean {
-  const row = db.prepare("SELECT * FROM issues WHERE id = ?").get(issueId) as { kind: string; plan_rank?: number | null; derived_status: string | null } | undefined;
+function derivedHorizonWrite(db: DatabaseSync, issueId: string, payload: Record<string, unknown>): boolean {
+  if (!("status" in payload)) return false;
+  const row = db.prepare("SELECT * FROM issues WHERE id = ?").get(issueId) as
+    | { kind: string; status: string; plan_rank?: number | null; derived_status: string | null }
+    | undefined;
   if (row === undefined || row.kind !== MILESTONE_KIND || row.plan_rank == null) return false;
-  if (row.derived_status === null || row.derived_status !== local) return false;
+  if (row.derived_status === null || row.derived_status !== row.status) return false;
   const owner = "derivedStatus" in payload ? payload.derivedStatus : "derived_status" in payload ? payload.derived_status : undefined;
-  return owner !== undefined ? owner === carried : typeof payload.derived === "string";
+  return owner !== undefined ? owner === payload.status : typeof payload.derived === "string";
 }
+
+/** The columns derivation writes beside a status (`deriveOneAncestor`, `store.ts`). */
+const DERIVATION_COMPANIONS: readonly string[] = [
+  "started_at",
+  "completed_at",
+  "cancelled_at",
+  "blocked_transition_at",
+  "unblock_owner",
+  "unblock_action",
+];
 
 /** The `derived_status` a resolution to `chosen` writes: the chosen value when the side it came from was derivation's. */
 function ownerFor(db: DatabaseSync, conflict: ConflictRecord, chosen: unknown): string | null {

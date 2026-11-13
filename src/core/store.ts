@@ -3363,11 +3363,37 @@ export class WorkspaceStore {
     const owed = this.planHoldsOwed();
     if (owed === null) return;
     const { settled, moved } = owed;
-    for (const id of moved) this.deriveHolders([id], trigger, actor, new Set([id]), { mayCloseStart: true, mayCancel: false });
+    for (const id of moved) {
+      this.deriveHolders([id], trigger, actor, new Set([id]), { mayCloseStart: true, mayCancel: false });
+      this.clearDerivedCompletion(id, actor);
+    }
     const after = moved.length === 0 ? settled : this.planHoldInputs()!;
     this.db
       .prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
       .run(PLAN_HOLDS_SETTLED_KEY, JSON.stringify(after));
+  }
+
+  /**
+   * A horizon whose status derivation owns holds no completion time while it is open
+   * (design/plan.md, "Accounting"). A pull can apply another device's derived reopen, which never
+   * clears a completion time it did not stamp, and a re-derivation that leaves the status where
+   * the pull put it writes nothing: a horizon two devices closed offline and a third reopened kept
+   * a completion time on every device. A status still contested here is a person's to settle, and
+   * its timestamps with it.
+   */
+  private clearDerivedCompletion(id: string, actor: string | null): void {
+    const row = this.db.prepare("SELECT status, derived_status, completed_at FROM issues WHERE id = ?").get(id) as
+      | { status: string; derived_status: string | null; completed_at: string | null }
+      | undefined;
+    if (row === undefined || row.derived_status === null || row.derived_status !== row.status) return;
+    if (row.completed_at === null || this.categoryOf(row.status) === "done") return;
+    const contested = this.db
+      .prepare("SELECT 1 AS hit FROM sync_conflicts WHERE entity = 'issue' AND entity_id = ? AND field = 'status' AND resolved_at IS NULL")
+      .get(id);
+    if (contested !== undefined) return;
+    const now = nowIso();
+    this.db.prepare("UPDATE issues SET completed_at = NULL, updated_at = ? WHERE id = ?").run(now, id);
+    this.journal.record({ entity: "issue", entityId: id, verb: "update", payload: { completed_at: null, updated_at: now }, actor });
   }
 
   /** Some horizon's status inputs moved since this device last settled them (`rederivePlanHolds`). */
