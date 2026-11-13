@@ -49,7 +49,7 @@ export interface HorizonData {
   rank: number;
   /** The milestone's status; a horizon is a milestone. */
   status: string;
-  /** Its derived done: every member landed and no scheduled idea on it is unshipped. */
+  /** Its milestone is done: every member landed and nothing on its plan holds it. What folds its column. */
   shipped: boolean;
   memberCount: number;
   ideaCount: number;
@@ -59,12 +59,16 @@ export interface HorizonData {
   shippedCount: number;
   /** Its work items: ticket leaves done and open, and its ideas' breakdown rows with no tickets yet. */
   units: PlanUnits;
-  /** Its scheduled ideas with nothing to count yet. */
+  /** Ideas it carries with nothing to count yet. */
   unsizedCount: number;
-  /** Its scheduled leaf ideas by state, and the parents among them: what its counts print. */
-  records: { leaves: number; shipped: number; started: number; shaped: number; exploring: number; parentCount: number };
+  /** The leaf ideas it carries by state, and the parents among them: what its counts print. */
+  records: { leaves: number; shipped: number; started: number; shaped: number; exploring: number; raw: number; parentCount: number };
   /** Done units over all its units, 0..1; null while it has none. */
   progress: number | null;
+  /** The server's whole percent of its units, rounded down: what the page prints. */
+  percent: number | null;
+  /** All its units are done and nothing on its plan holds it. A 100 that is not complete says so. */
+  complete: boolean;
   /** How far agents take it when they pick its work up; null until the person sets it. */
   runMode: "work" | "goal" | "epic" | null;
   /** Its goal: the milestone's acceptance criteria. */
@@ -102,6 +106,8 @@ export interface IdeaData {
   unsized: boolean;
   /** Done units over its rollup's units; null before any of its work is started. */
   progress: number | null;
+  /** The server's whole percent of its rollup's units, rounded down; null with `progress`. */
+  percent: number | null;
   actual: ActualWindow;
   late: boolean;
   notStarted: boolean;
@@ -136,6 +142,8 @@ export interface LinkData {
   leaves: number;
   doneLeaves: number;
   progress: number;
+  /** The server's whole percent of its leaves, rounded down. */
+  percent: number;
   startedAt: string | null;
   completedAt: string | null;
   milestone: { identifier: string; title: string; state: string; run: { state: string; actor: string } | null } | null;

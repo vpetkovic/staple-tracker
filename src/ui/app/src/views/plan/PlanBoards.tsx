@@ -310,7 +310,7 @@ function IdeaCard({ plan, entry, column, columns, write, onOpen, selected }: Boa
       ) : (
         <ThinkingChips idea={idea} horizonLabel={horizon ? `${horizon.name}${horizon.date ? ` · ${dayLabel(horizon.date, false)}` : ""}` : null} />
       )}
-      {onHorizons && started && !shipped && idea.progress !== null ? <Progress value={idea.progress} /> : null}
+      {onHorizons && started && !shipped && idea.percent !== null ? <Progress percent={idea.percent} /> : null}
       {descendants.length > 0 ? (
         <div className="mt-2 border-t pt-1.5">
           <button
@@ -440,14 +440,17 @@ export function Chip({ children, tone }: { children: ReactNode; tone?: "amber" |
   );
 }
 
-export function Progress({ value }: { value: number }) {
-  const percent = Math.round(value * 100);
+/** The server's percent, as it gives it; a whole 100 that is not complete (an idea left unsized) says so. */
+export function Progress({ percent, complete = true }: { percent: number; complete?: boolean }) {
+  const incomplete = percent === 100 && !complete;
   return (
-    <div className="mt-2 flex items-center gap-2" aria-label={`${percent}% done`}>
+    <div className="mt-2 flex items-center gap-2" aria-label={`${percent}% done${incomplete ? ", incomplete" : ""}`}>
       <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
         <div className="h-full rounded-full bg-primary" style={{ width: `${percent}%` }} />
       </div>
-      <span className="text-caption tabular-nums text-text-tertiary">{percent}%</span>
+      <span className="text-caption tabular-nums text-text-tertiary">
+        {percent}%{incomplete ? " incomplete" : ""}
+      </span>
     </div>
   );
 }
@@ -558,7 +561,7 @@ function HorizonHeader({ column, write, onOpen, done }: { column: BoardColumn; w
           </button>
         )}
       </div>
-      {horizon.progress !== null && !done ? <Progress value={horizon.progress} /> : null}
+      {horizon.percent !== null && !done ? <Progress percent={horizon.percent} complete={horizon.complete} /> : null}
       {done || horizon.shippedCount > 0 || risk.late > 0 || risk.notStarted > 0 || horizon.awaitingApproval ? (
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-caption" data-plan-horizon-risk={horizon.identifier}>
           {horizon.awaitingApproval ? (

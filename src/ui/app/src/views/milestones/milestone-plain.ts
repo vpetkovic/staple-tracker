@@ -221,7 +221,8 @@ function horizonProgressSentence(progress: MilestoneProgress, planned: number): 
   if (progress.countable === 0 && planned === 0) return `No work to count yet.${unsized}`;
   const tasks = `${progress.counts.done} of ${progress.countable} ${progress.countable === 1 ? "task" : "tasks"} finished`;
   const plannedText = planned === 0 ? "" : `, ${planned} planned in ideas with no tickets yet`;
-  return `${tasks}${plannedText} (${progress.percent ?? 0}% of all work).${unsized}`;
+  const incomplete = progress.percent === 100 && !progress.complete ? ", incomplete" : "";
+  return `${tasks}${plannedText} (${progress.percent ?? 0}% of all work${incomplete}).${unsized}`;
 }
 
 /**
