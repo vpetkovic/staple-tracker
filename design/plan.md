@@ -540,9 +540,15 @@ device that pulled an idea another device scheduled while this one closed the la
 horizon no record holds any more whose work has all landed closes, whether or not derivation ever
 wrote its status before: its last holding record was dropped, unscheduled, moved or shipped. A
 status a person set outside the pre-work band, or a gate, is left alone. Every device that holds
-the same facts writes the same status, and two devices' derived writes of one horizon's status
-are never a conflict: the pull applies the other device's and re-derives from the merged facts
-(`cloud/conflicts.ts`, `derivedHorizonStatus`). A status a person set on either side still is.
+the same facts writes the same status, and two devices' derived writes of one horizon are never a
+conflict: the pull applies the other device's and re-derives from the merged facts
+(`cloud/conflicts.ts`, `derivedHorizonWrite`). Derivation owns the status and the timestamps it
+writes with it (when the horizon started, completed or was cancelled, and its blocked cycle).
+Those timestamps are applied in the log's order, so every device holds the last one written, as
+the service's fold does, and a horizon derivation leaves open has its completion time cleared
+after the pull (`clearDerivedCompletion`). An open horizon has none; a closed one has one, the
+same on every device. A status a person set on either side is still a conflict, and the horizon
+keeps its timestamps while it is.
 
 The hold is protection, not presentation: it keys on what the records are, so it holds with the
 flag off too, where the horizon reads as a plain milestone that says it is held by its plan
@@ -724,6 +730,11 @@ What converges, under both folds, on a tail device and a freshly hydrated one:
   offline reopens on every device after the pull. One device releasing a horizon (its last
   holding idea taken off) while another reopens a ticket on it offline ends with the status the
   merged facts derive on both, and no conflict.
+- **A horizon two devices derive offline** ends with one start time and one completion time on
+  every device, a fresh one included, and no conflict. Closed on two devices and reopened by a
+  third, or closed before a device joined and reopened by an offline write, it ends open with no
+  completion time anywhere. A person's cancel still conflicts with a derived close or reopen, and
+  keeps its own timestamps while it does.
 
 ## Known limits
 
@@ -776,7 +787,7 @@ What converges, under both folds, on a tail device and a freshly hydrated one:
 | `test/plan-scaffold.test.ts` | sections persist as revisions, an agent writes them, duplicate keys refused; the gate on every path to shaped, deferred questions let through; Scaffold creates exactly its preview, idempotently and for rows added later, nested sub-ideas as child epics, never where the lifecycle does not offer it; import with its file attached |
 | `test/plan-scaffold-surfaces.test.ts` | the gate on the page, the CLI with `--person` and an agent over MCP; the three Scaffold previews agree and write nothing; a confirm creates once whichever surface retries; CLI import |
 | `test/plan-scaffold-guards.test.ts` | a shaped plan hollowed by an edit stays shaped, says what it lacks, holds Scaffold and Promote back and refuses both; the breakdown never written as a document; every malformed plan payload refused by name; import into shaped held to the gate; the source file attached byte for byte; a confirm refused without a fingerprint and on a changed plan; no preview where Scaffold is not offered; inherited acceptance, labelled; blockers added and never removed; a renamed key keeps its task; tasks named by idea and row; a stale breakdown save refused; one row edited writes one row |
-| `test/cloud-plan-sync.test.ts` | under both folds: the plan, its membership and its numbers converge on a tail device and a hydrated one; offline adopts and unlinks; offline moves derive the same membership with no conflict; two offline promotions end with two distinct numbers; a third device never shows a numberless epic; a horizon whose only work is cancelled stays listed; a horizon a scheduled idea holds stays open, reopens after a concurrent close, and converges with no conflict when one device releases it while another reopens its ticket; an idea an earlier build numbered resolves by its old number |
+| `test/cloud-plan-sync.test.ts` | under both folds: the plan, its membership and its numbers converge on a tail device and a hydrated one; offline adopts and unlinks; offline moves derive the same membership with no conflict; two offline promotions end with two distinct numbers; a third device never shows a numberless epic; a horizon whose only work is cancelled stays listed; a horizon a scheduled idea holds stays open, reopens after a concurrent close, and converges with no conflict when one device releases it while another reopens its ticket; a horizon's start and completion times converge with no conflict when devices derive it offline, a person's cancel still conflicts, and a plain milestone is unchanged; an idea an earlier build numbered resolves by its old number |
 | `test/cloud-plan-promotion-identity.test.ts` | under both folds: one idea promoted on two devices offline ends on one number per record on every device and a fresh one, no number on two records, no open conflict |
 | `test/cloud-plan-breakdown-sync.test.ts` | under both folds: different rows edited or added offline both kept with no conflict; one row edited on both is a recorded conflict, and resolving it settles both; two devices scaffolding one idea create the same tasks |
 | `test/sync-mutation-convergence.test.ts` | every `PlanStore` mutation, and `promoteInPlace`, converges column for column |
