@@ -171,6 +171,7 @@ import {
 } from "../core/telemetry/budget-config.js";
 import { usagePollingStatus } from "../core/telemetry/polling/run.js";
 import { hideDraftIdentifiers } from "../core/plan.js";
+import { horizonTreeRecords } from "../core/plan-store.js";
 
 interface UiOptions {
   port: number;
@@ -1079,8 +1080,9 @@ export function startUiServer(options: UiOptions): UiHandle {
 
   /**
    * The plan's side of a detail (design/plan.md, "Lifecycle"): for a plan record, its plan detail
-   * (state, offered actions, brief, questions, decisions, links); for a horizon, its view and the
-   * records on it. Null outside the plan. The drawer reads its tabs, header and actions from
+   * (state, offered actions, brief, questions, decisions, links); for a horizon, its view, the
+   * records its tree draws (`horizonTreeRecords`) and the horizons' names, so a sub-idea carried
+   * elsewhere can say where. Null outside the plan. The drawer reads its tabs, header and actions from
    * these, never from the issue's own fields, so an unpromoted idea's stored identifier is never
    * what it shows.
    */
@@ -1089,7 +1091,7 @@ export function startUiServer(options: UiOptions): UiHandle {
     if (!plan.enabled()) return {};
     const view = plan.view();
     const horizon = view.horizons.find((h) => h.id === issueId) ?? null;
-    if (horizon) return { planRecord: null, horizonPlan: { horizon, ideas: view.ideas.filter((idea) => idea.horizonId === issueId) } };
+    if (horizon) return { planRecord: null, horizonPlan: { horizon, ideas: horizonTreeRecords(view.ideas, issueId), horizons: view.horizons.map((h) => ({ id: h.id, name: h.name })) } };
     if (!view.ideas.some((idea) => idea.id === issueId)) return { planRecord: null, horizonPlan: null };
     return { planRecord: plan.detail(issueId), horizonPlan: null };
   }
