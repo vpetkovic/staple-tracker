@@ -6,6 +6,7 @@
  * per state of the database: a request that checks a state, writes and answers rebuilds them
  * once for the write.
  */
+import { StatementSync } from "node:sqlite";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { openDb } from "../src/core/db.js";
 import type { PlanStore } from "../src/core/plan-store.js";
@@ -27,6 +28,29 @@ beforeEach(() => {
   plan.enable("vp", { person: { via: "settings" } });
   ids = ["raw", "exploring", "shaped", "shaped"].map((maturity, at) => plan.capture({ title: `Idea ${at}`, maturity, brief: "b", plan: READY_PLAN }, "vp", PERSON).id);
 });
+
+/** The statements one plan read runs, derived afresh. */
+function statementsOfARead(): number {
+  const proto = StatementSync.prototype as unknown as Record<"all" | "get", (...args: unknown[]) => unknown>;
+  const { all, get } = proto;
+  let count = 0;
+  proto.all = function (this: unknown, ...args: unknown[]) {
+    count += 1;
+    return all.apply(this, args);
+  };
+  proto.get = function (this: unknown, ...args: unknown[]) {
+    count += 1;
+    return get.apply(this, args);
+  };
+  try {
+    (plan as unknown as { viewMemo: unknown }).viewMemo = null;
+    plan.view();
+  } finally {
+    proto.all = all;
+    proto.get = get;
+  }
+  return count;
+}
 
 const builds = () => vi.spyOn(plan as unknown as { buildIdeaViews: () => unknown }, "buildIdeaViews");
 
@@ -53,6 +77,21 @@ describe("a plan read", () => {
     plan.detail(ids[2]!);
     expect(spy.mock.calls.length).toBeLessThanOrEqual(2);
     expect(plan.ideaView(ids[2]!).title).toBe("Renamed");
+  });
+
+  it("costs a record a fixed number of statements, an umbrella's sub-ideas read from the plan it already holds", () => {
+    const add = (n: number) => {
+      for (let at = 0; at < n; at += 1) {
+        const parent = plan.capture({ title: `Umbrella ${at}`, maturity: "exploring" }, "vp", PERSON).id;
+        plan.capture({ title: `R1 Under ${at}`, parent, maturity: "exploring" }, "vp", PERSON);
+      }
+    };
+    add(5);
+    const fewer = statementsOfARead();
+    add(5);
+    const more = statementsOfARead();
+    // Ten more records, five umbrellas and their sub-ideas: what they add to one read.
+    expect(more - fewer).toBeLessThanOrEqual(215);
   });
 
   it("reads a change written outside the plan layer, and the day it is read on", () => {

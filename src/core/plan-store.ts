@@ -978,7 +978,7 @@ export class PlanStore {
         promoted &&
         (sections.breakdown.length === 0 ? subIdea : planRowsOf(this.db, row.id).some((planRow) => this.issueExists(scaffoldTaskId(row.id, planRow.id))));
       // A shaped plan is held to the gate again before anything is built from it.
-      const planIncomplete = maturity === "shaped" && (state === "shaped" || scaffolded) ? this.gateOf(row.id) : [];
+      const planIncomplete = maturity === "shaped" && (state === "shaped" || scaffolded) ? this.gateOf(row.id, undefined, subIdea) : [];
       return {
         id: row.id,
         identifier: shownIdentifier(row.identifier),
@@ -1018,7 +1018,7 @@ export class PlanStore {
           promoted,
           maturity,
           ownLinks: ownLinks.length,
-          gate: maturity === "raw" || maturity === "exploring" ? () => this.gateOf(row.id) : () => [],
+          gate: maturity === "raw" || maturity === "exploring" ? () => this.gateOf(row.id, undefined, subIdea) : () => [],
           scaffolded,
           planIncomplete,
         }),
@@ -1068,9 +1068,12 @@ export class PlanStore {
     return sections;
   }
 
-  /** What the shaped gate finds missing in a record's plan as it stands, its sub-ideas included. */
-  private gateOf(id: string, sections: PlanSections = this.sectionsOf(id)): string[] {
-    return shapedGate(sections, parseQuestions(this.documentBody(id, QUESTIONS_KEY)), { subIdea: this.hasSubIdea(id) });
+  /**
+   * What the shaped gate finds missing in a record's plan as it stands, its sub-ideas included. The
+   * plan read passes whether it has a sub-idea from the records it already holds.
+   */
+  private gateOf(id: string, sections: PlanSections = this.sectionsOf(id), subIdea: boolean = this.hasSubIdea(id)): string[] {
+    return shapedGate(sections, parseQuestions(this.documentBody(id, QUESTIONS_KEY)), { subIdea });
   }
 
   /**
