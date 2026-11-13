@@ -114,6 +114,7 @@ import { journalFor, recordFieldWrites, type SyncEntity, type SyncVerb } from ".
 import { settingMetaKey } from "../settings-registry.js";
 import { StapleError, nowIso } from "../types.js";
 import { criterionMarkPosition } from "../milestone-goal.js";
+import { MILESTONE_KIND } from "../milestones.js";
 import { criterionMarkFields } from "../milestone-marks.js";
 import { planLinkFields, planLinkIssue } from "../plan-links.js";
 import { planRowFields, planRowId } from "../plan-rows.js";
@@ -797,6 +798,8 @@ function contest(
 
     const local = readField(db, op.entity, op.entityId, named.name);
     if (!local.present) continue;
+    // Two devices' derivations of one horizon re-derive here after the pull, never a record (`derivedHorizonStatus`).
+    if (op.entity === "issue" && named.name === "status" && derivedHorizonStatus(db, op.entityId, local.value, carried, op.payload)) continue;
     const endUnit = op.entity === "attempt" && named.name === "end";
     const remoteValue = endUnit ? attemptEndValue({ ...(local.value as Record<string, unknown>), ...op.payload }) : carried;
     if (sameValue(local.value, remoteValue)) continue;
@@ -952,6 +955,24 @@ function keepStatusOwners(db: DatabaseSync, id: string, issueId: string, local: 
     statusOwnerKey(id),
     JSON.stringify({ local: held?.derived_status != null && held.derived_status === local, remote: remoteOwned }),
   );
+}
+
+/**
+ * Whether a contested status is a horizon's, written by derivation on both sides (design/plan.md,
+ * "Accounting"). A horizon's status is a function of synchronized facts (its members, and the
+ * plan records that hold it), and every device re-derives it after each pull
+ * (`rederivePlanMilestonesAfterPull`): two derivations made from two halves of the facts are
+ * settled by deriving again from the merged ones, which every device does alike, so neither is a
+ * value a person must choose. The remote value is applied, and the re-derivation after the pull
+ * writes the merged answer where it differs. A status a person set, on either side, is still a
+ * conflict, and a plain milestone's is unchanged.
+ */
+function derivedHorizonStatus(db: DatabaseSync, issueId: string, local: unknown, carried: unknown, payload: Record<string, unknown>): boolean {
+  const row = db.prepare("SELECT * FROM issues WHERE id = ?").get(issueId) as { kind: string; plan_rank?: number | null; derived_status: string | null } | undefined;
+  if (row === undefined || row.kind !== MILESTONE_KIND || row.plan_rank == null) return false;
+  if (row.derived_status === null || row.derived_status !== local) return false;
+  const owner = "derivedStatus" in payload ? payload.derivedStatus : "derived_status" in payload ? payload.derived_status : undefined;
+  return owner !== undefined ? owner === carried : typeof payload.derived === "string";
 }
 
 /** The `derived_status` a resolution to `chosen` writes: the chosen value when the side it came from was derivation's. */

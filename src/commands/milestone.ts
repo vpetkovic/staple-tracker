@@ -25,6 +25,7 @@ import type { MilestoneListRow, MilestoneView } from "../core/milestone-store.js
 import type { CriterionVerdict } from "../core/milestone-goal.js";
 import { resolveWorkspace } from "../core/workspace.js";
 import { StapleError } from "../core/types.js";
+import { percentText } from "../core/plan-accounting.js";
 
 const USAGE = "Use: ls, show, new, set, criterion, add, rm, mv, reorder";
 
@@ -53,7 +54,7 @@ function integerOption(raw: string | undefined, flag: string): number | undefine
 
 function progressCell(row: Pick<MilestoneView, "progress">): string {
   const { done } = row.progress.counts;
-  const percent = row.progress.percent === null ? "—" : `${row.progress.percent}%`;
+  const percent = percentText(row.progress.percent, row.progress.complete);
   // A horizon's planned work items (planning on) are in the denominator, as in its percent.
   return `${done}/${row.progress.countable + (row.progress.planned ?? 0)} ${percent}`;
 }
@@ -77,6 +78,7 @@ function printView(view: MilestoneView): void {
     `state ${m.state} · status ${m.status}${m.assignee ? ` · @${m.assignee}` : ""} · target ${m.targetDate ?? "none"} · start ${m.startDate ?? "none"} · revision ${view.revision}`,
   );
   console.log(`progress ${progressCell(view)}${plannedText(view.progress)} · ${view.progress.total} leaves${view.progress.complete ? " · complete" : ""}`);
+  if (view.heldByPlan) console.log(`held by plan · ${view.heldByPlan} ${view.heldByPlan === 1 ? "idea" : "ideas"} on it not shipped yet`);
   if (m.description) console.log(`about    ${m.description.split("\n")[0]}`);
   printGoal(view);
   if (view.members.length === 0) {

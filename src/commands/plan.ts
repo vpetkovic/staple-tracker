@@ -17,6 +17,7 @@ import { splitDepends, type BreakdownRowInput, type PlanPatch } from "../core/pl
 import { resolveWorkspace } from "../core/workspace.js";
 import { StapleError } from "../core/types.js";
 import { aKind } from "../core/plan.js";
+import { percentText } from "../core/plan-accounting.js";
 
 const COMMON = {
   db: { type: "string" },
@@ -92,7 +93,7 @@ function horizonLine(horizon: HorizonView): string {
   const { leaves, parentCount } = horizon.records;
   const parents = parentCount ? ` (+${parentCount} ${parentCount === 1 ? "parent" : "parents"})` : "";
   const { done, total, planned } = horizon.units;
-  const progress = `  ${done}/${total} ${horizon.progress === null ? "—" : `${Math.floor(horizon.progress * 100)}%`}${planned ? ` · ${planned} planned` : ""}${horizon.unsizedCount ? ` · ${horizon.unsizedCount} unsized` : ""}`;
+  const progress = `  ${done}/${total} ${percentText(horizon.percent, horizon.complete)}${planned ? ` · ${planned} planned` : ""}${horizon.unsizedCount ? ` · ${horizon.unsizedCount} unsized` : ""}`;
   return `${horizon.identifier.padEnd(9)} ${horizon.name.padEnd(24)} ${(horizon.date ?? "no date").padEnd(10)} ${horizon.state.padEnd(8)} ${String(leaves).padStart(3)} ${leaves === 1 ? "idea" : "ideas"}${parents}${progress}${risk ? `  ${risk}` : ""}${run}${horizon.awaitingApproval ? "  waiting for your approval" : ""}`;
 }
 

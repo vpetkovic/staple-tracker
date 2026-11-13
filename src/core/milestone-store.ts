@@ -130,6 +130,11 @@ export interface MilestoneView {
   goal: MilestoneGoal;
   /** The work still open in it, from its estimates: what a projected finish date reads. */
   remaining: MilestoneRemaining;
+  /**
+   * A horizon's only, present only while records on its plan keep it from shipping (they are
+   * not dropped, not shipped and not an umbrella): how many. In both flag states.
+   */
+  heldByPlan?: number;
 }
 
 /**
@@ -718,7 +723,9 @@ export class MilestoneStore {
   private view(id: string, facts: QueueFacts = this.queueFacts()): MilestoneView {
     const { base, openIds } = this.baseView(id, facts);
     const view = { ...base, remaining: this.remainingOf(openIds, this.store.remainingForecasts(openIds)) };
-    return { ...view, goal: this.goalOf(id, view) };
+    // A horizon its plan holds open says so in both flag states: protection, never hidden (design/plan.md, "Feature flag").
+    const held = this.store.isHorizon(id) ? this.store.plan().holdOf(id) : 0;
+    return { ...view, goal: this.goalOf(id, view), ...(held > 0 ? { heldByPlan: held } : {}) };
   }
 
   /** `remaining` from the open leaves and each one's remaining work as `forecast` weighs it. */

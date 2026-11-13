@@ -673,9 +673,10 @@ export function rederivePlanMilestonesAfterPull(db: DatabaseSync, changed: reado
   const ids = [...new Set([...changed, ...cancelledByDerivation])].sort();
   const store = new WorkspaceStore(db, "", "");
   try {
+    // And each horizon whose status inputs the pull moved, its plan's hold among them: a pull that moved none writes nothing.
+    if (ids.length === 0 && !store.owesPlanHolds()) return;
     store.journal.run(() => {
       if (ids.length > 0) store.rederiveMilestones(ids, "plan", null);
-      // And each horizon whose plan hold the pull changed: scheduled ideas keep one open.
       store.rederivePlanHolds("plan", null);
     });
   } catch (error) {
@@ -683,6 +684,12 @@ export function rederivePlanMilestonesAfterPull(db: DatabaseSync, changed: reado
     console.error(`staple: could not re-derive the plan's horizons after the pull (${detail}); the next change re-derives them.`);
   }
 }
+
+/**
+ * What this device last settled each horizon's plan hold from (`rederivePlanHolds`): device-local,
+ * never sent. A cache of a derivation, never a fact: removing it costs one full settle.
+ */
+const PLAN_HOLDS_SETTLED_KEY = "plan_holds_settled";
 
 /** Set by migration 017 on a database it backfilled `derived_status` on. */
 const DERIVED_STATUS_PUBLISH_KEY = "derived_status_publish_owed";
@@ -2344,7 +2351,17 @@ export class WorkspaceStore {
    */
   private requireTarget(ref: string): IssueRow {
     const row = this.requireRow(ref);
-    if (row.kind === IDEA_KIND || this.isHorizon(row.id)) this.plan().assertEnabled();
+    if (row.kind === IDEA_KIND) this.plan().assertEnabled();
+    else if (this.isHorizon(row.id) && !this.planningOn()) {
+      // Hidden with planning off, a horizon its plan holds open says why: its ideas are hidden too.
+      const held = this.plan().holdOf(row.id);
+      if (held === 0) this.plan().assertEnabled();
+      const ideas = held === 1 ? "idea that has not shipped; turn planning on to see it" : "ideas that have not shipped; turn planning on to see them";
+      throw new StapleError("validation", `${PLAN_KINDS_MISSING_MESSAGE} ${displayRef(row)} is held by ${held} scheduled ${ideas}.`, {
+        kinds: [IDEA_KIND, MILESTONE_KIND],
+        heldByPlan: held,
+      });
+    }
     if (renumbersAcknowledged()) return row;
     const trimmed = ref.trim();
     if (trimmed === row.id) return row;
@@ -3218,11 +3235,11 @@ export class WorkspaceStore {
    * unstarted band) until the person removes it. Reopening the work derives it again.
    */
   private deriveHorizonStatus(horizonId: string, inputs: readonly string[]): DerivedRung | null {
-    if (inputs.length === 0) return null;
+    // Not shipped while a record it carries is not (design/plan.md, "Accounting"): its landed
+    // work, or none, leaves it in the unstarted band, as a parent with work still to start reads.
+    if (inputs.length === 0) return this.plan().heldByPlan(horizonId) ? "workable" : null;
     const live = inputs.filter((status) => this.categoryOf(status) !== "cancelled");
     const rung = live.length === 0 ? "workable" : this.deriveStatusFromChildren(live);
-    // Not shipped while a scheduled record on it is not (design/plan.md, "Accounting"): its
-    // landed work leaves it in the unstarted band, as a parent with work still to start reads.
     return rung === "done" && this.plan().heldByPlan(horizonId) ? "workable" : rung;
   }
 
@@ -3330,24 +3347,63 @@ export class WorkspaceStore {
   }
 
   /**
-   * After a plan write or a pull, the horizons whose plan hold disagrees with their status
-   * (design/plan.md, "Accounting"). One that reads done while a scheduled record still holds it
-   * reopens. One the plan released (no record holds it now) closes on its landed work, if
-   * derivation owns its status: a record leaving is, for a horizon, what a member landing is for
-   * a milestone. A status set by hand, or a gate, is left as it is.
+   * After a plan write or a pull, each horizon re-derives its status the way a parent does when a
+   * child moves, closing included (design/plan.md, "Accounting"): reopened while a record it
+   * carries holds it, closed on its landed work once nothing does. One derivation from
+   * synchronized facts, so every device that holds the same facts writes the same status; it
+   * writes only where that status differs, and a gate or a status a person set outside the
+   * pre-work band is left as it is (`deriveOneAncestor`).
+   *
+   * What a horizon's status is derived from (its status, its members' statuses and its hold) is
+   * compared with what this device last settled (device-local, in `meta`), and only a horizon
+   * whose inputs moved re-derives: a write or a pull that changed none of them reads a constant
+   * number of statements and writes nothing.
    */
   rederivePlanHolds(trigger: string, actor: string | null): void {
+    const owed = this.planHoldsOwed();
+    if (owed === null) return;
+    const { settled, moved } = owed;
+    for (const id of moved) this.deriveHolders([id], trigger, actor, new Set([id]), { mayCloseStart: true, mayCancel: false });
+    const after = moved.length === 0 ? settled : this.planHoldInputs()!;
+    this.db
+      .prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .run(PLAN_HOLDS_SETTLED_KEY, JSON.stringify(after));
+  }
+
+  /** Some horizon's status inputs moved since this device last settled them (`rederivePlanHolds`). */
+  owesPlanHolds(): boolean {
+    return this.planHoldsOwed() !== null;
+  }
+
+  /** The horizons whose inputs moved since the last settle, with every horizon's inputs now; null when nothing is owed. */
+  private planHoldsOwed(): { settled: Record<string, string>; moved: string[] } | null {
+    const settled = this.planHoldInputs();
+    if (settled === null) return null;
+    const before = this.db.prepare("SELECT value FROM meta WHERE key = ?").get(PLAN_HOLDS_SETTLED_KEY) as { value: string } | undefined;
+    const known = before === undefined ? {} : (JSON.parse(before.value) as Record<string, string>);
+    const moved = Object.keys(settled).filter((id) => known[id] !== settled[id]);
+    if (moved.length === 0 && Object.keys(known).length === Object.keys(settled).length) return null;
+    return { settled, moved };
+  }
+
+  /** Each listed horizon's derivation inputs as one string: its status, its members' statuses, its hold. Null with no horizon. */
+  private planHoldInputs(): Record<string, string> | null {
     const horizons = this.db
-      .prepare(`SELECT id, status, derived_status FROM issues WHERE ${LISTED_HORIZON}`)
+      .prepare(`SELECT id, status, derived_status FROM issues WHERE ${LISTED_HORIZON} ORDER BY id`)
       .all() as Array<{ id: string; status: string; derived_status: string | null }>;
-    for (const horizon of horizons) {
-      const done = this.categoryOf(horizon.status) === "done";
-      const held = this.plan().heldByPlan(horizon.id);
-      if (held && done) this.deriveHolders([horizon.id], trigger, actor, new Set([horizon.id]));
-      else if (!held && !done && horizon.derived_status === horizon.status) {
-        this.deriveHolders([horizon.id], trigger, actor, new Set([horizon.id]), { mayCloseStart: true, mayCancel: false });
-      }
+    if (horizons.length === 0) return null;
+    const members = new Map<string, string[]>();
+    for (const row of this.db
+      .prepare(`SELECT m.milestone_id, m.issue_id, i.status FROM ${MILESTONE_MEMBERSHIP} m JOIN issues i ON i.id = m.issue_id ORDER BY m.issue_id`)
+      .all() as Array<{ milestone_id: string; issue_id: string; status: string }>) {
+      const list = members.get(row.milestone_id) ?? [];
+      list.push(`${row.issue_id}=${row.status}`);
+      members.set(row.milestone_id, list);
     }
+    const holds = this.plan().holdsByHorizon();
+    return Object.fromEntries(
+      horizons.map((row) => [row.id, JSON.stringify([row.status, row.derived_status, holds.get(row.id) ?? 0, members.get(row.id) ?? []])]),
+    );
   }
 
   /** Re-derive what holds these issues (their parents, their milestones), as a move of theirs would. */
