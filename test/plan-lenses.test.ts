@@ -62,6 +62,59 @@ describe("the records a record waits on", () => {
     expect(resolveDependencies("c3", { dependencies: ["R2", "C3 itself", "PLAN-9"], breakdown: [] }, records)).toEqual([]);
   });
 
+  it("name a sub-idea by its title's key over the same key on a row of its own ancestor", () => {
+    const family = [
+      { id: "ga", identifier: null, title: "Platform GA", parentId: null, rowKeys: ["R1", "R2", "R3"] },
+      { id: "r1", identifier: null, title: "R1 Billing export", parentId: "ga" },
+      { id: "r2", identifier: null, title: "R2 Checkout API", parentId: "ga" },
+      { id: "wave", identifier: null, title: "Wave two", parentId: "ga" },
+      { id: "r3", identifier: null, title: "R3 Webhooks", parentId: "wave" },
+    ];
+    expect(resolveDependencies("r2", { dependencies: ["R1 lands first"], breakdown: [] }, family)).toEqual(["r1"]);
+    // An ancestor further up holds the row: still the sub-idea's own line.
+    expect(resolveDependencies("r2", { dependencies: ["R3"], breakdown: [] }, family)).toEqual(["r3"]);
+    // A key two unrelated records share names neither, here or with a row of a record that is not an ancestor.
+    const strangers = [...family, { id: "other", identifier: null, title: "R1 Payments", parentId: null }];
+    expect(resolveDependencies("r2", { dependencies: ["R1"], breakdown: [] }, strangers)).toEqual([]);
+    const cousin = [...family, { id: "elsewhere", identifier: null, title: "Elsewhere", parentId: null, rowKeys: ["R2"] }];
+    expect(resolveDependencies("r1", { dependencies: ["R2"], breakdown: [] }, cousin)).toEqual([]);
+  });
+
+  it("never name a record's own sub-idea or its own parent: its own rows' keys are its own", () => {
+    const family = [
+      { id: "ga", identifier: null, title: "Platform GA", parentId: null, rowKeys: ["R1", "R9"] },
+      { id: "r1", identifier: "TST-7", title: "R1 Billing export", parentId: "ga" },
+      { id: "wave", identifier: null, title: "Wave two", parentId: "ga" },
+      { id: "r3", identifier: null, title: "R3 Webhooks", parentId: "wave", rowKeys: ["R8"] },
+    ];
+    // The parent's Dependencies naming its own row's key, or its sub-idea's number: nothing.
+    expect(resolveDependencies("ga", { dependencies: ["R1 must land first", "TST-7"], breakdown: [] }, family)).toEqual([]);
+    // A key only on an ancestor's row: the sub-idea, however deep, does not wait on its own parent.
+    expect(resolveDependencies("r1", { dependencies: ["R9"], breakdown: [] }, family)).toEqual([]);
+    expect(resolveDependencies("r3", { dependencies: ["R9"], breakdown: [] }, family)).toEqual([]);
+    // Nor an ancestor on a row of its descendant.
+    expect(resolveDependencies("ga", { dependencies: ["R8"], breakdown: [] }, family)).toEqual([]);
+    // A sibling still names it.
+    expect(resolveDependencies("wave", { dependencies: ["R1"], breakdown: [] }, family)).toEqual(["r1"]);
+  });
+
+  it("never draw a two-way wait between a parent and its sub-idea on the payload", () => {
+    const rows = ["R5", "R9"].map((key) => ({ key, title: `Rung ${key}`, estimate: "1h", dependsOn: [], acceptance: null, owner: null, notes: null }));
+    const parent = plan.capture({ title: "Platform GA", plan: { breakdown: rows, dependencies: ["R5 first"] } }, "agent").id;
+    const r5 = plan.capture({ title: "R5 Billing export", parent, plan: { dependencies: ["R9"] } }, "agent").id;
+    expect(view(parent).dependsOn).toEqual([]);
+    expect(view(r5).dependsOn).toEqual([]);
+  });
+
+  it("draw a sibling's arrow on the payload when the parent's rows are keyed like its sub-ideas", () => {
+    const rows = ["R1", "R2"].map((key) => ({ key, title: `Rung ${key}`, estimate: "1d", dependsOn: [], acceptance: null, owner: null, notes: null }));
+    const parent = plan.capture({ title: "Platform GA", maturity: "shaped", plan: { ...READY_PLAN, breakdown: rows } }, "vp", PERSON).id;
+    const r1 = plan.capture({ title: "R1 Billing export", parent }, "agent").id;
+    const r2 = plan.capture({ title: "R2 Checkout API", parent, plan: { dependencies: ["R1 Billing export"] } }, "agent").id;
+    expect(view(r2).dependsOn).toEqual([r1]);
+    expect(view(r1).dependsOn).toEqual([]);
+  });
+
   it("are on the plan's payload, beside how much of each plan is written", () => {
     const c2 = plan.capture({ title: "C2 Checkout API", maturity: "shaped", plan: READY_PLAN }, "vp", PERSON).id;
     const c3 = plan.capture({ title: "C3 OpenAPI + SDKs", maturity: "shaped", plan: { ...READY_PLAN, dependencies: ["C2"] } }, "vp", PERSON).id;

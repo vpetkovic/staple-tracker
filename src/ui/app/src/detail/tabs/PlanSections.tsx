@@ -97,7 +97,8 @@ function Reading({ text, empty, editable, onStart, testId }: { text: string; emp
 /** How much of the plan is written, and what shaping still needs. */
 export function Completeness({ record }: { record: IdeaDetailData }) {
   const { completeness: c, missingForShaped, idea } = record;
-  const thinking = idea.state === "raw" || idea.state === "exploring";
+  // Where Mark shaped is offered (raw, exploring, and started while still exploring), say what it needs.
+  const shapeable = idea.actions.some((action) => action.id === "shape");
   return (
     <div className="rounded-lg border bg-surface-raised px-3 py-2.5 text-label" data-plan-completeness={`${c.starred}/${c.starredTotal}`}>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -117,7 +118,7 @@ export function Completeness({ record }: { record: IdeaDetailData }) {
           {idea.planIncomplete.length > 5 ? `; and ${idea.planIncomplete.length - 5} more` : ""}. Scaffold and Promote wait until it passes again.
         </p>
       ) : null}
-      {thinking && missingForShaped.length > 0 ? (
+      {shapeable && missingForShaped.length > 0 ? (
         <p className="m-0 mt-1.5 text-caption text-text-secondary" data-plan-missing>
           To shape it: {missingForShaped.slice(0, 5).join("; ")}
           {missingForShaped.length > 5 ? `; and ${missingForShaped.length - 5} more` : ""}.

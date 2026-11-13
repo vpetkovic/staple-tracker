@@ -347,6 +347,25 @@ describe("promoted records and parents with sub-ideas on every surface", () => {
     }
   }, 60_000);
 
+  it("carries the started row and Mark shaped for an exploring record that adopted work, and shapes it for the person alone", async () => {
+    const { id } = await fixture("exploring");
+    expect((await mcpCall("start_idea", { ref: id, adopt: await task() })).isError).toBeFalsy();
+    const row = (await plan()).ideas.find((idea) => idea.id === id)!;
+    expect(row).toMatchObject({ state: "started", maturity: "exploring", promoted: false });
+    const table = ideaOffered("started", false, "exploring").filter((action) => action !== "open_epic" && action !== "scaffold");
+    expect(row.actions.map((action) => action.id)).toEqual(table);
+    const got = toolPayload(await mcpCall("get_idea", { ref: id })) as { idea: { state: string; actions: Offered[] } };
+    expect(got.idea.actions.map((action) => action.id)).toEqual(table);
+    // Its questions are still asked and deferred, and the CLI says what shaping it needs.
+    expect((await mcpCall("update_idea", { ref: id, add_question: "Which formats?" })).isError).toBeFalsy();
+    expect((await cli(false, "idea", "show", id)).stdout).toContain("to shape: 1 open question answered or deferred");
+    expect((await mcpCall("update_idea", { ref: id, defer_question: 1 })).isError).toBeFalsy();
+    expect(JSON.stringify((await mcpCall("update_idea", { ref: id, maturity: "shaped" })).content)).toContain("the person's call");
+    expect((await cli(false, "idea", "set", id, "--maturity", "shaped")).stderr).toContain("the person's call");
+    expect((await cli(true, "idea", "set", id, "--maturity", "shaped")).status).toBe(0);
+    expect((await plan()).ideas.find((idea) => idea.id === id)).toMatchObject({ state: "started", maturity: "shaped" });
+  }, 60_000);
+
   it("accepts a maturity a record already has as no change, on every surface", async () => {
     const { id } = await fixture("started");
     expect((await http("/api/plan/update", { ref: id, maturity: "shaped" })).status).toBe(200);

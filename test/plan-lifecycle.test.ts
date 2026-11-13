@@ -10,6 +10,7 @@ import {
   IDEA_ACTIONS,
   IDEA_LIFECYCLE,
   PROMOTED_ALWAYS,
+  UNSHAPED_STARTED,
   horizonState,
   ideaLifecycleRefusal,
   ideaOffered,
@@ -22,7 +23,7 @@ describe("the idea table", () => {
   it("offers exactly the agreed actions in each state", () => {
     expect(IDEA_LIFECYCLE).toEqual({
       raw: ["edit", "ask", "decide", "explore", "shape", "drop", "reparent", "reorder"],
-      exploring: ["edit", "ask", "decide", "shape", "drop", "schedule", "plan_dates", "reparent", "reorder"],
+      exploring: ["edit", "ask", "decide", "shape", "drop", "schedule", "plan_dates", "reparent", "reorder", "adopt"],
       shaped: ["edit", "ask", "decide", "unshape", "drop", "schedule", "plan_dates", "reparent", "reorder", "promote", "scaffold", "adopt"],
       started: ["edit", "ask", "decide", "schedule", "plan_dates", "reorder", "scaffold", "adopt", "unlink", "reset_baseline", "open_epic"],
       shipped: ["adopt", "open_epic"],
@@ -49,6 +50,20 @@ describe("the idea table", () => {
     expect(ideaOffered("shipped", false)).toEqual(["adopt", "open_epic"]);
   });
 
+  it("lets work be linked from exploring on, never while raw", () => {
+    expect(IDEA_LIFECYCLE.raw).not.toContain("adopt");
+    for (const state of ["exploring", "shaped", "started", "shipped"] as const) expect(IDEA_LIFECYCLE[state], state).toContain("adopt");
+  });
+
+  it("gives a record that started while still exploring Mark shaped on top of the started row, and nothing else", () => {
+    expect(UNSHAPED_STARTED).toEqual(["shape"]);
+    expect(ideaOffered("started", false, "exploring")).toEqual([...IDEA_LIFECYCLE.started, "shape"]);
+    expect(ideaOffered("started", false, "shaped")).toEqual(IDEA_LIFECYCLE.started);
+    expect(ideaOffered("shipped", false, "exploring")).toEqual(IDEA_LIFECYCLE.shipped);
+    expect(ideaOffered("exploring", false, "exploring")).toEqual(IDEA_LIFECYCLE.exploring);
+    expect(ideaLifecycleRefusal('the idea "X"', "started", "drop", false, "exploring").message).toContain("reset baseline to the plan or mark shaped.");
+  });
+
   it("names each maturity change by where the idea stands, and a maturity it already has as no change", () => {
     const cases: Array<[IdeaState, string, string, string | null]> = [
       ["raw", "raw", "exploring", "explore"],
@@ -64,6 +79,8 @@ describe("the idea table", () => {
       ["started", "shaped", "shaped", null],
       ["started", "shaped", "exploring", "unshape"],
       ["started", "shaped", "dropped", "drop"],
+      ["started", "exploring", "shaped", "shape"],
+      ["started", "exploring", "exploring", null],
       ["shipped", "shaped", "shaped", null],
       ["dropped", "dropped", "exploring", "restore"],
       ["dropped", "dropped", "raw", "restore"],

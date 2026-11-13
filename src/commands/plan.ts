@@ -113,7 +113,7 @@ function printDetail(detail: IdeaDetail): void {
   for (const child of detail.children) console.log(`  sub-idea ${child.identifier ?? child.id} ${child.title} (${child.stage})`);
   for (const link of detail.linked) console.log(`  linked  ${link.identifier} ${link.title} · ${link.status} · ${link.doneLeaves}/${link.leaves}`);
   const { completeness: c } = detail;
-  console.log(`plan     ${c.starred}/${c.starredTotal} required sections · ${c.filled}/${c.total} written${detail.missingForShaped.length > 0 && (idea.state === "raw" || idea.state === "exploring") ? ` · to shape: ${detail.missingForShaped.join("; ")}` : ""}`);
+  console.log(`plan     ${c.starred}/${c.starredTotal} required sections · ${c.filled}/${c.total} written${detail.missingForShaped.length > 0 && idea.actions.some((action) => action.id === "shape") ? ` · to shape: ${detail.missingForShaped.join("; ")}` : ""}`);
   if (idea.planIncomplete.length > 0) console.log(`shaped · plan incomplete: ${idea.planIncomplete.join("; ")}`);
   if (detail.plan.goal) console.log(`goal     ${detail.plan.goal.split("\n")[0]}`);
   const inherits = detail.plan.acceptance.length > 0;

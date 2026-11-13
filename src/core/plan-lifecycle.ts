@@ -50,8 +50,8 @@ function offeredWords(actions: readonly string[], rules: Record<string, ActionRu
  * The refusal for an action a state does not offer. It names the subject, its state, what was
  * refused, and what the state offers instead, so an agent can act on it without a second call.
  */
-export function ideaLifecycleRefusal(subject: string, state: IdeaState, action: IdeaAction, promoted = false): StapleError {
-  const offered = ideaOffered(state, promoted);
+export function ideaLifecycleRefusal(subject: string, state: IdeaState, action: IdeaAction, promoted = false, maturity?: string): StapleError {
+  const offered = ideaOffered(state, promoted, maturity);
   return new StapleError(
     "validation",
     `${capitalize(subject)} is ${state}; it cannot be ${IDEA_ACTIONS[action].verb}. ${article(state)} ${state} idea offers: ${offeredWords(offered, IDEA_ACTIONS)}.`,
@@ -69,8 +69,8 @@ export function horizonLifecycleRefusal(subject: string, state: HorizonState, ac
   );
 }
 
-export function assertIdeaAction(subject: string, state: IdeaState, action: IdeaAction, promoted = false): void {
-  if (!ideaOffers(state, action, promoted)) throw ideaLifecycleRefusal(subject, state, action, promoted);
+export function assertIdeaAction(subject: string, state: IdeaState, action: IdeaAction, promoted = false, maturity?: string): void {
+  if (!ideaOffers(state, action, promoted, maturity)) throw ideaLifecycleRefusal(subject, state, action, promoted, maturity);
 }
 
 export function assertHorizonAction(subject: string, state: HorizonState, action: HorizonAction): void {

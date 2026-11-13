@@ -37,6 +37,7 @@ stateDiagram-v2
         exploring --> shaped: mark shaped (person)
         shaped --> exploring: back to exploring (person)
         shaped --> started: Scaffold or Adopt
+        exploring --> started: Adopt (stays exploring until marked shaped)
         started --> shipped: all its work done
         raw --> dropped: drop (person)
         exploring --> dropped: drop (person)
@@ -116,7 +117,9 @@ An idea is a plan an agent can build from. The **Plan** tab has ten sections:
 
 **Mark shaped** works only when the plan passes the shaped gate:
 
-- a goal, acceptance criteria, and at least one breakdown row, every row with a title;
+- a goal, acceptance criteria, and at least one breakdown row, every row with a title. A parent
+  whose work is its sub-ideas needs no rows of its own: one sub-idea that is not dropped stands
+  in for the breakdown;
 - no two rows with one key, no row depending on a key the breakdown does not hold, and no
   depends-on cycle (a cycle is named by its rows, `1 → 2 → 1`);
 - every open question answered or **deferred**, which leaves it open on purpose.
@@ -136,7 +139,9 @@ staple idea import plans/gift-cards.md --horizon Now --maturity exploring --pers
 ```
 
 The import reads the headings and task tables, attaches the file, and lists anything it kept
-under Context because it did not fit the section it was in.
+under Context because it did not fit the section it was in. An imported idea has no sub-ideas
+yet, so importing straight into shaped needs breakdown rows; import a parent as exploring, add
+its sub-ideas, then mark it shaped.
 
 ## 5. Schedule it on a horizon
 
@@ -168,14 +173,23 @@ staple idea scaffold <id>                    # preview, prints the fingerprint
 staple idea scaffold <id> --confirm <fingerprint>
 ```
 
-The idea itself becomes the epic and keeps its documents, comments, files and history. Shaped sub-ideas become child epics the same way. Scaffolding again later creates
-only rows written since, and a retry never creates a task twice.
+The idea itself becomes the epic and keeps its documents, comments, files and history. Shaped sub-ideas become child epics the same way. A parent with no rows of its own becomes its epic and
+its shaped sub-ideas' epics, and no task of its own; a sub-idea still exploring stays an idea and
+is not in the preview. Scaffolding again later creates only what is missing: rows written since,
+and sub-ideas shaped since, as child epics. A retry never creates anything twice. So when you
+shape a sub-idea after its parent was scaffolded, scaffold the parent again (or the sub-idea on
+its own). A parent scaffolded with no rows of its own can be scaffolded again while it stays
+rowless; once it gains rows of its own, it offers Scaffold again only after a task of one of them
+exists, so until then scaffold the new sub-idea on its own.
 
 Two alternatives:
 
 - **Promote to epic** turns the idea into the epic without creating tasks. Break it down as you
   would any epic.
-- **Adopt existing work** links tickets that already exist. An idea can link several.
+- **Adopt existing work** links tickets that already exist. An idea can link several. An
+  exploring idea can adopt too, when tickets already exist for something still being worked out.
+  It then reads started, but its maturity stays exploring: you can still mark it shaped, and its
+  questions are still asked, answered and deferred.
 
 ## 7. From started to shipped
 
@@ -225,7 +239,12 @@ The **Timeline** lens draws each idea on a month axis, grouped by horizon:
 Vertical lines mark today and each dated horizon. An arrow runs from an idea to every idea that
 depends on it, red when the dependent one starts first. A dependency counts only when a line of
 the Dependencies section starts with the other idea's ticket number, the key its title starts
-with (C2 in "C2 Checkout API"), or a row key from its breakdown (42.1).
+with (C2 in "C2 Checkout API"), or a row key from its breakdown (42.1). A key two ideas share
+counts for neither, except that a sub-idea's title key wins over the same key on a row of any of
+its ancestors: when a parent's rows are keyed R1, R2 like its sub-ideas, a sibling's "R1" names
+the sub-idea. An idea never depends on its own parent or sub-ideas, at any depth: the parent's
+own "R1" is its own row, and a sub-idea naming a key only its parent's rows hold depends on
+nothing. No arrow runs between an idea and its parent.
 
 Two flags, never merged into one count:
 
@@ -297,17 +316,18 @@ come back as they were.
 | State | Offers |
 |---|---|
 | Raw | Edit, ask, decide, start exploring, mark shaped, drop, move under another idea, reorder |
-| Exploring | The same, plus schedule on a horizon and plan dates |
+| Exploring | The same, plus schedule on a horizon, plan dates and adopt existing work |
 | Shaped | Edit, schedule, plan dates, scaffold, promote, adopt, back to exploring, drop |
-| Started | Re-plan, adopt more work, unlink work, reset the baseline, open the epic; scaffold again only if it was scaffolded |
+| Started | Re-plan, adopt more work, unlink work, reset the baseline, open the epic; scaffold again only if it was scaffolded; mark shaped if it started while exploring |
 | Shipped | Open the epic, or link more work (open work reopens it). An idea that was never promoted takes no more edits. |
 | Dropped | Restore |
 | Horizon planned | Rename, date, reorder, run setting, remove |
 | Horizon active | Rename, date, reorder, queue, run setting |
 | Horizon shipped | Remove |
 
-A raw idea is never scheduled or promoted, and a started idea never offers promotion again. Ask
-for an action a state does not offer and the refusal names the state and what it offers.
+A raw idea is never scheduled, promoted or linked to work, and a started idea never offers
+promotion again. Ask for an action a state does not offer and the refusal names the state and
+what it offers.
 
 ## Reference
 

@@ -278,12 +278,14 @@ export function dependencyOrder<R extends Pick<BreakdownRow, "key" | "dependsOn"
  * promoted: a goal; a task breakdown of at least one row, every row titled, no two rows on one
  * key, no row waiting on a key the breakdown does not hold, no depends-on cycle; acceptance
  * criteria; and no open question that is not explicitly deferred. A row without its own "done
- * when" inherits the plan's acceptance criteria, so it needs none. Empty when it passes.
+ * when" inherits the plan's acceptance criteria, so it needs none. An umbrella, a record with a
+ * sub-idea that is not dropped, needs no rows of its own: its sub-ideas are its breakdown. Empty
+ * when it passes.
  */
-export function shapedGate(sections: PlanSections, questions: readonly GateQuestion[]): string[] {
+export function shapedGate(sections: PlanSections, questions: readonly GateQuestion[], record: { subIdea?: boolean } = {}): string[] {
   const missing: string[] = [];
   if (!sections.goal) missing.push("a goal");
-  if (sections.breakdown.length === 0) missing.push("a task breakdown");
+  if (sections.breakdown.length === 0 && !record.subIdea) missing.push("a task breakdown");
   const counts = new Map<string, number>();
   for (const row of sections.breakdown) counts.set(row.key, (counts.get(row.key) ?? 0) + 1);
   for (const [key, count] of counts) if (count > 1) missing.push(`one key per task (${count} tasks share ${key})`);
@@ -747,12 +749,13 @@ function leadingKeys(text: string, keyShape: (token: string) => boolean): string
 
 const isReference = (token: string) => REF_KEY.test(token) || ROW_KEY.test(token);
 
-/** A record as dependencies name it: its ticket number, its title, and its own breakdown rows' keys. */
+/** A record as dependencies name it: its ticket number, its title, its own breakdown rows' keys, and the record above it. */
 export interface DependencyRecord {
   id: string;
   identifier: string | null;
   title: string;
   rowKeys?: readonly string[];
+  parentId?: string | null;
 }
 
 /**
@@ -772,7 +775,11 @@ export function recordKeys(record: Pick<DependencyRecord, "identifier" | "title"
  * depends-on cell naming something outside its own breakdown, that LEADS with a record's ticket
  * number, a key its title leads with, or the key of a row in exactly one other record's
  * breakdown. Anything else is prose, whatever words with digits it holds. A key two records share
- * names neither, and a record never waits on itself.
+ * names neither, with one exception: a key that names one record by its title and otherwise only
+ * rows of that record's own ancestors names the record (an umbrella keys its rows like its
+ * sub-ideas, and the sub-idea is the one meant). A record never waits on itself, its ancestors or
+ * its descendants: a parent's work holds its sub-ideas', so either wait is a cycle, and its own
+ * rows' keys in its own text name its own rows.
  */
 export function resolveDependencies(self: string, sections: Pick<PlanSections, "dependencies" | "breakdown">, records: ReadonlyArray<DependencyRecord>): string[] {
   return dependencyResolver(records)(self, sections);
@@ -780,29 +787,51 @@ export function resolveDependencies(self: string, sections: Pick<PlanSections, "
 
 /** The same resolution with the records' keys indexed once, for a view that resolves every record. */
 export function dependencyResolver(records: ReadonlyArray<DependencyRecord>): (self: string, sections: Pick<PlanSections, "dependencies" | "breakdown">) => string[] {
-  const owners = new Map<string, Set<string>>();
-  const own = (key: string, id: string) => {
-    const set = owners.get(key) ?? new Set<string>();
+  const named = new Map<string, Set<string>>();
+  const rows = new Map<string, Set<string>>();
+  const own = (index: Map<string, Set<string>>, key: string, id: string) => {
+    const set = index.get(key) ?? new Set<string>();
     set.add(id);
-    owners.set(key, set);
+    index.set(key, set);
   };
   for (const record of records) {
-    for (const key of recordKeys(record)) own(key, record.id);
-    for (const key of record.rowKeys ?? []) own(key, record.id);
+    for (const key of recordKeys(record)) own(named, key, record.id);
+    for (const key of record.rowKeys ?? []) own(rows, key, record.id);
   }
-  return (self, sections) => resolveWith(owners, self, sections);
+  const parentOf = new Map(records.map((record) => [record.id, record.parentId ?? null]));
+  const isAncestor = (ancestor: string, of: string): boolean => {
+    const seen = new Set<string>();
+    for (let at = parentOf.get(of) ?? null; at !== null && !seen.has(at); at = parentOf.get(at) ?? null) {
+      if (at === ancestor) return true;
+      seen.add(at);
+    }
+    return false;
+  };
+  const owners = new Map<string, string>();
+  for (const key of new Set([...named.keys(), ...rows.keys()])) {
+    const byTitle = [...(named.get(key) ?? [])];
+    const byRow = [...(rows.get(key) ?? [])];
+    const all = new Set([...byTitle, ...byRow]);
+    if (all.size === 1) owners.set(key, [...all][0]!);
+    else if (byTitle.length === 1 && byRow.every((id) => isAncestor(id, byTitle[0]!))) owners.set(key, byTitle[0]!);
+  }
+  const related = (a: string, b: string) => a === b || isAncestor(a, b) || isAncestor(b, a);
+  return (self, sections) => resolveWith(owners, related, self, sections);
 }
 
-function resolveWith(owners: ReadonlyMap<string, ReadonlySet<string>>, self: string, sections: Pick<PlanSections, "dependencies" | "breakdown">): string[] {
+function resolveWith(
+  owners: ReadonlyMap<string, string>,
+  related: (a: string, b: string) => boolean,
+  self: string,
+  sections: Pick<PlanSections, "dependencies" | "breakdown">,
+): string[] {
   const rowKeys = new Set(sections.breakdown.map((row) => row.key));
   const texts = [...sections.dependencies, ...sections.breakdown.flatMap((row) => row.dependsOn.filter((dep) => !rowKeys.has(dep)))];
   const out: string[] = [];
   for (const text of texts) {
     for (const key of leadingKeys(text, isReference)) {
-      const ids = owners.get(key);
-      if (!ids || ids.size !== 1) continue;
-      const [id] = [...ids];
-      if (id !== self && !out.includes(id!)) out.push(id!);
+      const id = owners.get(key);
+      if (id !== undefined && !related(id, self) && !out.includes(id)) out.push(id);
     }
   }
   return out;

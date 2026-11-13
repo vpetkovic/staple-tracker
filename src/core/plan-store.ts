@@ -587,7 +587,7 @@ export class PlanStore {
    * for anyone, and the second only once the action itself is possible.
    */
   private allowIdea(row: PlanRow, action: IdeaAction, options: PlanWriteOptions, state: IdeaState = this.stateOf(row.id)): void {
-    assertIdeaAction(displayRef(row), state, action, row.kind !== IDEA_KIND);
+    assertIdeaAction(displayRef(row), state, action, row.kind !== IDEA_KIND, readMaturity(row.plan_maturity));
     if (IDEA_ACTIONS[action].who === "person") this.steer(STEERED_AS[action] ?? "maturity", displayRef(row), options);
   }
 
@@ -1141,7 +1141,7 @@ export class PlanStore {
     // Every record's sections first: a depends-on cell may name a row of another record's breakdown.
     const sectionsOf = new Map(rows.map((row) => [row.id, this.sectionsOf(row.id)]));
     const dependsOn = dependencyResolver(
-      rows.map((row) => ({ id: row.id, identifier: shownIdentifier(row.identifier), title: row.title, rowKeys: sectionsOf.get(row.id)!.breakdown.map((entry) => entry.key) })),
+      rows.map((row) => ({ id: row.id, identifier: shownIdentifier(row.identifier), title: row.title, rowKeys: sectionsOf.get(row.id)!.breakdown.map((entry) => entry.key), parentId: row.parent_id })),
     );
     /** Planned units of a record and every non-dropped record beneath it. */
     const rolledPlanned = (id: string, seen = new Set<string>()): number => {
@@ -1167,10 +1167,17 @@ export class PlanStore {
       };
       const started = workIds.length > 0;
       const hasBaseline = ownWork.length > 0 && (row.plan_baseline_start !== null || row.plan_baseline_target !== null);
-      // Scaffolded before: a started record scaffolds again only then, to add new rows.
-      const scaffolded = state === "started" && promoted && planRowsOf(this.db, row.id).some((planRow) => this.issueExists(scaffoldTaskId(row.id, planRow.id)));
+      // An umbrella: a sub-idea that is not dropped stands in for its own rows.
+      const subIdea = sizes.get(row.id)!.size.liveSubRecords;
+      // Scaffolded before: a started record scaffolds again only then, to add new rows and sub-ideas
+      // shaped since. A task of one of its rows exists, or it is a promoted umbrella with no rows,
+      // whose Scaffold made the same epic Promote makes and builds nothing but its sub-ideas.
+      const scaffolded =
+        state === "started" &&
+        promoted &&
+        (sections.breakdown.length === 0 ? subIdea : planRowsOf(this.db, row.id).some((planRow) => this.issueExists(scaffoldTaskId(row.id, planRow.id))));
       // A shaped plan is held to the gate again before anything is built from it.
-      const planIncomplete = maturity === "shaped" && (state === "shaped" || scaffolded) ? this.gateOf(row.id) : [];
+      const planIncomplete = maturity === "shaped" && (state === "shaped" || scaffolded) ? this.gateOf(row.id, undefined, subIdea) : [];
       return {
         id: row.id,
         identifier: shownIdentifier(row.identifier),
@@ -1211,8 +1218,9 @@ export class PlanStore {
         ...ideaLifecycle({
           state,
           promoted,
+          maturity,
           ownLinks: ownLinks.length,
-          gate: maturity === "raw" || maturity === "exploring" ? () => this.gateOf(row.id) : () => [],
+          gate: maturity === "raw" || maturity === "exploring" ? () => this.gateOf(row.id, undefined, subIdea) : () => [],
           scaffolded,
           planIncomplete,
         }),
@@ -1263,9 +1271,25 @@ export class PlanStore {
     return sections;
   }
 
-  /** What the shaped gate finds missing in a record's plan as it stands. */
-  private gateOf(id: string): string[] {
-    return shapedGate(this.sectionsOf(id), parseQuestions(this.documentBody(id, QUESTIONS_KEY)));
+  /**
+   * What the shaped gate finds missing in a record's plan as it stands, its sub-ideas included. The
+   * plan read passes whether it has a sub-idea from the records it already holds.
+   */
+  private gateOf(id: string, sections: PlanSections = this.sectionsOf(id), subIdea: boolean = this.hasSubIdea(id)): string[] {
+    return shapedGate(sections, parseQuestions(this.documentBody(id, QUESTIONS_KEY)), { subIdea });
+  }
+
+  /**
+   * Whether a record has a sub-idea that is not dropped, as the plan lists its records: an umbrella
+   * passes the gate's breakdown on its sub-ideas.
+   */
+  private hasSubIdea(id: string): boolean {
+    const children = this.db
+      .prepare("SELECT kind, status FROM issues WHERE parent_id = ? AND plan_maturity IS NOT NULL AND plan_maturity <> 'dropped'")
+      .all(id) as Array<{ kind: string; status: string }>;
+    if (children.length === 0) return false;
+    const resolved = this.resolvedStatuses();
+    return children.some((child) => child.kind !== IDEA_KIND || !resolved.has(child.status));
   }
 
   /** The breakdown's revision: a digest of its rows, ids and order. */
@@ -1285,7 +1309,7 @@ export class PlanStore {
     return {
       plan,
       completeness: completeness(plan, questions, decisions),
-      missingForShaped: shapedGate(plan, questions),
+      missingForShaped: shapedGate(plan, questions, { subIdea: this.hasSubIdea(id) }),
       planWarnings: planWarnings(plan),
       breakdownRevision: this.breakdownRevision(id),
       scaffold: offersScaffold ? this.scaffoldPreview(id) : null,
@@ -1397,7 +1421,8 @@ export class PlanStore {
     }
     const patch = checkPlanPatch(input.plan);
     const sections = mergeSections(emptySections(), patch);
-    if (maturity === "shaped") assertShaped(subject, sections, extra.questions);
+    // A record captured here has no sub-idea yet, so its own rows are its breakdown.
+    if (maturity === "shaped") assertShaped(subject, shapedGate(sections, extra.questions));
     const id = this.store.journaled(() => {
       const issue = this.store.createIssue({ title, kind: IDEA_KIND, parent: input.parent ?? null, createdBy: actor, allowDuplicate: true }, { plan: true });
       const columns: Record<string, unknown> = { plan_maturity: maturity, plan_rank: this.nextRecordRank() };
@@ -1448,7 +1473,7 @@ export class PlanStore {
       const action = maturityAction({ state: before, maturity: readMaturity(row.plan_maturity) }, maturity);
       if (action !== null) allow(action);
       // Shaped only when the plan, as this write leaves it, passes the gate.
-      if (action === "shape") assertShaped(displayRef(row), sections, parseQuestions(this.documentBody(row.id, QUESTIONS_KEY)));
+      if (action === "shape") assertShaped(displayRef(row), this.gateOf(row.id, sections));
       // The rest of one write is held to the state its maturity change leads to: shaping a raw idea
       // and scheduling it is one decision. A started or shipped record keeps its state.
       if (before !== "started" && before !== "shipped") state = maturity;
@@ -2110,6 +2135,8 @@ export class PlanStore {
 function ideaLifecycle(input: {
   state: IdeaState;
   promoted: boolean;
+  /** A started record still exploring offers Mark shaped on top of its row. */
+  maturity: string;
   ownLinks: number;
   /** What the shaped gate still needs, read only when the state offers shaping. */
   gate: () => string[];
@@ -2119,7 +2146,7 @@ function ideaLifecycle(input: {
   planIncomplete: readonly string[];
 }): { state: IdeaState; actions: OfferedAction[] } {
   const actions: OfferedAction[] = [];
-  for (const id of ideaOffered(input.state, input.promoted)) {
+  for (const id of ideaOffered(input.state, input.promoted, input.maturity)) {
     if (id === "open_epic" && !input.promoted) continue;
     // A started record that was promoted or linked some other way has nothing to scaffold into.
     if (id === "scaffold" && input.state === "started" && !input.scaffolded) continue;
@@ -2189,8 +2216,7 @@ export function mergeSections(base: PlanSections, patch: PlanPatch): PlanSection
 }
 
 /** The shaped gate as a refusal: what the plan still needs, named. */
-function assertShaped(subject: string, sections: PlanSections, questions: readonly Question[]): void {
-  const missing = shapedGate(sections, questions);
+function assertShaped(subject: string, missing: readonly string[]): void {
   if (missing.length === 0) return;
   throw new StapleError("validation", `${subject.charAt(0).toUpperCase()}${subject.slice(1)} cannot be marked shaped yet: ${gateSentence(missing)}.`, { missing });
 }

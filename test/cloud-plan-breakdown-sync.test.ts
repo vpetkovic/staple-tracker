@@ -152,5 +152,57 @@ for (const fold of ["service", "tail"] as const) {
       await fresh.sync();
       expect(tasks(fresh)).toEqual(tasks(a));
     });
+
+    it("scaffolds an umbrella with no rows once on both, and either device retries it after sync, building a sub-idea shaped since", async () => {
+      const server = new FakeSyncServer({ repositoryId: REPO, ...(fold === "tail" ? { maxSnapshotFoldOps: 3 } : {}) });
+      fleet = new Fleet(server, REPO);
+      const a = fleet.machine("a");
+      a.store.plan().enable("vp", { person: { via: "settings" } });
+      const umbrella: PlanPatch = { goal: "G", acceptance: ["x"] };
+      const parent = a.store.plan().capture({ title: "Platform GA", maturity: "exploring", plan: umbrella }, "vp", PERSON).id;
+      a.store.plan().capture({ title: "R1 Billing export", parent, maturity: "shaped", plan: PLAN }, "vp", PERSON);
+      const later = a.store.plan().capture({ title: "R2 Checkout API", parent, maturity: "exploring", plan: PLAN }, "vp", PERSON).id;
+      a.store.plan().update(parent, { maturity: "shaped" }, "vp", PERSON);
+      await a.sync();
+      const b = fleet.machine("b");
+      await b.sync();
+      a.use();
+      a.store.plan().scaffold(parent, a.store.plan().scaffoldPreview(parent).fingerprint, "vp", PERSON);
+      b.use();
+      b.store.plan().scaffold(parent, b.store.plan().scaffoldPreview(parent).fingerprint, "agent-b");
+      await both(a, b);
+      const issues = (machine: Machine) => {
+        machine.use();
+        return machine.store
+          .listIssues({})
+          .filter((issue) => issue.kind !== "milestone")
+          .map((issue) => [issue.id, issue.identifier, issue.kind, issue.parentId, issue.title])
+          .sort();
+      };
+      expect(issues(a)).toHaveLength(4);
+      expect(issues(b)).toEqual(issues(a));
+      expect(open(a)).toEqual([]);
+      const fresh = fleet.machine("fresh");
+      await fresh.sync();
+      expect(issues(fresh)).toEqual(issues(a));
+      // A sub-idea shaped since, on one device; the other device's retry builds it, once.
+      a.use();
+      a.store.plan().update(later, { maturity: "shaped" }, "vp", PERSON);
+      await both(a, b);
+      b.use();
+      const retry = b.store.plan().scaffoldPreview(parent);
+      expect(retry.children.map((child) => child.idea.id)).toContain(later);
+      b.store.plan().scaffold(parent, retry.fingerprint, "agent-b");
+      fresh.use();
+      fresh.store.plan().scaffold(parent, fresh.store.plan().scaffoldPreview(parent).fingerprint, "agent-fresh");
+      for (const machine of [a, b, fresh, a, b, fresh]) {
+        machine.use();
+        await machine.sync();
+      }
+      expect(issues(a)).toHaveLength(7);
+      expect(issues(b)).toEqual(issues(a));
+      expect(issues(fresh)).toEqual(issues(a));
+      expect(open(a)).toEqual([]);
+    });
   });
 }

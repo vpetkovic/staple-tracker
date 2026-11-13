@@ -79,6 +79,41 @@ describe("the shaped gate on every surface", () => {
     expect((await http("/api/plan/update", { ref: thin, maturity: "shaped" })).status).toBe(200);
   });
 
+  it("shapes an umbrella with no rows of its own once it has a sub-idea that is not dropped, on the page and the CLI", async () => {
+    const umbrella = { goal: "Release the platform.", acceptance: ["Every rung landed"] };
+    const onPage = await capture("Platform GA", { maturity: "exploring", plan: umbrella });
+    const onCli = await capture("Platform GA, by terminal", { maturity: "exploring", plan: umbrella });
+    const dropped = await capture("R9 Retired rung", { maturity: "exploring", parent: onCli });
+    expect((await http("/api/plan/update", { ref: dropped, maturity: "dropped" })).status).toBe(200);
+    const refusedCli = await cli("idea", "set", onCli, "--maturity", "shaped", "--person");
+    expect(refusedCli.stderr).toContain("it needs a task breakdown before it is shaped");
+    expect(JSON.stringify((await http("/api/plan/update", { ref: onPage, maturity: "shaped" })).body)).toContain("it needs a task breakdown before it is shaped");
+    await capture("R1 Billing export", { parent: onPage });
+    await capture("R1 Billing export, by terminal", { parent: onCli });
+    const detail = toolPayload(await mcp.call("get_idea", { ws: WS, ref: onPage })) as { missingForShaped: string[] };
+    expect(detail.missingForShaped).toEqual([]);
+    expect(JSON.stringify((await mcp.call("update_idea", { ws: WS, ref: onPage, maturity: "shaped" })).content)).toContain("the person's call");
+    expect((await http("/api/plan/update", { ref: onPage, maturity: "shaped" })).status).toBe(200);
+    expect((await cli("idea", "set", onCli, "--maturity", "shaped", "--person")).status).toBe(0);
+    const preview = toolPayload(await mcp.call("scaffold_idea", { ws: WS, ref: onPage })) as { scaffold: { tasks: unknown[]; children: unknown[]; problems: string[] } };
+    expect(preview.scaffold).toMatchObject({ tasks: [], children: [], problems: [] });
+  });
+
+  it("says in staple help what the gate asks, and nothing it does not", async () => {
+    const help = (await runCliAsync(["help"], { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT })).stdout.replace(/\s+/g, " ");
+    const defer = help.slice(help.indexOf("idea defer <ref>"), help.indexOf("idea decide <ref>"));
+    expect(defer).not.toContain("acceptance on every row");
+    expect(defer).toContain("shaping needs a goal, a task breakdown or a sub-idea that is not dropped, acceptance criteria, and every question answered or deferred");
+  });
+
+  it("holds an import into shaped to the same gate: an imported record has no sub-idea yet", async () => {
+    const file = join(home, "umbrella.md");
+    writeFileSync(file, "# Platform GA\n\n## Goal\n\nRelease the platform.\n\n## Acceptance criteria\n\n- Every rung landed\n");
+    const imported = await cli("idea", "import", file, "--maturity", "shaped", "--person");
+    expect(imported.status).not.toBe(0);
+    expect(imported.stderr).toContain("it needs a task breakdown before it is shaped");
+  });
+
   it("shows what shaping needs on the idea itself", async () => {
     const thin = await capture("Still thin", { maturity: "exploring", plan: { goal: "Something" } });
     const detail = toolPayload(await mcp.call("get_idea", { ws: WS, ref: thin })) as { missingForShaped: string[]; idea: { actions: Array<{ id: string; disabledReason?: string }> } };
@@ -121,6 +156,25 @@ describe("Scaffold on every surface", () => {
     const second = toolPayload(await mcp.call("get_task", { ws: WS, ref: numbers[1] })) as { blockedBy: Array<{ identifier: string }>; documents: Array<{ key: string }> };
     expect(second.blockedBy.map((b) => b.identifier)).toEqual([numbers[0]]);
     expect(second.documents.map((d) => d.key)).toContain("context");
+  });
+
+  it("previews and retries an umbrella with no rows on the CLI after its confirm, making nothing twice", async () => {
+    const parent = await capture("Storefront GA", { maturity: "exploring", plan: { goal: "Release the storefront.", acceptance: ["Every rung landed"] } });
+    const rung = { goal: "Export.", acceptance: ["Exports"], breakdown: [{ key: "1", title: "Endpoints", estimate: "4h", dependsOn: [], acceptance: "Served", owner: null, notes: null }] };
+    const child = await capture("R1 Billing export", { parent, maturity: "shaped", plan: rung });
+    expect((await http("/api/plan/update", { ref: parent, maturity: "shaped" })).status).toBe(200);
+    const first = JSON.parse((await cli("idea", "scaffold", parent, "--json")).stdout) as { fingerprint: string };
+    const made = await cli("idea", "scaffold", parent, "--confirm", first.fingerprint, "--json");
+    expect(made.status, made.stderr).toBe(0);
+    const before = (toolPayload(await mcp.call("list_tasks", { ws: WS })) as { items: unknown[] }).items.length;
+    const again = await cli("idea", "scaffold", parent, "--json");
+    expect(again.status, again.stderr).toBe(0);
+    const preview = JSON.parse(again.stdout) as { fingerprint: string; tasks: unknown[]; children: Array<{ idea: { id: string } }> };
+    expect(preview.tasks).toEqual([]);
+    expect(preview.children.map((c) => c.idea.id)).toEqual([child]);
+    const retried = await cli("idea", "scaffold", parent, "--confirm", preview.fingerprint, "--json");
+    expect(retried.status, retried.stderr).toBe(0);
+    expect((toolPayload(await mcp.call("list_tasks", { ws: WS })) as { items: unknown[] }).items.length).toBe(before);
   });
 
   it("imports a plan file from the CLI, saying what it read", async () => {
