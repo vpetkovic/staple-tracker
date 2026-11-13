@@ -178,7 +178,9 @@ its shaped sub-ideas' epics, and no task of its own; a sub-idea still exploring 
 is not in the preview. Scaffolding again later creates only what is missing: rows written since,
 and sub-ideas shaped since, as child epics. A retry never creates anything twice. So when you
 shape a sub-idea after its parent was scaffolded, scaffold the parent again (or the sub-idea on
-its own); this works for a parent with no rows of its own too.
+its own). A parent scaffolded with no rows of its own can be scaffolded again while it stays
+rowless; once it gains rows of its own, it offers Scaffold again only after a task of one of them
+exists, so until then scaffold the new sub-idea on its own.
 
 Two alternatives:
 
