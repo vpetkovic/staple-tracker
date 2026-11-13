@@ -410,7 +410,7 @@ two orders each subcommand shows or edits, the classification ladder, and the
 four refusal codes. `--json` on every subcommand prints the one shape MCP and
 the UI server return: `{revision, entries, effective}`, with `queue next`
 answering `{revision, next, skipped}` (`{revision, scope, next, skipped}` with
-`--scope`) — see
+`--scope`), plus `planSteps` with planning on ([plan steps](plan.md#plan-steps)) — see
 [queue.md](queue.md#operations-by-surface).
 
 ## Autopilot runs
@@ -436,7 +436,8 @@ staple run hook bind
 `run continue` exits 0 for take, wait and stop alike; a driver loops on
 `action` and ends on `stop`. The stop reasons, first match wins, are
 `stopped_by_human`, `touched_main_line`, `budget`, `failure_streak`,
-`scope_gone`, `vp_blocked`, `gate_pending`, `goal_met` and `scope_empty`.
+`scope_gone`, `vp_blocked`, `gate_pending`, `planning_needed`, `goal_met` and
+`scope_empty`.
 
 - **A milestone run is a goal run.** It gates the milestone to `--gate-owner`
   (default `VP`) so the milestone never closes unreviewed, creates a

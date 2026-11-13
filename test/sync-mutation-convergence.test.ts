@@ -105,7 +105,7 @@ const READS: Record<StoreName, readonly string[]> = {
   QueueStore: ["revision", "entries", "effectiveQueue", "view", "scopeMembership"],
   ProjectStore: ["list", "get", "issueCounts"],
   // The plan layer's reads, and the lifecycle checks the tracker asks of it: derived on every call, nothing stored.
-  PlanStore: ["assertEnabled", "today", "enabled", "view", "ideaView", "detail", "stateOf", "assertEditable", "assertDocumentWrite", "assertQueueable", "sectionsOf", "scaffoldPreview", "horizonsOf", "horizonIds", "accountingOf", "heldByPlan", "holdOf", "holdsByHorizon"],
+  PlanStore: ["assertEnabled", "today", "enabled", "view", "ideaView", "detail", "stateOf", "assertEditable", "assertDocumentWrite", "assertQueueable", "sectionsOf", "scaffoldPreview", "horizonsOf", "horizonIds", "accountingOf", "heldByPlan", "holdOf", "holdsByHorizon", "planStepsOf", "pickupPlanSteps"],
 };
 
 interface World {

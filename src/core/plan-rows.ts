@@ -90,12 +90,15 @@ export function planRowsOf(db: DatabaseSync, ideaId: string): Array<BreakdownRow
   return out;
 }
 
-/** How many breakdown rows each record has, in one read: the rows `planRowsOf` answers, counted. */
-export function planRowCounts(db: DatabaseSync): Map<string, number> {
-  const out = new Map<string, number>();
-  for (const row of db.prepare("SELECT idea_id, body FROM plan_rows").all() as Array<{ idea_id: string; body: string }>) {
-    if (!planRowFromValue(JSON.parse(row.body))) continue;
-    out.set(row.idea_id, (out.get(row.idea_id) ?? 0) + 1);
+/** Every record's breakdown in one read, each in the order `planRowsOf` answers it. */
+export function planRowsByRecord(db: DatabaseSync): Map<string, BreakdownRow[]> {
+  const out = new Map<string, BreakdownRow[]>();
+  for (const row of db.prepare("SELECT idea_id, row_id, body FROM plan_rows ORDER BY idea_id, rank, row_id").all() as Array<{ idea_id: string; row_id: string; body: string }>) {
+    const value = planRowFromValue(JSON.parse(row.body));
+    if (!value) continue;
+    const list = out.get(row.idea_id) ?? [];
+    list.push({ id: row.row_id, key: value.key, title: value.title, estimate: value.estimate, dependsOn: value.dependsOn, acceptance: value.acceptance, owner: value.owner, notes: value.notes });
+    out.set(row.idea_id, list);
   }
   return out;
 }

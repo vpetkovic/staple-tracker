@@ -33,6 +33,22 @@ export interface OfferedAction {
   disabledReason?: string;
 }
 
+/** One plan step as the server derives it (`src/core/plan-steps.ts`): what a record needs next, and who acts. */
+export interface PlanStepData {
+  ideaId: string;
+  title: string;
+  parentId: string | null;
+  parentTitle: string | null;
+  horizonId: string;
+  state: IdeaState;
+  need: "answer_questions" | "write_plan" | "mark_shaped" | "fix_plan" | "wait" | "scaffold" | "brainstorm";
+  who: "person" | "agent" | "nobody";
+  instruction: string;
+  questions?: string[];
+  missing?: string[];
+  waitingOn?: { start?: string; records?: Array<{ id: string; title: string; state: IdeaState }> };
+}
+
 /** Work items as the server counts them (`plan-accounting.ts`). */
 export interface PlanUnits {
   done: number;

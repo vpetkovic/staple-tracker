@@ -55,6 +55,8 @@ import type { PlanComparison, PlanSummary } from "./core/plan-rollup.js";
 import { takeRenumberNotices, withRenumberAcknowledged } from "./core/identifier-moves.js";
 import { publicOutput, publicValue } from "./core/plan.js";
 import type { PlanPatch } from "./core/plan-sections.js";
+import { PLAN_STEP_NEEDS, type PlanStep } from "./core/plan-steps.js";
+import { IDEA_STATES } from "./core/plan-lifecycle-table.js";
 import type { CrossBlockerState } from "./core/hub.js";
 import { requireMineLens } from "./core/cloud/member-lens.js";
 import { CONTINUE_STOP_REASONS, RUN_STATES, RUN_STOP_REASONS, RUN_TICKET_OUTCOMES, RUN_WAIT_REASONS } from "./core/run-store.js";
@@ -1111,6 +1113,35 @@ const instructionsField = {
       "Instruction documents that apply to this ticket, nearest first: its own, its parents' (nearest first), its milestone's, then the run's. On a key two sources share, the nearest wins (effective). Follow them for as long as you work the ticket.",
     ),
 };
+
+/** One plan step (design/plan.md, "Plan steps"): derived, never claimed. */
+const planStepShape = {
+  ideaId: z.string(),
+  title: z.string(),
+  parentId: z.string().nullable(),
+  parentTitle: z.string().nullable(),
+  horizonId: z.string().describe("The horizon that carries the record"),
+  state: z.enum(IDEA_STATES),
+  need: z.enum(PLAN_STEP_NEEDS),
+  who: z.enum(["person", "agent", "nobody"]).describe("Who acts next; an agent takes only a step whose who is agent, and never scaffolds a waiting idea"),
+  instruction: z.string(),
+  questions: z.array(z.string()).optional().describe("answer_questions: the open questions, deferred ones left out"),
+  missing: z.array(z.string()).optional().describe("write_plan and fix_plan: what the shaped gate names"),
+  waitingOn: z
+    .object({
+      start: z.string().optional(),
+      records: z.array(z.object({ id: z.string(), title: z.string(), state: z.enum(IDEA_STATES) })).optional(),
+    })
+    .optional()
+    .describe("wait: the planned start it waits for and the records it depends on that have not shipped"),
+};
+type _PlanStepShapeMatchesInterface = Expect<Equals<z.infer<z.ZodObject<typeof planStepShape>>, PlanStep>>;
+const planStepsField = z
+  .array(z.object(planStepShape))
+  .optional()
+  .describe(
+    "With planning on only: the plan steps of the horizons this answer concerns, in plan order (the scope's horizon, the horizon of the ticket answered and, unscoped, every queued horizon). Tickets come first; with none eligible take the first step whose who is agent and stop for the person on the rest. An idea is never claimable.",
+  );
 
 const instructionChangeShape = {
   seq: z.number(),
@@ -2960,6 +2991,10 @@ const milestoneViewShape = {
     .number()
     .optional()
     .describe("A horizon's only, present only while ideas on its plan keep it from shipping (not dropped, not shipped): how many. Present with planning off too, where those ideas are hidden; its status cannot derive done until they ship, are dropped or move off it"),
+  planSteps: z
+    .array(z.object(planStepShape))
+    .optional()
+    .describe("A horizon's only, with planning on only: what its planned work still needs, in plan order ([] when nothing does)"),
 };
 const milestoneRefSchema = z.string().describe("The milestone's reference (an issue of the `milestone` kind)");
 const dateSchema = z
@@ -3014,7 +3049,7 @@ server.registerTool(
   "get_milestone",
   {
     description:
-      "One milestone: dates, derived state, count-each-leaf-once progress (for a horizon with planning on, progress also carries planned: its scheduled ideas' breakdown rows with no tickets yet, in percent's denominator, and unsized: its ideas with nothing to count yet; the same numbers list_horizons gives), the members revision and every member in rank order with its real parent and `nestedUnder`. A non-milestone reference is refused with validation naming its kind; an unknown one is not_found.",
+      "One milestone: dates, derived state, count-each-leaf-once progress (for a horizon with planning on, progress also carries planned: its scheduled ideas' breakdown rows with no tickets yet, in percent's denominator, and unsized: its ideas with nothing to count yet; the same numbers list_horizons gives, and planSteps: its plan steps in plan order), the members revision and every member in rank order with its real parent and `nestedUnder`. A non-milestone reference is refused with validation naming its kind; an unknown one is not_found.",
     inputSchema: { ref: milestoneRefSchema, ws: wsSchema },
     outputSchema: milestoneViewShape,
     annotations: { title: "Get milestone", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
@@ -3202,7 +3237,7 @@ server.registerTool(
   "list_ideas",
   {
     description:
-      "The plan: every horizon in order (a horizon is a milestone shown as a column: name, date, status, shipped, units, progress, percent, complete, unsizedCount and records as list_horizons gives them, member count, idea count, late and not-started counts) and every plan record with its maturity, derived stage (raw, exploring, shaped, scheduled, started, shipped, dropped), horizon, parent, planned window, baseline, linked issues, units (its rollup's work items: done and open ticket leaves of its and its sub-ideas' work, and planned breakdown rows of itself and every non-dropped sub-idea with no work yet), unsized (its own size is unknown: no work, no rows, no sub-ideas), progress (done over those units; null before any of its work is started), percent (progress as a whole percent, rounded down), actual dates, the late / notStarted flags, and its lifecycle state with the actions that state offers (state, actions: id, label, who: anyone or person, disabledReason). A write the state does not offer is refused with validation naming the state and what it offers. An unpromoted idea has identifier null (it holds no ticket number; refer to it by id) and never appears in list_tasks, the queue or next_task; a promoted one is an ordinary epic with its number. Filter with maturity or horizon (an identifier or name). A workspace with planning off refuses with validation.",
+      "The plan: every horizon in order (a horizon is a milestone shown as a column: name, date, status, shipped, units, progress, percent, complete, unsizedCount and records as list_horizons gives them, member count, idea count, late and not-started counts) and every plan record with its maturity, derived stage (raw, exploring, shaped, scheduled, started, shipped, dropped), horizon, parent, planned window, baseline, linked issues, units (its rollup's work items: done and open ticket leaves of its and its sub-ideas' work, and planned breakdown rows of itself and every non-dropped sub-idea with no work yet), unsized (its own size is unknown: no work, no rows, no sub-ideas), progress (done over those units; null before any of its work is started), percent (progress as a whole percent, rounded down), actual dates, the late / notStarted flags, and its lifecycle state with the actions that state offers (state, actions: id, label, who: anyone or person, disabledReason), and nextStep: what it needs next from planning while a horizon carries it (the step list_horizons lists), else null. A write the state does not offer is refused with validation naming the state and what it offers. An unpromoted idea has identifier null (it holds no ticket number; refer to it by id) and never appears in list_tasks, the queue or next_task; a promoted one is an ordinary epic with its number. Filter with maturity or horizon (an identifier or name). A workspace with planning off refuses with validation.",
     inputSchema: {
       maturity: z.enum(["raw", "exploring", "shaped", "dropped"]).optional(),
       horizon: z.string().optional().describe("A horizon's identifier or name"),
@@ -3225,7 +3260,7 @@ server.registerTool(
   "get_idea",
   {
     description:
-      "One idea, everything an agent needs to build from it: its view (lifecycle state and the actions it offers, maturity, stage, windows, flags, and planIncomplete: what a shaped plan edited since it was shaped now lacks, which holds Scaffold and Promote back), parent, sub-ideas, horizon, brief, questions (open, resolved, deferred), decisions, each linked issue with its progress and the milestone (and live run) holding it; its plan sections (plan: goal, context, breakdown rows {id, key, title, estimate, dependsOn, acceptance, owner, notes}, acceptance, dependencies, outOfScope, risks, sources), completeness, missingForShaped (what the shaped gate still needs; a sub-idea that is not dropped stands in for the breakdown), planWarnings (estimates that are not durations), breakdownRevision (pass it to update_idea as breakdown_base to refuse a stale breakdown edit), and while its state offers Scaffold the scaffold preview (scaffold_idea without confirm answers the same): the epic, every task with estimate, blockers, acceptance (inherited from the plan when its row has none, flagged), context and the task it already made, problems that hold the confirm back, warnings, and the fingerprint the confirm names.",
+      "One idea, everything an agent needs to build from it: its view (lifecycle state and the actions it offers, maturity, stage, windows, flags, nextStep: what it needs next from planning while a horizon carries it, else null, and planIncomplete: what a shaped plan edited since it was shaped now lacks, which holds Scaffold and Promote back), parent, sub-ideas, horizon, brief, questions (open, resolved, deferred), decisions, each linked issue with its progress and the milestone (and live run) holding it; its plan sections (plan: goal, context, breakdown rows {id, key, title, estimate, dependsOn, acceptance, owner, notes}, acceptance, dependencies, outOfScope, risks, sources), completeness, missingForShaped (what the shaped gate still needs; a sub-idea that is not dropped stands in for the breakdown), planWarnings (estimates that are not durations), breakdownRevision (pass it to update_idea as breakdown_base to refuse a stale breakdown edit), and while its state offers Scaffold the scaffold preview (scaffold_idea without confirm answers the same): the epic, every task with estimate, blockers, acceptance (inherited from the plan when its row has none, flagged), context and the task it already made, problems that hold the confirm back, warnings, and the fingerprint the confirm names.",
     inputSchema: { ref: ideaRefSchema, ws: wsSchema },
     annotations: { title: "Get idea", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
@@ -3235,7 +3270,7 @@ server.registerTool(
 server.registerTool(
   "list_horizons",
   {
-    description: "The horizons in order. A horizon is a milestone the plan shows as a column, so it can be queued (enqueue_task) like a task; its members are the work of its ideas, derived, plus any added by hand. Each has name, optional date (a dated horizon is a release line), status, shipped (its milestone is done; never while an idea it carries is not shipped: an idea scheduled on it, or a sub-idea of one that is scheduled on no horizon), units (work items: done and open ticket leaves under its members, and planned: breakdown rows of the ideas it carries that have no tickets yet; total), progress (done over total; null when it has none), percent (progress as a whole percent, rounded down: the number every surface prints), complete (all its units are done and no idea holds it; a percent of 100 that is not complete is incomplete), unsizedCount (ideas it carries with no work, no rows and no sub-ideas: size unknown, never zero), records (the non-dropped leaf ideas it carries by state: shipped, started, shaped, exploring, raw, and parentCount: the parents among its ideas, never counted as one of their children), member count, idea count (every non-dropped idea on it, parents included), the shipped, late and not-started counts, its lifecycle state (planned: no work yet; active: holds work and may be queued; shipped) with the actions that state offers, and its run setting: runMode (how far agents take it: work, until its work is done; goal, until its goal is met; epic, stop for review after each epic; null when unset), goal (its acceptance criteria) and awaitingApproval. The run setting is the person's and reaches you as the horizon-run instruction on every ticket of the horizon (next_task, get_task, continue_run); a goal run (start_run) over a horizon is refused unless it is set to goal. Horizons are defined by the person.",
+    description: "The horizons in order. A horizon is a milestone the plan shows as a column, so it can be queued (enqueue_task) like a task; its members are the work of its ideas, derived, plus any added by hand. Each has name, optional date (a dated horizon is a release line), status, shipped (its milestone is done; never while an idea it carries is not shipped: an idea scheduled on it, or a sub-idea of one that is scheduled on no horizon), units (work items: done and open ticket leaves under its members, and planned: breakdown rows of the ideas it carries that have no tickets yet; total), progress (done over total; null when it has none), percent (progress as a whole percent, rounded down: the number every surface prints), complete (all its units are done and no idea holds it; a percent of 100 that is not complete is incomplete), unsizedCount (ideas it carries with no work, no rows and no sub-ideas: size unknown, never zero), records (the non-dropped leaf ideas it carries by state: shipped, started, shaped, exploring, raw, and parentCount: the parents among its ideas, never counted as one of their children), member count, idea count (every non-dropped idea on it, parents included), the shipped, late and not-started counts, its lifecycle state (planned: no work yet; active: holds work and may be queued; shipped) with the actions that state offers, planSteps (what the ideas it carries still need, in plan order: ideaId, title, parent, state, need: answer_questions | write_plan | mark_shaped | fix_plan | wait | scaffold | brainstorm, who: person | agent | nobody, instruction, and questions, missing or waitingOn; reaches you as the horizon-plan instruction too), and its run setting: runMode (how far agents take it: work, until its work is done; goal, until its goal is met; epic, stop for review after each epic; null when unset), goal (its acceptance criteria) and awaitingApproval. The run setting is the person's and reaches you as the horizon-run instruction on every ticket of the horizon (next_task, get_task, continue_run); a goal run (start_run) over a horizon is refused unless it is set to goal. Horizons are defined by the person.",
     inputSchema: { ws: wsSchema },
     annotations: { title: "List horizons", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
@@ -3556,7 +3591,7 @@ server.registerTool(
   "next_task",
   {
     description:
-      "The ONE fresh leaf you should take next and everything it stepped over. `next` is the first eligible row in effective order; `skipped` lists what came before it with why (resolved, gated, blocked, claimed, unavailable, and in a shared workspace assigned_to_other_member: another member's ticket, which `anyAssignee: true` stops skipping). Each row carries full claim metadata or null. Under queue.policy = strict this is exactly what checkout_task will let you claim — call it before claiming and you will never see out_of_order. With `scope` the answer is limited to the work inside one container (an epic, a milestone, or any issue with children; a milestone means its members plus their descendants; inside means whatever queueing the scope would reach), queued or not: rows the plan reaches keep their effective order, then the scope's unqueued work in the order queueing the scope would give it, and the answer echoes `scope`. A null `next` with nothing unresolved in `skipped` means the scope has no open work left. An unknown scope is not_found; a leaf is validation. Under queue.policy = strict checkout_task still checks a scoped `next` against the WHOLE plan, so it is refused out_of_order whenever an eligible plan row outside the scope comes first — queued or not.",
+      "The ONE fresh leaf you should take next and everything it stepped over. `next` is the first eligible row in effective order; `skipped` lists what came before it with why (resolved, gated, blocked, claimed, unavailable, and in a shared workspace assigned_to_other_member: another member's ticket, which `anyAssignee: true` stops skipping). Each row carries full claim metadata or null. Under queue.policy = strict this is exactly what checkout_task will let you claim — call it before claiming and you will never see out_of_order. With `scope` the answer is limited to the work inside one container (an epic, a milestone, or any issue with children; a milestone means its members plus their descendants; inside means whatever queueing the scope would reach), queued or not: rows the plan reaches keep their effective order, then the scope's unqueued work in the order queueing the scope would give it, and the answer echoes `scope`. A null `next` with nothing unresolved in `skipped` means the scope has no open work left. An unknown scope is not_found; a leaf is validation. Under queue.policy = strict checkout_task still checks a scoped `next` against the WHOLE plan, so it is refused out_of_order whenever an eligible plan row outside the scope comes first — queued or not. With planning on the answer also carries planSteps: the plan steps of the scope's horizon, of the horizon of `next` and, unscoped, of every queued horizon, in plan order. `next` is still a ticket or null, never an idea; with next null and planSteps non-empty, take the first step whose who is agent and stop for the person on the rest.",
     inputSchema: {
       actor: z.string().optional().describe("Whose view (defaults to unattributed)"),
       scope: z
@@ -3579,6 +3614,7 @@ server.registerTool(
       instructions: instructionsField.instructions.describe(
         "The instructions that apply to `next`, nearest first ([] when next is null): what you work it under once you claim it",
       ),
+      planSteps: planStepsField,
     },
     annotations: { title: "Next task", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
@@ -3589,7 +3625,9 @@ server.registerTool(
         .queue()
         .effectiveQueue({ actor, scope: scopeRef, pickup: anyAssignee === true ? null : store.members() });
       const instructions = next ? store.instructions(next.issueId) : [];
-      return scope ? { revision, scope, next, skipped, instructions } : { revision, next, skipped, instructions };
+      const planSteps = store.plan().pickupPlanSteps({ scope: scope?.issueId ?? null, next: next?.issueId ?? null });
+      const steps = planSteps === undefined ? {} : { planSteps };
+      return scope ? { revision, scope, next, skipped, instructions, ...steps } : { revision, next, skipped, instructions, ...steps };
     }),
 );
 
@@ -3803,6 +3841,10 @@ const runFactsShape = z
       })
       .nullable()
       .optional(),
+    planSteps: z
+      .array(z.object(planStepShape))
+      .optional()
+      .describe("With planning on only: the plan steps of the horizons in scope; pending steps with nothing to take stop the run planning_needed"),
   })
   .nullable()
   .describe("The facts the decision was read from; null once the run has ended");
@@ -3907,7 +3949,7 @@ server.registerTool(
   "run_status",
   {
     description:
-      "Autopilot runs and what the stop rules make of them now, without changing anything. A run whose scope no longer resolves reads decision scope_gone rather than failing. With run_id (full id, or a prefix of 8+ characters): that run. Without: actor's live (active or paused) runs; with all: every run of every actor, newest first. Each entry is {run, decision, facts}. decision.reason is one of, first match wins: stopped_by_human, touched_main_line (run drive saw a session move master or main), budget (detail.budget tickets | time | ceiling | goal_children), failure_streak (two failed tickets in a row), scope_gone (the scope issue was deleted or holds nothing any more), vp_blocked (a ticket the run took is blocked on a person, or nothing is workable and something in scope is), gate_pending (the scope issue holds a person's open gate, pending or with changes requested, or nothing is workable and something in scope does; detail.gates[].state says which; a goal run's gate on its milestone is not one), goal_met (a goal run: nothing left and every criterion met; ends completed, the milestone left gated), scope_empty (nothing left; the run ends completed). A goal run with its scope empty short of its goal answers {stop:false, goalCheck}: the next continue_run creates and takes a goal-check ticket; past its cap it stops budget (detail.budget goal_children). goal is the goal run's goal check (criteria with verdicts and evidence, pace, the run's tickets against its cap, the gate), null on any other run. driver is the `staple run drive` process working the run ({pid, host, agent, heartbeatAt, ticket, sessionPid, logDir, alive}), or null when none is attached; stop_run stops it mid-ticket. Same payload as `staple run status --json`.",
+      "Autopilot runs and what the stop rules make of them now, without changing anything. A run whose scope no longer resolves reads decision scope_gone rather than failing. With run_id (full id, or a prefix of 8+ characters): that run. Without: actor's live (active or paused) runs; with all: every run of every actor, newest first. Each entry is {run, decision, facts}. decision.reason is one of, first match wins: stopped_by_human, touched_main_line (run drive saw a session move master or main), budget (detail.budget tickets | time | ceiling | goal_children), failure_streak (two failed tickets in a row), scope_gone (the scope issue was deleted or holds nothing any more), vp_blocked (a ticket the run took is blocked on a person, or nothing is workable and something in scope is), gate_pending (the scope issue holds a person's open gate, pending or with changes requested, or nothing is workable and something in scope does; detail.gates[].state says which; a goal run's gate on its milestone is not one), planning_needed (with planning on: nothing left to take but a horizon in scope still lists plan steps, in detail.planSteps, with detail.earliestWait when every one waits), goal_met (a goal run: nothing left and every criterion met; ends completed, the milestone left gated), scope_empty (nothing left; the run ends completed). A goal run with its scope empty short of its goal answers {stop:false, goalCheck}: the next continue_run creates and takes a goal-check ticket; past its cap it stops budget (detail.budget goal_children). goal is the goal run's goal check (criteria with verdicts and evidence, pace, the run's tickets against its cap, the gate), null on any other run. driver is the `staple run drive` process working the run ({pid, host, agent, heartbeatAt, ticket, sessionPid, logDir, alive}), or null when none is attached; stop_run stops it mid-ticket. Same payload as `staple run status --json`.",
     inputSchema: {
       run_id: z.string().optional(),
       all: z.boolean().optional().describe("Every run, any actor or state"),
@@ -3985,7 +4027,7 @@ server.registerTool(
   "continue_run",
   {
     description:
-      "THE call an autopilot agent makes after finishing or failing each ticket; the tracker decides, never the prompt. It records how the run's current ticket ended (outcome if you state it; else read off your ended attempt; else the ticket's status: done/review/gated count as done, anything else you no longer hold as failed; a ticket you still hold is handed back to resume), evaluates the stop rules and answers one action. take: {ref, issueId, title, why, resumed, instructions, instructionsChanged} and the ticket is ALREADY CLAIMED for you (do not check it out again); work it under its `instructions` (its own, its parents', its milestone's and the run's instruction documents, nearest first; on a shared key the nearest wins), then call continue_run again. instructionsChanged lists instruction documents in the run's scope that changed since its last take. wait: {reason: paused | waiting_on_others | out_of_order, message, retryAfterSeconds}; take nothing, ask again later or end your session (out_of_order: under queue.policy strict the run's next row is later than an eligible plan row elsewhere and the run has no override). stop: {reason, detail, message}; the run has ended (stopped_by_human, touched_main_line, budget, failure_streak, scope_gone, vp_blocked, gate_pending, goal_met, scope_empty) or you have no live run (no_run, run null); end your loop. With no live run, your most recently ended run that still has an unsettled ticket is the one continued: the ticket is settled and that run's stop reason answered. Every answer carries `recorded` (the outcome this call recorded, or null), `run`, and `goal`: on a goal run (a run over a milestone) the goal check (each criterion met/unmet/unknown with its evidence, the pace, the run's tickets against its cap, the gate), else null. On a goal run whose scope empties short of its goal, the take is a goal-check ticket the run created: judge each criterion with mark_milestone_criterion (follow_up for unmet ones), comment `review: …`, then close it. outcome failed on a ticket you still hold also releases it with that reason; outcome done on a ticket you still hold is refused (move it to review or done first). Same payload as `staple run continue --json`.",
+      "THE call an autopilot agent makes after finishing or failing each ticket; the tracker decides, never the prompt. It records how the run's current ticket ended (outcome if you state it; else read off your ended attempt; else the ticket's status: done/review/gated count as done, anything else you no longer hold as failed; a ticket you still hold is handed back to resume), evaluates the stop rules and answers one action. take: {ref, issueId, title, why, resumed, instructions, instructionsChanged} and the ticket is ALREADY CLAIMED for you (do not check it out again); work it under its `instructions` (its own, its parents', its milestone's and the run's instruction documents, nearest first; on a shared key the nearest wins), then call continue_run again. instructionsChanged lists instruction documents in the run's scope that changed since its last take. With planning on a take also carries planSteps: the plan steps of the horizons it concerns, in plan order; they are never claimed. wait: {reason: paused | waiting_on_others | out_of_order, message, retryAfterSeconds}; take nothing, ask again later or end your session (out_of_order: under queue.policy strict the run's next row is later than an eligible plan row elsewhere and the run has no override). stop: {reason, detail, message}; the run has ended (stopped_by_human, touched_main_line, budget, failure_streak, scope_gone, vp_blocked, gate_pending, planning_needed, goal_met, scope_empty; planning_needed, with planning on: nothing is left to take but a horizon in scope still lists plan steps, in detail.planSteps, with detail.earliestWait when every one waits: take the first step whose who is agent, stop for the person on the rest) or you have no live run (no_run, run null); end your loop. With no live run, your most recently ended run that still has an unsettled ticket is the one continued: the ticket is settled and that run's stop reason answered. Every answer carries `recorded` (the outcome this call recorded, or null), `run`, and `goal`: on a goal run (a run over a milestone) the goal check (each criterion met/unmet/unknown with its evidence, the pace, the run's tickets against its cap, the gate), else null. On a goal run whose scope empties short of its goal, the take is a goal-check ticket the run created: judge each criterion with mark_milestone_criterion (follow_up for unmet ones), comment `review: …`, then close it. outcome failed on a ticket you still hold also releases it with that reason; outcome done on a ticket you still hold is refused (move it to review or done first). Same payload as `staple run continue --json`.",
     inputSchema: {
       run_id: z.string().optional().describe("The run; without it, actor's one live run"),
       outcome: z.enum(RUN_TICKET_OUTCOMES).optional().describe("How the current ticket ended, when you know"),
@@ -4016,6 +4058,7 @@ server.registerTool(
         .array(z.object(instructionChangeShape))
         .optional()
         .describe("take only: instruction documents in the run's scope that changed since its last take (what run_status listed as pending); `instructions` already holds the new text for this ticket"),
+      planSteps: planStepsField,
     },
     annotations: { title: "Continue run", ...runWriteAnnotations, idempotentHint: false },
   },

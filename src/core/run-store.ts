@@ -25,6 +25,10 @@
  *                     it is
  *   gate_pending      the scope issue itself holds a pending review gate, or nothing in
  *                     scope is workable and something in it holds one
+ *   planning_needed   (planning on) nothing in scope is left to take, but a horizon in scope
+ *                     still lists plan steps (design/plan.md, "Plan steps"): `detail.planSteps`,
+ *                     and `detail.earliestWait` when every step left waits. It wins over
+ *                     `goal_met` and `scope_empty`: the horizon's planned work is not done
  *   goal_met          (a goal run) nothing unresolved is left in scope and every criterion
  *                     of the milestone is met; the milestone is left gated to its owner
  *   scope_empty       nothing unresolved is left in scope at all
@@ -91,6 +95,7 @@
  * name no issue, so the journal never re-emits them. Writes still run inside
  * `store.journaled()`, because an event must be written inside a transaction.
  */
+import { earliestWait, type PlanStep } from "./plan-steps.js";
 import { type InstructionChange, type ResolvedInstruction, type RunInstruction, instructionChangesSince, instructionSourceIds, latestEventSeq, normalizeRunInstructions, parseRunInstructions, resolveInstructions } from "./instructions.js";
 import type { DatabaseSync } from "node:sqlite";
 import { stapleHome } from "../config/home.js";
@@ -121,6 +126,7 @@ export const RUN_STOP_REASONS = [
   "scope_gone",
   "vp_blocked",
   "gate_pending",
+  "planning_needed",
   "goal_met",
   "scope_empty",
 ] as const;
@@ -269,6 +275,11 @@ export interface RunFacts {
   scopeGone?: string | null;
   /** A goal run over an unresolved milestone: its criteria and its cap. Null (or absent) otherwise. */
   goal?: RunGoalFacts | null;
+  /**
+   * With planning on: the plan steps of the horizons in scope (the scope's, or every queued one
+   * for a run over the queue), in plan order. Absent or [] otherwise.
+   */
+  planSteps?: PlanStep[];
 }
 
 /** What the goal check reads: the criteria counts and the room left under the cap. */
@@ -451,6 +462,19 @@ export function evaluateStopRules(run: RunForRules, facts: RunFacts): StopDecisi
       },
     };
   }
+  const steps = facts.planSteps ?? [];
+  if (steps.length > 0) {
+    const waiting = steps.every((step) => step.need === "wait");
+    const count = (who: string) => steps.filter((step) => step.who === who).length;
+    const until = waiting ? earliestWait(steps) : null;
+    return stop(
+      "planning_needed",
+      { planSteps: steps, ...(waiting ? { earliestWait: until } : {}) },
+      waiting
+        ? `Nothing in scope is left to take, and every plan step left waits${until ? ` (the earliest until ${until})` : " on work that has not shipped"}.`
+        : `Nothing in scope is left to take, and ${steps.length} plan step(s) are pending: ${count("agent")} for an agent, ${count("person")} for the person, ${count("nobody")} waiting.`,
+    );
+  }
   const goal = facts.goal ?? null;
   if (goal !== null) {
     const tally = `${goal.counts.met} of ${goal.counts.total} criteria met`;
@@ -574,6 +598,8 @@ export type ContinueAnswer =
        * listed as pending. `instructions` is already the current text for this ticket.
        */
       instructionsChanged: InstructionChange[];
+      /** With planning on only: the plan steps beside the ticket, in plan order (design/plan.md, "Plan steps"). */
+      planSteps?: PlanStep[];
     }
   | {
       action: "wait";
@@ -791,7 +817,14 @@ export class RunStore {
       ceiling,
       scopeGone: null,
       goal: this.goalFacts(run),
+      ...this.planStepsOf(rootId, null),
     };
+  }
+
+  /** The plan steps a run answer carries, with planning on only (`PlanStore.pickupPlanSteps`). */
+  private planStepsOf(scope: string | null, next: string | null): { planSteps?: PlanStep[] } {
+    const planSteps = this.store.plan().pickupPlanSteps({ scope, next });
+    return planSteps === undefined ? {} : { planSteps };
   }
 
   // ---------- goal mode ----------
@@ -1296,7 +1329,8 @@ export class RunStore {
       this.writeTaken(row, issue.id, issue.identifier);
       const handed = this.takeInstructions(row, issue.id, run);
       const taken = this.get(row.id);
-      return { action: "take", ref: issue.identifier, issueId: issue.id, title: issue.title, why, resumed: resume !== null, recorded, run: taken, goal: this.goalReport(taken), ...handed };
+      const steps = this.planStepsOf(run.scope.kind === "queue" ? null : run.scope.issueId, issue.id);
+      return { action: "take", ref: issue.identifier, issueId: issue.id, title: issue.title, why, resumed: resume !== null, recorded, run: taken, goal: this.goalReport(taken), ...handed, ...steps };
     });
   }
 

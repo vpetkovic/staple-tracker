@@ -1198,7 +1198,7 @@ Autopilot runs
               A milestone run is a goal run: it gates the milestone to W and ends goal_met
   run status [<run-id>] [--all]         a run and whether a stop rule trips now:
               stopped_by_human, touched_main_line, budget, failure_streak, scope_gone, vp_blocked,
-              gate_pending, goal_met, scope_empty (staple run --help)
+              gate_pending, planning_needed, goal_met, scope_empty (staple run --help)
   run stop [<run-id>] [-m why]          stop a run, recorded as stopped_by_human
   run pause|resume [<run-id>]           hold a run without ending it, and let it go on
   run continue [--run <id>] [--outcome done|failed] [--reason R]

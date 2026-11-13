@@ -365,6 +365,7 @@ async function driveLocked(options: DriveOptions): Promise<DriveResult> {
           ticketInstructions: answer.instructions,
           instructionsChanged: answer.instructionsChanged,
           instructionsFile: `${stem}.instructions.json`,
+          planSteps: answer.planSteps,
         }),
         brief_file: `${stem}.brief.md`,
         workspace: options.cwd,

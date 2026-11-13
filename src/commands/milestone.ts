@@ -80,6 +80,10 @@ function printView(view: MilestoneView): void {
   );
   console.log(`progress ${progressCell(view)}${plannedText(view.progress)} · ${view.progress.total} leaves${view.progress.complete ? " · complete" : ""}`);
   if (view.heldByPlan) console.log(`held by plan · ${view.heldByPlan} ${view.heldByPlan === 1 ? "idea" : "ideas"} on it not shipped yet`);
+  if (view.planSteps && view.planSteps.length > 0) {
+    console.log("plan steps");
+    for (const step of view.planSteps) console.log(`  ${step.need.padEnd(16)} ${step.who.padEnd(6)} ${step.title}`);
+  }
   if (m.description) console.log(`about    ${m.description.split("\n")[0]}`);
   printGoal(view);
   if (view.members.length === 0) {
