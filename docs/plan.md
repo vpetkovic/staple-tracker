@@ -39,6 +39,8 @@ stateDiagram-v2
         shaped --> started: Scaffold or Adopt
         exploring --> started: Adopt (stays exploring until marked shaped)
         started --> shipped: all its work done
+        exploring --> shipped: delivered outside the tracker (person)
+        shaped --> shipped: delivered outside the tracker (person)
         raw --> dropped: drop (person)
         exploring --> dropped: drop (person)
         shaped --> dropped: drop (person)
@@ -205,6 +207,23 @@ The planned window an idea has when it starts is kept as its **baseline**. Re-pl
 old window stays visible behind the new one, so a slip is easy to see. **Reset baseline to the
 plan** in the ⋯ menu makes the current window the new baseline.
 
+### Delivered outside the tracker
+
+Some work shipped before the tracker existed, or somewhere it does not reach. Mark the idea
+**delivered outside the tracker** instead of inventing a ticket for it. Open it, and in the Plan
+tab set the day it was delivered and, if you like, a note about where and how. It then reads
+**shipped**, with ✓, the day and *outside the tracker* on its card, and takes no ticket number.
+
+```bash
+staple idea set <id> --delivered 2026-10-03 --note "Shipped by hand before the tracker" --person
+staple idea set <id> --undelivered --person      # clear the mark
+```
+
+An exploring or shaped idea offers the mark. The delivery day is the idea's actual end, so it reads
+**late** only when that day is after its planned end or its horizon's date. A marked idea can still
+be renamed and given a new brief, questions and decisions; **Clear the delivered mark** puts it back
+where it was. Linking open work to it later reopens it, as it would any shipped idea.
+
 ## 8. Read the Timeline
 
 The **Timeline** lens draws each idea on a month axis, grouped by horizon:
@@ -285,7 +304,7 @@ come back as they were.
 > promote an idea **you** marked shaped (preview first, then confirm).
 >
 > Agents cannot move maturity, schedule ideas on horizons, set dates or order, re-parent ideas,
-> reset baselines, create or change horizons, set a horizon's run setting, or turn planning on or
+> mark an idea delivered outside the tracker, reset baselines, create or change horizons, set a horizon's run setting, or turn planning on or
 > off. These need you, in the web UI or with `--person` on the CLI, which records the change
 > under your name. An agent that tries gets a `validation` refusal saying what it may do instead.
 
@@ -294,10 +313,10 @@ come back as they were.
 | State | Offers |
 |---|---|
 | Raw | Edit, ask, decide, start exploring, mark shaped, drop, move under another idea, reorder |
-| Exploring | The same, plus schedule on a horizon, plan dates and adopt existing work |
-| Shaped | Edit, schedule, plan dates, scaffold, promote, adopt, back to exploring, drop |
+| Exploring | The same, plus schedule on a horizon, plan dates, adopt existing work and mark delivered outside the tracker |
+| Shaped | Edit, schedule, plan dates, scaffold, promote, adopt, mark delivered outside the tracker, back to exploring, drop |
 | Started | Re-plan, adopt more work, unlink work, reset the baseline, open the epic; scaffold again only if it was scaffolded; mark shaped if it started while exploring |
-| Shipped | Open the epic, or link more work (open work reopens it). An idea that was never promoted takes no more edits. |
+| Shipped | Open the epic, or link more work (open work reopens it). An idea that was never promoted takes no more edits, unless it was marked delivered outside the tracker: then it is still edited, and you can clear the mark. |
 | Dropped | Restore |
 | Horizon planned | Rename, date, reorder, run setting, remove |
 | Horizon active | Rename, date, reorder, queue, run setting |
@@ -316,6 +335,7 @@ what it offers.
 | `staple horizon ls` | `list_horizons` | Horizons in order, with their run setting |
 | `staple idea new` | `capture_idea` | Capture a raw idea |
 | `staple idea set`, `ask`, `resolve`, `defer`, `decide` | `update_idea` | Edit an idea and its questions |
+| `staple idea set --delivered D [--note T] --person`, `--undelivered` | | Mark an idea delivered outside the tracker, or clear the mark |
 | `staple idea plan`, `task` | `update_idea` (`plan`) | Write plan sections and breakdown rows |
 | `staple idea import <plan.md>` | | Capture an idea from a plan file |
 | `staple idea scaffold [--confirm FP]` | `scaffold_idea` | Preview, then create the epic and its tasks |

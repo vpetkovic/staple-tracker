@@ -184,7 +184,7 @@ need `--person`, which records the change under `humanName`.
 | `staple idea ls` | Ideas with stage, horizon and progress. `--maturity M`, `--horizon H` filter. An idea has no ticket number until it is promoted; its `<ref>` is the id this prints. |
 | `staple idea new <title>` | Capture a raw idea. `--brief T`, `--parent REF`. |
 | `staple idea show <ref>` | Stage, planned and actual windows, baseline, brief, questions, decisions and links. |
-| `staple idea set <ref>` | `--title`, `--brief`; with `--person` also `--maturity`, `--horizon H\|none`, `--parent REF\|none`, `--start D\|none`, `--target D\|none`, `--before REF\|end`. |
+| `staple idea set <ref>` | `--title`, `--brief`; with `--person` also `--maturity`, `--horizon H\|none`, `--parent REF\|none`, `--start D\|none`, `--target D\|none`, `--before REF\|end`, and `--delivered D [--note T]` (delivered outside the tracker on day D: it reads shipped with no ticket) or `--undelivered`. |
 | `staple idea promote <ref>` | The idea becomes an epic on the same record and takes its ticket number. An agent may promote only a shaped idea. |
 | `staple idea scaffold <ref> [--confirm FP]` | Without `--confirm`, the preview: the epic and every task it would make from the breakdown (estimate, blockers, acceptance, a context page each), what holds it back, and its fingerprint. `--confirm FP` makes exactly that preview, and is refused when the plan changed since. A retry makes only what is missing. |
 | `staple idea plan <ref>` | Write plan sections: `--goal`, `--context`, `--acceptance`…, `--dependency`…, `--out-of-scope`, `--risks`, `--source`…. |
