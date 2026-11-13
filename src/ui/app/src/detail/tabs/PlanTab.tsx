@@ -291,7 +291,7 @@ function Work({ record, write }: { record: IdeaDetailData; write: PlanWrite }) {
   if (!adopts && record.linked.length === 0 && idea.linkCount === 0) return null;
   return (
     <Section label="Work in the tracker" testId="work">
-      {idea.linkCount > 0 && idea.progress !== null ? <Progress value={idea.progress} /> : null}
+      {idea.linkCount > 0 && idea.percent !== null ? <Progress percent={idea.percent} /> : null}
       {record.linked.length === 0 && idea.linkCount > 0 ? <p className="mt-1 text-caption text-text-tertiary">{idea.promoted ? "This record is the epic; its tasks are its work." : "Linked through its sub-ideas."}</p> : null}
       <ul className="mt-2 space-y-2">
         {record.linked.map((link) => (
@@ -323,7 +323,7 @@ function Work({ record, write }: { record: IdeaDetailData; write: PlanWrite }) {
                 </Button>
               ) : null}
             </div>
-            {link.missing ? null : <Progress value={link.progress} />}
+            {link.missing ? null : <Progress percent={link.percent} />}
           </li>
         ))}
       </ul>

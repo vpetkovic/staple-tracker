@@ -221,7 +221,12 @@ export function goalPace(input: {
 
   let verdict: PaceVerdict;
   let message: string;
-  const doneText = `${leaves.done}/${leaves.countable} leaves done`;
+  // A horizon's, with planning on: the planned work in its ideas is not done either, nor is an idea with no size yet.
+  const planned = progress.planned ? `, ${progress.planned} planned in ideas with no tickets yet` : "";
+  const unsized = progress.unsized ? `, ${progress.unsized} ${progress.unsized === 1 ? "idea" : "ideas"} not sized` : "";
+  const doneText = `${leaves.done}/${leaves.countable} leaves done${planned}${unsized}`;
+  // The estimates are the tickets'; planned rows carry none the pace reads.
+  const workText = progress.planned ? "estimated ticket work" : "estimated work";
   if (progress.complete) {
     verdict = "done";
     message = `${doneText}.`;
@@ -236,10 +241,10 @@ export function goalPace(input: {
     message = `${doneText}; nothing open is estimated, ${daysToTarget} day(s) to ${target}.`;
   } else if (remainingSeconds > secondsToTarget!) {
     verdict = "behind";
-    message = `${doneText}; ${hours(remainingSeconds)}${partial ? "+" : ""} of estimated work remains, more than the time left to the end of ${target}.`;
+    message = `${doneText}; ${hours(remainingSeconds)}${partial ? "+" : ""} of ${workText} remains, more than the time left to the end of ${target}.`;
   } else {
     verdict = "on_track";
-    message = `${doneText}; ${hours(remainingSeconds)}${partial ? "+" : ""} of estimated work remains, ${daysToTarget} day(s) to ${target}.`;
+    message = `${doneText}; ${hours(remainingSeconds)}${partial ? "+" : ""} of ${workText} remains, ${daysToTarget} day(s) to ${target}.`;
   }
   /**
    * No seconds-left field, so every field but `verdict` is a function of the UTC day and the

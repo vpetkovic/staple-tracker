@@ -89,3 +89,13 @@ export function planRowsOf(db: DatabaseSync, ideaId: string): Array<BreakdownRow
   }
   return out;
 }
+
+/** How many breakdown rows each record has, in one read: the rows `planRowsOf` answers, counted. */
+export function planRowCounts(db: DatabaseSync): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const row of db.prepare("SELECT idea_id, body FROM plan_rows").all() as Array<{ idea_id: string; body: string }>) {
+    if (!planRowFromValue(JSON.parse(row.body))) continue;
+    out.set(row.idea_id, (out.get(row.idea_id) ?? 0) + 1);
+  }
+  return out;
+}
