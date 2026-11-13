@@ -1,0 +1,147 @@
+/* The four phases as a strip: the one the scene is in is lit, the ones behind it read done. */
+.phases {
+  display: flex;
+  align-items: center;
+  gap: var(--st-space-2);
+  margin: 0 0 var(--st-space-3);
+  padding: 0;
+  overflow: hidden;
+  list-style: none;
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-2xs);
+  letter-spacing: var(--st-tracking-eyebrow);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.phase {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--st-space-2);
+  color: var(--st-fg-subtle);
+  transition: color var(--st-duration-scene) var(--st-ease);
+}
+
+.phase + .phase::before {
+  content: '→';
+  color: var(--st-fg-subtle);
+}
+
+.phase.phasePast {
+  color: var(--st-fg-muted);
+}
+
+.phase.phaseOn {
+  color: var(--st-accent-text);
+  font-weight: var(--st-weight-semibold);
+}
+
+/* The horizon's header: drawn back until the idea is scheduled on it. */
+.horizon {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto minmax(3rem, 6rem);
+  align-items: center;
+  gap: var(--st-space-2);
+  margin-bottom: var(--st-space-3);
+  opacity: 0.45;
+  transition: opacity var(--st-duration-scene) var(--st-ease);
+}
+
+.horizon.horizonOn {
+  opacity: 1;
+}
+
+.diamond {
+  color: var(--st-accent-text);
+}
+
+.name {
+  font-size: var(--st-text-base);
+  font-weight: var(--st-weight-semibold);
+  letter-spacing: -0.01em;
+  color: var(--st-fg-strong);
+}
+
+.due {
+  min-width: 0;
+  font-size: var(--st-text-xs);
+  color: var(--st-fg-subtle);
+  white-space: nowrap;
+}
+
+.figure {
+  font-size: var(--st-text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--st-fg-muted);
+}
+
+.figure strong {
+  font-weight: var(--st-weight-semibold);
+  color: var(--st-fg-strong);
+}
+
+.meter {
+  width: 100%;
+}
+
+/* The record: the same row is the idea, then the epic. */
+.record {
+  display: flex;
+  align-items: center;
+  gap: var(--st-space-2);
+  height: var(--st-scene-row);
+  padding: 0 var(--st-space-3);
+  white-space: nowrap;
+  transition: background-color var(--st-duration-scene) var(--st-ease);
+}
+
+.record.recordLit {
+  background: var(--st-accent-soft);
+}
+
+.recordId {
+  flex: none;
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-xs);
+  color: var(--st-fg-subtle);
+}
+
+.recordTitle {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: var(--st-weight-medium);
+  color: var(--st-fg-strong);
+  text-overflow: ellipsis;
+}
+
+.recordHorizon,
+.recordState {
+  flex: none;
+}
+
+/* The plan's completeness, under the record. */
+.plan {
+  padding: 0 var(--st-space-3) var(--st-space-2);
+  border-bottom: var(--st-hairline) solid var(--st-border);
+  font-size: var(--st-text-xs);
+  color: var(--st-fg-muted);
+  white-space: nowrap;
+}
+
+.plan strong {
+  font-weight: var(--st-weight-semibold);
+  color: var(--st-fg-strong);
+}
+
+@container scene (max-width: 22rem) {
+  .phases {
+    gap: var(--st-space-1);
+    letter-spacing: 0;
+  }
+
+  .phase {
+    gap: var(--st-space-1);
+  }
+}

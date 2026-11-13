@@ -6,8 +6,8 @@ import Link from '@docusaurus/Link';
 import Layout from '@theme/Layout';
 import Button, {ButtonRow} from '@site/src/components/Button';
 import CopyCommand from '@site/src/components/CopyCommand';
-import {StatusGlyph, TrackerSync} from '@site/src/components/scenes';
-import CompareTable, {Planned} from './parts/CompareTable';
+import {IdeaToShipped, StatusGlyph, TrackerSync} from '@site/src/components/scenes';
+import CompareTable, {Experimental, Planned} from './parts/CompareTable';
 import Faq from './parts/Faq';
 import Install from './parts/Install';
 import PlanFolder from './parts/PlanFolder';
@@ -593,6 +593,35 @@ export default function Blend(): ReactNode {
           </section>
 
           <Tour />
+
+          <section className={clsx(styles.band, styles.split)} aria-labelledby="blend-planning">
+            <div className={styles.legend}>
+              <p className={styles.eyebrow}>Experimental · off by default</p>
+              <h2 id="blend-planning" className={clsx(styles.title, styles.tick)}>
+                From idea to <em>shipped</em>.
+              </h2>
+            </div>
+            <div className={styles.prose}>
+              <p>
+                <Experimental />
+                Planning sits above the tracker. Capture an idea, write its plan until it has a goal, a task
+                breakdown and acceptance criteria, and put it on a horizon such as Now, Next or a dated beta. Scaffold
+                then turns the idea into an epic with a task per breakdown row, and the horizon tracks that work as a
+                milestone until it ships.
+              </p>
+              <p>
+                Agents capture ideas and write plans. You decide maturity, horizons and dates. Planning stays off in a
+                workspace until a person turns it on in Settings, and it may change in any release.
+              </p>
+              <Link to="/docs/plan" className={styles.more}>
+                Planning, from idea to shipped
+                <Arrow />
+              </Link>
+            </div>
+            <div className={styles.figure}>
+              <IdeaToShipped />
+            </div>
+          </section>
 
           <section className={clsx(styles.band, styles.split, styles.alongside)} aria-labelledby="blend-alongside">
             <div className={styles.legend}>

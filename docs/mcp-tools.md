@@ -54,6 +54,10 @@ The loop an agent follows, described in
 
 ## Planning
 
+The idea and horizon tools (`list_ideas` through `unlink_idea`) belong to
+[experimental planning](plan.md). They refuse until a person turns on `features.planning`,
+which an agent reads with `get_setting` and cannot change.
+
 | Tool | What it does | CLI | Writes |
 |---|---|---|---|
 | `set_blocked_by` | Replace a ticket's blockers | `staple blocked-by` | yes |

@@ -1959,10 +1959,12 @@ roving focus, arrow keys and tab/panel relationships. Scroll reveal and edge fad
 Plan remembers its lens, drawer, scroll and phone column per workspace, while filters use
 the shell's existing URL and per-viewer preferences. Every storage access fails safe.
 
-Unscheduled replaces the default Later bucket. Optional-date named horizons remain available
+Unscheduled is the absence of a horizon. Optional-date named horizons remain available
 in Plan, Tasks grouping, chip and filter; only dated horizons list in Milestones. Plain
-milestones retain their existing listing behavior. The synchronized upgrade is documented
-in [plan.md](plan.md#unscheduled-and-optional-dates).
+milestones retain their existing listing behavior. The rules are in
+[plan.md](plan.md#unscheduled-and-optional-dates), and the synchronized upgrade of an earlier
+build's Later column in [plan.md](plan.md#upgrade-from-the-later-column). All of it shows only
+while the experimental `features.planning` setting is on.
 
 Milestones and horizon drawers link each planned idea directly to its Plan drawer, by stable id.
 Promoted epics link back to that same original idea. Both layouts use the same links.

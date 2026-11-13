@@ -11,6 +11,7 @@ export {default as Handoff} from './Handoff';
 export {default as ApprovalGate} from './ApprovalGate';
 export {default as AutopilotRun} from './AutopilotRun';
 export {default as MilestoneGoal} from './MilestoneGoal';
+export {default as IdeaToShipped} from './IdeaToShipped';
 export {default as TrackerSync} from './TrackerSync';
 export {default as Budget} from './Budget';
 export {default as OneStore} from './OneStore';

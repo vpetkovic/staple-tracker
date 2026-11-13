@@ -727,3 +727,19 @@ pre code,
     scroll-behavior: auto !important;
   }
 }
+
+/* Mermaid diagrams in the docs: centred, scaled to the column, and if one is still wider
+   than a phone it scrolls inside its own box instead of widening the page. */
+.docusaurus-mermaid-container {
+  margin-bottom: var(--ifm-leading);
+  overflow-x: auto;
+  text-align: center;
+}
+
+/* On a phone, scaling a wide diagram to the column leaves its labels unreadable: keep it
+   large enough to read and let the box scroll sideways. */
+@media (max-width: 767.98px) {
+  .docusaurus-mermaid-container > svg {
+    min-width: 44rem;
+  }
+}

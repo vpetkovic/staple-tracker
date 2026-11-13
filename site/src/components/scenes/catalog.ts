@@ -7,6 +7,7 @@ import Handoff from './Handoff';
 import ApprovalGate from './ApprovalGate';
 import AutopilotRun from './AutopilotRun';
 import MilestoneGoal from './MilestoneGoal';
+import IdeaToShipped from './IdeaToShipped';
 import TrackerSync from './TrackerSync';
 import Budget from './Budget';
 import OneStore from './OneStore';
@@ -31,6 +32,7 @@ export const SCENES: SceneEntry[] = [
   {name: 'ApprovalGate', feature: 'Approval gate', story: 'An epic waits on a person. Approve all is pressed and the tickets under it become ready.', Component: ApprovalGate},
   {name: 'AutopilotRun', feature: 'Autopilot run', story: 'Tickets go done one after another, then the budget stops the run.', Component: AutopilotRun},
   {name: 'MilestoneGoal', feature: 'Milestone goal', story: 'Goal criteria are marked met with evidence and the progress fills.', Component: MilestoneGoal},
+  {name: 'IdeaToShipped', feature: 'Planning (experimental)', story: 'An idea is shaped, scheduled on a horizon, scaffolded into an epic and its tasks, and ships.', Component: IdeaToShipped},
   {name: 'TrackerSync', feature: 'Tracker sync (planned)', story: 'staple beside GitHub Issues, ClickUp and Linear, each marked planned.', Component: TrackerSync},
   {name: 'Budget', feature: 'Budget', story: 'Provider limits as gauges with the reserve, and an estimate against what the work took.', Component: Budget},
   {name: 'OneStore', feature: 'One store', story: 'A command in the terminal changes the same ticket in the web UI and over MCP.', Component: OneStore},

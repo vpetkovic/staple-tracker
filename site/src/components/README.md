@@ -50,6 +50,7 @@ while you check a change.
 | `ApprovalGate` | An epic waits on a person; Approve all is pressed; the tickets under it become ready. |
 | `AutopilotRun` | Tickets go done one after another, then the budget stops the run. |
 | `MilestoneGoal` | Goal criteria are marked met with evidence; the progress fills. |
+| `IdeaToShipped` | Experimental planning: an idea is shaped, scheduled on a horizon, scaffolded into an epic and its tasks, and ships. |
 | `TrackerSync` | staple beside GitHub Issues, ClickUp and Linear, each marked Planned. |
 | `Budget` | Provider limits as gauges with the reserve; an estimate against what the work took. |
 | `OneStore` | A command in the terminal changes the same ticket in the web UI and over MCP. |

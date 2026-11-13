@@ -138,3 +138,4 @@ the members: agents keep working them.
 
 - [Autopilot runs](runs.md): let an agent work the milestone until its goal is met.
 - [The pickup queue](queue.md): how milestones and epics share one order.
+- [Planning (experimental)](plan.md): horizons are milestones whose members come from the ideas on them.

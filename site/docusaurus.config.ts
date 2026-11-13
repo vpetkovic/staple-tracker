@@ -81,6 +81,8 @@ const config: Config = {
   markdown: {
     // .md files are CommonMark, .mdx files are MDX: docs/*.md render as written.
     format: 'detect',
+    // ```mermaid fences render as diagrams, in .md and .mdx alike, as they do on GitHub.
+    mermaid: true,
     hooks: {
       onBrokenMarkdownLinks: linkOutsideDocs,
       onBrokenMarkdownImages: 'throw',
@@ -124,6 +126,7 @@ const config: Config = {
   plugins: [preloadFonts],
 
   themes: [
+    '@docusaurus/theme-mermaid',
     [
       '@easyops-cn/docusaurus-search-local',
       {
@@ -148,6 +151,10 @@ const config: Config = {
     image: 'img/og.png',
     colorMode: {
       respectPrefersColorScheme: true,
+    },
+    // Mermaid's own themes, one per colour mode, so a diagram reads in both.
+    mermaid: {
+      theme: {light: 'neutral', dark: 'dark'},
     },
     navbar: {
       title: 'staple',
