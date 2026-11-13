@@ -93,7 +93,7 @@ const needs = (steps: unknown) => (steps as PlanStep[]).map((step) => [step.idea
 describe("plan steps on every surface, planning on", () => {
   it("a horizon's planSteps read the same on list_horizons, horizon ls, get_milestone, milestone show, /api/plan and /api/issue", async () => {
     const find = (list: unknown) => (list as Array<{ id: string; planSteps: PlanStep[] }>).find((h) => h.id === horizon.id)!.planSteps;
-    const fromMcp = find(await tool("list_horizons").then((payload) => payload as unknown));
+    const fromMcp = find(await tool("list_horizons"));
     expect(needs(fromMcp)).toEqual(order());
     expect(fromMcp[0]).toMatchObject({ questions: ["Which payment provider?"], parentId: null, horizonId: horizon.id });
     expect(fromMcp[2]).toMatchObject({ waitingOn: { start: "2099-01-05" } });
