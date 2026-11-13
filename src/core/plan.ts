@@ -134,14 +134,20 @@ export interface StageInputs {
   resolvedLinks: number;
   /** Links whose issue this device no longer holds: still links, judged by nothing. */
   missingLinks?: number;
+  /** The day the person marked it delivered outside the tracker (`plan_delivered_on`), or null. */
+  deliveredOn?: string | null;
 }
 
 /**
  * Shipped is judged on the linked work that is here; a link whose issue is gone keeps the idea
  * started rather than letting it slip back to a maturity it had already left.
+ *
+ * A record the person marked delivered outside the tracker is shipped with no ticket, unless work
+ * linked to it since is open: open work reopens it, as it reopens any shipped record.
  */
 export function deriveStage(input: StageInputs): Stage {
   const present = input.links - (input.missingLinks ?? 0);
+  if (isDelivered(input.deliveredOn)) return present > 0 && input.resolvedLinks < present ? "started" : "shipped";
   if (input.links > 0) return present > 0 && input.resolvedLinks >= present ? "shipped" : "started";
   if (input.maturity === "dropped") return "dropped";
   if (input.scheduled) return "scheduled";
@@ -209,6 +215,9 @@ export function forecastEnd(input: { start: string | null; end: string | null; p
  * Late is about linked work only: it landed, or is forecast to land, after the earlier of the
  * planned target and the horizon's date, or that day has passed while it is still open. An
  * idea with nothing linked is never late; see {@link isNotStarted}.
+ *
+ * A record delivered outside the tracker landed on its delivery day: it is late only when that
+ * day is after the line, whatever else it links.
  */
 export function isLate(input: {
   plannedTarget: string | null;
@@ -219,19 +228,46 @@ export function isLate(input: {
   /** Not shipped and not dropped. */
   open: boolean;
   today: string;
+  /** The day the person marked it delivered outside the tracker, or null. */
+  deliveredOn?: string | null;
 }): boolean {
-  if (input.links === 0) return false;
+  const delivered = isDelivered(input.deliveredOn);
+  if (input.links === 0 && !delivered) return false;
   const lines = [input.plannedTarget, input.horizonDate].filter((day): day is string => day !== null);
   if (lines.length === 0) return false;
   const line = lines.reduce((a, b) => (a < b ? a : b));
+  if (delivered) return input.deliveredOn! > line;
   const landing = input.actual.end ?? input.actual.forecastEnd;
   if (landing !== null && landing > line) return true;
   return input.open && input.today > line;
 }
 
-/** Not started: nothing is linked yet, and the planned start has passed. */
-export function isNotStarted(input: { plannedStart: string | null; links: number; dropped: boolean; today: string }): boolean {
-  return !input.dropped && input.links === 0 && input.plannedStart !== null && input.today > input.plannedStart;
+/** Not started: nothing is linked yet, it was not delivered outside the tracker, and the planned start has passed. */
+export function isNotStarted(input: { plannedStart: string | null; links: number; dropped: boolean; today: string; deliveredOn?: string | null }): boolean {
+  return !input.dropped && !isDelivered(input.deliveredOn) && input.links === 0 && input.plannedStart !== null && input.today > input.plannedStart;
+}
+
+// ---------- delivered outside the tracker ----------
+
+/** The document a delivered-outside-the-tracker mark keeps its note in. */
+export const DELIVERED_NOTE_KEY = "delivered-note";
+
+/**
+ * The day a delivered-outside-the-tracker mark names: required, a calendar day, and not after
+ * `today` (work is marked once it was delivered, not before).
+ */
+export function parseDeliveredOn(value: string | null | undefined, today: string): string {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new StapleError("validation", "Marking an idea delivered outside the tracker needs the day it was delivered, YYYY-MM-DD.");
+  }
+  const day = parsePlanDate(value);
+  if (day > today) throw new StapleError("validation", `An idea is marked delivered once it was; ${day} is after today (${today}).`, { deliveredOn: day, today });
+  return day;
+}
+
+/** Whether a record carries the person's delivered-outside-the-tracker mark (`plan_delivered_on`). */
+export function isDelivered(deliveredOn: string | null | undefined): deliveredOn is string {
+  return typeof deliveredOn === "string" && deliveredOn !== "";
 }
 
 // ---------- guards ----------
@@ -300,7 +336,8 @@ export type SteeringWrite =
   | "planned dates"
   | "baseline"
   | "horizons"
-  | "promote";
+  | "promote"
+  | "delivery";
 
 /** `subject` is how the message names the record (`displayRef`), never a draft identifier. */
 export function steeringRefusal(what: SteeringWrite, subject: string | null): StapleError {
@@ -309,6 +346,10 @@ export function steeringRefusal(what: SteeringWrite, subject: string | null): St
   const message =
     what === "promote"
       ? `${Name} is not shaped yet; an agent may promote only an idea the person has marked shaped. Capture questions or decisions on it instead, or ask the person to shape it.`
+      : what === "delivery"
+        ? `Marking ${name} delivered outside the tracker, or clearing that mark, is the person's call, not an agent's. ` +
+          "To record work that landed in the tracker, adopt its ticket onto the idea (start_idea with adopt, or staple idea adopt); " +
+          "otherwise tell the person the idea looks delivered, and they mark it in the Plan view (or the CLI with --person)."
       : what === "status"
         ? `${Name} is an idea; its status does not move. Its maturity is its state, and the person sets it, or drops the idea, in the Plan view (or the CLI with --person). Promote it, or adopt work onto it, to track progress.`
         : `Changing ${what === "horizons" ? "horizons" : `the ${what} of ${name}`} is the person's call, not an agent's. ` +

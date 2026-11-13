@@ -9,6 +9,7 @@ import {
   HORIZON_LIFECYCLE,
   IDEA_ACTIONS,
   IDEA_LIFECYCLE,
+  DELIVERED_MARKED,
   PROMOTED_ALWAYS,
   UNSHAPED_STARTED,
   horizonState,
@@ -23,8 +24,8 @@ describe("the idea table", () => {
   it("offers exactly the agreed actions in each state", () => {
     expect(IDEA_LIFECYCLE).toEqual({
       raw: ["edit", "ask", "decide", "explore", "shape", "drop", "reparent", "reorder"],
-      exploring: ["edit", "ask", "decide", "shape", "drop", "schedule", "plan_dates", "reparent", "reorder", "adopt"],
-      shaped: ["edit", "ask", "decide", "unshape", "drop", "schedule", "plan_dates", "reparent", "reorder", "promote", "scaffold", "adopt"],
+      exploring: ["edit", "ask", "decide", "shape", "drop", "schedule", "plan_dates", "reparent", "reorder", "adopt", "mark_delivered"],
+      shaped: ["edit", "ask", "decide", "unshape", "drop", "schedule", "plan_dates", "reparent", "reorder", "promote", "scaffold", "adopt", "mark_delivered"],
       started: ["edit", "ask", "decide", "schedule", "plan_dates", "reorder", "scaffold", "adopt", "unlink", "reset_baseline", "open_epic"],
       shipped: ["adopt", "open_epic"],
       dropped: ["restore"],
@@ -36,7 +37,7 @@ describe("the idea table", () => {
       .filter(([, rule]) => rule.who === "person")
       .map(([id]) => id)
       .sort();
-    expect(people).toEqual(["back_to_raw", "drop", "explore", "plan_dates", "reorder", "reparent", "reset_baseline", "restore", "schedule", "shape", "unshape"]);
+    expect(people).toEqual(["back_to_raw", "clear_delivered", "drop", "explore", "mark_delivered", "plan_dates", "reorder", "reparent", "reset_baseline", "restore", "schedule", "shape", "unshape"]);
   });
 
   it("offers going back to raw in no state", () => {
@@ -62,6 +63,19 @@ describe("the idea table", () => {
     expect(ideaOffered("shipped", false, "exploring")).toEqual(IDEA_LIFECYCLE.shipped);
     expect(ideaOffered("exploring", false, "exploring")).toEqual(IDEA_LIFECYCLE.exploring);
     expect(ideaLifecycleRefusal('the idea "X"', "started", "drop", false, "exploring").message).toContain("reset baseline to the plan or mark shaped.");
+  });
+
+  it("lets the person mark an exploring or shaped idea delivered outside the tracker, and gives a marked record its edits and the clear", () => {
+    for (const state of ["exploring", "shaped"] as const) expect(IDEA_LIFECYCLE[state], state).toContain("mark_delivered");
+    for (const state of ["raw", "started", "shipped", "dropped"] as const) expect(IDEA_LIFECYCLE[state], state).not.toContain("mark_delivered");
+    for (const row of Object.values(IDEA_LIFECYCLE)) expect(row).not.toContain("clear_delivered");
+    expect(DELIVERED_MARKED).toEqual(["edit", "ask", "decide", "clear_delivered"]);
+    expect(ideaOffered("shipped", false, "shaped", true)).toEqual(["adopt", "open_epic", "edit", "ask", "decide", "clear_delivered"]);
+    expect(ideaOffered("started", false, "exploring", true)).toEqual([...IDEA_LIFECYCLE.started, "shape", "clear_delivered"]);
+    expect(ideaOffered("shipped", false, "shaped", false)).toEqual(IDEA_LIFECYCLE.shipped);
+    expect(ideaLifecycleRefusal('the idea "X"', "shipped", "schedule", false, "shaped", true).message).toBe(
+      'The idea "X" is shipped; it cannot be scheduled. A shipped idea offers: adopt existing work, edit title and brief, ask a question, record a decision or clear the delivered mark.',
+    );
   });
 
   it("names each maturity change by where the idea stands, and a maturity it already has as no change", () => {

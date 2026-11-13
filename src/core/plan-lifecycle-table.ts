@@ -41,6 +41,9 @@ export const IDEA_ACTIONS = {
   unlink: { label: "Unlink work", verb: "unlinked from work", who: "anyone" },
   reset_baseline: { label: "Reset baseline to the plan", verb: "re-baselined", who: "person" },
   open_epic: { label: "Open the epic", verb: "opened as an epic", who: "anyone" },
+  /** The person says it was delivered outside the tracker, on a day: it reads shipped with no ticket. */
+  mark_delivered: { label: "Mark delivered outside the tracker", verb: "marked delivered outside the tracker", who: "person" },
+  clear_delivered: { label: "Clear the delivered mark", verb: "cleared of its delivered mark", who: "person" },
 } as const satisfies Record<string, ActionRule>;
 export type IdeaAction = keyof typeof IDEA_ACTIONS;
 export const IDEA_ACTION_IDS = Object.keys(IDEA_ACTIONS) as IdeaAction[];
@@ -51,7 +54,8 @@ export const IDEA_ACTION_IDS = Object.keys(IDEA_ACTIONS) as IdeaAction[];
  * link work that already exists, which starts it while its scope is still open. Shaped is ready: it is scheduled, promoted or
  * linked to existing work, or scaffolded: promoted with its task breakdown as the epic's tasks.
  * Started (promoted, or linked to work) is re-planned, not re-shaped, and never promoted again;
- * one that was scaffolded scaffolds again only to add the rows written since. Shipped offers no edits: only linking more work (history that landed
+ * one that was scaffolded scaffolds again only to add the rows written since. Exploring and shaped may be marked delivered outside the tracker by
+ * the person, which ships them with no ticket. Shipped offers no edits: only linking more work (history that landed
  * elsewhere, or new work, which reopens it) and opening the epic. Dropped can only be restored.
  *
  * A state is the record's own: its maturity, its own promotion and its own links. Work under its
@@ -59,8 +63,8 @@ export const IDEA_ACTION_IDS = Object.keys(IDEA_ACTIONS) as IdeaAction[];
  */
 export const IDEA_LIFECYCLE: Readonly<Record<IdeaState, readonly IdeaAction[]>> = {
   raw: ["edit", "ask", "decide", "explore", "shape", "drop", "reparent", "reorder"],
-  exploring: ["edit", "ask", "decide", "shape", "drop", "schedule", "plan_dates", "reparent", "reorder", "adopt"],
-  shaped: ["edit", "ask", "decide", "unshape", "drop", "schedule", "plan_dates", "reparent", "reorder", "promote", "scaffold", "adopt"],
+  exploring: ["edit", "ask", "decide", "shape", "drop", "schedule", "plan_dates", "reparent", "reorder", "adopt", "mark_delivered"],
+  shaped: ["edit", "ask", "decide", "unshape", "drop", "schedule", "plan_dates", "reparent", "reorder", "promote", "scaffold", "adopt", "mark_delivered"],
   started: ["edit", "ask", "decide", "schedule", "plan_dates", "reorder", "scaffold", "adopt", "unlink", "reset_baseline", "open_epic"],
   shipped: ["adopt", "open_epic"],
   dropped: ["restore"],
@@ -80,13 +84,26 @@ export const PROMOTED_ALWAYS: readonly IdeaAction[] = ["edit", "ask", "decide"];
 export const UNSHAPED_STARTED: readonly IdeaAction[] = ["shape"];
 
 /**
- * What a record offers: its state's row, for a promoted record the epic's own edits, and for a
- * started record whose maturity is still exploring, Mark shaped.
+ * A record the person marked delivered outside the tracker reads shipped, and is still the idea it
+ * was: its title, brief, questions and decisions are edited as before (a promoted shipped record
+ * keeps these the same way), and the person may clear the mark. These it offers on top of its
+ * state's row while it is marked.
  */
-export function ideaOffered(state: IdeaState, promoted = false, maturity?: string): readonly IdeaAction[] {
+export const DELIVERED_MARKED: readonly IdeaAction[] = ["edit", "ask", "decide", "clear_delivered"];
+
+/**
+ * What a record offers: its state's row, for a promoted record the epic's own edits, for a
+ * started record whose maturity is still exploring, Mark shaped, and for a record marked delivered
+ * outside the tracker, its edits and clearing the mark.
+ */
+export function ideaOffered(state: IdeaState, promoted = false, maturity?: string, delivered = false): readonly IdeaAction[] {
   const row = IDEA_LIFECYCLE[state];
-  const extra = [...(promoted ? PROMOTED_ALWAYS : []), ...(state === "started" && maturity === "exploring" ? UNSHAPED_STARTED : [])];
-  const added = extra.filter((id) => !row.includes(id));
+  const extra = [
+    ...(promoted ? PROMOTED_ALWAYS : []),
+    ...(state === "started" && maturity === "exploring" ? UNSHAPED_STARTED : []),
+    ...(delivered ? DELIVERED_MARKED : []),
+  ];
+  const added = [...new Set(extra)].filter((id) => !row.includes(id));
   return added.length > 0 ? [...row, ...added] : row;
 }
 
@@ -170,8 +187,8 @@ export function maturityAction(record: { state: IdeaState; maturity: string }, t
   return null;
 }
 
-export function ideaOffers(state: IdeaState, action: IdeaAction, promoted = false, maturity?: string): boolean {
-  return ideaOffered(state, promoted, maturity).includes(action);
+export function ideaOffers(state: IdeaState, action: IdeaAction, promoted = false, maturity?: string, delivered = false): boolean {
+  return ideaOffered(state, promoted, maturity, delivered).includes(action);
 }
 
 export function horizonOffers(state: HorizonState, action: HorizonAction): boolean {
