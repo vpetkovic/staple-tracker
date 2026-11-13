@@ -30,3 +30,8 @@ export default function CompareTable(): ReactNode {
 export function Planned(): ReactNode {
   return <span className={styles.planned}>Planned</span>;
 }
+
+/** The chip on anything that ships off by default and may change: the same dashed outline. */
+export function Experimental(): ReactNode {
+  return <span className={styles.planned}>Experimental</span>;
+}
