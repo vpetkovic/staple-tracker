@@ -26,6 +26,11 @@ To look something up from the terminal:
 | `--db <path>` | Use this workspace database instead of the one found by walking up from the current directory. |
 | `--ws <slug\|prefix>` | Use a registered workspace by name or prefix, from anywhere. `STAPLE_DB`, when set, wins over it. |
 
+Inside a linked git worktree (`git worktree add`), the current directory resolves to the
+workspace of the repository's main checkout, as if you had run the command there. A
+worktree whose main checkout cannot be located is refused rather than resolved to a workspace
+in some parent directory; pass `--ws` or `--db`.
+
 Writes are recorded under `STAPLE_AGENT`, else `$USER`. `start`, `done`, `cancel`,
 `status`, `estimate` and `release` also take `--agent <name>` to say who acts.
 
