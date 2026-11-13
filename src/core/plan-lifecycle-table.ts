@@ -47,7 +47,8 @@ export const IDEA_ACTION_IDS = Object.keys(IDEA_ACTIONS) as IdeaAction[];
 
 /**
  * The idea table. Raw is captured thinking: it is refined, explored, shaped or dropped, never
- * scheduled or promoted while it is raw. Exploring may reserve a horizon slot. Shaped is ready: it is scheduled, promoted or
+ * scheduled, promoted or linked to work while it is raw. Exploring may reserve a horizon slot and
+ * link work that already exists, which starts it while its scope is still open. Shaped is ready: it is scheduled, promoted or
  * linked to existing work, or scaffolded: promoted with its task breakdown as the epic's tasks.
  * Started (promoted, or linked to work) is re-planned, not re-shaped, and never promoted again;
  * one that was scaffolded scaffolds again only to add the rows written since. Shipped offers no edits: only linking more work (history that landed
@@ -58,7 +59,7 @@ export const IDEA_ACTION_IDS = Object.keys(IDEA_ACTIONS) as IdeaAction[];
  */
 export const IDEA_LIFECYCLE: Readonly<Record<IdeaState, readonly IdeaAction[]>> = {
   raw: ["edit", "ask", "decide", "explore", "shape", "drop", "reparent", "reorder"],
-  exploring: ["edit", "ask", "decide", "shape", "drop", "schedule", "plan_dates", "reparent", "reorder"],
+  exploring: ["edit", "ask", "decide", "shape", "drop", "schedule", "plan_dates", "reparent", "reorder", "adopt"],
   shaped: ["edit", "ask", "decide", "unshape", "drop", "schedule", "plan_dates", "reparent", "reorder", "promote", "scaffold", "adopt"],
   started: ["edit", "ask", "decide", "schedule", "plan_dates", "reorder", "scaffold", "adopt", "unlink", "reset_baseline", "open_epic"],
   shipped: ["adopt", "open_epic"],
@@ -71,10 +72,22 @@ export const IDEA_LIFECYCLE: Readonly<Record<IdeaState, readonly IdeaAction[]>> 
  */
 export const PROMOTED_ALWAYS: readonly IdeaAction[] = ["edit", "ask", "decide"];
 
-/** What a record offers: its state's row, and for a promoted record the epic's own edits. */
-export function ideaOffered(state: IdeaState, promoted = false): readonly IdeaAction[] {
+/**
+ * A record that linked work while it was still exploring reads started, and its maturity is still
+ * the person's to move: it offers Mark shaped on top of the started row (held to the gate as
+ * any shaping is). Its questions are already in that row (ask).
+ */
+export const UNSHAPED_STARTED: readonly IdeaAction[] = ["shape"];
+
+/**
+ * What a record offers: its state's row, for a promoted record the epic's own edits, and for a
+ * started record whose maturity is still exploring, Mark shaped.
+ */
+export function ideaOffered(state: IdeaState, promoted = false, maturity?: string): readonly IdeaAction[] {
   const row = IDEA_LIFECYCLE[state];
-  return promoted ? [...row, ...PROMOTED_ALWAYS.filter((id) => !row.includes(id))] : row;
+  const extra = [...(promoted ? PROMOTED_ALWAYS : []), ...(state === "started" && maturity === "exploring" ? UNSHAPED_STARTED : [])];
+  const added = extra.filter((id) => !row.includes(id));
+  return added.length > 0 ? [...row, ...added] : row;
 }
 
 /** Named horizons may be undated: the same lifecycle applies. Only dated horizons list in
@@ -157,8 +170,8 @@ export function maturityAction(record: { state: IdeaState; maturity: string }, t
   return null;
 }
 
-export function ideaOffers(state: IdeaState, action: IdeaAction, promoted = false): boolean {
-  return ideaOffered(state, promoted).includes(action);
+export function ideaOffers(state: IdeaState, action: IdeaAction, promoted = false, maturity?: string): boolean {
+  return ideaOffered(state, promoted, maturity).includes(action);
 }
 
 export function horizonOffers(state: HorizonState, action: HorizonAction): boolean {

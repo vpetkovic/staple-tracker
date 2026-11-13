@@ -319,6 +319,13 @@ describe("the Plan tab", () => {
     expect(html).not.toMatch(/data-plan-row="7\.1" data-plan-row-inherits/);
   });
 
+  it("says what shaping still needs wherever Mark shaped is offered: a record started while exploring, not a shaped one", () => {
+    const shape: OfferedAction = { id: "shape", label: "Mark shaped", who: "person" };
+    const exploring = planned("started", { maturity: "exploring", actions: [...OFFERED.started!, shape] });
+    expect(renderTab(exploring)).toContain("To shape it: 1 open question answered or deferred.");
+    expect(renderTab(planned("started"))).not.toContain("To shape it");
+  });
+
   it("shows Scaffold's preview section only when the state offers it", () => {
     const rec = planned("shaped");
     expect(renderTab(rec)).not.toContain("data-plan-scaffold");

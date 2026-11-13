@@ -1146,13 +1146,14 @@ The plan (experimental; features.planning defaults off)
               would make (estimate, blockers, acceptance, a context document each), what
               holds it back, and its fingerprint; --confirm FP makes exactly that preview
               and is refused when the plan changed since; a retry makes only what is missing
-  idea adopt <ref> <issue>              link existing work to the idea
+  idea adopt <ref> <issue>              link existing work to the idea; an exploring or shaped
+              idea offers it (it then reads started), a raw one does not
   idea unlink <ref> <issue>
   idea ask <ref> <question>             add an open question
   idea resolve <ref> <n> [--reopen]     resolve question n (1-based)
   idea defer <ref> <n> [--reopen]       leave question n open on purpose: it no longer holds
-              shaping back (shaping needs a goal, a task breakdown with acceptance on every
-              row, acceptance criteria, and every question answered or deferred)
+              shaping back (shaping needs a goal, a task breakdown or a sub-idea that is not
+              dropped, acceptance criteria, and every question answered or deferred)
   idea decide <ref> <decision>          record a decision
   idea reset-baseline <ref> --person    the current planned window becomes the baseline
   horizon ls

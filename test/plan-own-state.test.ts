@@ -56,7 +56,7 @@ function childWithWork(parent: string, done: boolean): { child: string; work: st
 }
 
 const RAW = ["edit", "ask", "decide", "explore", "shape", "drop", "reparent", "reorder"];
-const EXPLORING = ["edit", "ask", "decide", "shape", "drop", "schedule", "plan_dates", "reparent", "reorder"];
+const EXPLORING = ["edit", "ask", "decide", "shape", "drop", "schedule", "plan_dates", "reparent", "reorder", "adopt"];
 const SHAPED = ["edit", "ask", "decide", "unshape", "drop", "schedule", "plan_dates", "reparent", "reorder", "promote", "scaffold", "adopt"];
 
 describe("a parent's own state is its own; its sub-ideas' work is a rollup", () => {
@@ -245,5 +245,44 @@ describe("an idea's documents and files are its edit", () => {
     const ref = idea("Raw idea", "raw");
     expect(store.putDocument(ref, "context", "Why it matters", { author: "agent" }).revision).toBe(1);
     expect(store.attachFile(ref, { filename: "sketch.txt", bytes: new TextEncoder().encode("sketch"), author: "agent" }).filename).toBe("sketch.txt");
+  });
+});
+
+describe("an exploring idea adopts work", () => {
+  const STARTED = ["edit", "ask", "decide", "schedule", "plan_dates", "reorder", "adopt", "unlink", "reset_baseline"];
+
+  it("links existing work while exploring and reads started, its maturity still exploring and still the person's to shape", () => {
+    const ref = idea("Billing export", "exploring");
+    const work = store.createIssue({ title: "Export endpoint" });
+    expect(plan.adopt(ref, work.identifier, "agent")).toMatchObject({ maturity: "exploring", stage: "started", state: "started", links: [work.id] });
+    // The started row, and Mark shaped on top of it: the maturity is still the person's to move.
+    expect(actionsOf(ref)).toEqual([...STARTED, "shape"]);
+    plan.addQuestion(ref, "Which formats?", "agent");
+    expect(plan.ideaView(ref).actions.find((action) => action.id === "shape")?.disabledReason).toContain("1 open question answered or deferred");
+    plan.deferQuestion(ref, 1, "agent");
+    expect(refused(() => plan.update(ref, { maturity: "shaped" }, "agent")).message).toContain("the person's call");
+    expect(plan.update(ref, { maturity: "shaped" }, "vp", PERSON)).toMatchObject({ maturity: "shaped", state: "started" });
+    expect(actionsOf(ref)).toEqual(STARTED);
+  });
+
+  it("never links work to a raw idea, naming the state", () => {
+    const ref = idea("Half a thought", "raw");
+    const error = refused(() => plan.adopt(ref, store.createIssue({ title: "Some work" }).identifier, "agent"));
+    expect(error.message).toContain("is raw; it cannot be linked to work");
+    expect(plan.ideaView(ref)).toMatchObject({ state: "raw", links: [] });
+  });
+
+  it("puts its work in its horizon and keeps its baseline as a shaped idea's would, and stays out of the tracker", () => {
+    const now = horizon("Now");
+    const ref = plan.capture({ title: "Reserved slot", maturity: "exploring", horizon: now, plannedStart: "2026-11-01", plannedTarget: "2026-11-30" }, "vp", PERSON).id;
+    const work = store.createIssue({ title: "Its first ticket" });
+    plan.adopt(ref, work.identifier, "agent");
+    expect(store.milestones().get(now).members.map((member) => member.issueId)).toEqual([work.id]);
+    expect(plan.ideaView(ref).baseline).toEqual({ start: "2026-11-01", target: "2026-11-30" });
+    plan.update(ref, { plannedTarget: "2026-12-15" }, "vp", PERSON);
+    expect(plan.ideaView(ref).baseline).toEqual({ start: "2026-11-01", target: "2026-11-30" });
+    expect(refused(() => store.queue().enqueue(ref, {}, "agent")).message).toContain("cannot be queued");
+    expect(refused(() => store.checkoutIssue(ref, "agent")).message).toContain("cannot be checked out");
+    expect(store.listIssues({}).map((issue) => issue.id)).not.toContain(ref);
   });
 });

@@ -127,6 +127,37 @@ describe("the shaped gate", () => {
   });
 });
 
+describe("the shaped gate on an umbrella", () => {
+  const UMBRELLA: PlanPatch = { goal: "Release the platform.", acceptance: ["Every rung landed"] };
+
+  it("takes one sub-idea that is not dropped in place of the parent's own rows", () => {
+    const parent = plan.capture({ title: "Platform GA", maturity: "exploring", plan: UMBRELLA }, "vp", PERSON).id;
+    expect(plan.detail(parent).missingForShaped).toEqual(["a task breakdown"]);
+    plan.capture({ title: "R1 Billing export", parent, maturity: "exploring" }, "vp", PERSON);
+    expect(plan.detail(parent).missingForShaped).toEqual([]);
+    expect(plan.ideaView(parent).actions.find((action) => action.id === "shape")?.disabledReason).toBeUndefined();
+    expect(plan.update(parent, { maturity: "shaped" }, "vp", PERSON)).toMatchObject({ state: "shaped", planIncomplete: [] });
+  });
+
+  it("still needs rows when every sub-idea is dropped, and holds the rest of the gate", () => {
+    const parent = plan.capture({ title: "Platform GA", maturity: "exploring", plan: UMBRELLA }, "vp", PERSON).id;
+    const child = plan.capture({ title: "R1 Billing export", parent, maturity: "exploring" }, "vp", PERSON).id;
+    plan.update(child, { maturity: "dropped" }, "vp", PERSON);
+    expect(refused(() => plan.update(parent, { maturity: "shaped" }, "vp", PERSON))).toContain("it needs a task breakdown before it is shaped");
+    const thin = plan.capture({ title: "No goal", maturity: "exploring" }, "vp", PERSON).id;
+    plan.capture({ title: "Under it", parent: thin }, "agent");
+    expect(plan.detail(thin).missingForShaped).toEqual(["a goal", "acceptance criteria"]);
+  });
+
+  it("reads a shaped umbrella whose last sub-idea is dropped as shaped with its plan incomplete", () => {
+    const parent = plan.capture({ title: "Platform GA", maturity: "exploring", plan: UMBRELLA }, "vp", PERSON).id;
+    const child = plan.capture({ title: "R1 Billing export", parent, maturity: "exploring" }, "vp", PERSON).id;
+    plan.update(parent, { maturity: "shaped" }, "vp", PERSON);
+    plan.update(child, { maturity: "dropped" }, "vp", PERSON);
+    expect(plan.ideaView(parent)).toMatchObject({ state: "shaped", maturity: "shaped", planIncomplete: ["a task breakdown"] });
+  });
+});
+
 describe("Scaffold", () => {
   it("creates exactly what its preview shows: the epic, and a task per row with estimate, blockers, acceptance and context", () => {
     const id = shaped("Checkout API");
@@ -205,6 +236,24 @@ describe("Scaffold", () => {
     // The parent's epic and its own rows only; the sub-idea's task replays.
     expect(store.listIssues({}).length - before).toBe(1 + PLAN.breakdown!.length);
     expect(store.listIssues({}).filter((issue) => issue.parentId === child).map((issue) => issue.title)).toEqual(["2.1 Endpoints"]);
+  });
+
+  it("scaffolds an umbrella with no rows of its own: its epic and its shaped sub-ideas' epics, no task of its own", () => {
+    const parent = plan.capture({ title: "Platform GA", maturity: "exploring", plan: { goal: "Release the platform.", acceptance: ["Every rung landed"] } }, "vp", PERSON).id;
+    const child = shaped("R1 Billing export", { ...PLAN, breakdown: [{ key: "1", title: "Endpoints", estimate: "4h", dependsOn: [], acceptance: "Served", owner: null, notes: null }] }, { parent });
+    const thinking = plan.capture({ title: "R2 Checkout API", parent, maturity: "exploring" }, "vp", PERSON).id;
+    plan.update(parent, { maturity: "shaped" }, "vp", PERSON);
+    const preview = plan.scaffoldPreview(parent);
+    expect(preview).toMatchObject({ tasks: [], problems: [] });
+    expect(preview.children.map((c) => [c.idea.id, c.tasks.map((task) => task.title)])).toEqual([[child, ["1 Endpoints"]]]);
+    const before = store.listIssues({}).length;
+    confirm(parent, "agent");
+    expect(store.getIssue(parent)).toMatchObject({ kind: "epic" });
+    expect(store.getIssue(child)).toMatchObject({ kind: "epic", parentId: parent });
+    expect(store.listIssues({}).filter((issue) => issue.parentId === parent).map((issue) => issue.id)).toEqual([child]);
+    expect(store.listIssues({}).filter((issue) => issue.parentId === child).map((issue) => issue.title)).toEqual(["1 Endpoints"]);
+    expect(store.listIssues({}).length - before).toBe(3);
+    expect(plan.ideaView(thinking)).toMatchObject({ promoted: false, state: "exploring" });
   });
 
   it("is offered only where the lifecycle offers it: never to an idea that is not shaped", () => {
