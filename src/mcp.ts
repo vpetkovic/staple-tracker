@@ -143,6 +143,9 @@ function asMcpResolutionError(error: unknown, ws?: string): unknown {
    * one verb that can't help unless it runs inside a clone.
    */
   if (error.detail?.absentRow !== undefined) return error;
+  // A refused git worktree: `init` there would create a workspace inside the worktree and fork it
+  // from the repository's own.
+  if (error.detail?.worktreeRefusal !== undefined) return error;
   const cause = ws
     ? `No workspace "${ws}" is registered in the hub.`
     : "No staple workspace found at or above this server's working directory.";
