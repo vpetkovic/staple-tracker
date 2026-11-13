@@ -148,7 +148,7 @@ export function ideaState(view: { stage: string; maturity: string }): IdeaState 
 export const RUN_MODES = {
   work: {
     label: "Until its work is done",
-    asks: "Take its work through the queue (staple queue next) until every member has landed. Do not add work beyond it, and do not start a goal run over it. It ships when its last member lands.",
+    asks: "Take its work through the queue (staple queue next) until every member has landed. Do not add work beyond it, and do not start a goal run over it. It ships when its last member lands and no idea on it is left unshipped.",
   },
   goal: {
     label: "Until its goal is met",

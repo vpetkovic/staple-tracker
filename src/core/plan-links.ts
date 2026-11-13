@@ -62,3 +62,14 @@ export function planLinksOf(db: DatabaseSync, ideaId: string): string[] {
     (row) => row.issue_id,
   );
 }
+
+/** Every record's links in one read, each list in `planLinksOf`'s order: what the plan's derivation reads. */
+export function allPlanLinks(db: DatabaseSync): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const row of db.prepare("SELECT idea_id, issue_id FROM plan_links ORDER BY linked_at, issue_id").all() as Array<{ idea_id: string; issue_id: string }>) {
+    const list = out.get(row.idea_id) ?? [];
+    list.push(row.issue_id);
+    out.set(row.idea_id, list);
+  }
+  return out;
+}

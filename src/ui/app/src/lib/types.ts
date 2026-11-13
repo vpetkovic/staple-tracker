@@ -1426,9 +1426,13 @@ export interface MilestoneProgress {
   total: number;
   countable: number;
   counts: Record<StatusCategory, number>;
-  /** `floor(done · 100 / countable)`; null when nothing is countable. */
+  /** `floor(done · 100 / countable)`, over `countable + planned` for a horizon; null when nothing is countable. */
   percent: number | null;
   complete: boolean;
+  /** A horizon's, with planning on: its ideas' breakdown rows with no tickets yet, in `percent`'s denominator. */
+  planned?: number;
+  /** A horizon's, with planning on: its ideas with nothing to count yet. */
+  unsized?: number;
 }
 
 export interface MilestoneMemberRow {

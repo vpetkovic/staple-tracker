@@ -73,7 +73,7 @@ function sentence(record: IdeaDetailData): string {
     case "shaped":
       return `Ready to start, ${where}`;
     case "started":
-      return `Underway, ${where}${idea.progress !== null ? ` · ${Math.round(idea.progress * 100)}% done` : ""}`;
+      return `Underway, ${where}${idea.percent !== null ? ` · ${idea.percent}% done` : ""}`;
     case "shipped":
       return `Shipped${idea.actual.end ? ` ${dayLabel(idea.actual.end)}` : ""}`;
     case "dropped":
@@ -134,7 +134,7 @@ export function PlanOverflow({ workspace, idea, controller, triggerClassName }: 
 export function HorizonSection({ detail, horizon, ideas, controller, className }: { detail: IssueDetail; horizon: HorizonData; ideas: IdeaData[]; controller: IssueActionsController; className?: string }) {
   const [running, setRunning] = useState(false);
   const items = horizonActionItems(detail.workspace, horizon);
-  const progress = horizon.progress;
+  const percent = horizon.percent;
   return (
     <section aria-label="Horizon" className={cn("rounded-lg border p-4", className)} data-horizon-section={horizon.id} data-horizon-state={horizon.state}>
       <div className="flex flex-wrap items-center gap-2">
@@ -190,12 +190,12 @@ export function HorizonSection({ detail, horizon, ideas, controller, className }
           <p className="m-0 mt-1 text-text-secondary">No goal yet. Set it with how agents run it.</p>
         )}
       </div>
-      {progress !== null ? (
+      {percent !== null ? (
         <div className="mt-3">
-          <Progress value={progress} />
+          <Progress percent={percent} complete={horizon.complete} />
         </div>
       ) : null}
-      <p className="mt-3 text-caption text-text-tertiary">{planCounts(horizon.ideaCount, horizon.memberCount)}</p>
+      <p className="mt-3 text-caption text-text-tertiary">{planCounts(horizon)}</p>
       <h3 className="mt-4 mb-1.5 text-caption font-semibold tracking-wide text-text-tertiary uppercase">Ideas on it ({horizon.ideaCount})</h3>
       {ideas.length === 0 ? (
         <p className="m-0 text-label text-text-secondary">No ideas are scheduled on it yet.</p>

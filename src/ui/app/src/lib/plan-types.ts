@@ -33,6 +33,14 @@ export interface OfferedAction {
   disabledReason?: string;
 }
 
+/** Work items as the server counts them (`plan-accounting.ts`). */
+export interface PlanUnits {
+  done: number;
+  open: number;
+  planned: number;
+  total: number;
+}
+
 export interface HorizonData {
   id: string;
   identifier: string;
@@ -41,7 +49,7 @@ export interface HorizonData {
   rank: number;
   /** The milestone's status; a horizon is a milestone. */
   status: string;
-  /** Its derived done: every member landed. */
+  /** Its milestone is done: every member landed and nothing on its plan holds it. What folds its column. */
   shipped: boolean;
   memberCount: number;
   ideaCount: number;
@@ -49,8 +57,18 @@ export interface HorizonData {
   notStartedCount: number;
   /** Records on it whose work has all landed. */
   shippedCount: number;
-  /** Members landed over members held, 0..1; null while it holds none. */
+  /** Its work items: ticket leaves done and open, and its ideas' breakdown rows with no tickets yet. */
+  units: PlanUnits;
+  /** Ideas it carries with nothing to count yet. */
+  unsizedCount: number;
+  /** The leaf ideas it carries by state, and the parents among them: what its counts print. */
+  records: { leaves: number; shipped: number; started: number; shaped: number; exploring: number; raw: number; parentCount: number };
+  /** Done units over all its units, 0..1; null while it has none. */
   progress: number | null;
+  /** The server's whole percent of its units, rounded down: what the page prints. */
+  percent: number | null;
+  /** All its units are done and nothing on its plan holds it. A 100 that is not complete says so. */
+  complete: boolean;
   /** How far agents take it when they pick its work up; null until the person sets it. */
   runMode: "work" | "goal" | "epic" | null;
   /** Its goal: the milestone's acceptance criteria. */
@@ -82,7 +100,14 @@ export interface IdeaData {
   missingLinks: string[];
   linkCount: number;
   resolvedLinks: number;
+  /** Its rollup's work items, its sub-ideas' planned rows included. */
+  units: PlanUnits;
+  /** Its own size is unknown: no work, no rows, no sub-ideas. */
+  unsized: boolean;
+  /** Done units over its rollup's units; null before any of its work is started. */
   progress: number | null;
+  /** The server's whole percent of its rollup's units, rounded down; null with `progress`. */
+  percent: number | null;
   actual: ActualWindow;
   late: boolean;
   notStarted: boolean;
@@ -119,6 +144,8 @@ export interface LinkData {
   leaves: number;
   doneLeaves: number;
   progress: number;
+  /** The server's whole percent of its leaves, rounded down. */
+  percent: number;
   startedAt: string | null;
   completedAt: string | null;
   milestone: { identifier: string; title: string; state: string; run: { state: string; actor: string } | null } | null;

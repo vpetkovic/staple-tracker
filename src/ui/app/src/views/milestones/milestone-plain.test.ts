@@ -57,6 +57,16 @@ describe("progress and risk sentences", () => {
     expect(progressSentence(progress(0, 0))).toBe("No tasks to count yet.");
   });
 
+  it("reads a horizon's planned work into the sentence and the bar, and a plain milestone's not at all", () => {
+    const horizon = { ...progress(78, 86), percent: 50, planned: 69, unsized: 0 };
+    expect(progressSentence(horizon)).toBe("78 of 86 tasks finished, 69 planned in ideas with no tickets yet (50% of all work).");
+    expect(progressSentence({ ...horizon, unsized: 2 })).toBe("78 of 86 tasks finished, 69 planned in ideas with no tickets yet (50% of all work). 2 ideas have no size yet.");
+    expect(progressSegments(horizon).find((segment) => segment.key === "planned")?.count).toBe(69);
+    expect(progressSegments(progress(1, 4)).map((segment) => segment.key)).not.toContain("planned");
+    // Every counted unit landed but an idea is unsized: the server's 100 is not complete, and the sentence says so.
+    expect(progressSentence({ ...progress(3, 3), percent: 100, complete: false, planned: 0, unsized: 1 })).toBe("3 of 3 tasks finished (100% of all work, incomplete). 1 idea has no size yet.");
+  });
+
   it("names blocked work in the bar's own number, and stays silent when there is none", () => {
     const open = { total: 4, countable: 4, percent: 0, complete: false, counts: { unstarted: 2, ready: 1, active: 0, review: 0, gated: 1, blocked: 0, done: 0, cancelled: 0 } };
     // One gated by status, two not-started tasks the queue holds back: three blocked.
