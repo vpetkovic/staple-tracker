@@ -88,7 +88,12 @@ function printScaffold(preview: ScaffoldPreview, dry: boolean, depth = 0): void 
 function horizonLine(horizon: HorizonView): string {
   const risk = [horizon.lateCount ? `${horizon.lateCount} late` : null, horizon.notStartedCount ? `${horizon.notStartedCount} not started` : null].filter(Boolean).join(" · ");
   const run = horizon.runMode ? `  runs ${horizon.runMode}${horizon.goal.length ? ` · ${horizon.goal.length} goal ${horizon.goal.length === 1 ? "criterion" : "criteria"}` : ""}` : horizon.goal.length ? `  ${horizon.goal.length} goal ${horizon.goal.length === 1 ? "criterion" : "criteria"}` : "";
-  return `${horizon.identifier.padEnd(9)} ${horizon.name.padEnd(24)} ${(horizon.date ?? "no date").padEnd(10)} ${horizon.state.padEnd(8)} ${String(horizon.ideaCount).padStart(3)} ${horizon.ideaCount === 1 ? "idea" : "ideas"}${risk ? `  ${risk}` : ""}${run}${horizon.awaitingApproval ? "  waiting for your approval" : ""}`;
+  // Leaf ideas: a parent is counted apart, never as one of its children.
+  const { leaves, parentCount } = horizon.records;
+  const parents = parentCount ? ` (+${parentCount} ${parentCount === 1 ? "parent" : "parents"})` : "";
+  const { done, total, planned } = horizon.units;
+  const progress = `  ${done}/${total} ${horizon.progress === null ? "—" : `${Math.floor(horizon.progress * 100)}%`}${planned ? ` · ${planned} planned` : ""}${horizon.unsizedCount ? ` · ${horizon.unsizedCount} unsized` : ""}`;
+  return `${horizon.identifier.padEnd(9)} ${horizon.name.padEnd(24)} ${(horizon.date ?? "no date").padEnd(10)} ${horizon.state.padEnd(8)} ${String(leaves).padStart(3)} ${leaves === 1 ? "idea" : "ideas"}${parents}${progress}${risk ? `  ${risk}` : ""}${run}${horizon.awaitingApproval ? "  waiting for your approval" : ""}`;
 }
 
 function printDetail(detail: IdeaDetail): void {

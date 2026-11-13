@@ -198,15 +198,30 @@ export function progressSegments(progress: MilestoneProgress, risk: MilestoneRis
     { key: "blocked", count: b.blocked, word: "blocked", color: PROGRESS_COLOR.waiting },
     { key: "ready", count: b.ready, word: "to do", color: PROGRESS_COLOR.ready },
     { key: "open", count: b.notStarted, word: "not started", color: PROGRESS_COLOR.notStarted },
+    // A horizon's ideas' breakdown rows with no tickets yet: in the server's percent, so on the bar.
+    ...(progress.planned === undefined ? [] : [{ key: "planned", count: progress.planned, word: "planned, no tickets yet", color: PROGRESS_COLOR.notStarted }]),
   ];
 }
 
 /** "3 of 4 tasks finished (75%)." — or the honest sentence when nothing is countable. */
 export function progressSentence(progress: MilestoneProgress): string {
+  if (progress.planned !== undefined) return horizonProgressSentence(progress, progress.planned);
   if (progress.countable === 0) return "No tasks to count yet.";
   const noun = progress.countable === 1 ? "task" : "tasks";
   if (progress.complete) return `All ${progress.countable} ${noun} are finished.`;
   return `${progress.counts.done} of ${progress.countable} ${noun} finished (${progress.percent ?? 0}%).`;
+}
+
+/**
+ * A horizon's, with planning on: its tasks, then the planned work in its ideas, then the server's
+ * percent over both, and the ideas it cannot count yet.
+ */
+function horizonProgressSentence(progress: MilestoneProgress, planned: number): string {
+  const unsized = progress.unsized ? ` ${progress.unsized} ${progress.unsized === 1 ? "idea has" : "ideas have"} no size yet.` : "";
+  if (progress.countable === 0 && planned === 0) return `No work to count yet.${unsized}`;
+  const tasks = `${progress.counts.done} of ${progress.countable} ${progress.countable === 1 ? "task" : "tasks"} finished`;
+  const plannedText = planned === 0 ? "" : `, ${planned} planned in ideas with no tickets yet`;
+  return `${tasks}${plannedText} (${progress.percent ?? 0}% of all work).${unsized}`;
 }
 
 /**

@@ -129,11 +129,12 @@ export function horizonsColumns(plan: PlanData): BoardColumn[] {
 
 /**
  * A horizon whose work has all landed, as the server reads it: the milestone is done, or every
- * member has landed. Never read from the cards: a hand-added member or a record still being
- * explored is work the column does not show. Its column folds to a ✓ summary.
+ * unit (ticket leaves and planned rows) has landed and no idea on it is unsized. Never read from
+ * the cards: a hand-added member or a record still being explored is work the column does not
+ * show. Its column folds to a ✓ summary.
  */
-export function horizonDone(horizon: Pick<HorizonData, "shipped" | "progress" | "awaitingApproval">): boolean {
-  return !horizon.awaitingApproval && (horizon.shipped || horizon.progress === 1);
+export function horizonDone(horizon: Pick<HorizonData, "shipped" | "progress" | "awaitingApproval" | "unsizedCount">): boolean {
+  return !horizon.awaitingApproval && (horizon.shipped || (horizon.progress === 1 && horizon.unsizedCount === 0));
 }
 
 /** The late and not-started split of a set of ideas: never one lumped number. */

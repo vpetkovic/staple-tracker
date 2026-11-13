@@ -54,7 +54,14 @@ function integerOption(raw: string | undefined, flag: string): number | undefine
 function progressCell(row: Pick<MilestoneView, "progress">): string {
   const { done } = row.progress.counts;
   const percent = row.progress.percent === null ? "—" : `${row.progress.percent}%`;
-  return `${done}/${row.progress.countable} ${percent}`;
+  // A horizon's planned work items (planning on) are in the denominator, as in its percent.
+  return `${done}/${row.progress.countable + (row.progress.planned ?? 0)} ${percent}`;
+}
+
+/** A horizon's planned and unsized ideas, with planning on; nothing for a plain milestone. */
+function plannedText(progress: MilestoneView["progress"]): string {
+  if (progress.planned === undefined) return "";
+  return ` · ${progress.planned} planned${progress.unsized ? ` · ${progress.unsized} unsized` : ""}`;
 }
 
 function summaryLine(row: MilestoneListRow | MilestoneView): string {
@@ -69,7 +76,7 @@ function printView(view: MilestoneView): void {
   console.log(
     `state ${m.state} · status ${m.status}${m.assignee ? ` · @${m.assignee}` : ""} · target ${m.targetDate ?? "none"} · start ${m.startDate ?? "none"} · revision ${view.revision}`,
   );
-  console.log(`progress ${progressCell(view)} · ${view.progress.total} leaves${view.progress.complete ? " · complete" : ""}`);
+  console.log(`progress ${progressCell(view)}${plannedText(view.progress)} · ${view.progress.total} leaves${view.progress.complete ? " · complete" : ""}`);
   if (m.description) console.log(`about    ${m.description.split("\n")[0]}`);
   printGoal(view);
   if (view.members.length === 0) {

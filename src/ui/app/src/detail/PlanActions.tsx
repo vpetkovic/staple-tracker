@@ -195,7 +195,7 @@ export function HorizonSection({ detail, horizon, ideas, controller, className }
           <Progress value={progress} />
         </div>
       ) : null}
-      <p className="mt-3 text-caption text-text-tertiary">{planCounts(horizon.ideaCount, horizon.memberCount)}</p>
+      <p className="mt-3 text-caption text-text-tertiary">{planCounts(horizon)}</p>
       <h3 className="mt-4 mb-1.5 text-caption font-semibold tracking-wide text-text-tertiary uppercase">Ideas on it ({horizon.ideaCount})</h3>
       {ideas.length === 0 ? (
         <p className="m-0 text-label text-text-secondary">No ideas are scheduled on it yet.</p>

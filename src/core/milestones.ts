@@ -266,6 +266,13 @@ export interface MilestoneProgress {
   percent: number | null;
   /** Something is countable and all of it is done. */
   complete: boolean;
+  /**
+   * A horizon's, with planning on only (design/plan.md, "Accounting"): breakdown rows of its
+   * scheduled ideas that have no tickets yet, in `percent`'s denominator beside `countable`.
+   */
+  planned?: number;
+  /** A horizon's, with planning on only: scheduled ideas with nothing to count yet. */
+  unsized?: number;
 }
 
 function emptyCounts(): Record<StatusCategory, number> {

@@ -374,6 +374,63 @@ describe("a horizon's status over sync", () => {
       }
     });
 
+    it(`keeps a horizon open on every device when its last ticket closes while a scheduled idea has none (${fold} fold)`, async () => {
+      const server = new FakeSyncServer({ repositoryId: REPO, ...(fold === "tail" ? { maxSnapshotFoldOps: 3 } : {}) });
+      fleet = new Fleet(server, REPO);
+      const a = fleet.machine("a");
+      a.store.plan().enable("vp", { person: { via: "settings" } });
+      const now = a.store.plan().view().horizons[0]!.id;
+      const p = a.store.plan().capture({ title: "Checkout API", maturity: "shaped", plan: READY_PLAN, horizon: now }, "vp", PERSON).id;
+      a.store.plan().capture({ title: "Billing export", maturity: "shaped", plan: READY_PLAN, horizon: now }, "vp", PERSON);
+      a.store.plan().promote(p, "vp", PERSON);
+      a.store.checkoutIssue(p, "agent");
+      await a.sync();
+      const b = fleet.machine("b");
+      await b.sync();
+
+      a.use();
+      a.store.updateIssue(p, { status: "done" }, "agent");
+      await both(a, b);
+      const fresh = fleet.machine("fresh");
+      await fresh.sync();
+      for (const machine of [a, b, fresh]) {
+        expect(category(machine, now)).not.toBe("done");
+        expect(machine.store.plan().view().horizons.find((h) => h.id === now)).toMatchObject({ shipped: false, units: { done: 1, open: 0, planned: 1, total: 2 } });
+        expect(openConflicts(machine)).toEqual([]);
+      }
+    });
+
+    it(`reopens a horizon one device closed while another scheduled an unshipped idea onto it offline (${fold} fold)`, async () => {
+      const server = new FakeSyncServer({ repositoryId: REPO, ...(fold === "tail" ? { maxSnapshotFoldOps: 3 } : {}) });
+      fleet = new Fleet(server, REPO);
+      const a = fleet.machine("a");
+      a.store.plan().enable("vp", { person: { via: "settings" } });
+      const now = a.store.plan().view().horizons[0]!.id;
+      const p = a.store.plan().capture({ title: "Checkout API", maturity: "shaped", plan: READY_PLAN, horizon: now }, "vp", PERSON).id;
+      const q = a.store.plan().capture({ title: "Billing export", maturity: "shaped", plan: READY_PLAN }, "vp", PERSON).id;
+      a.store.plan().promote(p, "vp", PERSON);
+      a.store.checkoutIssue(p, "agent");
+      await a.sync();
+      const b = fleet.machine("b");
+      await b.sync();
+
+      // Offline: A lands the last ticket and derives the horizon shipped; B schedules an idea onto it.
+      a.use();
+      a.store.updateIssue(p, { status: "done" }, "agent");
+      expect(category(a, now)).toBe("done");
+      b.use();
+      b.store.plan().update(q, { horizon: now }, "vp", PERSON);
+
+      await both(a, b, 3);
+      const fresh = fleet.machine("fresh");
+      await fresh.sync();
+      for (const machine of [a, b, fresh]) {
+        expect(category(machine, now)).not.toBe("done");
+        expect(machine.store.plan().view().horizons.find((h) => h.id === now)!.shipped).toBe(false);
+        expect(openConflicts(machine)).toEqual([]);
+      }
+    });
+
     it(`re-derives each horizon from the membership two offline moves leave, on every device (${fold} fold)`, async () => {
       const server = new FakeSyncServer({ repositoryId: REPO, ...(fold === "tail" ? { maxSnapshotFoldOps: 3 } : {}) });
       fleet = new Fleet(server, REPO);

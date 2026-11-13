@@ -33,6 +33,14 @@ export interface OfferedAction {
   disabledReason?: string;
 }
 
+/** Work items as the server counts them (`plan-accounting.ts`). */
+export interface PlanUnits {
+  done: number;
+  open: number;
+  planned: number;
+  total: number;
+}
+
 export interface HorizonData {
   id: string;
   identifier: string;
@@ -41,7 +49,7 @@ export interface HorizonData {
   rank: number;
   /** The milestone's status; a horizon is a milestone. */
   status: string;
-  /** Its derived done: every member landed. */
+  /** Its derived done: every member landed and no scheduled idea on it is unshipped. */
   shipped: boolean;
   memberCount: number;
   ideaCount: number;
@@ -49,7 +57,13 @@ export interface HorizonData {
   notStartedCount: number;
   /** Records on it whose work has all landed. */
   shippedCount: number;
-  /** Members landed over members held, 0..1; null while it holds none. */
+  /** Its work items: ticket leaves done and open, and its ideas' breakdown rows with no tickets yet. */
+  units: PlanUnits;
+  /** Its scheduled ideas with nothing to count yet. */
+  unsizedCount: number;
+  /** Its scheduled leaf ideas by state, and the parents among them: what its counts print. */
+  records: { leaves: number; shipped: number; started: number; shaped: number; exploring: number; parentCount: number };
+  /** Done units over all its units, 0..1; null while it has none. */
   progress: number | null;
   /** How far agents take it when they pick its work up; null until the person sets it. */
   runMode: "work" | "goal" | "epic" | null;
@@ -82,6 +96,11 @@ export interface IdeaData {
   missingLinks: string[];
   linkCount: number;
   resolvedLinks: number;
+  /** Its rollup's work items, its sub-ideas' planned rows included. */
+  units: PlanUnits;
+  /** Its own size is unknown: no work, no rows, no sub-ideas. */
+  unsized: boolean;
+  /** Done units over its rollup's units; null before any of its work is started. */
   progress: number | null;
   actual: ActualWindow;
   late: boolean;

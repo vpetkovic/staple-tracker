@@ -2878,8 +2878,13 @@ const milestoneProgressShape = {
   total: z.number(),
   countable: z.number().describe("total minus cancelled leaves — the denominator"),
   counts: z.record(z.string(), z.number()),
-  percent: z.number().nullable().describe("floor(done·100/countable); null when nothing is countable"),
-  complete: z.boolean(),
+  percent: z.number().nullable().describe("floor(done·100/countable), or for a horizon with planning on floor(done·100/(countable+planned)); null when nothing is countable"),
+  complete: z.boolean().describe("Something is counted and all of it is done; a horizon with planned or unsized ideas is never complete"),
+  planned: z
+    .number()
+    .optional()
+    .describe("A horizon's only, with planning on: breakdown rows of its scheduled ideas that have no tickets yet, counted as work items beside the countable leaves"),
+  unsized: z.number().optional().describe("A horizon's only, with planning on: scheduled ideas with no work, no rows and no sub-ideas yet (never counted as zero work)"),
 };
 /** The goal check (`milestone-goal.ts`): each criterion's verdict with its evidence, and the pace. */
 const milestoneGoalShape = z
@@ -2978,7 +2983,7 @@ server.registerTool(
   "list_milestones",
   {
     description:
-      "Every open plain milestone and dated horizon (undated horizons stay in Plan), with dates, derived state, progress and members revision, sorted by plan position, then target date, then identifier. Milestones are issues of the reserved `milestone` kind; a workspace without that kind refuses with validation naming the `kinds add` that enables it.",
+      "Every open plain milestone and dated horizon (undated horizons stay in Plan), with dates, derived state, progress (a horizon's, with planning on, counts its ideas' planned rows too, as get_milestone says) and members revision, sorted by plan position, then target date, then identifier. Milestones are issues of the reserved `milestone` kind; a workspace without that kind refuses with validation naming the `kinds add` that enables it.",
     inputSchema: {
       all: z.boolean().optional().describe("Include done and cancelled milestones"),
       ws: wsSchema,
@@ -3004,7 +3009,7 @@ server.registerTool(
   "get_milestone",
   {
     description:
-      "One milestone: dates, derived state, count-each-leaf-once progress, the members revision and every member in rank order with its real parent and `nestedUnder`. A non-milestone reference is refused with validation naming its kind; an unknown one is not_found.",
+      "One milestone: dates, derived state, count-each-leaf-once progress (for a horizon with planning on, progress also carries planned: its scheduled ideas' breakdown rows with no tickets yet, in percent's denominator, and unsized: its ideas with nothing to count yet; the same numbers list_horizons gives), the members revision and every member in rank order with its real parent and `nestedUnder`. A non-milestone reference is refused with validation naming its kind; an unknown one is not_found.",
     inputSchema: { ref: milestoneRefSchema, ws: wsSchema },
     outputSchema: milestoneViewShape,
     annotations: { title: "Get milestone", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
@@ -3192,7 +3197,7 @@ server.registerTool(
   "list_ideas",
   {
     description:
-      "The plan: every horizon in order (a horizon is a milestone shown as a column: name, date, status, shipped, member count, idea count, late and not-started counts) and every plan record with its maturity, derived stage (raw, exploring, shaped, scheduled, started, shipped, dropped), horizon, parent, planned window, baseline, linked issues, progress, actual dates, the late / notStarted flags, and its lifecycle state with the actions that state offers (state, actions: id, label, who: anyone or person, disabledReason). A write the state does not offer is refused with validation naming the state and what it offers. An unpromoted idea has identifier null (it holds no ticket number; refer to it by id) and never appears in list_tasks, the queue or next_task; a promoted one is an ordinary epic with its number. Filter with maturity or horizon (an identifier or name). A workspace with planning off refuses with validation.",
+      "The plan: every horizon in order (a horizon is a milestone shown as a column: name, date, status, shipped, units, progress, unsizedCount and records as list_horizons gives them, member count, idea count, late and not-started counts) and every plan record with its maturity, derived stage (raw, exploring, shaped, scheduled, started, shipped, dropped), horizon, parent, planned window, baseline, linked issues, units (its rollup's work items: done and open ticket leaves of its and its sub-ideas' work, and planned breakdown rows of itself and every non-dropped sub-idea with no work yet), unsized (its own size is unknown: no work, no rows, no sub-ideas), progress (done over those units; null before any of its work is started), actual dates, the late / notStarted flags, and its lifecycle state with the actions that state offers (state, actions: id, label, who: anyone or person, disabledReason). A write the state does not offer is refused with validation naming the state and what it offers. An unpromoted idea has identifier null (it holds no ticket number; refer to it by id) and never appears in list_tasks, the queue or next_task; a promoted one is an ordinary epic with its number. Filter with maturity or horizon (an identifier or name). A workspace with planning off refuses with validation.",
     inputSchema: {
       maturity: z.enum(["raw", "exploring", "shaped", "dropped"]).optional(),
       horizon: z.string().optional().describe("A horizon's identifier or name"),
@@ -3225,7 +3230,7 @@ server.registerTool(
 server.registerTool(
   "list_horizons",
   {
-    description: "The horizons in order. A horizon is a milestone the plan shows as a column, so it can be queued (enqueue_task) like a task; its members are the work of its ideas, derived, plus any added by hand. Each has name, optional date (a dated horizon is a release line), status, shipped, progress, member count, idea count, the shipped, late and not-started counts, its lifecycle state (planned: no work yet; active: holds work and may be queued; shipped) with the actions that state offers, and its run setting: runMode (how far agents take it: work, until its work is done; goal, until its goal is met; epic, stop for review after each epic; null when unset), goal (its acceptance criteria) and awaitingApproval. The run setting is the person's and reaches you as the horizon-run instruction on every ticket of the horizon (next_task, get_task, continue_run); a goal run (start_run) over a horizon is refused unless it is set to goal. Horizons are defined by the person.",
+    description: "The horizons in order. A horizon is a milestone the plan shows as a column, so it can be queued (enqueue_task) like a task; its members are the work of its ideas, derived, plus any added by hand. Each has name, optional date (a dated horizon is a release line), status, shipped (false while any scheduled, non-dropped idea on it is not shipped), units (work items: done and open ticket leaves under its members, and planned: breakdown rows of its scheduled ideas that have no tickets yet; total), progress (done over total; null when it has none), unsizedCount (scheduled ideas with no work, no rows and no sub-ideas: size unknown, never zero), records (its scheduled, non-dropped leaf ideas by state: shipped, started, shaped, exploring, and parentCount: the parents among its ideas, never counted as one of their children), member count, idea count (every non-dropped idea on it, parents included), the shipped, late and not-started counts, its lifecycle state (planned: no work yet; active: holds work and may be queued; shipped) with the actions that state offers, and its run setting: runMode (how far agents take it: work, until its work is done; goal, until its goal is met; epic, stop for review after each epic; null when unset), goal (its acceptance criteria) and awaitingApproval. The run setting is the person's and reaches you as the horizon-run instruction on every ticket of the horizon (next_task, get_task, continue_run); a goal run (start_run) over a horizon is refused unless it is set to goal. Horizons are defined by the person.",
     inputSchema: { ws: wsSchema },
     annotations: { title: "List horizons", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },

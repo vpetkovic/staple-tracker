@@ -32,6 +32,8 @@ function idea(id: string, extra: Partial<IdeaData> = {}): IdeaData {
     missingLinks: [],
     linkCount: 0,
     resolvedLinks: 0,
+    units: { done: 0, open: 0, planned: 0, total: 0 },
+    unsized: false,
     progress: null,
     actual: { start: null, end: null, forecastEnd: null },
     late: false,
@@ -63,6 +65,9 @@ function horizon(id: string, extra: Partial<HorizonData> = {}): HorizonData {
     lateCount: 0,
     notStartedCount: 0,
     shippedCount: 0,
+    units: { done: 0, open: 0, planned: 0, total: 0 },
+    unsizedCount: 0,
+    records: { leaves: 0, shipped: 0, started: 0, shaped: 0, exploring: 0, parentCount: 0 },
     progress: 0.5,
     runMode: null,
     goal: [],
@@ -214,11 +219,26 @@ describe("the Horizons lens is delivery", () => {
     expect(planned).not.toContain("data-plan-horizon-run");
   });
 
+  it("counts leaf ideas in the header, a parent apart from its children, as the server gives them", () => {
+    const html = renderToStaticMarkup(
+      <HorizonsBoard
+        plan={plan([], [horizon("now", { ideaCount: 4, memberCount: 2, records: { leaves: 3, shipped: 1, started: 1, shaped: 1, exploring: 0, parentCount: 1 } })])}
+        write={async () => true}
+        onOpen={() => {}}
+        selected={null}
+      />,
+    );
+    expect(text(html)).toContain("3 ideas (+1 parent) · 2 members");
+    expect(text(html)).not.toContain("4 ideas");
+  });
+
   it("folds only a horizon the server reads as done, never one whose cards merely all shipped", () => {
     // Every card shipped, but the horizon still holds open work the cards do not show.
     expect(horizonDone(horizon("now", { progress: 0.5 }))).toBe(false);
     expect(horizonDone(horizon("now", { progress: 1 }))).toBe(true);
     expect(horizonDone(horizon("now", { shipped: true, progress: null }))).toBe(true);
+    // Every counted unit landed, but an idea on it has nothing to count yet: not done.
+    expect(horizonDone(horizon("now", { progress: 1, unsizedCount: 1 }))).toBe(false);
     expect(horizonDone(horizon("now", { progress: null }))).toBe(false);
     const open = renderToStaticMarkup(<HorizonsBoard plan={plan([shipped], [horizon("now", { shippedCount: 1, progress: 0.5 })])} write={async () => true} onOpen={() => {}} selected={null} />);
     expect(open).not.toContain("data-plan-horizon-done");

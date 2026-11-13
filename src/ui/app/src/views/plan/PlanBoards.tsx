@@ -115,7 +115,7 @@ function Board({ plan, write, onOpen, selected, columns, hint, footer, action, c
                 )}
               >
                 {column.title}
-                <span className="text-text-tertiary">{column.horizon ? planCounts(column.horizon.ideaCount, column.horizon.memberCount) : column.ideas.length}</span>
+                <span className="text-text-tertiary">{column.horizon ? planCounts(column.horizon) : column.ideas.length}</span>
                 {risk.late > 0 ? <span aria-label={`${risk.late} late`} className="size-1.5 rounded-full bg-destructive" /> : null}
               </button>
             );
@@ -507,7 +507,7 @@ function HorizonHeader({ column, write, onOpen, done }: { column: BoardColumn; w
           </form>
         ) : (
           <button type="button" className="min-w-0 flex-1 truncate text-left text-body font-semibold" onClick={() => (offers(horizon, "rename") ? setRenaming(true) : undefined)} title={offers(horizon, "rename") ? "Rename" : horizon.name}>
-            {horizon.name} <span className="text-label font-normal text-text-tertiary">{planCounts(horizon.ideaCount, horizon.memberCount)}</span>
+            {horizon.name} <span className="text-label font-normal text-text-tertiary">{planCounts(horizon)}</span>
           </button>
         )}
         <DropdownMenu>

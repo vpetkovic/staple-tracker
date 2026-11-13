@@ -97,6 +97,7 @@ import {
 import { MILESTONE_KIND, MILESTONE_MEMBERSHIP, assertNotReservedActor, isGoalRunGate } from "./milestones.js";
 import { IDEA_KIND, PLAN_KINDS_MISSING_MESSAGE, PLAN_KINDS, assertPlanParent, assertPlanRekind, displayRef, draftIdentifier, isPlanKind, planKindRefusal, steeringRefusal } from "./plan.js";
 import { PlanStore } from "./plan-store.js";
+import { LISTED_HORIZON } from "./plan-members.js";
 import { fallbackTarget, recordRemovalTarget } from "./vocabulary-targets.js";
 import { ProjectStore } from "./project-store.js";
 import { QueueStore } from "./queue-store.js";
@@ -670,10 +671,13 @@ export function rederivePlanMilestonesAfterPull(db: DatabaseSync, changed: reado
       .all(MILESTONE_KIND) as Array<{ id: string }>
   ).map((row) => row.id);
   const ids = [...new Set([...changed, ...cancelledByDerivation])].sort();
-  if (ids.length === 0) return;
   const store = new WorkspaceStore(db, "", "");
   try {
-    store.journal.run(() => store.rederiveMilestones(ids, "plan", null));
+    store.journal.run(() => {
+      if (ids.length > 0) store.rederiveMilestones(ids, "plan", null);
+      // And each horizon whose plan hold the pull changed: scheduled ideas keep one open.
+      store.rederivePlanHolds("plan", null);
+    });
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     console.error(`staple: could not re-derive the plan's horizons after the pull (${detail}); the next change re-derives them.`);
@@ -3213,10 +3217,13 @@ export class WorkspaceStore {
    * nor to done on the strength of cancelled work; with nothing else in it, it is planned (the
    * unstarted band) until the person removes it. Reopening the work derives it again.
    */
-  private deriveHorizonStatus(inputs: readonly string[]): DerivedRung | null {
+  private deriveHorizonStatus(horizonId: string, inputs: readonly string[]): DerivedRung | null {
     if (inputs.length === 0) return null;
     const live = inputs.filter((status) => this.categoryOf(status) !== "cancelled");
-    return live.length === 0 ? "workable" : this.deriveStatusFromChildren(live);
+    const rung = live.length === 0 ? "workable" : this.deriveStatusFromChildren(live);
+    // Not shipped while a scheduled record on it is not (design/plan.md, "Accounting"): its
+    // landed work leaves it in the unstarted band, as a parent with work still to start reads.
+    return rung === "done" && this.plan().heldByPlan(horizonId) ? "workable" : rung;
   }
 
   /**
@@ -3320,6 +3327,27 @@ export class WorkspaceStore {
    */
   rederiveMilestones(milestoneIds: readonly string[], trigger: string, actor: string | null): void {
     this.deriveHolders(milestoneIds, trigger, actor, new Set(milestoneIds));
+  }
+
+  /**
+   * After a plan write or a pull, the horizons whose plan hold disagrees with their status
+   * (design/plan.md, "Accounting"). One that reads done while a scheduled record still holds it
+   * reopens. One the plan released (no record holds it now) closes on its landed work, if
+   * derivation owns its status: a record leaving is, for a horizon, what a member landing is for
+   * a milestone. A status set by hand, or a gate, is left as it is.
+   */
+  rederivePlanHolds(trigger: string, actor: string | null): void {
+    const horizons = this.db
+      .prepare(`SELECT id, status, derived_status FROM issues WHERE ${LISTED_HORIZON}`)
+      .all() as Array<{ id: string; status: string; derived_status: string | null }>;
+    for (const horizon of horizons) {
+      const done = this.categoryOf(horizon.status) === "done";
+      const held = this.plan().heldByPlan(horizon.id);
+      if (held && done) this.deriveHolders([horizon.id], trigger, actor, new Set([horizon.id]));
+      else if (!held && !done && horizon.derived_status === horizon.status) {
+        this.deriveHolders([horizon.id], trigger, actor, new Set([horizon.id]), { mayCloseStart: true, mayCancel: false });
+      }
+    }
   }
 
   /** Re-derive what holds these issues (their parents, their milestones), as a move of theirs would. */
@@ -3590,7 +3618,7 @@ export class WorkspaceStore {
     if (this.categoryOf(ancestor.status) === "gated") return false;
 
     const inputs = this.derivationInputs(ancestor);
-    const target = this.isHorizon(ancestor.id) ? this.deriveHorizonStatus(inputs) : this.deriveStatusFromChildren(inputs);
+    const target = this.isHorizon(ancestor.id) ? this.deriveHorizonStatus(ancestor.id, inputs) : this.deriveStatusFromChildren(inputs);
     if (target === null) return false; // rung 0: no children, so nothing to report
 
     /**
