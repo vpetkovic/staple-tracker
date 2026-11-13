@@ -34,6 +34,11 @@ function idea(id: string, extra: Partial<IdeaData> = {}): IdeaData {
     resolvedLinks: 0,
     units: { done: 0, open: 0, planned: 0, total: 0 },
     unsized: false,
+    own: { done: 0, open: 0, planned: 0, total: 0 },
+    umbrella: false,
+    // Carried where it is scheduled, unless a fixture says otherwise.
+    carriedBy: extra.horizonId ?? null,
+    nextStep: null,
     progress: null,
     percent: null,
     actual: { start: null, end: null, forecastEnd: null },
@@ -82,6 +87,8 @@ function horizon(id: string, extra: Partial<HorizonData> = {}): HorizonData {
       { id: "queue", label: "Queue the horizon", who: "anyone" },
       { id: "run", label: "Set how agents run it", who: "person" },
     ],
+    planSteps: [],
+    needsYou: 0,
     ...extra,
   };
 }

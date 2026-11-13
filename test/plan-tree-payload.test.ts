@@ -99,7 +99,7 @@ const pick = (ideas: unknown, id: string): TreeFields => {
 
 describe("the tree's fields, planning on", () => {
   it("gives each record its own units, whether it is an umbrella and the horizon carrying it, the same on every surface", async () => {
-    const rows = READY_PLAN.breakdown.length;
+    const rows = READY_PLAN.breakdown!.length;
     const expected: TreeFields[] = [
       // An umbrella: its sub-ideas carry its size, so its own rows are not counted beside theirs.
       { id: ids.parent, own: { done: 0, open: 0, planned: 0, total: 0 }, umbrella: true, carriedBy: now.id },

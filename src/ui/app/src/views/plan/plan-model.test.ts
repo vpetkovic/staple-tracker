@@ -33,6 +33,11 @@ function idea(id: string, extra: Partial<IdeaData> = {}): IdeaData {
     resolvedLinks: 0,
     units: { done: 0, open: 0, planned: 0, total: 0 },
     unsized: false,
+    own: { done: 0, open: 0, planned: 0, total: 0 },
+    umbrella: false,
+    // Carried where it is scheduled, unless a fixture says otherwise.
+    carriedBy: extra.horizonId ?? null,
+    nextStep: null,
     progress: null,
     percent: null,
     actual: { start: null, end: null, forecastEnd: null },
@@ -53,8 +58,8 @@ function idea(id: string, extra: Partial<IdeaData> = {}): IdeaData {
   };
 }
 
-const now: HorizonData = { id: "now", identifier: "T-now", name: "Now", date: "2026-12-31", rank: 1, status: "backlog", shipped: false, memberCount: 0, ideaCount: 0, lateCount: 0, notStartedCount: 0, shippedCount: 0, units: { done: 0, open: 0, planned: 0, total: 0 }, unsizedCount: 0, records: { leaves: 0, shipped: 0, started: 0, shaped: 0, exploring: 0, raw: 0, parentCount: 0 }, progress: null, percent: null, complete: false, runMode: null, goal: [], awaitingApproval: false, late: false, state: "planned", actions: [] };
-const next: HorizonData = { id: "next", identifier: "T-next", name: "Next", date: null, rank: 2, status: "backlog", shipped: false, memberCount: 0, ideaCount: 0, lateCount: 0, notStartedCount: 0, shippedCount: 0, units: { done: 0, open: 0, planned: 0, total: 0 }, unsizedCount: 0, records: { leaves: 0, shipped: 0, started: 0, shaped: 0, exploring: 0, raw: 0, parentCount: 0 }, progress: null, percent: null, complete: false, runMode: null, goal: [], awaitingApproval: false, late: false, state: "planned", actions: [] };
+const now: HorizonData = { id: "now", identifier: "T-now", name: "Now", date: "2026-12-31", rank: 1, status: "backlog", shipped: false, memberCount: 0, ideaCount: 0, lateCount: 0, notStartedCount: 0, shippedCount: 0, units: { done: 0, open: 0, planned: 0, total: 0 }, unsizedCount: 0, records: { leaves: 0, shipped: 0, started: 0, shaped: 0, exploring: 0, raw: 0, parentCount: 0 }, progress: null, percent: null, complete: false, runMode: null, goal: [], awaitingApproval: false, late: false, state: "planned", actions: [], planSteps: [], needsYou: 0 };
+const next: HorizonData = { id: "next", identifier: "T-next", name: "Next", date: null, rank: 2, status: "backlog", shipped: false, memberCount: 0, ideaCount: 0, lateCount: 0, notStartedCount: 0, shippedCount: 0, units: { done: 0, open: 0, planned: 0, total: 0 }, unsizedCount: 0, records: { leaves: 0, shipped: 0, started: 0, shaped: 0, exploring: 0, raw: 0, parentCount: 0 }, progress: null, percent: null, complete: false, runMode: null, goal: [], awaitingApproval: false, late: false, state: "planned", actions: [], planSteps: [], needsYou: 0 };
 
 function plan(ideas: IdeaData[]): PlanData {
   return { enabled: true, today: "2026-11-07", horizons: [now, next], ideas };

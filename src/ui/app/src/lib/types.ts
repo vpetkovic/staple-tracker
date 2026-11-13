@@ -1162,7 +1162,8 @@ export interface IssueDetail {
    */
   planRecord?: IdeaDetailData | null;
   /** On a horizon's own detail: the horizon as the plan reads it, and the records on it. Else null. */
-  horizonPlan?: { horizon: HorizonData; ideas: IdeaData[] } | null;
+  /** A horizon's plan: its view, the records its tree draws, and every horizon's name (where a sub-idea carried elsewhere is). */
+  horizonPlan?: { horizon: HorizonData; ideas: IdeaData[]; horizons: Array<{ id: string; name: string }> } | null;
 }
 
 /** Mirror of `EffectiveMilestone` in src/core/milestone-store.ts. */
