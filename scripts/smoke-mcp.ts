@@ -109,7 +109,7 @@ try {
   await pinned.handshake();
 
   const tools = await rpc("tools/list", {});
-  assert(tools.tools.length >= 20, `tools/list exposes ${tools.tools.length} tools`);
+  assert(tools.tools.length === 84, `tools/list exposes ${tools.tools.length} tools`);
 
   const byName = new Map<string, any>(tools.tools.map((t: any) => [t.name, t]));
   assert(
@@ -644,6 +644,17 @@ try {
     "list_kinds returns the seeded kind vocabulary",
   );
 
+  // Planning is readable but person-controlled, and absent until enabled.
+  const planningFlag = JSON.parse(toolText(await rpc("tools/call", { name: "get_setting", arguments: { key: "features.planning" } })));
+  assert(planningFlag.value === false && planningFlag.source === "default", "experimental planning defaults off");
+  const flagRefused = await rpc("tools/call", { name: "set_setting", arguments: { key: "features.planning", value: true, actor: "smoke-agent" } });
+  assert(flagRefused.isError === true && toolText(flagRefused).includes("Only a person"), "an agent cannot change the planning flag");
+  for (const name of ["list_ideas", "list_horizons"]) {
+    assert(byName.get(name).description.startsWith("Experimental, only when features.planning is on."), `${name} describes the feature gate`);
+    const refused = await rpc("tools/call", { name, arguments: {} });
+    assert(refused.isError === true && toolText(refused).includes("Planning is off in this workspace"), `${name} refuses when planning is off`);
+  }
+
   // ── registered workspace settings (R6d, STA-179) ──────────────────────────
   const policyBefore = JSON.parse(
     toolText(await rpc("tools/call", { name: "get_setting", arguments: { key: "queue.policy" } })),
@@ -963,7 +974,7 @@ try {
 
   const coldTools = await cold.rpc("tools/list", {});
   assert(
-    coldTools.tools.length === tools.tools.length && coldTools.tools.length >= 20,
+    coldTools.tools.length === tools.tools.length && coldTools.tools.length === 84,
     `server connects and lists ${coldTools.tools.length} tools with no workspace anywhere above cwd`,
   );
 

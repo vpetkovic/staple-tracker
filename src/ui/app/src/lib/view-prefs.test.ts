@@ -62,6 +62,7 @@ describe("the default", () => {
       "pickup",
       "parent",
       "kind",
+      "horizon",
     ]);
     // Each one explains itself. A menu of bare nouns makes the user click to find out.
     expect(GROUP_BY_OPTIONS.every((o) => o.label.length > 0 && o.hint.length > 0)).toBe(true);

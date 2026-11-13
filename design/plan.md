@@ -8,7 +8,7 @@ undecided work in the task list. It has three things:
 - an **idea**, which has a *maturity* (`raw`, `exploring`, `shaped`, or `dropped`), a brief,
   open questions, decisions, an optional parent idea, and an optional planned window. An idea
   has no ticket number;
-- a **horizon**, which is a milestone the plan shows as a column, such as Now, Next or Later.
+- a **horizon**, which is a milestone the plan shows as a column, such as Now or Next.
   A dated horizon is a release line;
 - the way into the tracker: **Promote** turns the idea itself into an epic, which takes its
   ticket number then, and **Adopt** links an existing issue to it.
@@ -44,20 +44,74 @@ it ships only on work that was done, and reopening the work derives it again. Me
 rebuilt over the same listed horizons, so no rebuild drops a horizon's rows for its status, and
 the outcome does not depend on when rebuilds run.
 
-**Planning is on** once the `idea` and `milestone` kinds exist and a milestone carries a plan
-rank (`WorkspaceStore.planningOn`). Only the plan layer writes one, it synchronizes as data,
-and no setting can switch it. Every guard below applies only while planning is on, so a
-workspace that already used `idea` as a kind of its own keeps every such issue a numbered
-tracker issue after upgrading.
+**Planning is experimental** and may change. One synchronized workspace setting,
+`features.planning`, defaults false. Only a person changes it in Settings → Experimental
+or with `staple settings set features.planning true --person` under their humanName.
+Agents read it through `get_setting` and `show_about`; agent `set_setting` refuses.
 
-**Turning planning on.** `staple plan enable` (and "Turn on planning" in the web UI) adds the
-two kinds when they are missing and creates Now, Next and Later as milestones. While any issue
-already has kind `idea`, it is refused with `validation` naming those issues: they are someone's
-work, and planning would take them out of every task view. Re-kind them, then turn planning on.
-Every plan write before then is refused with `validation` naming the command
-(`PLAN_KINDS_MISSING_MESSAGE`). Run again where planning is on, `enable` gives any idea an
-earlier build numbered its draft identifier (below), and records the number it gave up as an
-alias, as every device that applies the move does, so the old number names the idea everywhere.
+The UI is the person, and the UI token is the person's. An authenticated HTTP
+`/api/settings` request therefore declares a person decision. The CLI's `--person`
+declares the configured `humanName`. These declarations use the existing person
+model, not a separate authentication boundary: agents are trusted not to impersonate
+the person by using that token or `--person`. Agent tools can read `features.planning`
+with `get_setting`; they must ask the person to change it.
+
+**Planning is on** when the flag is true AND the existing structural check holds: the
+idea and milestone kinds exist and a milestone carries a plan rank. Setting true runs the
+existing enable path in the same transaction, including default horizons, legacy-Later
+migration and drafting. `staple plan enable --person` is an alias for this same setting.
+There is no second switch. Migration 020 runs for every workspace regardless of the flag:
+it is additive and nullable; the setting gates behavior, not schema installation.
+
+**Off hides the whole layer and keeps its data.** Plan, its lenses, drawer tabs, palette
+actions and Tasks horizon chip/axis/filter disappear. Planning CLI, MCP and HTTP operations
+refuse with one validation sentence. `/api/issues` omits horizon fields, and pickup answers
+and run briefs omit horizon-run instructions. Horizons appear as plain milestones; promoted
+epics are ordinary epics. Ideas remain unnumbered drafts, never task-list or pickup work,
+with idea guards active in both states. Direct generic idea reads (`get_task` and
+`/api/issue`) refuse with the same planning-off sentence. Generic task detail and
+explicit subtrees also omit nested ideas while off. Queue pruning cannot remove a retained
+horizon while off. Agents can still read the flag
+with `get_setting`. Horizon identity and idea-kind guards never depend on the flag or
+structural readiness; hidden horizons refuse generic writes, including goal runs. Re-enabling restores ideas, horizons, sections,
+links and run settings without deleting or rewriting their data.
+
+## Unscheduled and optional dates
+
+Unscheduled is the absence of a horizon (`plan_horizon_id = NULL`), not a milestone.
+It replaces the old default Later column. New workspaces seed Now and Next only.
+Named horizons may still be undated: Now, Next or a person-created Research column describes
+an intentional grouping, while Unscheduled means no grouping has been chosen. Requiring dates
+would invent deadlines for those groups and complicate the lifecycle without changing delivery.
+The same lifecycle, Tasks chip/group/filter, CLI and MCP operations apply with or without a date.
+Only **dated horizons** appear in the Milestones list, alongside plain milestones as before.
+Clearing a horizon date removes it from that list; it remains in Plan and Tasks grouping.
+
+**Upgrade.** When the person turns the flag on, and after sync binds its device journal while the flag is on,
+`migrateLegacyLater` finds listed, undated horizons named exactly Later. In one journaled
+transaction it unschedules every plan record on them, including promoted records, then clears
+the old milestone's plan rank. Derived membership rebuilds; hand-placed members, queue position,
+goal, history and status remain on the now-plain milestone. Nothing is deleted or cancelled:
+keeping the ordinary milestone is what preserves the person's manual commitments. An empty
+plain milestone may be removed by the person later. Dated Later horizons are intentional and stay.
+The changed `planHorizonId` and `planRank` fields travel through the existing issue journal,
+tail and snapshots, with no new schema or protocol. A connected workspace without a device identity defers the upgrade until its journal can send it. Clearing rank makes the upgrade idempotent.
+
+## Returning to Plan
+
+Plan reuses the detail drawer's `DetailTabStrip`, Radix keys and accessibility. The phone uses
+its finger-sized segments; the desktop uses its underline strip. There is one implementation.
+The last lens, open record, each lens's scroll axes and phone column are per-viewer preferences
+under `staple:plan:v1:<workspace>`. Filters use the existing workspace/view preference envelope
+and URL state. The shareable `plan-lens` and `issue` parameters take precedence on arrival;
+Back/Forward follows the URL, and an explicit drawer close clears the remembered record.
+Storage reads, writes and access to the storage getter all fail safe. Search filters the ideas
+in every lens. Per-column vertical scrolling is remembered separately from the board frame.
+
+A horizon's drawer and the Milestones detail both link directly to each planned record using
+`view=plan&issue=<stable id>`. A promoted epic is the same record and carries an explicit
+"Open original idea in Plan" link. On phones the task row's secondary metadata has a quiet
+unfilled diamond. Tap reveals the full horizon name and its Open link; the desktop keeps its chip.
 
 ## Ticket numbers: none until promotion
 
@@ -368,13 +422,13 @@ and documents follow epic rules on the plan's surfaces and the tracker's alike.
 | started | edit, ask, decide, schedule, plan dates, reorder, scaffold (only if it was scaffolded), adopt, unlink, reset baseline, open the epic |
 | shipped | adopt (linking more work: landed work keeps it shipped, open work reopens it), open the epic; a promoted record adds edit, ask, decide |
 | dropped | restore |
-| horizon planned | rename, date, reorder, remove (held back while it is queued) |
-| horizon active | rename, date, reorder, queue |
+| horizon planned | rename, date, reorder, run setting, remove (held back while it is queued) |
+| horizon active | rename, date, reorder, queue (held back once it is queued), run setting |
 | horizon shipped | remove |
 
 So raw is never scheduled or promoted, a started or promoted idea never offers promotion again,
 an unpromoted shipped idea offers no edits (only linking more work), and a horizon is removed only while it holds no
-open work and is not queued (a done horizon included), and queued only while it holds open work. Each action also says who may take it: the steering actions (maturity moves,
+open work and is not queued (a done horizon included), queued only while it holds open work, and given its run setting until it ships. Each action also says who may take it: the steering actions (maturity moves,
 schedule, dates, order, parent, baseline, every horizon definition) are the person's; the rest
 are anyone's. A few preconditions need data and travel with the offer as a `disabledReason`:
 unlinking needs a link, the epic opens once promoted.
@@ -402,6 +456,98 @@ card's ⋯ menu, the board's drops and the timeline's drags; it names which acti
 is, never whether it is allowed. `test/plan-lifecycle-surfaces.test.ts` walks every (state,
 write) cell on HTTP, MCP and the CLI with and without `--person`, and every horizon (state,
 action) cell, and checks that every payload carries exactly the table's row.
+
+## Lenses: thinking, delivery, time
+
+The Plan view has three lenses, each with one job (`views/plan/plan-model.ts`). Shaping is the
+hand-off between the first two: no record is ever in both.
+
+**Ideas is thinking.** It holds a record in its own raw or exploring state, in those two columns.
+A sub-idea still being explored under started work stays (`inIdeasLens` reads the record's own
+`state`, never the rollup). Its card shows how much of the plan is written (`★ 2/3 · 6/10
+written`, the payload's `completeness`), open questions and the horizon it is aimed at (`◇ Now`),
+and nothing about delivery: no progress, no linked count, no late or not started. Marked shaped
+(from the card's menu or the Plan tab), it moves to Horizons.
+
+**Horizons is delivery.** One column per horizon, then Unscheduled (*Ready, no horizon yet*),
+holding shaped, started and shipped records (`inHorizonsLens`). A card shows where the work
+stands, its progress and late or not started; a shaped record whose plan no longer passes the
+shaped gate is flagged *plan incomplete*, and its Scaffold is held back (`planIncomplete` reads
+the server's missing-plan reasons from the payload). A horizon's header takes every number from the
+server, which sees what the cards do not (a member added by hand, a record still being explored
+past its planned start): its date, a progress bar (members landed over members held,
+`progress`), `✓ n shipped` (`shippedCount`), late (`lateCount`) and not started
+(`notStartedCount`), *Waiting for your approval* while its close is gated (`awaitingApproval`),
+and two buttons from its offered actions: **Queue**, which queues the horizon exactly as queueing
+a task does, held back as *Queued* once it is in the queue, and its **run setting**. The drawer's
+horizon section and the timeline's group headers read the same fields, so the three agree. A
+horizon is done only when the server says so (`horizonDone`: its milestone is done, or every
+member has landed); then its column folds to a ✓ summary that opens on a click.
+
+**A horizon's run setting.** How far agents take the horizon when they pick its work up, and its
+goal. It is a setting, like autopilot's, and nothing runs from it: the person sets it in the
+horizon's header or drawer (`setHorizonRun`, `POST /api/plan/horizon-run`, `staple horizon set
+--run --goal --person`; refused to an agent, as every horizon setting is), and every agent that
+takes the horizon's work reads it. The goal is the milestone's own acceptance criteria, now
+editable from the plan and the person's on a horizon (`update_milestone` and `update_task` refuse
+an agent's edit of them). How far is `plan_run_mode`, one of three, because they are the three
+places a run can stop:
+
+| setting | what agents do | how it ends |
+|---|---|---|
+| `work`: until its work is done | take its work from the queue until every member has landed; nothing beyond it, no goal run | ships itself when its last member lands, as any milestone does |
+| `goal`: until its goal is met | a goal run over it works its members, judges each criterion with evidence, and may file the tickets the goal still needs | the run gates the close to the person: the header reads *Waiting for your approval* until they approve it |
+| `epic`: stop for review after each epic | work one epic at a time and stop when it lands, leaving the next for the person | each epic is reviewed before the next starts; the horizon ships with its last member |
+
+Unset, agents work it as any milestone. Agents receive it as the `horizon-run` instruction
+(`instructions.ts`), on every ticket of the horizon and on the horizon itself, so it arrives
+wherever work is picked up: `queue next` / `next_task`, `get_task`, `run continue` /
+`continue_run` and the run brief all carry the same instruction list, and the horizon's For agents
+view shows it. A goal run over a horizon (`start_run`) is refused unless the horizon is set to
+`goal` (`RunStore.assertHorizonRunsToGoal`): a goal run gates the close for a goal check, which a
+horizon set to stop at its work or at each epic is not to get. So an agent-run horizon ends where
+its setting says, and only a goal-set horizon waits for the person's approval.
+
+**Shipped is one mark** (`detail/ShippedMark.tsx`): a check in the done hue's icon token and the
+words, `✓ Shipped Oct 3` or `✓ 4 shipped`, never the colour alone. The card (muted, no progress
+bar), the horizon header, the drawer's state chip, status sentence and phases, the horizon
+section of a milestone's detail, and the timeline's end-cap on a shipped bar all draw it, and all
+read the record's own `state` (a horizon's, the server's `shipped` or `progress`).
+
+A horizon without a run setting is worked through the queue, as any milestone. A goal run is
+allowed only after the person explicitly selects the goal mode. Stopping a goal run leaves its
+approval gate standing: stopping execution does not approve the goal. The horizon stays open and
+reads "Waiting for your approval" until the person approves or requests changes. Work and epic
+modes do not create this goal gate. A pending gate takes precedence over a completed progress bar
+in the board, drawer and timeline.
+
+**Timeline is time.** Planned, baseline and actual windows as before, a ✓ end-cap where a
+record shipped, and an arrow from each record to every record that waits on it. What a record
+waits on is the payload's `dependsOn` (`resolveDependencies`), and only an explicit reference
+counts: a line of its Dependencies section, or a depends-on cell naming something outside its own
+breakdown, that leads with a record's ticket number, a key the record's title leads with (capitals
+with a number: `C2 Checkout API` is C2, `R2 · EPIC-40 — Exercise API` is R2 and EPIC-40), or the
+key of a row in exactly one other record's breakdown (`42.1`). Everything else is prose, however
+many words with digits it holds (`OAuth2`, `S3`). A key two records share names neither, and a
+record never waits on itself. An arrow is red when the record waiting starts before the one it
+waits on ends.
+
+**Tasks reads the same horizons.** `GET /api/issues` leaves the horizons themselves out of its
+rows when planning is on (`PlanStore.horizonIds`): a horizon is not a task, and shows as a section
+heading under Group: Horizon and as each row's chip. Plain milestones stay rows. Each row carries
+its `horizon` (`PlanStore.horizonsOf`): the milestone the issue is a member of, put there or
+derived from the plan, else its nearest ancestor's, when that milestone is a horizon (a horizon is
+its own). The row's milestone chip becomes `◇ <horizon>`, in every grouping and on landed work;
+below 480px, where the milestone mark is dropped, a compact `◇ Now` chip keeps its own slot and
+shows the full name on a tap. **Group: Horizon** sections the list by horizon in the plan's order,
+then *No horizon*, without nesting members under their milestone again (`placeForAxis`); and a
+**Horizon** filter keeps the work of the horizons asked for ([web-ui.md](web-ui.md)).
+
+**Reading mode.** The brief and every text and list section of the Plan tab read as formatted
+Markdown (`lib/markdown.tsx`, which reads quotes, numbered lists, checklists, pipe tables and
+emphasis as well as before), with an **Edit** control only where the state offers the edit
+action; Edit opens the textarea, a blur saves what changed and Escape puts it back. An empty
+section offers to write it where edits are offered and says *Not written* where they are not.
 
 ## The drawer: ideas and horizons open where issues do
 
@@ -534,12 +680,13 @@ the plan as an outline behind it.
   `confirm`; with it and the preview's `fingerprint`, create); `update_idea` also takes `plan`
   (sections), `breakdown_base` and `defer_question`;
   `reset_idea_baseline` (a view button).
-- **HTTP** `GET /api/plan`, `GET /api/plan-idea?ref=`; `POST /api/plan/{enable, capture, update, question, resolve, decision, promote, scaffold, adopt, unlink, reset-baseline, horizon-create, horizon-update, horizon-remove, horizon-queue}`; `update` and `capture` take `plan`, `update` takes `breakdownBase`, `resolve` takes `deferred`, `scaffold` takes `preview` or the preview's `fingerprint`.
+- **HTTP** `GET /api/plan` (each record with `completeness` and `dependsOn`, each horizon with `shippedCount`, `progress`, `runMode`, `goal` and `awaitingApproval`), `GET /api/plan-idea?ref=`, `GET /api/issues` (each row with its `horizon`, horizons themselves left out); `POST /api/plan/{enable, capture, update, question, resolve, decision, promote, scaffold, adopt, unlink, reset-baseline, horizon-create, horizon-update, horizon-remove, horizon-queue, horizon-run}`; `update` and `capture` take `plan`, `update` takes `breakdownBase`, `resolve` takes `deferred`, `scaffold` takes `preview` or the preview's `fingerprint`.
   Every write answers `{ plan, idea }`. `GET /api/issue` adds `planRecord` and `horizonPlan`.
-- **Web UI** the Plan view ([web-ui.md](web-ui.md)): Ideas (columns by maturity, capture),
-  Horizons (Unscheduled and each horizon), Timeline (planned, baseline and actual windows on a
-  month axis, today and horizon lines, drag to move and resize); a card or a horizon opens in
-  the shared drawer. Cards never show a number; a promoted record's detail does. A sub-idea in its
+- **Web UI** the Plan view ([web-ui.md](web-ui.md)): Ideas (thinking: raw and exploring,
+  capture, completeness on each card), Horizons (delivery: shaped onwards, Unscheduled and each
+  horizon, with the server's counts, the shipped mark, Queue and the run setting), Timeline (planned, baseline and actual
+  windows on a month axis, today and horizon lines, dependency arrows, a ✓ end-cap, drag to move
+  and resize); a card or a horizon opens in the shared drawer. Tasks shows each row's horizon, groups by it and filters by it. Cards never show a number; a promoted record's detail does. A sub-idea in its
   parent's column folds under the parent's card; one in another column shows there, labelled
   with its parent. Below 768px the boards are one column with a switcher and the timeline
   scrolls inside its own frame with the names pinned, each up to three lines.
@@ -562,6 +709,10 @@ the plan as an outline behind it.
 | `test/plan-surfaces.test.ts` | CLI, MCP and HTTP read one plan with no idea numbers and no draft shown, walk every surface that prints or serializes an issue (CLI text and JSON, MCP tools, HTTP routes, events, refusals) and find no draft, with `identifier: null, draft: true` on every issue object, consume no number at capture, refuse the same agent writes (plain tracker tools and `update_milestone` included), promote into the horizon's milestone, and let the person steer |
 | `test/plan-lifecycle.test.ts` | the table itself, pinned: every state's actions, who takes each, the promoted record's epic edits, back to raw offered nowhere, how a maturity change is named (a no-op included), how states are read |
 | `test/plan-own-state.test.ts` | with hand-written expectations, not the table's: a parent's own state against its rollup (a raw parent with work underway or landed beneath it, a dropped one restored, its sub-ideas left alone, no baseline, late rolled up); a sub-idea promoted or adopted on its own and re-parented by its parent's promotion, its tree and derived status; a promoted record edited as an epic once shipped; the maturity no-op; every document key, restore and file on a shipped, dropped or raw idea |
+| `test/plan-lenses-review.test.ts` | the server counts a horizon's hand-added members and exploring records (shipped, progress, not started); a horizon is its own horizon and the task list's horizon ids; the run setting is the person's on every path (`setHorizonRun`, `update_milestone`, `update_task`), reaches every ticket of the horizon and the horizon itself as the `horizon-run` instruction, and allows a goal run only when set to `goal`; dependencies only from explicit references, never prose words with digits |
+| `test/plan-lenses.test.ts` | what the lenses read: records named by number and title keys, dependencies from the section and outside depends-on cells, a shared key and the record itself never named; completeness and `dependsOn` on the payload; a horizon's shipped count and progress; Queue and Run to goal offered while it holds work, Queue held back once queued; each issue's horizon from its own membership (derived or put there) or an ancestor's, a plain milestone's never, none with the plan off |
+| `views/plan/lenses.test.tsx` | Ideas holds own-state thinking only (a sub-idea under started work included) and shows completeness and the horizon with nothing about delivery; Horizons holds shaped, started and shipped; a shipped card's mark and date; the header's progress, shipped count, late, Queue and Run (Queued held back, neither on a planned horizon); a done horizon folds; the goal-run commands; the shipped mark's words; the timeline's end-cap on shipped bars only; arrows between laid-out rows, red when the waiting record starts first; Markdown quotes, numbered lists, checklists, tables and emphasis, a lone asterisk left alone |
+| `views/tree/horizon-axis.test.tsx` | a horizon's own row files under itself, never No horizon, never re-placed on the Horizon axis; the phone's compact chip in its own slot below 480px with the full name on tap; the ◇ chip names the row's horizon ahead of the queue's milestone; Group by Horizon in the plan's order then No horizon, an epic with its task; the horizon filter's options, counts and matches, absent without horizons |
 | `test/plan-lifecycle-surfaces.test.ts` | every idea (state, write) cell and every horizon (state, action) cell agrees with the lifecycle table on HTTP, MCP and the CLI with and without `--person` (the CLI bundled once per run, so the walk takes seconds); every payload carries exactly the table's row, promoted records and parents with sub-ideas included; every document and file write (MCP `put_document`, `attach_file`, `doc_restore`, `staple doc --put`) in every state; the no-op maturity; a horizon's milestone route refusing a start date before any write |
 | `src/ui/app/src/detail/plan-drawer.test.tsx` | an idea's tab strip, the epic's strip once promoted, no ticket number in any presentation, actions exactly as offered, a read-only title where the state offers no edit, idea wording in Activity, Documents and Files, a horizon's section and a held-back action's reason |
 | `src/ui/app/src/components/command-palette/commands.test.ts` | a plan record's palette commands are its one-click offered actions only (no status, start or stop for an idea; a promoted one keeps its epic commands), with its title as the hint, never its id |

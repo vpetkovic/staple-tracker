@@ -820,6 +820,7 @@ export interface WorkspaceRef {
 
 /** GET /api/bootstrap */
 export interface Bootstrap {
+  features?: Record<string, { planning: boolean }>;
   mode: UiMode;
   workspaces: WorkspaceRef[];
   /** The page origins the server accepts writes from (its Origin check). */
@@ -928,6 +929,12 @@ export interface IssueRow {
    * nest a parentless member under its milestone. Optional for the reason `deps` is.
    */
   milestoneId?: string | null;
+  /**
+   * The horizon this row's work belongs to: its milestone (put there or derived from the
+   * plan), else its nearest ancestor's, when that milestone is a horizon. The ◇ chip, the
+   * Horizon grouping and the horizon filter all read it. Optional for the reason `deps` is.
+   */
+  horizon?: RowHorizon | null;
   /**
    * Linked pull requests, newest-first. OPTIONAL and absent today — see `PullRequestRef`.
    *
@@ -1047,6 +1054,17 @@ export interface RowMilestoneCue {
   identifier: string;
   /** From `/api/milestones`; null when the page has not listed that milestone. */
   title: string | null;
+  /** The milestone is a horizon of the plan: the chip reads `◇ <horizon>`. */
+  horizon?: boolean;
+}
+
+/** A horizon as a task row carries it (`/api/issues`, `horizon`). */
+export interface RowHorizon {
+  id: string;
+  identifier: string;
+  name: string;
+  date: string | null;
+  rank: number;
 }
 
 export interface RowCues {

@@ -27,7 +27,7 @@ for (const fold of ["service", "tail"] as const) {
     const server = new FakeSyncServer({ repositoryId: REPO, ...(fold === "tail" ? { maxSnapshotFoldOps: 3 } : {}) });
     fleet = new Fleet(server, REPO);
     const a = fleet.machine("a");
-    a.store.plan().enable("vp");
+    a.store.plan().enable("vp", { person: { via: "settings" } });
     const p = a.store.plan().capture({ title: "Same idea", maturity: "shaped", plan: READY_PLAN }, "vp", PERSON).id;
     await a.sync();
     const b = fleet.machine("b");

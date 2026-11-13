@@ -191,6 +191,7 @@ export function issueCommand(row: IssueRow, showWorkspace: boolean): PaletteComm
 // ---------- everything that is not an issue ----------
 
 export interface PaletteContext {
+  planningEnabled?: boolean;
   /** The issue every action command acts on. Null means the actions group is empty. */
   selection: Selection | null;
   /** Status of the selected issue, when known — used to hide a no-op transition. */
@@ -289,7 +290,7 @@ export function writeTarget(selected: Selection & { actor?: string }): { ws: str
 export function buildCommands(context: PaletteContext): PaletteCommand[] {
   const commands: PaletteCommand[] = [];
 
-  const record = context.selection ? (context.planRecord ?? null) : null;
+  const record = context.planningEnabled === true && context.selection ? (context.planRecord ?? null) : null;
   if (record) {
     // The record's one-click actions, as the drawer's buttons are; one held back is not offered.
     for (const item of planActionItems(context.selection!.workspace, record)) {
@@ -377,7 +378,7 @@ export function buildCommands(context: PaletteContext): PaletteCommand[] {
   }
 
   for (const view of VIEWS) {
-    if (view === context.view) continue;
+    if (view === context.view || (view === "plan" && context.planningEnabled !== true)) continue;
     // The label is the rail's word for the view ("Tasks"); the internal value stays in
     // the keywords so a reader who still types "tree" finds it.
     commands.push({

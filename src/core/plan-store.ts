@@ -60,6 +60,10 @@ import {
   horizonState,
   ideaOffered,
   ideaState,
+  isRunMode,
+  RUN_MODE_IDS,
+  RUN_MODES,
+  type RunMode,
   maturityAction,
   type HorizonAction,
   type HorizonState,
@@ -68,6 +72,7 @@ import {
   type OfferedAction,
 } from "./plan-lifecycle.js";
 import { createHash, randomUUID } from "node:crypto";
+import { readStoredRepositoryId } from "./repo-identity.js";
 import { planLinkField, planLinksOf, writePlanLink } from "./plan-links.js";
 import { planRowField, planRowsOf, planRowValue, writePlanRow, type PlanRowValue } from "./plan-rows.js";
 import {
@@ -88,6 +93,7 @@ import {
   planWarnings,
   readSection,
   renderSection,
+  dependencyResolver,
   shapedGate,
   type BreakdownRow,
   type BreakdownRowInput,
@@ -108,7 +114,7 @@ export interface HorizonView {
   /** The milestone's ticket number: a horizon is real work, so it has one. */
   identifier: string;
   name: string;
-  /** YYYY-MM-DD, or null for an undated horizon such as Later (the milestone's target date). */
+  /** YYYY-MM-DD, or null for an undated named horizon (the milestone's target date). */
   date: string | null;
   rank: number;
   /** The milestone's own status, derived from its members like any milestone's. */
@@ -122,10 +128,29 @@ export interface HorizonView {
   lateCount: number;
   /** Plan records on it with nothing started whose planned start has passed. */
   notStartedCount: number;
+  /** Plan records on it whose work has all landed. */
+  shippedCount: number;
+  /** Members landed over members it holds, 0..1; null while it holds none. */
+  progress: number | null;
+  /** How far agents take it when they pick its work up; null until the person sets it. */
+  runMode: RunMode | null;
+  /** Its goal: the milestone's acceptance criteria, set by the person. */
+  goal: string[];
+  /** Its close waits for the person's approval (a goal run gated it, or a person did). */
+  awaitingApproval: boolean;
   late: boolean;
   /** Its lifecycle state, and the actions that state offers (`plan-lifecycle.ts`). */
   state: HorizonState;
   actions: OfferedAction[];
+}
+
+/** The horizon a task's work belongs to, as the task list shows it. */
+export interface RowHorizon {
+  id: string;
+  identifier: string;
+  name: string;
+  date: string | null;
+  rank: number;
 }
 
 export interface PlanWindow {
@@ -174,6 +199,10 @@ export interface IdeaView {
    * Empty otherwise.
    */
   planIncomplete: string[];
+  /** How much of its plan is written: the starred sections and all ten. */
+  completeness: { starred: number; starredTotal: number; filled: number; total: number };
+  /** The records it waits on, by id: those its dependencies and outside depends-on cells name. */
+  dependsOn: string[];
   /** Its lifecycle state, and the actions that state offers (`plan-lifecycle.ts`). */
   state: IdeaState;
   actions: OfferedAction[];
@@ -336,6 +365,7 @@ interface PlanRow {
   plan_baseline_start: string | null;
   plan_baseline_target: string | null;
   plan_rank: number | null;
+  plan_run_mode: string | null;
 }
 
 interface HorizonRow extends PlanRow {
@@ -356,7 +386,7 @@ interface WorkRow {
 
 const RANK_STEP = 1024;
 const PLAN_COLUMNS = `id, identifier, title, description, kind, status, parent_id, depth, created_at, updated_at,
-  plan_maturity, plan_horizon_id, plan_start, plan_target, plan_baseline_start, plan_baseline_target, plan_rank`;
+  plan_maturity, plan_horizon_id, plan_start, plan_target, plan_baseline_start, plan_baseline_target, plan_rank, plan_run_mode`;
 
 /** Column name to the payload field the issue entity carries it as. */
 const FIELD_OF: Record<string, string> = {
@@ -367,6 +397,7 @@ const FIELD_OF: Record<string, string> = {
   plan_baseline_start: "planBaselineStart",
   plan_baseline_target: "planBaselineTarget",
   plan_rank: "planRank",
+  plan_run_mode: "planRunMode",
   parent_id: "parentId",
 };
 
@@ -381,6 +412,13 @@ const BRIEF_KEY = "brief";
  */
 export function scaffoldTaskId(ideaId: string, rowId: string): string {
   const hex = createHash("sha256").update(`staple:plan-scaffold:${ideaId}:${rowId}`).digest("hex");
+  const variant = ((parseInt(hex[16]!, 16) & 0x3) | 0x8).toString(16);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+/** Stable within a repository, separate from user-created horizons and scaffolded work. */
+function defaultHorizonId(repositoryId: string, name: string): string {
+  const hex = createHash("sha256").update(`staple:default-horizon:${repositoryId}:${name}`).digest("hex");
   const variant = ((parseInt(hex[16]!, 16) & 0x3) | 0x8).toString(16);
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
@@ -457,7 +495,7 @@ export class PlanStore {
     return this.store.planningOn();
   }
 
-  private assertEnabled(): void {
+  assertEnabled(): void {
     if (!this.store.planningOn()) throw new StapleError("validation", PLAN_KINDS_MISSING_MESSAGE, { kinds: [IDEA_KIND, MILESTONE_KIND] });
   }
 
@@ -489,6 +527,7 @@ export class PlanStore {
   assertEditable(ref: string): void {
     const row = this.row(ref, false);
     if (row.plan_maturity === null || row.kind !== IDEA_KIND) return;
+    this.assertEnabled();
     this.allowIdea(row, "edit", {});
   }
 
@@ -587,29 +626,64 @@ export class PlanStore {
    * Run again on a workspace where planning is on, it converts what an earlier build left: a
    * numbered idea back to a draft identifier.
    */
-  enable(actor: string | null): PlanView {
-    if (this.store.planningOn()) {
+  enable(actor: string | null, options: PlanWriteOptions = {}): PlanView {
+    this.store.setSetting("features.planning", true, actor, options.person);
+    return this.view();
+  }
+
+  /** Only the feature-setting transaction calls this structural upgrade. */
+  initialize(actor: string | null): void {
+    if (this.store.planningInitialized()) {
       this.store.journaled(() => {
+        this.migrateLegacyLater();
         this.draftNumberedIdeas(actor);
         this.settleMembership(actor);
       });
-      return this.view();
+      return;
     }
     const unrelated = this.db.prepare("SELECT identifier FROM issues WHERE kind = ? ORDER BY identifier").all(IDEA_KIND) as Array<{ identifier: string }>;
     if (unrelated.length > 0) {
       const names = unrelated.map((row) => row.identifier);
       throw new StapleError(
         "validation",
-        `Planning uses the kind "idea", and ${names.slice(0, 10).join(", ")}${names.length > 10 ? ` and ${names.length - 10} more` : ""} already use it for other work. Re-kind ${names.length === 1 ? "it" : "them"} first (staple set <ref> --kind <other>), then turn planning on.`,
+        `Planning uses the kind "idea", and ${names.slice(0, 10).join(", ")}${names.length > 10 ? ` and ${names.length - 10} more` : ""} already use it for other work. The idea kind is reserved; these legacy records are kept intact and generic kind migration is refused. A person must resolve the legacy vocabulary before enabling planning.`,
         { issues: names },
       );
     }
-    return this.store.journaled(() => {
+    this.store.journaled(() => {
       const ids = this.store.getKinds().map((kind) => kind.id);
       if (!ids.includes(IDEA_KIND)) this.store.addKind({ id: IDEA_KIND, label: "Idea" }, actor);
       if (!ids.includes(MILESTONE_KIND)) this.store.addKind({ id: MILESTONE_KIND, label: "Milestone" }, actor);
-      DEFAULT_HORIZONS.forEach((name, index) => this.insertHorizon(name, null, (index + 1) * RANK_STEP, actor));
+      const repositoryId = readStoredRepositoryId(this.db);
+      DEFAULT_HORIZONS.forEach((name, index) => {
+        // Concurrent first enables create the same records, including before either syncs.
+        // Isolated in-memory stores without repository identity keep independent random ids.
+        const id = repositoryId === null ? undefined : defaultHorizonId(repositoryId, name);
+        this.insertHorizon(name, null, (index + 1) * RANK_STEP, actor, id);
+      });
       return this.view();
+    });
+  }
+
+  /** Upgrade the old default bucket through ordinary synchronized issue updates.
+   * Keep hand membership, queue and history on a plain milestone rather than cancel open work.
+   * Dated Later is intentional and stays. No marker is needed: clearing rank is idempotent.
+   */
+  migrateLegacyLater(): void {
+    if (!this.enabled()) return;
+    const sync = this.db.prepare("SELECT epoch FROM sync_state WHERE id = 1").get() as { epoch: number } | undefined;
+    // A connected workspace must journal this upgrade. If its device is unavailable, sync
+    // retries after binding the real journal, rather than making local-only data changes.
+    if ((sync?.epoch ?? 0) > 0 && !this.store.journal.deviceIdentity()) return;
+    const legacy = this.horizonRows().filter(row => row.title === "Later" && row.target_date === null);
+    if (legacy.length === 0) return;
+    this.store.journaled(() => {
+      for (const row of legacy) {
+        const ideas = this.db.prepare("SELECT id FROM issues WHERE plan_horizon_id = ?").all(row.id) as Array<{ id: string }>;
+        for (const idea of ideas) this.write(idea.id, { plan_horizon_id: null }, null, "idea_updated", { fields: ["plan_horizon_id"], upgrade: "unscheduled" });
+        this.write(row.id, { plan_rank: null }, null, "horizon_updated", { fields: ["plan_rank"], upgrade: "unscheduled" });
+      }
+      this.settleMembership(null);
     });
   }
 
@@ -641,6 +715,45 @@ export class PlanStore {
     ).sort((a, b) => (a.plan_rank ?? Number.MAX_SAFE_INTEGER) - (b.plan_rank ?? Number.MAX_SAFE_INTEGER) || a.created_at.localeCompare(b.created_at));
   }
 
+  /**
+   * The horizon each issue's work belongs to: the milestone it is a member of (put there or
+   * derived from the plan), else its nearest ancestor's, when that milestone is a horizon.
+   * What the task list reads for its ◇ chip, its Horizon grouping and its horizon filter.
+   */
+  horizonsOf(ids: readonly string[]): Map<string, RowHorizon> {
+    const out = new Map<string, RowHorizon>();
+    if (ids.length === 0 || !this.enabled()) return out;
+    const horizons = new Map(this.horizonRows().map((row) => [row.id, { id: row.id, identifier: row.identifier, name: row.title, date: row.target_date, rank: row.plan_rank ?? 0 }]));
+    if (horizons.size === 0) return out;
+    const memberOf = new Map((this.db.prepare(`SELECT issue_id, milestone_id FROM ${MILESTONE_MEMBERSHIP}`).all() as Array<{ issue_id: string; milestone_id: string }>).map((row) => [row.issue_id, row.milestone_id]));
+    const parentOf = new Map((this.db.prepare("SELECT id, parent_id FROM issues").all() as Array<{ id: string; parent_id: string | null }>).map((row) => [row.id, row.parent_id]));
+    for (const id of ids) {
+      // A horizon is its own: it never falls under "No horizon".
+      const own = horizons.get(id);
+      if (own) {
+        out.set(id, own);
+        continue;
+      }
+      let cursor: string | null = id;
+      for (let hops = 0; cursor !== null && hops < 64; hops += 1) {
+        const milestone = memberOf.get(cursor);
+        if (milestone !== undefined) {
+          const horizon = horizons.get(milestone);
+          if (horizon) out.set(id, horizon);
+          break;
+        }
+        cursor = parentOf.get(cursor) ?? null;
+      }
+    }
+    return out;
+  }
+
+  /** The horizons' issue ids: the task list leaves them out of its rows, and shows each as a heading or a chip. */
+  horizonIds(): Set<string> {
+    if (!this.enabled()) return new Set();
+    return new Set(this.horizonRows().map((row) => row.id));
+  }
+
   /** Every plan record: unpromoted ideas while open, promoted ones whatever their status. */
   private recordRows(): PlanRow[] {
     const resolved = this.resolvedStatuses();
@@ -668,6 +781,8 @@ export class PlanStore {
     const memberCount = (
       this.db.prepare("SELECT COUNT(*) AS n FROM milestone_members WHERE milestone_id = ?").get(row.id) as { n: number }
     ).n + (this.db.prepare("SELECT COUNT(*) AS n FROM plan_members WHERE milestone_id = ? AND issue_id NOT IN (SELECT issue_id FROM milestone_members)").get(row.id) as { n: number }).n;
+    const open = this.openWorkOf(row.id);
+    const own = this.db.prepare("SELECT gate_state, acceptance_criteria FROM issues WHERE id = ?").get(row.id) as { gate_state: string | null; acceptance_criteria: string | null };
     return {
       id: row.id,
       identifier: row.identifier,
@@ -680,8 +795,13 @@ export class PlanStore {
       ideaCount: on.length,
       lateCount,
       notStartedCount: on.filter((idea) => idea.notStarted).length,
+      shippedCount: on.filter((idea) => idea.stage === "shipped").length,
+      progress: memberCount > 0 ? (memberCount - open) / memberCount : null,
+      runMode: isRunMode(row.plan_run_mode) ? row.plan_run_mode : null,
+      goal: own.acceptance_criteria ? (JSON.parse(own.acceptance_criteria) as string[]) : [],
+      awaitingApproval: own.gate_state === "pending",
       late: lateCount > 0,
-      ...horizonLifecycle(this.store.categoryOf(row.status) === "done", this.openWorkOf(row.id), this.isQueued(row.id)),
+      ...horizonLifecycle(this.store.categoryOf(row.status) === "done", open, this.isQueued(row.id)),
     };
   }
 
@@ -811,8 +931,15 @@ export class PlanStore {
       for (const child of childIds.get(id) ?? []) for (const item of rolledWork(child, seen)) out.add(item);
       return out;
     };
+    // Every record's sections first: a depends-on cell may name a row of another record's breakdown.
+    const sectionsOf = new Map(rows.map((row) => [row.id, this.sectionsOf(row.id)]));
+    const dependsOn = dependencyResolver(
+      rows.map((row) => ({ id: row.id, identifier: shownIdentifier(row.identifier), title: row.title, rowKeys: sectionsOf.get(row.id)!.breakdown.map((entry) => entry.key) })),
+    );
     return rows.map((row) => {
       const promoted = row.kind !== IDEA_KIND;
+      const sections = sectionsOf.get(row.id)!;
+      const questions = parseQuestions(this.documentBody(row.id, QUESTIONS_KEY));
       const ownLinks = planLinksOf(this.db, row.id);
       // Its own state reads its own work only: itself once promoted, and its own links. Linked
       // work whose issue is gone (a rewind, say) still counts, so the state does not slip back.
@@ -875,7 +1002,9 @@ export class PlanStore {
         }),
         notStarted: isNotStarted({ plannedStart: row.plan_start, links: workIds.length, dropped: maturity === "dropped", today }),
         childIds: childIds.get(row.id) ?? [],
-        openQuestions: parseQuestions(this.documentBody(row.id, QUESTIONS_KEY)).filter((q) => !q.resolved).length,
+        openQuestions: questions.filter((q) => !q.resolved).length,
+        completeness: completeness(sections, questions, parseDecisions(this.documentBody(row.id, DECISIONS_KEY))),
+        dependsOn: dependsOn(row.id, sections),
         planIncomplete,
         ...ideaLifecycle({
           state,
@@ -1615,8 +1744,8 @@ export class PlanStore {
 
   // ---------- horizons: milestones the plan shows as columns (all the person's) ----------
 
-  private insertHorizon(name: string, date: string | null, rank: number, actor: string | null): string {
-    const issue = this.store.createIssue({ title: name, kind: MILESTONE_KIND, createdBy: actor, allowDuplicate: true }, { plan: true });
+  private insertHorizon(name: string, date: string | null, rank: number, actor: string | null, id?: string): string {
+    const issue = this.store.createIssue({ title: name, kind: MILESTONE_KIND, createdBy: actor, allowDuplicate: true }, { plan: true, id });
     this.write(issue.id, { plan_rank: rank }, actor, "horizon_created", { date });
     if (date !== null) this.store.milestones().update(issue.id, { targetDate: date }, actor, { plan: true });
     return issue.id;
@@ -1650,6 +1779,26 @@ export class PlanStore {
         this.store.milestones().update(row.id, { targetDate: patch.date === null ? null : parsePlanDate(patch.date) }, actor, { plan: true });
       }
       if (patch.before !== undefined) this.write(row.id, { plan_rank: this.rankBefore("horizons", row.id, patch.before, actor) }, actor, "horizon_updated", { fields: ["plan_rank"] });
+    });
+    return this.horizonOf(row.id);
+  }
+
+  /**
+   * A horizon's run setting: how far agents take it when they pick its work up (`mode`), and its
+   * goal, the milestone's acceptance criteria. Both are the person's; nothing runs from here.
+   * Agents read them in every take of the horizon's work (`instructions.ts`, "horizon-run").
+   */
+  setHorizonRun(ref: string, patch: { mode?: RunMode | null; goal?: readonly string[] }, actor: string | null, options: PlanWriteOptions = {}): HorizonView {
+    this.assertEnabled();
+    const row = this.horizonRow(ref);
+    this.allowHorizon(row, "run");
+    this.steer("horizons", row.identifier, options);
+    if (patch.mode !== undefined && patch.mode !== null && !isRunMode(patch.mode)) {
+      throw new StapleError("validation", `A horizon runs ${RUN_MODE_IDS.map((id) => `${id} (${RUN_MODES[id].label.toLowerCase()})`).join(", ")}; not "${String(patch.mode)}".`);
+    }
+    this.store.journaled(() => {
+      if (patch.mode !== undefined && patch.mode !== row.plan_run_mode) this.write(row.id, { plan_run_mode: patch.mode }, actor, "horizon_updated", { fields: ["plan_run_mode"] });
+      if (patch.goal !== undefined) this.store.milestones().update(row.id, { acceptanceCriteria: [...patch.goal] }, actor, { plan: true });
     });
     return this.horizonOf(row.id);
   }
@@ -1793,6 +1942,7 @@ function horizonLifecycle(shipped: boolean, openWork: number, queued: boolean): 
       label: HORIZON_ACTIONS[id].label,
       who: HORIZON_ACTIONS[id].who,
       ...(id === "remove" && queued ? { disabledReason: "It is in the queue; take it off first." } : {}),
+      ...(id === "queue" && queued ? { disabledReason: "It is in the queue already." } : {}),
     })),
   };
 }

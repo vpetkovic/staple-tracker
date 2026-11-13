@@ -1,3 +1,4 @@
+import { useOptionalSession } from "@/lib/session";
 /**
  * The add-a-filter popover — V4 (STA-89).
  *
@@ -140,7 +141,8 @@ export function FilterMenuBody({
   // `?? null` collapses "no page chosen" and "a page naming a dimension this build does
   // not have" into one state — the picker. An `openAt` from a chip written by a newer
   // build lands there rather than rendering an empty menu with no way out.
-  const dimension = page === null ? null : (findFilterDimension(page) ?? null);
+  const planningEnabled = useOptionalSession()?.planningEnabled === true;
+  const dimension = page === null || (page === "horizon" && !planningEnabled) ? null : (findFilterDimension(page) ?? null);
 
   return (
       <div data-filter-menu={dimension ? dimension.id : "root"}>
@@ -150,7 +152,7 @@ export function FilterMenuBody({
             <CommandList>
               <CommandEmpty>no such filter</CommandEmpty>
               <CommandGroup>
-                {ALL_FILTER_DIMENSIONS.map((entry) => {
+                {ALL_FILTER_DIMENSIONS.filter(entry => entry.id !== "horizon" || planningEnabled).map((entry) => {
                   const selected = state.dims[entry.id]?.length ?? 0;
                   return (
                     <CommandItem

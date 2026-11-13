@@ -1,3 +1,4 @@
+import { ideaPlanHref } from "./PlannedIdeaLinks";
 /**
  * The detail panel's contents: the bar, the header (breadcrumb, title, status line, actions),
  * the properties, and the tab slot.
@@ -35,7 +36,7 @@ import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Maximize2, Minimize2
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { flushSync } from "react-dom";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { getIssue, getQueue, getSettings } from "@/lib/api";
 import type { AuthError } from "@/lib/api";
 import { selectionTarget, useSession, type Selection } from "@/lib/session";
@@ -78,6 +79,7 @@ import {
   type PanelGeometry,
   type ReserveAnchor,
 } from "./tab-scroll";
+import { DetailTabStrip } from "./tabs/DetailTabStrip";
 import { onOpenDetailTab, takeArrivalTab, visibleTabs } from "./tabs/registry";
 
 export function IssueDetailPanel({
@@ -554,6 +556,7 @@ export function DetailContent({
           {gate}
         </div>
 
+        {planRecordOf(detail)?.idea.promoted ? <a data-original-idea href={ideaPlanHref(detail.workspace, issue.id)} className="focus-ring mt-3 inline-flex min-h-11 items-center text-label text-text-secondary hover:underline">Open original idea in Plan ↗</a> : null}
         {horizon ? <HorizonSection detail={detail} horizon={horizon.horizon} ideas={horizon.ideas} controller={controller} className="mt-5" /> : null}
 
         {!sheet && !expanded ? (
@@ -827,7 +830,6 @@ function DetailTabs({
 }) {
   // "overview", unless a link elsewhere asked for another tab on this issue (a goal's evidence).
   const [tab, setTab] = useState(() => takeArrivalTab(detail.issue.identifier) ?? "overview");
-  const stripRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const panelsRef = useRef<HTMLDivElement>(null);
   /** The panels' min-height while a stuck switch needs one, else null (tab-scroll.ts). */
@@ -858,7 +860,6 @@ function DetailTabs({
   useEffect(() => onOpenDetailTab(selectTab), [selectTab]);
   const tabs = visibleTabs(detail);
   const active = tabs.some((t) => t.id === tab) ? tab : (tabs[0]?.id ?? "overview");
-  const edges = useScrollEdges(stripRef, tabs.length);
   const stuck = useStuck(sentinelRef);
 
   // Before paint: a stuck strip stays stuck, and the new tab starts right under it.
@@ -867,16 +868,6 @@ function DetailTabs({
     pendingScroll.current = null;
     const scroller = sentinelRef.current ? scrollerOf(sentinelRef.current) : null;
     if (target !== null && scroller) scroller.scrollTop = target;
-  }, [active]);
-
-  // Bring the active tab into view inside the strip, horizontally only: scrollIntoView
-  // would also scroll the panel to the strip, which is not what choosing a tab means.
-  useLayoutEffect(() => {
-    const strip = stripRef.current;
-    const trigger = strip?.querySelector<HTMLElement>('[role="tab"][data-state="active"]');
-    if (!strip || !trigger || strip.scrollWidth <= strip.clientWidth) return;
-    const left = trigger.offsetLeft - (strip.clientWidth - trigger.offsetWidth) / 2;
-    strip.scrollTo({ left: Math.max(0, left), behavior: prefersReducedMotion() ? "auto" : "smooth" });
   }, [active]);
 
   return (
@@ -889,19 +880,7 @@ function DetailTabs({
         data-detail-tabs=""
         data-stuck={stuck ? "" : undefined}
       >
-        <div className="staple-detail-tabfade" data-fade-start={edges.start ? "" : undefined} data-fade-end={edges.end ? "" : undefined}>
-          <TabsList
-            ref={stripRef}
-            variant={sheet ? "default" : "line"}
-            className={cn("staple-detail-tabstrip w-full justify-start", sheet && "staple-detail-segments")}
-          >
-            {tabs.map((definition) => (
-              <TabsTrigger key={definition.id} value={definition.id} className="focus-ring-inset flex-none">
-                {definition.label}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </div>
+        <DetailTabStrip sheet={sheet} label="Issue detail tabs" items={tabs} active={active} />
       </div>
       <div ref={panelsRef} data-detail-tabpanels="" style={reserve !== null ? { minHeight: reserve } : undefined}>
         {tabs.map((definition) => {
@@ -1002,29 +981,6 @@ function useReserveRelease(
       observer?.disconnect();
     };
   }, [holding, sentinelRef, panelsRef, anchorRef, setReserve]);
-}
-
-/** Whether a horizontal scroller has more content before or after what is showing. */
-function useScrollEdges(ref: RefObject<HTMLElement | null>, contentKey: unknown): { start: boolean; end: boolean } {
-  const [edges, setEdges] = useState({ start: false, end: false });
-  useEffect(() => {
-    const element = ref.current;
-    if (!element) return;
-    const measure = () => {
-      const max = element.scrollWidth - element.clientWidth;
-      const next = { start: element.scrollLeft > 1, end: max - element.scrollLeft > 1 };
-      setEdges((current) => (current.start === next.start && current.end === next.end ? current : next));
-    };
-    measure();
-    element.addEventListener("scroll", measure, { passive: true });
-    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
-    observer?.observe(element);
-    return () => {
-      element.removeEventListener("scroll", measure);
-      observer?.disconnect();
-    };
-  }, [ref, contentKey]);
-  return edges;
 }
 
 /** Whether the element after `sentinel` is stuck: the sentinel has scrolled out of the panel. */

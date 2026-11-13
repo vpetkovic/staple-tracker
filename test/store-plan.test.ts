@@ -30,7 +30,7 @@ beforeEach(() => {
   store = memStore();
   plan = store.plan();
   plan.clock = () => new Date("2026-11-07T12:00:00.000Z");
-  plan.enable("vp");
+  plan.enable("vp", { person: { via: "settings" } });
 });
 
 function refused(fn: () => unknown, code = "validation"): StapleError {
@@ -71,14 +71,14 @@ function finish(identifier: string): void {
 }
 
 describe("enabling", () => {
-  it("adds the idea and milestone kinds and seeds Now, Next and Later once, as milestones", () => {
+  it("adds the idea and milestone kinds and seeds Now and Next once, as milestones", () => {
     expect(store.getKinds().map((k) => k.id)).toEqual(expect.arrayContaining([IDEA_KIND, MILESTONE_KIND]));
     const horizons = plan.view().horizons;
-    expect(horizons.map((h) => h.name)).toEqual(["Now", "Next", "Later"]);
+    expect(horizons.map((h) => h.name)).toEqual(["Now", "Next"]);
     for (const h of horizons) expect(store.getIssue(h.id).kind).toBe(MILESTONE_KIND);
-    expect(store.milestones().list().map((m) => m.milestone.title)).toEqual(expect.arrayContaining(["Now", "Next", "Later"]));
-    plan.enable("vp");
-    expect(plan.view().horizons).toHaveLength(3);
+    expect(store.milestones().list()).toEqual([]);
+    plan.enable("vp", { person: { via: "settings" } });
+    expect(plan.view().horizons).toHaveLength(2);
   });
 
   it("refuses every write in a workspace that has not turned planning on", () => {
@@ -140,7 +140,7 @@ describe("identity: an idea holds no ticket number until it is promoted", () => 
     const id = idea("Numbered by v1");
     // What an earlier build left: the idea took a ticket number at capture.
     store.db.prepare("UPDATE issues SET identifier = 'TST-77' WHERE id = ?").run(id);
-    plan.enable("vp");
+    plan.enable("vp", { person: { via: "settings" } });
     expect(isDraftIdentifier(store.getIssue(id).identifier)).toBe(true);
     expect(store.db.prepare("SELECT 1 FROM issues WHERE identifier = 'TST-77'").get()).toBeUndefined();
     const event = store.db.prepare("SELECT payload FROM events WHERE kind = 'idea_drafted' AND issue_id = ?").get(id) as { payload: string } | undefined;
@@ -173,7 +173,7 @@ describe("guards: an idea never enters the tracker", () => {
     expect(rows.map((r) => r.identifier)).toContain(task);
     expect(rows.map((r) => r.issueId)).not.toContain(ref);
     const ideaOnly = memStore();
-    ideaOnly.plan().enable("vp");
+    ideaOnly.plan().enable("vp", { person: { via: "settings" } });
     ideaOnly.plan().capture({ title: "Alone" }, "vp", PERSON);
     expect(ideaOnly.queue().effectiveQueue({ actor: "agent" }).rows).toHaveLength(0);
   });
@@ -223,14 +223,14 @@ describe("guards: an idea never enters the tracker", () => {
     expect(refused(() => store.updateIssue(task, { kind: IDEA_KIND }, "vp")).message).toContain("cannot change kind");
     const milestone = store.createIssue({ title: "M", kind: MILESTONE_KIND }).identifier;
     expect(refused(() => store.milestones().addMember(milestone, ref, {}, "vp")).message).toContain("cannot be added to a milestone");
-    expect(refused(() => store.removeKind(IDEA_KIND, { migrateTo: "task" }, "vp")).message).toContain("still use it");
+    expect(refused(() => store.removeKind(IDEA_KIND, { migrateTo: "task" }, "vp")).message).toContain("Parent idea");
   });
 });
 
 describe("the tracker's own writes follow the person rule", () => {
   it("makes a milestone created through the tracker an ordinary milestone, never a column", () => {
     const made = store.createIssue({ title: "Autopilot milestone", kind: MILESTONE_KIND, createdBy: "agent" });
-    expect(plan.view().horizons.map((h) => h.name)).toEqual(["Now", "Next", "Later"]);
+    expect(plan.view().horizons.map((h) => h.name)).toEqual(["Now", "Next"]);
     expect(store.updateIssue(made.identifier, { title: "Renamed by its agent" }, "agent").title).toBe("Renamed by its agent");
     store.milestones().update(made.identifier, { targetDate: "2026-12-01" }, "agent");
     expect(store.milestones().get(made.identifier).milestone.targetDate).toBe("2026-12-01");
@@ -248,7 +248,7 @@ describe("the tracker's own writes follow the person rule", () => {
     expect(refused(() => store.updateIssue(now.identifier, { title: "Renamed by agent" }, "agent")).message).toContain("the person's call");
     expect(refused(() => store.updateIssue(now.identifier, { status: "cancelled" }, "agent")).message).toContain("the person's call");
     expect(refused(() => store.updateIssue(now.identifier, { priority: "high" }, "agent")).message).toContain("the person's call");
-    expect(plan.view().horizons.map((h) => h.name)).toEqual(["Now", "Next", "Later"]);
+    expect(plan.view().horizons.map((h) => h.name)).toEqual(["Now", "Next"]);
     expect(plan.ideaView(ref).horizonId).toBe(now.id);
   });
 
@@ -288,34 +288,40 @@ describe("dependencies are tracker work", () => {
 });
 
 describe("a workspace that already had its own idea kind", () => {
-  function custom(): WorkspaceStore {
+  function legacy() {
     const own = memStore();
     own.addKind({ id: IDEA_KIND, label: "Idea" }, "vp");
-    return own;
+    const mine = own.createIssue({ title: "My idea ticket" });
+    // A pre-planning row imported from an older database, not a newly permitted idea write.
+    own.db.prepare("UPDATE issues SET kind = ? WHERE id = ?").run(IDEA_KIND, mine.id);
+    return { own, mine };
   }
 
-  it("keeps every issue of that kind a numbered tracker issue while planning is off", () => {
-    const own = custom();
-    const mine = own.createIssue({ title: "My idea ticket", kind: IDEA_KIND });
-    expect(mine.identifier).toMatch(/^TST-\d+$/);
-    expect(own.planningOn()).toBe(false);
-    expect(own.listIssues({}).map((i) => i.identifier)).toContain(mine.identifier);
-    expect(own.tree().map((n) => n.issue.identifier)).toContain(mine.identifier);
-    own.queue().enqueue(mine.identifier, {}, "vp");
-    expect(own.queue().effectiveQueue({ actor: "agent" }).rows.map((r) => r.identifier)).toContain(mine.identifier);
-    expect(own.checkoutIssue(mine.identifier, "agent").checkoutAgent).toBe("agent");
+  it("keeps preexisting numbered idea data intact and guarded while planning is off", () => {
+    const { own, mine } = legacy();
+    try {
+      expect(own.getIssue(mine.id).identifier).toBe(mine.identifier);
+      expect(own.planningOn()).toBe(false);
+      expect(own.listIssues({}).map(i => i.id)).not.toContain(mine.id);
+      expect(own.tree().map(n => n.issue.id)).not.toContain(mine.id);
+      expect(() => own.createIssue({ title: "Another idea", kind: IDEA_KIND })).toThrow(/Planning is off/);
+      expect(() => own.queue().enqueue(mine.id, {}, "agent")).toThrow(/Planning is off/);
+      expect(() => own.checkoutIssue(mine.id, "agent")).toThrow(/Planning is off/);
+      expect(own.getIssue(mine.id).kind).toBe(IDEA_KIND);
+    } finally { own.db.close(); }
   });
 
-  it("refuses to turn planning on while such issues exist, naming them, and turns on once they are re-kinded", () => {
-    const own = custom();
-    const mine = own.createIssue({ title: "My idea ticket", kind: IDEA_KIND });
-    const error = refused(() => own.plan().enable("vp"));
-    expect(error.message).toContain(mine.identifier);
-    expect(own.planningOn()).toBe(false);
-    own.updateIssue(mine.identifier, { kind: "task" }, "vp");
-    expect(own.plan().enable("vp").enabled).toBe(true);
-    expect(own.planningOn()).toBe(true);
-    expect(own.getIssue(mine.identifier).kind).toBe("task");
+  it("refuses unsafe initialization and generic vocabulary escapes without changing legacy ideas", () => {
+    const { own, mine } = legacy();
+    try {
+      const before = own.db.prepare("SELECT * FROM issues").all();
+      const error = refused(() => own.plan().enable("vp", { person: { via: "settings" } }));
+      expect(error.message).toContain(mine.identifier);
+      expect(own.planningOn()).toBe(false);
+      expect(() => own.updateIssue(mine.id, { kind: "task" }, "agent")).toThrow();
+      expect(() => own.removeKind(IDEA_KIND, { migrateTo: "task" }, "agent")).toThrow(/My idea ticket/);
+      expect(own.db.prepare("SELECT * FROM issues").all()).toEqual(before);
+    } finally { own.db.close(); }
   });
 });
 
@@ -341,12 +347,12 @@ describe("ideas and horizons", () => {
     const mvp = plan.createHorizon({ name: "MVP", date: "2026-12-31" }, "vp", PERSON);
     expect(store.getIssue(mvp.id).kind).toBe(MILESTONE_KIND);
     expect(store.milestones().get(mvp.id).milestone.targetDate).toBe("2026-12-31");
-    expect(plan.view().horizons.map((h) => h.name)).toEqual(["MVP", "Now", "Next", "Later"]);
+    expect(plan.view().horizons.map((h) => h.name)).toEqual(["MVP", "Now", "Next"]);
     plan.updateHorizon(mvp.identifier, { name: "Now · MVP", before: null }, "vp", PERSON);
-    expect(plan.view().horizons.map((h) => h.name)).toEqual(["Now", "Next", "Later", "Now · MVP"]);
+    expect(plan.view().horizons.map((h) => h.name)).toEqual(["Now", "Next", "Now · MVP"]);
     const ref = idea("On it", { horizon: mvp.id });
     plan.removeHorizon(mvp.identifier, "vp", PERSON);
-    expect(plan.view().horizons.map((h) => h.name)).toEqual(["Now", "Next", "Later"]);
+    expect(plan.view().horizons.map((h) => h.name)).toEqual(["Now", "Next"]);
     expect(plan.ideaView(ref).horizonId).toBeNull();
     expect(store.categoryOf(store.getIssue(mvp.id).status)).toBe("cancelled");
   });
@@ -397,7 +403,7 @@ describe("membership: a horizon holds its ideas' work without anyone typing it",
   });
 
   it("leaves a member a person put in a milestone by hand where it was put", () => {
-    const later = plan.view().horizons.find((h) => h.name === "Later")!;
+    const later = plan.createHorizon({ name: "Release", date: "2027-02-01" }, "vp", PERSON);
     const task = store.createIssue({ title: "Hand-placed" });
     store.milestones().addMember(later.identifier, task.identifier, {}, "vp");
     const ref = idea("Wants it on Now", { horizon: horizon("Now") });
@@ -435,7 +441,7 @@ describe("membership: a horizon holds its ideas' work without anyone typing it",
   });
 
   it("leaves a hand-placed member out of the horizon the plan would put it in, for status as well", () => {
-    const later = plan.view().horizons.find((h) => h.name === "Later")!;
+    const later = plan.createHorizon({ name: "Release", date: "2027-02-01" }, "vp", PERSON);
     const task = store.createIssue({ title: "Hand-placed, then finished" });
     store.milestones().addMember(later.identifier, task.identifier, {}, "vp");
     const ref = idea("Wants it on Now", { horizon: horizon("Now") });
@@ -567,11 +573,11 @@ describe("a horizon's own status: only the person removes it", () => {
   });
 
   it("refuses an edit of a removed horizon before writing any of it", () => {
-    const later = horizon("Later");
+    const later = plan.createHorizon({ name: "Release", date: "2027-02-01" }, "vp", PERSON).id;
     plan.removeHorizon(later, "vp", PERSON);
     const error = refused(() => plan.updateHorizon(later, { name: "Someday", date: "2027-01-01" }, "vp", PERSON));
     expect(error.message).toContain("was removed");
-    expect(store.getIssue(later).title).toBe("Later");
+    expect(store.getIssue(later).title).toBe("Release");
     expect(refused(() => plan.updateHorizon(horizon("Now"), { name: "Today", date: "not a day" }, "vp", PERSON)).message).toContain("YYYY-MM-DD");
     expect(store.getIssue(horizon("Now")).title).toBe("Now");
   });
@@ -861,7 +867,6 @@ describe("agents capture, the person steers", () => {
     expect(plan.view().horizons.map((h) => [h.name, h.date])).toEqual([
       ["Now", null],
       ["Next", null],
-      ["Later", null],
     ]);
   });
 
@@ -920,7 +925,7 @@ describe("the lifecycle in the store", () => {
   });
 
   it("counts only open work toward a horizon's state, and holds back removing a queued one", () => {
-    const later = plan.view().horizons.find((h) => h.name === "Later")!;
+    const later = plan.createHorizon({ name: "Release", date: "2027-02-01" }, "vp", PERSON);
     const task = store.createIssue({ title: "Will be cancelled" });
     store.milestones().addMember(later.identifier, task.identifier, {}, "vp");
     expect(plan.view().horizons.find((h) => h.id === later.id)!.state).toBe("active");

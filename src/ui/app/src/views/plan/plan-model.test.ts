@@ -39,6 +39,8 @@ function idea(id: string, extra: Partial<IdeaData> = {}): IdeaData {
     childIds: [],
     openQuestions: 0,
     planIncomplete: [],
+    completeness: { starred: 0, starredTotal: 3, filled: 0, total: 10 },
+    dependsOn: [],
     state: "raw",
     actions: [],
     createdAt: "2026-11-01T00:00:00.000Z",
@@ -47,19 +49,19 @@ function idea(id: string, extra: Partial<IdeaData> = {}): IdeaData {
   };
 }
 
-const now: HorizonData = { id: "now", identifier: "T-now", name: "Now", date: "2026-12-31", rank: 1, status: "backlog", shipped: false, memberCount: 0, ideaCount: 0, lateCount: 0, notStartedCount: 0, late: false, state: "planned", actions: [] };
-const next: HorizonData = { id: "next", identifier: "T-next", name: "Next", date: null, rank: 2, status: "backlog", shipped: false, memberCount: 0, ideaCount: 0, lateCount: 0, notStartedCount: 0, late: false, state: "planned", actions: [] };
+const now: HorizonData = { id: "now", identifier: "T-now", name: "Now", date: "2026-12-31", rank: 1, status: "backlog", shipped: false, memberCount: 0, ideaCount: 0, lateCount: 0, notStartedCount: 0, shippedCount: 0, progress: null, runMode: null, goal: [], awaitingApproval: false, late: false, state: "planned", actions: [] };
+const next: HorizonData = { id: "next", identifier: "T-next", name: "Next", date: null, rank: 2, status: "backlog", shipped: false, memberCount: 0, ideaCount: 0, lateCount: 0, notStartedCount: 0, shippedCount: 0, progress: null, runMode: null, goal: [], awaitingApproval: false, late: false, state: "planned", actions: [] };
 
 function plan(ideas: IdeaData[]): PlanData {
   return { enabled: true, today: "2026-11-07", horizons: [now, next], ideas };
 }
 
-const ga = idea("ga", { maturity: "shaped", stage: "started", horizonId: "now", linkCount: 1, planned: { start: "2026-09-01", target: "2026-12-19" } });
-const r0 = idea("r0", { maturity: "shaped", stage: "scheduled", parentId: "ga", horizonId: "now", notStarted: true, planned: { start: "2026-09-01", target: "2026-09-19" } });
-const r2 = idea("r2", { maturity: "shaped", stage: "started", parentId: "ga", horizonId: "now", late: true, linkCount: 1, planned: { start: "2026-09-15", target: "2026-10-31" } });
-const r8 = idea("r8", { maturity: "shaped", stage: "scheduled", parentId: "ga", horizonId: "next", planned: { start: "2027-02-02", target: "2027-03-13" } });
+const ga = idea("ga", { maturity: "shaped", stage: "started", state: "started", horizonId: "now", linkCount: 1, planned: { start: "2026-09-01", target: "2026-12-19" } });
+const r0 = idea("r0", { maturity: "shaped", stage: "scheduled", state: "shaped", parentId: "ga", horizonId: "now", notStarted: true, planned: { start: "2026-09-01", target: "2026-09-19" } });
+const r2 = idea("r2", { maturity: "shaped", stage: "started", state: "started", parentId: "ga", horizonId: "now", late: true, linkCount: 1, planned: { start: "2026-09-15", target: "2026-10-31" } });
+const r8 = idea("r8", { maturity: "shaped", stage: "scheduled", state: "shaped", parentId: "ga", horizonId: "next", planned: { start: "2027-02-02", target: "2027-03-13" } });
 const raw = idea("raw");
-const sdk = idea("sdk", { maturity: "shaped", stage: "shaped" });
+const sdk = idea("sdk", { maturity: "shaped", stage: "shaped", state: "shaped" });
 
 describe("boards", () => {
   it("nest child ideas under their parent's card in the same column, and label one in another column", () => {
@@ -75,9 +77,9 @@ describe("boards", () => {
     expect(columns[0]!.ideas.map((i) => i.id)).toEqual(["sdk"]);
   });
 
-  it("keeps a started idea and everything under it out of the Ideas lens", () => {
+  it("holds only thinking in the Ideas lens: shaped and started records are Horizons'", () => {
     const columns = ideasColumns(plan([ga, r0, r2, r8, raw, sdk]));
-    expect(columns.flatMap((column) => column.ideas.map((i) => i.id))).toEqual(["raw", "sdk"]);
+    expect(columns.flatMap((column) => column.ideas.map((i) => i.id))).toEqual(["raw"]);
   });
 
   it("splits late from not started and never lumps them", () => {

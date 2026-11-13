@@ -624,6 +624,8 @@ staple milestone criterion ABC-40 1 --met --evidence ABC-41
 staple milestone criterion ABC-40 2 --unmet --evidence "no tests" --follow-up "Write the tests"
 ```
 
+**A horizon's run setting.** A horizon of the plan carries how far agents take it ([plan.md](plan.md), "Lenses"). A goal run over a horizon is refused unless that setting is *until its goal is met*: set to *until its work is done* or *stop for review after each epic*, its work is taken from the queue, and nothing gates its close.
+
 **Start.** `--gate-owner` names the person the milestone is gated to; without
 it, `VP` (`DEFAULT_GATE_OWNER`), whoever the milestone's assignee is: the
 assignee owns the plan, and the reviewer of a goal is one fixed person unless a

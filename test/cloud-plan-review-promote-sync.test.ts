@@ -33,7 +33,7 @@ describe("same idea promoted on two devices offline", () => {
       const server = new FakeSyncServer({ repositoryId: REPO, ...(fold === "tail" ? { maxSnapshotFoldOps: 3 } : {}) });
       fleet = new Fleet(server, REPO);
       const a = fleet.machine("a");
-      a.store.plan().enable("vp");
+      a.store.plan().enable("vp", { person: { via: "settings" } });
       const p = a.store.plan().capture({ title: "Same idea", maturity: "shaped", plan: READY_PLAN }, "vp", PERSON).id;
       await a.sync();
       const b = fleet.machine("b");
@@ -62,7 +62,7 @@ describe("derived membership after a pull that cancels a horizon's only work", (
     const server = new FakeSyncServer({ repositoryId: REPO });
     fleet = new Fleet(server, REPO);
     const a = fleet.machine("a");
-    a.store.plan().enable("vp");
+    a.store.plan().enable("vp", { person: { via: "settings" } });
     const now = a.store.plan().view().horizons[0]!.id;
     const p = a.store.plan().capture({ title: "Only work on Now", maturity: "shaped", plan: READY_PLAN, horizon: now }, "vp", PERSON).id;
     a.store.plan().promote(p, "vp", PERSON);

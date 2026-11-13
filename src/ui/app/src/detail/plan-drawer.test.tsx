@@ -76,6 +76,8 @@ function idea(state: keyof typeof OFFERED, patch: Partial<IdeaData> = {}): IdeaD
     childIds: [],
     openQuestions: 0,
     planIncomplete: [],
+    completeness: { starred: 0, starredTotal: 3, filled: 0, total: 10 },
+    dependsOn: [],
     state: state as IdeaData["state"],
     actions: OFFERED[state]!,
     createdAt: "2026-11-01T00:00:00.000Z",
@@ -215,6 +217,11 @@ describe("a horizon in the shared drawer", () => {
     ideaCount: 1,
     lateCount: 0,
     notStartedCount: 0,
+    shippedCount: 0,
+    progress: null,
+    runMode: null,
+    goal: [],
+    awaitingApproval: false,
     late: false,
     state,
     actions,
@@ -346,5 +353,28 @@ describe("the Plan tab", () => {
     expect(html).toContain("Shaped · plan incomplete: a goal.");
     expect(html).toContain("data-plan-scaffold-held");
     expect(html).toContain("Held back, the plan is incomplete: a goal.");
+  });
+
+  it("reads the brief and the sections as formatted Markdown, with Edit only where the state offers edits", () => {
+    const rec = planned("raw", { state: "exploring", maturity: "exploring", stage: "exploring", actions: [{ id: "edit", label: "Edit title and brief", who: "anyone" }] });
+    rec.brief = "**Window**: soon\n\n> Merchants integrate through the SDKs.";
+    rec.plan.context = "1. Generated, never edited\n2. Pinned per version";
+    const html = renderTab(rec);
+    expect(html).toContain("<strong>Window</strong>");
+    expect(html).toContain("<blockquote");
+    expect(html).not.toContain("**Window**");
+    // The context section's numbered lines read as a numbered list (the phase strip is a list too).
+    expect(html).toMatch(/data-plan-section-read="context"><div[^>]*><ol[^>]*><li[^>]*><span>Generated, never edited<\/span>/);
+    expect(html).not.toContain("data-plan-detail-brief");
+    expect(html).not.toContain('data-plan-section-input="goal"');
+    for (const section of ["brief", "goal", "context", "acceptance"]) expect(html).toContain(`data-plan-section-edit="${section}"`);
+    // An empty section offers to write it; one that cannot be edited says so.
+    expect(html).toContain('data-plan-section-empty="risks"');
+    const shipped = planned("started", { state: "shipped", stage: "shipped", actions: [] });
+    shipped.brief = "**Window**: soon";
+    const read = renderTab(shipped);
+    expect(read).toContain("<strong>Window</strong>");
+    expect(read).not.toContain("data-plan-section-edit");
+    expect(read).not.toContain("data-plan-section-empty");
   });
 });

@@ -197,7 +197,14 @@ function resetWorkspaceCache(): void {
   byAlias.clear();
 }
 
-const server = new McpServer({ name: "staple", version: "0.1.0" });
+const featureInstructions = (() => {
+  try { return `This workspace has features.planning ${storeFor().planningOn() ? "on" : "off"}.`; }
+  catch { return "Resolve the workspace and read get_setting features.planning first."; }
+})();
+const server = new McpServer({ name: "staple", version: "0.1.0" }, {
+  instructions: `${featureInstructions} Planning is experimental, defaults off, and only a person changes it in Settings → Experimental or with staple settings set features.planning true --person. Read get_setting or show_about for the current workspace state; explicit ws may differ from this handshake. When off, use ordinary tasks and milestones; plan tools refuse. Ideas remain drafts and are never pickup work.`,
+});
+const PLANNING_TOOLS = new Set(["list_ideas", "get_idea", "list_horizons", "capture_idea", "update_idea", "scaffold_idea", "start_idea", "unlink_idea", "reset_idea_baseline"]);
 
 /**
  * S10: this server's automatic-sync registration.
@@ -245,6 +252,7 @@ const autoSync = new SurfaceAutoSync({
 const MACHINE_LOCAL_WRITES = new Set(["record_budget_sample", "stop_run", "pause_run", "resume_run"]);
 {
   type ToolConfig = {
+    description?: string;
     annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean };
     inputSchema?: Record<string, unknown>;
     outputSchema?: unknown;
@@ -387,6 +395,15 @@ const MACHINE_LOCAL_WRITES = new Set(["record_budget_sample", "stop_run", "pause
     rawCb: ToolCallback,
   ) => {
     assertAnnotated(name, rawConfig);
+    if (PLANNING_TOOLS.has(name)) {
+      rawConfig = { ...rawConfig, description: `Experimental, only when features.planning is on. ${rawConfig.description ?? ""}` };
+      const planCallback = rawCb;
+      rawCb = (...args: unknown[]) => {
+        const ws = (args[0] as { ws?: string } | undefined)?.ws;
+        try { storeFor(ws).plan().assertEnabled(); } catch (error) { return fail(error); }
+        return planCallback(...args);
+      };
+    }
     // A tool that declares an MCP Apps view: checked, both meta spellings, results stamped.
     const [viewConfig, cb] = linkToolView(name, rawConfig, rawCb);
     const config = declaringNotices(viewConfig);
@@ -1666,6 +1683,7 @@ server.registerTool(
       description: z.string().optional(),
       status: statusEnum.optional(),
       kind: kindSchema.optional().describe("Re-declare the kind. Omit to leave unchanged."),
+      parent: refSchema.nullable().optional().describe("Validated explicitly; changing parent through update_task is refused."),
       priority: priorityEnum.optional(),
       assignee: z.string().nullable().optional(),
       labels: z.array(z.string()).optional(),
@@ -1704,6 +1722,7 @@ server.registerTool(
           description: input.description,
           status: input.status,
           kind: input.kind,
+          parent: input.parent,
           priority: input.priority,
           assignee: input.assignee,
           labels: input.labels,
@@ -2959,7 +2978,7 @@ server.registerTool(
   "list_milestones",
   {
     description:
-      "Every open milestone with its dates, derived state, progress and members revision, sorted by plan position, then target date, then identifier. Milestones are issues of the reserved `milestone` kind; a workspace without that kind refuses with validation naming the `kinds add` that enables it.",
+      "Every open plain milestone and dated horizon (undated horizons stay in Plan), with dates, derived state, progress and members revision, sorted by plan position, then target date, then identifier. Milestones are issues of the reserved `milestone` kind; a workspace without that kind refuses with validation naming the `kinds add` that enables it.",
     inputSchema: {
       all: z.boolean().optional().describe("Include done and cancelled milestones"),
       ws: wsSchema,
@@ -3173,7 +3192,7 @@ server.registerTool(
   "list_ideas",
   {
     description:
-      "The plan: every horizon in order (a horizon is a milestone shown as a column: name, date, status, shipped, member count, idea count, late and not-started counts) and every plan record with its maturity, derived stage (raw, exploring, shaped, scheduled, started, shipped, dropped), horizon, parent, planned window, baseline, linked issues, progress, actual dates, the late / notStarted flags, and its lifecycle state with the actions that state offers (state, actions: id, label, who: anyone or person, disabledReason). A write the state does not offer is refused with validation naming the state and what it offers. An unpromoted idea has identifier null (it holds no ticket number; refer to it by id) and never appears in list_tasks, the queue or next_task; a promoted one is an ordinary epic with its number. Filter with maturity or horizon (an identifier or name). A workspace without planning answers enabled: false.",
+      "The plan: every horizon in order (a horizon is a milestone shown as a column: name, date, status, shipped, member count, idea count, late and not-started counts) and every plan record with its maturity, derived stage (raw, exploring, shaped, scheduled, started, shipped, dropped), horizon, parent, planned window, baseline, linked issues, progress, actual dates, the late / notStarted flags, and its lifecycle state with the actions that state offers (state, actions: id, label, who: anyone or person, disabledReason). A write the state does not offer is refused with validation naming the state and what it offers. An unpromoted idea has identifier null (it holds no ticket number; refer to it by id) and never appears in list_tasks, the queue or next_task; a promoted one is an ordinary epic with its number. Filter with maturity or horizon (an identifier or name). A workspace with planning off refuses with validation.",
     inputSchema: {
       maturity: z.enum(["raw", "exploring", "shaped", "dropped"]).optional(),
       horizon: z.string().optional().describe("A horizon's identifier or name"),
@@ -3206,7 +3225,7 @@ server.registerTool(
 server.registerTool(
   "list_horizons",
   {
-    description: "The horizons in order. A horizon is a milestone the plan shows as a column, so it can be queued (enqueue_task) and goal-run; its members are the work of its ideas, derived, plus any added by hand. Each has name, optional date (a dated horizon is a release line), status, shipped, member count, idea count, and the late and not-started counts, and its lifecycle state (planned: no work yet; active: holds work and may be queued; shipped) with the actions that state offers. Horizons are defined by the person.",
+    description: "The horizons in order. A horizon is a milestone the plan shows as a column, so it can be queued (enqueue_task) like a task; its members are the work of its ideas, derived, plus any added by hand. Each has name, optional date (a dated horizon is a release line), status, shipped, progress, member count, idea count, the shipped, late and not-started counts, its lifecycle state (planned: no work yet; active: holds work and may be queued; shipped) with the actions that state offers, and its run setting: runMode (how far agents take it: work, until its work is done; goal, until its goal is met; epic, stop for review after each epic; null when unset), goal (its acceptance criteria) and awaitingApproval. The run setting is the person's and reaches you as the horizon-run instruction on every ticket of the horizon (next_task, get_task, continue_run); a goal run (start_run) over a horizon is refused unless it is set to goal. Horizons are defined by the person.",
     inputSchema: { ws: wsSchema },
     annotations: { title: "List horizons", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
@@ -4215,6 +4234,7 @@ server.registerTool(
     inputSchema: { ws: wsSchema },
     outputSchema: {
       server: z.object({ name: z.string(), version: z.string() }),
+      features: z.object({ planning: z.boolean() }).nullable(),
       workspace: z
         .object({ slug: z.string(), prefix: z.string(), total: z.number().int(), statuses: z.array(z.object(aboutStatusShape)) })
         .nullable()
@@ -4242,7 +4262,8 @@ server.registerTool(
       workspace = null;
     }
     const views = VIEWS.map((view) => ({ name: view.name, uri: viewUri(view.name), title: view.title }));
-    const payload = { server: { name: "staple", version: STAPLE_VERSION }, workspace, views };
+    const features = workspace === null ? null : { planning: storeFor(ws).planningOn() };
+    const payload = { server: { name: "staple", version: STAPLE_VERSION }, workspace, views, features };
     // The text is the whole answer for a host without MCP Apps, so it is prose, not JSON.
     const lines = [
       `staple ${STAPLE_VERSION}`,
@@ -4255,6 +4276,7 @@ server.registerTool(
                 .filter((status) => status.count > 0)
                 .map((status) => `${status.count} ${status.label.toLowerCase()}`)
                 .join(", ")}.`),
+      `Experimental features: planning ${features?.planning ? "on" : "off"}. Only a person changes features.planning.`,
       `Views: ${views.map((view) => `${view.name} (${view.uri})`).join(", ")}.`,
     ];
     return { content: [{ type: "text" as const, text: lines.join("\n") }], structuredContent: payload };

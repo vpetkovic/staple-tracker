@@ -13,13 +13,24 @@ when it is ready. From then on its progress and real dates come from that work.
 
 ## 1. Turn planning on
 
-Open **Plan** in the web UI and press **Turn on planning**, or run:
+Planning is **experimental** and may change. The workspace setting `features.planning`
+defaults to **false** and synchronizes across devices. In **Settings → Experimental**, turn
+on **Planning (experimental)**. At the terminal, a person with a configured humanName can run:
 
 ```bash
-staple plan enable
+staple settings set features.planning true --person
 ```
 
-This adds the `idea` and `milestone` kinds and three horizons: Now, Next and Later. A horizon
+`staple plan enable --person` sets the same flag. Agents read it with `get_setting` or
+`staple settings get features.planning`; they cannot change it. `show_about` reports its state.
+
+With the flag off, Plan and its lenses, drawer tabs, palette commands and Tasks horizon
+chip, axis and filter are absent. CLI, MCP and HTTP planning operations refuse. Pickup
+answers and run briefs carry no horizon-run instructions. Existing horizons appear as
+plain milestones and promoted epics as ordinary epics. Ideas remain unnumbered drafts,
+never tasks or pickup work. Disabling deletes nothing; enabling restores all planning data.
+
+This adds the `idea` and `milestone` kinds and two horizons: Now and Next. A horizon
 is a milestone, so it also shows under **Milestones** with its progress, and queueing it queues
 its ideas' work.
 
@@ -41,6 +52,13 @@ staple idea ask <id> "Expire links after 30 days?"
 
 ## 3. Schedule on horizons
 
+The **Ideas** lens is for thinking: it holds ideas that are raw or exploring, each card showing
+how much of its plan is written (★ for the three sections shaping needs) and the horizon it is
+aimed at. Marking an idea shaped hands it over: the **Horizons** lens is for delivery, shaped,
+started and shipped work by horizon, with shaped work that has no horizon under *Unscheduled*
+(*Ready, no horizon yet*). A shaped idea whose plan has gone incomplete since is flagged there
+and cannot be scaffolded until it is complete again.
+
 In the **Horizons** lens, drag a shaped idea from Unscheduled into a horizon. Give a horizon a
 date (**add a date**) and it becomes a release line; ideas past it are flagged. Add, rename and
 remove horizons from the column header and **+ Horizon**. Removing a horizon returns its ideas
@@ -53,8 +71,37 @@ The work of every idea on a horizon is that milestone's membership: you never ad
 Move an idea to another horizon and its work moves with it. Something you placed in a milestone
 yourself stays where you put it.
 
-Maturity and horizon are separate: an exploring idea on Next is a reserved slot; a shaped idea
-with no horizon is ready whenever you are.
+Maturity and horizon are separate: an exploring idea on Next is a reserved slot (it stays in
+Ideas, with a ◇ Next chip); a shaped idea with no horizon is ready whenever you are.
+
+Each horizon's header shows its progress, how many records on it shipped (✓ 2 shipped), what is
+late or not started (counting work added to it by hand and ideas still being explored), and two
+buttons. **Queue** puts the whole horizon in the pickup queue, exactly as queueing a task does (it
+reads *Queued* once it is there). The second is its **run setting**: how far agents take the
+horizon when they pick its work up, and its goal (a list of criteria). Nothing starts from it; it
+is a setting agents read with every ticket of the horizon:
+
+- **Until its work is done**: agents take its work from the queue until every member has landed,
+  and it ships with the last one.
+- **Until its goal is met**: agents work toward the goal, check each criterion, and may add the
+  tickets it still needs; then it waits for your approval to close (*Waiting for your approval*).
+- **Stop for review after each epic**: agents finish one epic and stop until you release the next.
+
+Only you set it (the CLI: `staple horizon set Now --run goal --goal "Checkout works end to end"
+--person`). A shipped record reads the same everywhere, with ✓ and the date it shipped; a horizon
+whose work has all landed folds to a ✓ summary.
+
+A horizon without a run setting is worked through the queue, as any milestone. A goal run is
+allowed only after the person explicitly selects the goal mode. Stopping a goal run leaves its
+approval gate standing: stopping execution does not approve the goal. The horizon stays open and
+reads "Waiting for your approval" until the person approves or requests changes. Work and epic
+modes do not create this goal gate. A pending gate takes precedence over a completed progress bar
+in the board, drawer and timeline.
+
+In **Tasks**, every task whose work belongs to a horizon shows a ◇ chip with the horizon's name
+(a short one on a phone; tap it for the whole name), **Group: Horizon** sections the list by
+horizon, and the **Horizon** filter keeps the work of the horizons you pick. Horizons themselves
+are not rows in Tasks: they are the sections and the chips. Plain milestones still are.
 
 An idea can have sub-ideas (open it and set **Part of**). They fold under the parent's card,
 with a summary such as "1 late · 6 not started". A sub-idea on a different horizon shows in
@@ -64,7 +111,11 @@ that column, marked with its parent.
 
 The **Timeline** lens shows each idea's planned window as a bar, grouped by horizon. Drag a
 bar to move it and drag its ends to change the dates. Ideas without dates are listed under
-their horizon with **add dates**. The vertical lines are today and each dated horizon.
+their horizon with **add dates**. The vertical lines are today and each dated horizon. An arrow
+runs from an idea to each idea that waits on it, red when the one waiting starts first; a
+shipped bar ends in ✓. A dependency counts when a line of the Dependencies section starts with
+the other idea's ticket number, the key its title starts with (C2 in "C2 Checkout API"), or a row
+key from its breakdown (42.1). Other words are left as text, even ones with digits like OAuth2.
 
 ## 5. Write the plan
 
@@ -79,6 +130,8 @@ not hold, or on each other in a circle. Every open question must be answered or 
 The meter at the top says what is still missing. If a shaped idea is edited so it no longer
 passes, it stays shaped and reads **shaped · plan incomplete**, with Scaffold and Promote held
 back until it passes again.
+Each section reads as formatted text (headings, lists, quotes, tables); press **Edit** beside a
+section to change it, click away to save, or press Escape to put it back.
 
 Agents can write all of it. A plan you already have as a file comes in whole:
 
@@ -131,7 +184,7 @@ follows the same rules:
 | Dropped | restore it |
 
 A raw idea is never scheduled or promoted, and an idea already started or promoted never offers
-promotion again. A horizon can be queued while it holds open work, and removed only once it
+promotion again. A horizon can be queued or run to its goal while it holds open work, and removed only once it
 holds no open work and is not in the queue. Ask for something a state does not offer and the refusal names the state and what it
 offers instead.
 
@@ -176,3 +229,5 @@ An agent trying any of these gets a `validation` refusal that says so.
 | `staple idea reset-baseline --person` | `reset_idea_baseline` (view button only) | Make the current window the baseline |
 
 The design contract is [design/plan.md](https://github.com/vpetkovic/staple-tracker/blob/master/design/plan.md).
+
+Undated work without a horizon lives in Unscheduled. Named horizons can have no date, but only dated horizons appear in Milestones. Plan remembers your lens, open record, scroll and filters per workspace. A milestone links straight to each of its planned ideas.

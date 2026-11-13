@@ -1,34 +1,96 @@
 /**
  * An idea's plan sections in the Plan tab (design/plan.md, "Plan sections"): the completeness
  * meter, each text and list section, the task breakdown as an editable table (stacked cards below
- * 768px), and the scaffold preview. Every editor renders only when the idea's state offers the
- * edit action; a section read-only otherwise. Each save writes that one section whole.
+ * 768px), and the scaffold preview. A text section reads as formatted Markdown, with an Edit
+ * control only where the idea's state offers the edit action; each save writes that one section
+ * whole.
  */
-import { Plus, Trash2 } from "lucide-react";
+import { Pencil, Plus, Trash2 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import type { BreakdownRow, IdeaDetailData, PlanSections, ScaffoldPreviewData } from "@/lib/plan-types";
+import { Markdown } from "@/lib/markdown";
 import { useIsDesk } from "@/lib/use-media";
 import { cn } from "@/lib/utils";
 import { offers } from "../plain-actions";
 import type { PlanWrite } from "../plan-record";
 
-export function Section({ label, star, children, testId, hint }: { label: string; star?: boolean; children: ReactNode; testId?: string; hint?: string }) {
+export function Section({ label, star, children, testId, hint, action }: { label: string; star?: boolean; children: ReactNode; testId?: string; hint?: string; action?: ReactNode }) {
   return (
     <section data-plan-section={testId}>
-      <h3 className="mb-2 flex items-baseline gap-1.5 text-caption font-semibold tracking-wide text-text-tertiary uppercase">
-        {label}
-        {star ? (
-          <span aria-label="required to shape" title="Required before the idea is shaped" className="text-[color:var(--status-task-todo)]">
-            ★
-          </span>
-        ) : null}
-        {hint ? <span className="font-normal tracking-normal normal-case">{hint}</span> : null}
-      </h3>
+      <div className="mb-2 flex min-h-6 items-center gap-2">
+        <h3 className="m-0 flex min-w-0 flex-1 items-baseline gap-1.5 text-caption font-semibold tracking-wide text-text-tertiary uppercase">
+          {label}
+          {star ? (
+            <span aria-label="required to shape" title="Required before the idea is shaped" className="text-[color:var(--status-task-todo)]">
+              ★
+            </span>
+          ) : null}
+          {hint ? <span className="font-normal tracking-normal normal-case">{hint}</span> : null}
+        </h3>
+        {action}
+      </div>
       {children}
     </section>
+  );
+}
+
+/**
+ * A section's text, read or written: formatted Markdown by default, a textarea while being
+ * edited. The Edit control is there only when the state offers edits; a save on blur writes
+ * what changed, and Escape puts the text back.
+ */
+export function useProse({ value, editable, onSave }: { value: string; editable: boolean; onSave: (value: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  useEffect(() => {
+    if (!editing) setDraft(value);
+  }, [value, editing]);
+  useEffect(() => {
+    if (!editable) setEditing(false);
+  }, [editable]);
+  return {
+    editing: editable && editing,
+    draft,
+    setDraft,
+    start: () => setEditing(true),
+    finish: () => {
+      setEditing(false);
+      if (draft !== value) onSave(draft);
+    },
+    cancel: () => {
+      setDraft(value);
+      setEditing(false);
+    },
+  };
+}
+
+export function EditButton({ label, testId, onClick }: { label: string; testId: string; onClick: () => void }) {
+  return (
+    <Button type="button" variant="ghost" size="sm" className="-my-1 h-7 px-2 text-caption text-text-secondary" onClick={onClick} aria-label={`Edit ${label.toLowerCase()}`} data-plan-section-edit={testId}>
+      <Pencil aria-hidden className="size-3.5" />
+      Edit
+    </Button>
+  );
+}
+
+/** The text as it reads: Markdown, or what is missing, with a way to write it where edits are offered. */
+function Reading({ text, empty, editable, onStart, testId }: { text: string; empty: string; editable: boolean; onStart: () => void; testId: string }) {
+  if (!text.trim()) {
+    return editable ? (
+      <button type="button" className="w-full rounded-md border border-dashed px-3 py-2 text-left text-body text-text-tertiary hover:bg-surface-hover" onClick={onStart} data-plan-section-empty={testId}>
+        {empty}
+      </button>
+    ) : (
+      <p className="m-0 text-body text-text-secondary">Not written.</p>
+    );
+  }
+  return (
+    <div data-plan-section-read={testId}>
+      <Markdown text={text} className="staple-detail-prose text-body" />
+    </div>
   );
 }
 
@@ -65,16 +127,24 @@ export function Completeness({ record }: { record: IdeaDetailData }) {
   );
 }
 
-/** A text section: a textarea saved on blur, or the text when the state offers no edits. */
+/** A text section: formatted Markdown to read, a textarea to edit where the state offers edits. */
 export function TextSection({ label, star, value, editable, placeholder, onSave, testId, rows = 4 }: { label: string; star?: boolean; value: string | null; editable: boolean; placeholder: string; onSave: (value: string) => void; testId: string; rows?: number }) {
-  const [draft, setDraft] = useState(value ?? "");
-  useEffect(() => setDraft(value ?? ""), [value]);
+  const prose = useProse({ value: value ?? "", editable, onSave });
   return (
-    <Section label={label} star={star} testId={testId}>
-      {editable ? (
-        <Textarea value={draft} rows={rows} onChange={(event) => setDraft(event.target.value)} onBlur={() => draft !== (value ?? "") && onSave(draft)} placeholder={placeholder} data-plan-section-input={testId} />
+    <Section label={label} star={star} testId={testId} action={editable && !prose.editing && value ? <EditButton label={label} testId={testId} onClick={prose.start} /> : null}>
+      {prose.editing ? (
+        <Textarea
+          autoFocus
+          value={prose.draft}
+          rows={rows}
+          onChange={(event) => prose.setDraft(event.target.value)}
+          onBlur={prose.finish}
+          onKeyDown={(event) => event.key === "Escape" && (event.preventDefault(), prose.cancel())}
+          placeholder={placeholder}
+          data-plan-section-input={testId}
+        />
       ) : (
-        <p className="m-0 text-body whitespace-pre-wrap text-text-secondary">{value || "Not written."}</p>
+        <Reading text={value ?? ""} empty={placeholder} editable={editable} onStart={prose.start} testId={testId} />
       )}
     </Section>
   );
@@ -83,27 +153,34 @@ export function TextSection({ label, star, value, editable, placeholder, onSave,
 /** A list section, one item per line while editing. */
 export function ListSection({ label, star, items, editable, placeholder, onSave, testId }: { label: string; star?: boolean; items: string[]; editable: boolean; placeholder: string; onSave: (items: string[]) => void; testId: string }) {
   const joined = items.join("\n");
-  const [draft, setDraft] = useState(joined);
-  useEffect(() => setDraft(joined), [joined]);
+  const prose = useProse({ value: joined, editable, onSave: (draft) => onSave(draft.split("\n").map((line) => line.replace(/^\s*[-*]\s+/, "").trim()).filter(Boolean)) });
   return (
-    <Section label={label} star={star} testId={testId} hint={editable ? "one per line" : undefined}>
-      {editable ? (
+    <Section
+      label={label}
+      star={star}
+      testId={testId}
+      hint={prose.editing ? "one per line" : undefined}
+      action={editable && !prose.editing && items.length > 0 ? <EditButton label={label} testId={testId} onClick={prose.start} /> : null}
+    >
+      {prose.editing ? (
         <Textarea
-          value={draft}
+          autoFocus
+          value={prose.draft}
           rows={Math.min(8, Math.max(3, items.length + 1))}
-          onChange={(event) => setDraft(event.target.value)}
-          onBlur={() => draft !== joined && onSave(draft.split("\n").map((line) => line.replace(/^\s*[-*]\s+/, "").trim()).filter(Boolean))}
+          onChange={(event) => prose.setDraft(event.target.value)}
+          onBlur={prose.finish}
+          onKeyDown={(event) => event.key === "Escape" && (event.preventDefault(), prose.cancel())}
           placeholder={placeholder}
           data-plan-section-input={testId}
         />
       ) : items.length === 0 ? (
-        <p className="m-0 text-body text-text-secondary">None.</p>
+        editable ? (
+          <Reading text="" empty={placeholder} editable onStart={prose.start} testId={testId} />
+        ) : (
+          <p className="m-0 text-body text-text-secondary">None.</p>
+        )
       ) : (
-        <ul className="m-0 list-disc space-y-1 pl-5 text-body">
-          {items.map((item, index) => (
-            <li key={`${index}-${item}`}>{item}</li>
-          ))}
-        </ul>
+        <Markdown text={items.map((item) => `- ${item}`).join("\n")} className="staple-detail-prose text-body" />
       )}
     </Section>
   );

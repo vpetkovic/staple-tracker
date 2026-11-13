@@ -64,7 +64,7 @@ describe("workspace migration 017", () => {
     db.exec("ALTER TABLE runs DROP COLUMN instructions");
     db.exec("ALTER TABLE runs DROP COLUMN instructions_seq");
     db.exec("DROP INDEX IF EXISTS issues_plan_ranked_idx");
-    for (const column of ["plan_maturity", "plan_horizon_id", "plan_start", "plan_target", "plan_baseline_start", "plan_baseline_target", "plan_rank"]) db.exec(`ALTER TABLE issues DROP COLUMN ${column}`);
+    for (const column of ["plan_maturity", "plan_horizon_id", "plan_start", "plan_target", "plan_baseline_start", "plan_baseline_target", "plan_rank", "plan_run_mode"]) db.exec(`ALTER TABLE issues DROP COLUMN ${column}`);
     db.exec("DROP TABLE IF EXISTS plan_members");
     db.exec("DROP TABLE IF EXISTS plan_links");
     db.exec("DROP TABLE IF EXISTS plan_rows");
@@ -98,7 +98,7 @@ describe("workspace migration 017", () => {
     db.exec("ALTER TABLE runs DROP COLUMN instructions");
     db.exec("ALTER TABLE runs DROP COLUMN instructions_seq");
     db.exec("DROP INDEX IF EXISTS issues_plan_ranked_idx");
-    for (const column of ["plan_maturity", "plan_horizon_id", "plan_start", "plan_target", "plan_baseline_start", "plan_baseline_target", "plan_rank"]) db.exec(`ALTER TABLE issues DROP COLUMN ${column}`);
+    for (const column of ["plan_maturity", "plan_horizon_id", "plan_start", "plan_target", "plan_baseline_start", "plan_baseline_target", "plan_rank", "plan_run_mode"]) db.exec(`ALTER TABLE issues DROP COLUMN ${column}`);
     db.exec("DROP TABLE IF EXISTS plan_members");
     db.exec("DROP TABLE IF EXISTS plan_links");
     db.exec("DROP TABLE IF EXISTS plan_rows");

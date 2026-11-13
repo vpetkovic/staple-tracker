@@ -159,6 +159,7 @@ export const ISSUE_FIELDS: Record<string, Column> = {
   planBaselineStart: col("plan_baseline_start"),
   planBaselineTarget: col("plan_baseline_target"),
   planRank: col("plan_rank"),
+  planRunMode: col("plan_run_mode"),
 };
 
 /**
@@ -175,6 +176,7 @@ export const PLAN_ISSUE_FIELDS: ReadonlySet<string> = new Set([
   "planBaselineStart",
   "planBaselineTarget",
   "planRank",
+  "planRunMode",
 ]);
 
 export const COMMENT_FIELDS: Record<string, Column> = {

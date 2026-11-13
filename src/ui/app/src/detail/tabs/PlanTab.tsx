@@ -16,15 +16,17 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { getPlan } from "@/lib/api";
+import { Markdown } from "@/lib/markdown";
 import type { IdeaDetailData, PlanData } from "@/lib/plan-types";
 import { useSession } from "@/lib/session";
 import { useResource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
 import { Chip, Progress } from "@/views/plan/PlanBoards";
+import { ShippedMark } from "../ShippedMark";
 import { dayLabel, descendantsOf } from "@/views/plan/plan-model";
 import { offers } from "../plain-actions";
 import { STATE_WORDS, onScaffoldRequest, planRecordOf, usePlanWrite, type PlanWrite } from "../plan-record";
-import { Completeness, PlanSectionsView, ScaffoldSection, Section } from "./PlanSections";
+import { Completeness, EditButton, PlanSectionsView, ScaffoldSection, Section, useProse } from "./PlanSections";
 import type { TabProps } from "./registry";
 
 /**
@@ -73,12 +75,13 @@ export function PlanTab({ detail, workspace, onAuthError, refresh }: TabProps) {
 
 function Stage({ record }: { record: IdeaDetailData }) {
   const { idea } = record;
-  const phase = idea.stage === "shipped" ? "shipped" : idea.stage === "started" ? "started" : "thinking";
+  // Its own state, as every lens reads it: the rollup and the horizon never move the phase.
+  const phase = idea.state === "shipped" ? "shipped" : idea.state === "started" ? "started" : "thinking";
   const at = PHASES.findIndex((entry) => entry.id === phase);
   return (
     <Section label="Stage" testId="stage">
       <ol className="flex flex-wrap gap-1 text-caption" data-plan-phases={phase}>
-        {idea.stage === "dropped" ? (
+        {idea.state === "dropped" ? (
           <li className="rounded-full border border-destructive/60 px-2 py-0.5 text-destructive">dropped</li>
         ) : (
           PHASES.map((entry, index) => (
@@ -100,7 +103,7 @@ function Stage({ record }: { record: IdeaDetailData }) {
       <div className="mt-2 flex flex-wrap gap-1.5 text-caption">
         {idea.late ? <Chip tone="red">late</Chip> : null}
         {idea.notStarted ? <Chip tone="amber">not started</Chip> : null}
-        {idea.state === "shipped" ? <Chip tone="blue">✓ shipped</Chip> : null}
+        {idea.state === "shipped" ? <ShippedMark on={idea.actual.end} withYear /> : null}
       </div>
     </Section>
   );
@@ -182,22 +185,29 @@ function Fields({ record, plan, write }: { record: IdeaDetailData; plan: PlanDat
 }
 
 function Brief({ record, write }: { record: IdeaDetailData; write: PlanWrite }) {
-  const [brief, setBrief] = useState(record.brief ?? "");
-  useEffect(() => setBrief(record.brief ?? ""), [record.brief]);
   const editable = offers(record.idea, "edit");
+  const prose = useProse({ value: record.brief ?? "", editable, onSave: (brief) => void write("update", { ref: record.idea.id, brief }) });
   return (
-    <Section label="Brief" testId="brief">
-      {editable ? (
+    <Section label="Brief" testId="brief" action={editable && !prose.editing && record.brief ? <EditButton label="Brief" testId="brief" onClick={prose.start} /> : null}>
+      {prose.editing ? (
         <Textarea
-          value={brief}
-          onChange={(event) => setBrief(event.target.value)}
-          onBlur={() => brief !== (record.brief ?? "") && void write("update", { ref: record.idea.id, brief })}
+          autoFocus
+          value={prose.draft}
+          onChange={(event) => prose.setDraft(event.target.value)}
+          onBlur={prose.finish}
+          onKeyDown={(event) => event.key === "Escape" && (event.preventDefault(), prose.cancel())}
           placeholder="What is it, who is it for, what does done look like?"
           className="min-h-24"
           data-plan-detail-brief
         />
+      ) : record.brief ? (
+        <Markdown text={record.brief} className="staple-detail-prose text-body" />
+      ) : editable ? (
+        <button type="button" className="w-full rounded-md border border-dashed px-3 py-2 text-left text-body text-text-tertiary hover:bg-surface-hover" onClick={prose.start} data-plan-section-empty="brief">
+          What is it, who is it for, what does done look like?
+        </button>
       ) : (
-        <p className="m-0 text-body whitespace-pre-wrap text-text-secondary">{record.brief || "No brief."}</p>
+        <p className="m-0 text-body text-text-secondary">No brief.</p>
       )}
     </Section>
   );

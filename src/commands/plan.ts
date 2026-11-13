@@ -48,8 +48,10 @@ function writer(person: boolean | undefined): { actor: string; options: PlanWrit
   return { actor: name, options: { person: { via: "cli" } } };
 }
 
-function planFor(values: { db?: string; ws?: string }) {
-  return resolveWorkspace({ db: values.db, ws: values.ws }).store.plan();
+function planFor(values: { db?: string; ws?: string }, enabling = false) {
+  const plan = resolveWorkspace({ db: values.db, ws: values.ws }).store.plan();
+  if (!enabling) plan.assertEnabled();
+  return plan;
 }
 
 function ideaLine(idea: IdeaView, plan: PlanView): string {
@@ -85,7 +87,8 @@ function printScaffold(preview: ScaffoldPreview, dry: boolean, depth = 0): void 
 
 function horizonLine(horizon: HorizonView): string {
   const risk = [horizon.lateCount ? `${horizon.lateCount} late` : null, horizon.notStartedCount ? `${horizon.notStartedCount} not started` : null].filter(Boolean).join(" · ");
-  return `${horizon.identifier.padEnd(9)} ${horizon.name.padEnd(24)} ${(horizon.date ?? "no date").padEnd(10)} ${horizon.state.padEnd(8)} ${String(horizon.ideaCount).padStart(3)} ideas${risk ? `  ${risk}` : ""}`;
+  const run = horizon.runMode ? `  runs ${horizon.runMode}${horizon.goal.length ? ` · ${horizon.goal.length} goal ${horizon.goal.length === 1 ? "criterion" : "criteria"}` : ""}` : horizon.goal.length ? `  ${horizon.goal.length} goal ${horizon.goal.length === 1 ? "criterion" : "criteria"}` : "";
+  return `${horizon.identifier.padEnd(9)} ${horizon.name.padEnd(24)} ${(horizon.date ?? "no date").padEnd(10)} ${horizon.state.padEnd(8)} ${String(horizon.ideaCount).padStart(3)} ${horizon.ideaCount === 1 ? "idea" : "ideas"}${risk ? `  ${risk}` : ""}${run}${horizon.awaitingApproval ? "  waiting for your approval" : ""}`;
 }
 
 function printDetail(detail: IdeaDetail): void {
@@ -126,12 +129,12 @@ function offeredLine(actions: IdeaDetail["idea"]["actions"]): string {
 export function runPlanCommand(rest: string[]): void {
   const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: COMMON });
   const [sub = "show"] = positionals;
-  const plan = planFor(values);
-  const { actor } = writer(values.person);
+  const plan = planFor(values, sub === "enable");
+  const { actor, options } = writer(values.person);
   let view: PlanView;
   switch (sub) {
     case "enable":
-      view = plan.enable(actor);
+      view = plan.enable(actor, options);
       break;
     case "show":
       view = plan.view();
@@ -140,9 +143,8 @@ export function runPlanCommand(rest: string[]): void {
       throw new StapleError("validation", `Unknown plan verb "${sub}". Use: enable, show`);
   }
   if (values.json) return console.log(JSON.stringify(view));
-  if (!view.enabled) return console.log("Planning is not turned on. Run `staple plan enable`.");
   for (const horizon of view.horizons) console.log(horizonLine(horizon));
-  console.log(`${view.ideas.length} ideas · today ${view.today}`);
+  console.log(`${view.ideas.length} ${view.ideas.length === 1 ? "idea" : "ideas"} · today ${view.today}`);
 }
 
 export function runIdeaCommand(rest: string[]): void {
@@ -198,7 +200,6 @@ export function runIdeaCommand(rest: string[]): void {
         ideas = ideas.filter((idea) => idea.horizonId === (horizon?.id ?? null));
       }
       if (values.json) return console.log(JSON.stringify(ideas));
-      if (!view.enabled) return console.log("Planning is not turned on. Run `staple plan enable`.");
       if (ideas.length === 0) return console.log("no ideas");
       for (const idea of ideas) console.log(ideaLine(idea, view));
       return;
@@ -354,7 +355,7 @@ export function runHorizonCommand(rest: string[]): void {
   const { values, positionals } = parseArgs({
     args: rest,
     allowPositionals: true,
-    options: { ...COMMON, name: { type: "string" }, date: { type: "string" }, before: { type: "string" }, end: { type: "boolean" } },
+    options: { ...COMMON, name: { type: "string" }, date: { type: "string" }, before: { type: "string" }, end: { type: "boolean" }, run: { type: "string" }, goal: { type: "string", multiple: true }, "no-goal": { type: "boolean" } },
   });
   const [sub = "ls", first, ...others] = positionals;
   const need = (value: string | undefined, what: string): string => {
@@ -366,7 +367,6 @@ export function runHorizonCommand(rest: string[]): void {
   const list = () => {
     const view = plan.view();
     if (values.json) return console.log(JSON.stringify(view.horizons));
-    if (!view.enabled) return console.log("Planning is not turned on. Run `staple plan enable`.");
     for (const horizon of view.horizons) console.log(horizonLine(horizon));
   };
   switch (sub) {
@@ -375,9 +375,25 @@ export function runHorizonCommand(rest: string[]): void {
     case "new":
       plan.createHorizon({ name: need([first, ...others].filter(Boolean).join(" "), "a name"), date: values.date ?? null }, actor, options);
       return list();
-    case "set":
-      plan.updateHorizon(need(first, "a horizon reference"), { name: values.name, date: clearable(values.date) }, actor, options);
+    case "set": {
+      const ref = need(first, "a horizon reference");
+      const naming = values.name !== undefined || values.date !== undefined;
+      const running = values.run !== undefined || values.goal !== undefined || values["no-goal"] === true;
+      if (!naming && !running) throw new StapleError("validation", "staple horizon set needs --name, --date, --run (work, goal, epic or none) or --goal");
+      if (naming) plan.updateHorizon(ref, { name: values.name, date: clearable(values.date) }, actor, options);
+      if (running) {
+        plan.setHorizonRun(
+          ref,
+          {
+            ...(values.run !== undefined ? { mode: (values.run === "none" ? null : values.run) as never } : {}),
+            ...(values.goal !== undefined || values["no-goal"] ? { goal: values["no-goal"] ? [] : (values.goal as string[]) } : {}),
+          },
+          actor,
+          options,
+        );
+      }
       return list();
+    }
     case "mv":
       if (values.before === undefined && values.end !== true) throw new StapleError("validation", "staple horizon mv needs --before <horizon> or --end");
       plan.updateHorizon(need(first, "a horizon reference"), { before: values.end ? null : values.before! }, actor, options);
