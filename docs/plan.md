@@ -23,7 +23,7 @@ The four things and their jobs:
 | Idea | A plan you are still thinking about. It has no ticket number and never shows up as work. |
 | Horizon | A column of planned work. Every horizon is a [milestone](milestones.md), so it has progress, a state and a place in the queue. |
 | Epic and tasks | The executable work, made from the idea's plan. Agents pick them up like any other tickets. |
-| Milestone | Delivery tracking. A horizon's milestone counts its work and reads shipped when that work is done. |
+| Milestone | Delivery tracking. A horizon's milestone counts its work, the planned work in its ideas too, and reads shipped when all of it is done. |
 
 One idea moves through these states. Each state offers only the actions that fit it, on every
 surface (the page, the CLI and the agent tools):
@@ -49,7 +49,7 @@ stateDiagram-v2
         state "shipped" as h_shipped
         [*] --> h_planned: created (person)
         h_planned --> h_active: holds open work
-        h_active --> h_shipped: all its work done
+        h_active --> h_shipped: all its work done, every idea on it shipped
     }
     note right of horizon
         Shaping, scheduling and planned dates are the person's call
@@ -183,6 +183,22 @@ Once it is scaffolded, promoted or linked to work, the idea reads **started**. I
 real dates now come from that work, and it reads **shipped**, with ✓ and the date, when all of it
 is done. A horizon reads **active** while it holds open work and **shipped** when its milestone is
 done; its column then folds to a ✓ summary.
+
+**What progress counts.** Progress counts work items. A ticket counts once it exists, done or
+open, and each breakdown row of an idea that has no tickets yet counts as one **planned** item.
+So a horizon whose tickets are nearly all done, with three ideas still waiting to be scaffolded,
+reads the share of all its work that is done, not of the tickets alone. The horizon header, its
+drawer, the **Milestones** view, `staple horizon ls`, `staple milestone show` and the agent tools
+all show the same numbers and the same percentage. An idea with no work, no rows and no
+sub-ideas has no size yet: it is counted as **unsized**, never as no work. A parent idea's
+sub-ideas carry its size, so its own breakdown, which usually names them, is not counted again;
+its rows count once they are tickets. Counts of ideas name the sub-ideas, with the parent counted
+apart (`3 ideas (+1 parent)`).
+
+**A horizon waits for its ideas.** A horizon is not shipped while an idea scheduled on it is not:
+closing its last ticket leaves it open while another idea on it is still to be built, or still
+being explored. Drop the idea or move it to another horizon and the horizon ships on the work it
+holds. This holds on every device, and whether planning is on or off.
 
 A parent idea's state is its own. Work under its sub-ideas shows on the parent as progress, dates
 and late or not-started counts, but it never starts, ships or reopens the parent.
