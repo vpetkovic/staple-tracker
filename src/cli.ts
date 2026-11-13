@@ -1,3 +1,4 @@
+import { configuredHumanName } from "./mcp-view-actions.js";
 /**
  * staple CLI — the human/CI surface. Mirrors the MCP tools.
  * Ships as the `staple` bin of the `staple-cli` npm package (`npx staple-cli`);
@@ -17,6 +18,7 @@ import { runDoctorCommand } from "./commands/doctor.js";
 import { runAddCommand } from "./commands/add.js";
 import { runDiscoverCommand } from "./commands/discover.js";
 import { runMilestoneCommand } from "./commands/milestone.js";
+import { runHorizonCommand, runIdeaCommand, runPlanCommand } from "./commands/plan.js";
 import { assertNotReservedActor } from "./core/milestones.js";
 import { renderInstructions } from "./core/instructions.js";
 import { runQueueCommand } from "./commands/queue.js";
@@ -79,6 +81,18 @@ import type { WorkspaceStore } from "./core/store.js";
 import { requireMineLens, splitMine } from "./core/cloud/member-lens.js";
 import { sharedLine, sharedStatus } from "./core/cloud/shared-status.js";
 import { readConnection } from "./core/cloud/connection.js";
+import { format } from "node:util";
+import { hideDraftIdentifiers, publicOutput } from "./core/plan.js";
+
+/**
+ * Everything the CLI prints goes through one place on its way out, so no command can show an
+ * unpromoted idea's draft identifier (design/plan.md, "Ticket numbers"): JSON hides it as
+ * `identifier: null, draft: true`, text names the idea by its id (`publicOutput`).
+ */
+for (const method of ["log", "error", "warn", "info"] as const) {
+  const print = console[method].bind(console);
+  console[method] = (...args: unknown[]) => print(publicOutput(format(...args)));
+}
 
 const STATUS_GLYPHS: Record<string, string> = {
   backlog: "◌",
@@ -455,11 +469,11 @@ function outJson(payload: unknown): void {
    */
   const notices = takeRenumberNotices();
   if (notices.length > 0 && payload !== null && typeof payload === "object" && !Array.isArray(payload)) {
-    console.log(JSON.stringify({ ...(payload as Record<string, unknown>), renumbered: notices }));
+    console.log(JSON.stringify({ ...(payload as Record<string, unknown>), renumbered: notices }, hideDraftIdentifiers));
     return;
   }
   for (const notice of notices) console.error(`note: ${notice.message}`);
-  console.log(JSON.stringify(payload));
+  console.log(JSON.stringify(payload, hideDraftIdentifiers));
 }
 
 /** Every renumber notice a command left and did not put in its JSON answer, said now. */
@@ -1101,6 +1115,54 @@ Milestones
               --base N is the members revision "show" printed; a stale base is
               refused (exit 7) and the order stands. Membership never changes an
               issue's parent, blockers, status or claim
+
+The plan (experimental; features.planning defaults off)
+  plan enable --person                 turn planning on: adds the "idea" and "milestone"
+              kinds and the horizons Now and Next, which are milestones
+  plan show                            the horizons in order with their late and
+              not-started counts
+  idea ls [--maturity M] [--horizon H]  ideas with stage, horizon and progress; ideas are
+              never queued, checked out, picked by next or listed by ls. An idea has
+              no ticket number until it is promoted: its <ref> is the id idea ls prints
+  idea new <title> [--brief T] [--parent REF]
+              capture a raw idea (an agent captures raw ideas only)
+  idea show <ref>                       stage, windows, plan sections, questions, decisions, links
+  idea plan <ref> [--goal T] [--context T|-] [--acceptance T]... [--dependency T]...
+              [--out-of-scope T] [--risks T] [--source T]...
+              write plan sections; a list flag given replaces that list whole
+  idea task <ref> add|set|rm <key> [title] [--estimate E] [--depends K,K] [--acceptance T]
+              [--owner O] [--notes T]
+              one task breakdown row (key, title, estimate, depends-on, acceptance)
+  idea import <plan.md> [--parent REF] [--horizon H] [--maturity M]
+              capture an idea from a plan file: its sections and task table, with the
+              file attached; prints what it kept in Context instead of its section
+  idea set <ref> [--title T] [--brief T]
+              the agent's edits; with --person also --maturity raw|exploring|shaped|dropped,
+              --horizon H|none, --parent REF|none, --start D|none, --target D|none and
+              --before REF|end
+  idea promote <ref>                    the idea becomes an epic on the same record and takes
+              its ticket number; only a shaped idea offers it
+  idea scaffold <ref> [--confirm FP]   without --confirm, the preview: the epic and every task it
+              would make (estimate, blockers, acceptance, a context document each), what
+              holds it back, and its fingerprint; --confirm FP makes exactly that preview
+              and is refused when the plan changed since; a retry makes only what is missing
+  idea adopt <ref> <issue>              link existing work to the idea
+  idea unlink <ref> <issue>
+  idea ask <ref> <question>             add an open question
+  idea resolve <ref> <n> [--reopen]     resolve question n (1-based)
+  idea defer <ref> <n> [--reopen]       leave question n open on purpose: it no longer holds
+              shaping back (shaping needs a goal, a task breakdown with acceptance on every
+              row, acceptance criteria, and every question answered or deferred)
+  idea decide <ref> <decision>          record a decision
+  idea reset-baseline <ref> --person    the current planned window becomes the baseline
+  horizon ls
+  horizon new <name> [--date D] --person
+  horizon set <ref> [--name N] [--date D|none] [--run work|goal|epic|none] [--goal TEXT]... [--no-goal] --person
+  horizon mv <ref> (--before H|--end) --person
+  horizon rm <ref> --person             cancels the horizon; its ideas become unscheduled.
+              A horizon is a milestone: its ideas' work is its membership
+              --person records a steering write as the person's, under the machine's
+              configured humanName; maturity, horizons, dates and the baseline need it
 
 The pickup queue
   queue [--all] [--effective]           the PLAN (what a human ordered), with each
@@ -2758,6 +2820,20 @@ function main() {
       break;
     }
 
+    /** The plan layer: ideas and horizons above the tracker (src/commands/plan.ts). */
+    case "plan": {
+      runPlanCommand(rest);
+      break;
+    }
+    case "idea": {
+      runIdeaCommand(rest);
+      break;
+    }
+    case "horizon": {
+      runHorizonCommand(rest);
+      break;
+    }
+
     /**
      * `staple queue` — R2c (STA-168). One dispatcher token over the plan and the
      * resolver; every mutation goes through the same `QueueStore.mutate` MCP and
@@ -2817,7 +2893,7 @@ function main() {
      * refused with the sentence that names `staple config set`.
      */
     case "settings": {
-      const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: common });
+      const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { ...common, person: { type: "boolean" } } });
       const { store } = getStore(values);
       const sub = positionals[0] ?? "ls";
       // A structured value (kinds.appearance is a map) prints as JSON rather
@@ -2846,7 +2922,9 @@ function main() {
           const raw = positionals[2];
           if (!key || raw === undefined) throw new StapleError("validation", "usage: staple settings set <key> <value>");
           const definition = requireSettingDefinition(key, "workspace");
-          const view = store.setSetting(key, coerceSettingInput(definition, raw, `workspace ${store.slug}`), agentName());
+          const name = values.person ? configuredHumanName() : null;
+          if (values.person && !name) throw new StapleError("validation", '--person needs your name: run `staple config set humanName "Your Name"` first.');
+          const view = store.setSetting(key, coerceSettingInput(definition, raw, `workspace ${store.slug}`), name ?? agentName(), values.person ? { via: "cli" } : null);
           if (values.json) outJson(view);
           else line(view);
           break;

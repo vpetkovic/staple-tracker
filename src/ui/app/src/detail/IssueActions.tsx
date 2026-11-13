@@ -18,7 +18,7 @@ import { StatusIcon } from "@/components/task-list";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { action, approveGate, requestGate, requestGateChanges } from "@/lib/api";
+import { action, approveGate, planWrite, requestGate, requestGateChanges } from "@/lib/api";
 import { isStaleClaim } from "@/lib/claim";
 import { isActiveGate } from "@/lib/derived-queued";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
@@ -146,7 +146,7 @@ export function useIssueActions(refresh: () => void, extras: ContextExtras = {})
       createActionController({
         // The gate helpers accept the actor in their body; passed as a value, the name rides
         // along without widening their declared shapes in lib/.
-        post: { action, requestGate, approveGate, requestGateChanges },
+        post: { action, requestGate, approveGate, requestGateChanges, planWrite },
         ask: (prompt, prefill) => window.prompt(prompt, prefill),
         names: () => namesRef.current,
         remember: (which, name) => {

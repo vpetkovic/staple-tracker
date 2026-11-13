@@ -47,6 +47,9 @@
 import type { DatabaseSync } from "node:sqlite";
 import { renumberedRanks } from "../milestones.js";
 import { criterionMarkFromValue, criterionMarkPosition, criterionMarkValue } from "../milestone-goal.js";
+import { planLinkFromValue, planLinkIssue, writePlanLink } from "../plan-links.js";
+import { planRowFromValue, planRowId, writePlanRow } from "../plan-rows.js";
+import { isDraftIdentifier } from "../plan.js";
 import { writeCriterionMark } from "../milestone-marks.js";
 import {
   SETTING_DEFINITIONS,
@@ -148,7 +151,33 @@ export const ISSUE_FIELDS: Record<string, Column> = {
   updatedAt: col("updated_at"),
   // The status derivation last wrote, cleared by any other move (migration 017).
   derivedStatus: col("derived_status"),
+  // The plan layer, meaningful on ideas and horizons only (migration 020, design/plan.md).
+  planMaturity: col("plan_maturity"),
+  planHorizonId: col("plan_horizon_id"),
+  planStart: col("plan_start"),
+  planTarget: col("plan_target"),
+  planBaselineStart: col("plan_baseline_start"),
+  planBaselineTarget: col("plan_baseline_target"),
+  planRank: col("plan_rank"),
+  planRunMode: col("plan_run_mode"),
 };
+
+/**
+ * The plan fields, left out of an issue's `create` while they are null. They are null on
+ * every issue that is not an idea or a horizon, so a task's create carries exactly the
+ * fields it carried before the plan layer existed, and an absent key on a create reads as
+ * null on the receiver, which is the value the column defaults to.
+ */
+export const PLAN_ISSUE_FIELDS: ReadonlySet<string> = new Set([
+  "planMaturity",
+  "planHorizonId",
+  "planStart",
+  "planTarget",
+  "planBaselineStart",
+  "planBaselineTarget",
+  "planRank",
+  "planRunMode",
+]);
 
 export const COMMENT_FIELDS: Record<string, Column> = {
   issueId: col("issue_id"),
@@ -282,6 +311,7 @@ export function payloadFromRow(
   const payload: Record<string, unknown> = {};
   for (const [key, mapped] of Object.entries(fields)) {
     if (!(mapped.column in row)) continue;
+    if (table === "issues" && PLAN_ISSUE_FIELDS.has(key) && row[mapped.column] === null) continue;
     payload[key] = decodeColumn(row[mapped.column], mapped.encoding);
   }
   return payload;
@@ -1104,6 +1134,21 @@ function displaceIdentifierHolder(
   const incoming = index < 0 ? undefined : pairs[index];
   if (!incoming || typeof incoming[1] !== "string") return;
 
+  /**
+   * The record's own number, written on two devices: one idea promoted on both before either
+   * heard of the other (design/plan.md, "Ticket numbers"). Its identifier is one field, and the
+   * last write of it in the log is the value, as the service's fold keeps it. So a write this
+   * device made later than the incoming one stands, and the incoming one names nothing: it
+   * displaces no holder here, because on every device its number is about to be given up.
+   */
+  const ownDecision = (input.verb === "renumber" && input.actor !== "staple") || input.seq === undefined || input.seq === null;
+  const mine = ownDecision ? null : ownClaimSeq(db, "issue", input.entityId, ["identifier"]);
+  const theirs = claimSeqOf(input, ["identifier"]);
+  if (mine !== null && theirs !== null && mine > theirs && identifierOf(db, input.entityId) !== incoming[1]) {
+    pairs.splice(index, 1);
+    return;
+  }
+
   const owner = identifierOwner(db, incoming[1]);
   if (owner === null || owner === input.entityId) return;
 
@@ -1136,6 +1181,18 @@ function displaceIdentifierHolder(
   }
   if (!decision && input.read !== undefined) {
     laterClaimInRead(db, input, pairs, index, incoming[1]);
+    return;
+  }
+  /**
+   * A promoted idea's first number is a claim like a create's (design/plan.md, "Identity"): the
+   * row holds a draft identifier, which is never shown, so a later claim it lost takes the
+   * stand-in a create would, on the record until the promoting device settles it.
+   */
+  const current = identifierOf(db, input.entityId);
+  if (!decision && current !== null && isDraftIdentifier(current)) {
+    const provisional = provisionalIdentifier(db, incoming[1], claimSeqOf(input, ["identifier"]));
+    recordIdentifierConflict(db, input, incoming[1], provisional);
+    pairs[index] = ["identifier", provisional];
     return;
   }
   if (!decision) {
@@ -2232,7 +2289,19 @@ function applyMilestone(db: DatabaseSync, input: ApplyInput): boolean {
   const marks = Object.keys(input.payload)
     .map((key) => ({ key, position: criterionMarkPosition(key) }))
     .filter((entry): entry is { key: string; position: number } => entry.position !== null);
-  if (!hasMembers && !hasTarget && !hasStart && !hasUpdated && marks.length === 0) return false;
+  /**
+   * An idea's links (`planLink.<issue id>`, `plan-links.ts`) ride the same entity in the same
+   * way: one field per link, a null unlinks, a value that is not a link is ignored.
+   */
+  const links = Object.keys(input.payload)
+    .map((key) => ({ key, issueId: planLinkIssue(key) }))
+    .filter((entry): entry is { key: string; issueId: string } => entry.issueId !== null);
+  /** And its task breakdown rows (`planRow.<row id>`, `plan-rows.ts`): one field per row, a null removes it. */
+  const rows = Object.keys(input.payload)
+    .map((key) => ({ key, rowId: planRowId(key) }))
+    .filter((entry): entry is { key: string; rowId: string } => entry.rowId !== null);
+  const fieldsOnly = marks.length + links.length + rows.length;
+  if (!hasMembers && !hasTarget && !hasStart && !hasUpdated && fieldsOnly === 0) return false;
 
   if (!issueExists(db, input.entityId)) throw new ReferentMissing(`milestone ${input.entityId}`);
   for (const { key, position } of marks) {
@@ -2241,7 +2310,19 @@ function applyMilestone(db: DatabaseSync, input: ApplyInput): boolean {
     if (value !== null && mark === null) continue;
     writeCriterionMark(db, input.entityId, position, mark === null ? null : criterionMarkValue(mark));
   }
-  if (marks.length > 0 && !hasMembers && !hasTarget && !hasStart && !hasUpdated) return true;
+  for (const { key, issueId } of links) {
+    const value = input.payload[key];
+    const link = value === null ? null : planLinkFromValue(value);
+    if (value !== null && link === null) continue;
+    writePlanLink(db, input.entityId, issueId, link);
+  }
+  for (const { key, rowId } of rows) {
+    const value = input.payload[key];
+    const row = value === null ? null : planRowFromValue(value);
+    if (value !== null && row === null) continue;
+    writePlanRow(db, input.entityId, rowId, row);
+  }
+  if (fieldsOnly > 0 && !hasMembers && !hasTarget && !hasStart && !hasUpdated) return true;
   /**
    * When the milestone last changed, as the device that changed it wrote it: the payload's
    * `updatedAt`, which every build since this one sends (`journal.ts`, the row diff). An

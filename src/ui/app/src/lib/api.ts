@@ -14,6 +14,7 @@
  * WAVE 2: import from here. Adding an endpoint means adding a function here.
  */
 import { replaceUrl } from "./back-to-close";
+import type { IdeaDetailData, PlanData, PlanWriteResult } from "./plan-types";
 import type {
   ActionPayload,
   AgentContext,
@@ -708,7 +709,19 @@ export const getInbox = (params: { assignee?: string } = {}) =>
   request<InboxRow[]>(`/api/inbox${qs(params)}`);
 
 export const getIssue = (params: { ws?: string; ref: string }) =>
-  request<IssueDetail>(`/api/issue${qs(params)}`);
+  request<IssueDetail>(`/api/issue${qs(params)}`).then(addressDrafts);
+
+/**
+ * An unpromoted idea has no ticket number: the server sends it, and any idea among its ancestors
+ * and children, with `identifier: null, draft: true`. The page addresses such an issue by its id,
+ * the one ref every route resolves, so a tab that names its issue in a request never sends null.
+ * What the page SHOWS for it is decided by the drawer (`detail/plan-record.ts`), never this.
+ */
+export function addressDrafts(detail: IssueDetail): IssueDetail {
+  const address = <I extends { id: string; identifier: string | null }>(issue: I): I & { identifier: string } =>
+    (issue.identifier === null ? { ...issue, identifier: issue.id } : issue) as I & { identifier: string };
+  return { ...detail, issue: address(detail.issue), ancestors: detail.ancestors.map(address), children: detail.children.map(address) };
+}
 
 export const getDocument = (params: { ws?: string; ref: string; key: string; revision?: number }) =>
   request<IssueDocument>(`/api/document${qs(params)}`);
@@ -1229,4 +1242,22 @@ export const startLinkJoin = (target: { link: string; consent: ConsentTicket }) 
     link: target.link,
     consent: target.consent.id,
     digest: target.consent.digest,
+  });
+
+// ---------- the plan layer (design/plan.md) ----------
+
+export const getPlan = (params: { ws?: string } = {}) => request<PlanData>(`/api/plan${qs(params)}`);
+
+export const getPlanIdea = (params: { ws?: string; ref: string }) => request<IdeaDetailData>(`/api/plan-idea${qs(params)}`);
+
+/**
+ * Every plan write: the route's verb and its fields. The page is the person, so the server
+ * records each write as the person's from the Plan view. Answers the whole plan, and the
+ * idea's detail when the write named one.
+ */
+export const planWrite = (verb: string, body: Record<string, unknown>) =>
+  request<PlanWriteResult>(`/api/plan/${verb}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ actor: "ui", ...body }),
   });

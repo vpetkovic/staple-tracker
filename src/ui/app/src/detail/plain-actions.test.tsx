@@ -101,7 +101,7 @@ describe("every write carries its workspace and its issue", () => {
       const c = ctx(state);
       for (const call of calls([primaryItem(c), ...overflowItems(c), ...statusItems(c)])) {
         expect(call.ws).toBe("exercises");
-        expect(call.ref).toBe(state.issue.id);
+        expect(call.route !== "plan" && call.ref).toBe(state.issue.id);
       }
     }
   });

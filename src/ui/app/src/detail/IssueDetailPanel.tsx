@@ -1,3 +1,4 @@
+import { ideaPlanHref } from "./PlannedIdeaLinks";
 /**
  * The detail panel's contents: the bar, the header (breadcrumb, title, status line, actions),
  * the properties, and the tab slot.
@@ -35,7 +36,7 @@ import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Maximize2, Minimize2
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { flushSync } from "react-dom";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { getIssue, getQueue, getSettings } from "@/lib/api";
 import type { AuthError } from "@/lib/api";
 import { selectionTarget, useSession, type Selection } from "@/lib/session";
@@ -64,7 +65,9 @@ import { useMembersCache, useOtherMembersRule } from "@/lib/members";
 import { EmptyValue, MoreDetails, PropertyList, PropertyRow, type PropertyLayout } from "./PropertyGrid";
 import { PersonChip, RelativeTime } from "./parts";
 import { MilestoneCrumb, MilestoneDue, MilestoneSentence, MilestoneValue, OpenPlanAction, opensPlan, planOf } from "./MilestoneParts";
-import { primaryItem, queueAheadOf, statusSentence } from "./plain-actions";
+import { offers, primaryItem, queueAheadOf, statusSentence } from "./plain-actions";
+import { HorizonSection, IdeaStatusLine, PlanOverflow, PlanPrimary } from "./PlanActions";
+import { hasNoNumber, horizonPlanOf, isIdeaDetail, planRecordOf } from "./plan-record";
 import { detailFacts } from "./properties";
 import {
   anchorAfterScroll,
@@ -76,6 +79,7 @@ import {
   type PanelGeometry,
   type ReserveAnchor,
 } from "./tab-scroll";
+import { DetailTabStrip } from "./tabs/DetailTabStrip";
 import { onOpenDetailTab, takeArrivalTab, visibleTabs } from "./tabs/registry";
 
 export function IssueDetailPanel({
@@ -148,7 +152,11 @@ export function IssueDetailPanel({
         onClose={onClose}
         overflow={
           sheet && detail ? (
-            <OverflowMenu detail={detail} controller={controller} onRequestApproval={() => setRequestOpen(true)} triggerClassName="size-11" />
+            isIdeaDetail(detail) ? (
+              <PlanOverflow workspace={detail.workspace} idea={planRecordOf(detail)!.idea} controller={controller} triggerClassName="size-11" />
+            ) : (
+              <OverflowMenu detail={detail} controller={controller} onRequestApproval={() => setRequestOpen(true)} triggerClassName="size-11" />
+            )
           ) : null
         }
       />
@@ -192,7 +200,9 @@ export function IssueDetailPanel({
           {/* A refusal from the bottom bar or the top bar's ⋯ shows here, next to the thumb
               that caused it, never at the top of a long scroll. */}
           <ActionRefusal controller={controller} className="max-h-[40vh] overflow-y-auto" />
-          {opensPlan(detail) ? (
+          {isIdeaDetail(detail) ? (
+            <PlanPrimary workspace={detail.workspace} idea={planRecordOf(detail)!.idea} controller={controller} size="lg" className="w-full" />
+          ) : opensPlan(detail) ? (
             <OpenPlanAction workspace={detail.workspace} identifier={detail.issue.identifier} size="lg" className="w-full" />
           ) : (
             <>
@@ -370,7 +380,7 @@ function Breadcrumb({ selection, detail, className }: { selection: Selection; de
         <span key={ancestor.id} className="flex min-w-0 items-center gap-1">
           <button
             type="button"
-            title={`${ancestor.identifier} · ${ancestor.title}`}
+            title={hasNoNumber(ancestor) ? ancestor.title : `${ancestor.identifier} · ${ancestor.title}`}
             onClick={() => session.open(detail!.workspace, ancestor.identifier)}
             className="focus-ring max-w-[18rem] min-w-0 truncate rounded-md px-1 py-0.5 text-text-secondary hover:bg-surface-hover hover:text-foreground pointer-coarse:py-2"
           >
@@ -382,10 +392,19 @@ function Breadcrumb({ selection, detail, className }: { selection: Selection; de
       {/* Never wraps: on a phone the row gives its column to the title, so this is where the
           reference is read, and it has to read as one word. */}
       <span className="shrink-0 px-1 whitespace-nowrap" data-detail-identifier="">
-        {detail?.issue.identifier ?? selection.ref}
+        {referenceOf(selection, detail)}
       </span>
     </nav>
   );
+}
+
+/**
+ * The quiet reference at the end of the breadcrumb. An unpromoted idea has no ticket number, so
+ * it reads "Idea"; while a detail loads, a ref that is an id or a stored key is not shown either.
+ */
+function referenceOf(selection: Selection, detail: IssueDetail | undefined): string {
+  if (detail) return isIdeaDetail(detail) ? "Idea" : detail.issue.identifier;
+  return selection.ref.startsWith("~") || /^[0-9a-f]{8}-[0-9a-f]{4}-/.test(selection.ref) ? "" : selection.ref;
 }
 
 /**
@@ -472,6 +491,29 @@ export function DetailContent({
   const sheet = presentation === "sheet";
   const { issue } = detail;
   const gate = <GateSection detail={detail} controller={controller} requestOpen={requestOpen} onCloseRequest={onCloseRequest} />;
+  const idea = isIdeaDetail(detail) ? planRecordOf(detail) : null;
+  const horizon = horizonPlanOf(detail);
+
+  if (idea) {
+    // An idea is a plan, not work: no status pill, no claim, no properties grid. Its state and the
+    // actions that state offers lead; the Plan tab holds the rest.
+    return (
+      <div data-detail-layout={sheet ? "sheet" : expanded ? "page" : "drawer"} data-detail-idea={idea.idea.id} className={cn("flex w-full flex-col", expanded ? "mx-auto max-w-readable px-6 pt-8 pb-12" : sheet ? "px-4 pt-3 pb-6" : "px-6 pt-6 pb-10")}>
+        {sheet ? <Breadcrumb selection={{ workspace: detail.workspace, ref: issue.id }} detail={detail} className="-ml-1 mb-1.5" /> : null}
+        <InlineTitle issue={issue} workspace={detail.workspace} refresh={refresh} size={sheet ? "heading" : "display"} readOnly={!offers(idea.idea, "edit")} />
+        <IdeaStatusLine record={idea} className="mt-3">
+          {sheet ? null : (
+            <div className="ml-auto flex shrink-0 items-center gap-1 pl-2">
+              <PlanPrimary workspace={detail.workspace} idea={idea.idea} controller={controller} />
+              <PlanOverflow workspace={detail.workspace} idea={idea.idea} controller={controller} />
+            </div>
+          )}
+        </IdeaStatusLine>
+        {sheet ? null : <ActionRefusal controller={controller} className="mt-4" />}
+        <DetailTabs detail={detail} sheet={sheet} refresh={refresh} onAuthError={onAuthError} />
+      </div>
+    );
+  }
 
   return (
     <div
@@ -513,6 +555,9 @@ export function DetailContent({
         <div ref={gateRef} tabIndex={-1} className="scroll-mt-4 outline-none empty:hidden [&:not(:empty)]:mt-5" data-detail-gate="">
           {gate}
         </div>
+
+        {planRecordOf(detail)?.idea.promoted ? <a data-original-idea href={ideaPlanHref(detail.workspace, issue.id)} className="focus-ring mt-3 inline-flex min-h-11 items-center text-label text-text-secondary hover:underline">Open original idea in Plan ↗</a> : null}
+        {horizon ? <HorizonSection detail={detail} horizon={horizon.horizon} ideas={horizon.ideas} controller={controller} className="mt-5" /> : null}
 
         {!sheet && !expanded ? (
           <section aria-label="Properties" className="mt-6 border-t pt-4">
@@ -785,7 +830,6 @@ function DetailTabs({
 }) {
   // "overview", unless a link elsewhere asked for another tab on this issue (a goal's evidence).
   const [tab, setTab] = useState(() => takeArrivalTab(detail.issue.identifier) ?? "overview");
-  const stripRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const panelsRef = useRef<HTMLDivElement>(null);
   /** The panels' min-height while a stuck switch needs one, else null (tab-scroll.ts). */
@@ -816,7 +860,6 @@ function DetailTabs({
   useEffect(() => onOpenDetailTab(selectTab), [selectTab]);
   const tabs = visibleTabs(detail);
   const active = tabs.some((t) => t.id === tab) ? tab : (tabs[0]?.id ?? "overview");
-  const edges = useScrollEdges(stripRef, tabs.length);
   const stuck = useStuck(sentinelRef);
 
   // Before paint: a stuck strip stays stuck, and the new tab starts right under it.
@@ -825,16 +868,6 @@ function DetailTabs({
     pendingScroll.current = null;
     const scroller = sentinelRef.current ? scrollerOf(sentinelRef.current) : null;
     if (target !== null && scroller) scroller.scrollTop = target;
-  }, [active]);
-
-  // Bring the active tab into view inside the strip, horizontally only: scrollIntoView
-  // would also scroll the panel to the strip, which is not what choosing a tab means.
-  useLayoutEffect(() => {
-    const strip = stripRef.current;
-    const trigger = strip?.querySelector<HTMLElement>('[role="tab"][data-state="active"]');
-    if (!strip || !trigger || strip.scrollWidth <= strip.clientWidth) return;
-    const left = trigger.offsetLeft - (strip.clientWidth - trigger.offsetWidth) / 2;
-    strip.scrollTo({ left: Math.max(0, left), behavior: prefersReducedMotion() ? "auto" : "smooth" });
   }, [active]);
 
   return (
@@ -847,19 +880,7 @@ function DetailTabs({
         data-detail-tabs=""
         data-stuck={stuck ? "" : undefined}
       >
-        <div className="staple-detail-tabfade" data-fade-start={edges.start ? "" : undefined} data-fade-end={edges.end ? "" : undefined}>
-          <TabsList
-            ref={stripRef}
-            variant={sheet ? "default" : "line"}
-            className={cn("staple-detail-tabstrip w-full justify-start", sheet && "staple-detail-segments")}
-          >
-            {tabs.map((definition) => (
-              <TabsTrigger key={definition.id} value={definition.id} className="focus-ring-inset flex-none">
-                {definition.label}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </div>
+        <DetailTabStrip sheet={sheet} label="Issue detail tabs" items={tabs} active={active} />
       </div>
       <div ref={panelsRef} data-detail-tabpanels="" style={reserve !== null ? { minHeight: reserve } : undefined}>
         {tabs.map((definition) => {
@@ -960,29 +981,6 @@ function useReserveRelease(
       observer?.disconnect();
     };
   }, [holding, sentinelRef, panelsRef, anchorRef, setReserve]);
-}
-
-/** Whether a horizontal scroller has more content before or after what is showing. */
-function useScrollEdges(ref: RefObject<HTMLElement | null>, contentKey: unknown): { start: boolean; end: boolean } {
-  const [edges, setEdges] = useState({ start: false, end: false });
-  useEffect(() => {
-    const element = ref.current;
-    if (!element) return;
-    const measure = () => {
-      const max = element.scrollWidth - element.clientWidth;
-      const next = { start: element.scrollLeft > 1, end: max - element.scrollLeft > 1 };
-      setEdges((current) => (current.start === next.start && current.end === next.end ? current : next));
-    };
-    measure();
-    element.addEventListener("scroll", measure, { passive: true });
-    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
-    observer?.observe(element);
-    return () => {
-      element.removeEventListener("scroll", measure);
-      observer?.disconnect();
-    };
-  }, [ref, contentKey]);
-  return edges;
 }
 
 /** Whether the element after `sentinel` is stuck: the sentinel has scrolled out of the panel. */

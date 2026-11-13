@@ -20,6 +20,7 @@ import { migration as m016 } from "./016-milestone-goals.js";
 import { migration as m017 } from "./017-derived-status.js";
 import { migration as m018 } from "./018-attachments.js";
 import { migration as m019 } from "./019-instruction-documents.js";
+import { migration as m020 } from "./020-plan-fields.js";
 
 /**
  * The workspace database — the per-repo (or global) task store.
@@ -59,13 +60,14 @@ import { migration as m019 } from "./019-instruction-documents.js";
  * follows: two new tables, the metadata replicating as the `attachment` entity and the
  * bytes staying local except when a create inlines them. 019 (instruction documents) follows:
  * one column on `document_revisions` that rides in the revision's payload, and two machine-local
- * `runs` columns.
+ * `runs` columns. 020 (the plan layer) follows: seven nullable `issues` columns that ride the
+ * `issue` entity as fields, and `plan_links` and `plan_rows`, one row per link and per breakdown row, each a field of the idea's `milestone` entity.
  */
 export const WORKSPACE_TARGET: MigrationTarget = {
   label: "workspace database",
   // `issues` has existed since version 1, so its absence means an empty file.
   sentinelTable: "issues",
-  migrations: [m001, m002, m003, m004, m005, m006, m007, m008, m009, m010, m011, m012, m013, m014, m015, m016, m017, m018, m019],
+  migrations: [m001, m002, m003, m004, m005, m006, m007, m008, m009, m010, m011, m012, m013, m014, m015, m016, m017, m018, m019, m020],
   consolidated: CONSOLIDATED_DDL,
 };
 

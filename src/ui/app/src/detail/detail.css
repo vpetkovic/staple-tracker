@@ -298,7 +298,7 @@
  * fades out (`data-fade-start` / `data-fade-end`, set from the scroll position), which says
  * "there is more" without a scrollbar.
  */
-.staple-detail-panel[data-mode="sheet"] .staple-detail-segments {
+.staple-detail-segments {
   height: 48px;
   padding: 4px;
   border-radius: 14px;
@@ -310,7 +310,7 @@
  * poked out of the track. So the segment states its own min-height too: 40px, which is a
  * finger-sized target, inside a 48px track with 4px of track showing round the thumb.
  */
-.staple-detail-panel[data-mode="sheet"] .staple-detail-segments [role="tab"] {
+.staple-detail-segments [role="tab"] {
   height: 40px;
   min-height: 40px;
   padding-inline: 14px;

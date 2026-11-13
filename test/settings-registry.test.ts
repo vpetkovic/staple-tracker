@@ -60,7 +60,7 @@ describe("the registered set", () => {
     }
   });
 
-  it("registers the four machine preferences as global and three workspace field settings", () => {
+  it("registers the four machine preferences as global and four workspace field settings", () => {
     expect(settingDefinitionsFor("global").map((d) => [d.key, d.configKey])).toEqual([
       ["machine.browser", "browser"],
       ["machine.port", "port"],
@@ -71,6 +71,7 @@ describe("the registered set", () => {
       "kinds.default",
       "kinds.appearance",
       "queue.policy",
+      "features.planning",
     ]);
   });
 
@@ -79,6 +80,7 @@ describe("the registered set", () => {
       "statuses:workspace:statuses",
       "kinds:workspace:kinds",
       "queue:workspace:fields",
+      "features:workspace:fields",
       "machine:global:fields",
     ]);
     expect(settingCategoriesFor("global").map((c) => c.id)).toEqual(["machine"]);
@@ -287,8 +289,9 @@ describe("wire views", () => {
 
   it("serves the whole registry in shell order", () => {
     const view = settingRegistryView();
-    expect(view.categories.map((c) => c.id)).toEqual(["statuses", "kinds", "queue", "machine"]);
+    expect(view.categories.map((c) => c.id)).toEqual(["statuses", "kinds", "queue", "features", "machine"]);
     expect(view.definitions.map((d) => d.key)).toEqual([
+      "features.planning",
       "kinds.default",
       "machine.browser",
       "queue.policy",

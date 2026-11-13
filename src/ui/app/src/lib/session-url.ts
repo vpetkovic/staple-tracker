@@ -34,6 +34,7 @@ export const VIEW_SLUGS: Record<ViewName, string> = {
   queue: "queue",
   graph: "graph",
   milestones: "milestones",
+  plan: "plan",
   calibration: "estimate-accuracy",
   budget: "budget",
 };
@@ -101,17 +102,20 @@ export function readShellUrl(search: string): ShellUrlState | null {
  * order is fixed (ws, view, then the filters in registry order) so the same state always
  * produces the same string, which is what lets the caller skip a no-op `replaceState`.
  */
-export function withShellState(href: string, state: ShellUrlState): string {
+export function withShellState(href: string, state: ShellUrlState, options: { planningEnabled?: boolean } = {}): string {
+  // Only a resolved OFF flag rewrites a deep link; preserve it while bootstrap is loading.
+  const view = state.view === "plan" && options.planningEnabled === false ? "tree" : state.view;
   const url = new URL(href);
   const params = url.searchParams;
   for (const key of [...Object.values(URL_PARAMS), ...dimensionIds()]) params.delete(key);
   // The graph's layout belongs to the Graph: on any other page it would ride along, unread,
   // into every link and bookmark — and re-appear on the Graph from a stale address.
-  if (state.view !== "graph") params.delete(GRAPH_PARAM);
+  if (view !== "graph") params.delete(GRAPH_PARAM);
+  if (view !== "plan") params.delete("plan-lens");
   const extra = [...params.entries()];
   const next = new URLSearchParams();
   if (state.ws) next.set(URL_PARAMS.ws, state.ws);
-  next.set(URL_PARAMS.view, VIEW_SLUGS[state.view]);
+  next.set(URL_PARAMS.view, VIEW_SLUGS[view]);
   for (const id of dimensionIds()) {
     for (const value of state.filters.dims[id] ?? []) next.append(id, value);
   }

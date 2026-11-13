@@ -187,6 +187,15 @@ third device minted meanwhile; that is a fresh claim, settled the same way.
   applies a settlement but leaves the stand-in's record open (reported as "1
   unresolved conflict" about an issue every device agrees on); its first sync on this
   build closes every identifier record whose issue has moved off its stand-in since.
+- **One record's own number, written on two devices, is the last write in the log.** An
+  idea promoted on two devices offline takes a number on each ([plan](plan.md#ticket-numbers-none-until-promotion)):
+  two `update`s of one field of one issue. The service's fold keeps the later, so every device
+  does too: a device whose own write of that identifier sits later in the log than the arriving
+  one keeps its value and lets the arriving one name nothing (it displaces no holder), and
+  otherwise the arriving one is applied like any claim, moving the record and freeing the
+  number it held for whoever waits on it. The conflict screen does not read such an `update`
+  as an edit, and keeps its place in the log (`seq`) on what it passes on, so it is decided
+  by order and never left open for a person (`test/cloud-plan-promotion-identity.test.ts`).
 - **A settled number keeps every allocator clear of it.** It reaches the other devices as
   a renumber of an issue they already hold, so the applier advances the local allocator
   on that path exactly as it does for a create — without it, the next `staple new` on a
@@ -384,7 +393,7 @@ entity's own primary key.
 
 | Table | Key | Fields that travel |
 |---|---|---|
-| `issues` | `id` | `identifier`, `title`, `normalized_title`, `description`, `status`, `status_version`, `priority`, `parent_id`, `depth`, `assignee`, `created_by`, `labels`, `acceptance_criteria`, `block_parent_until_done`, `unblock_owner`, `unblock_action`, `origin_kind`, `origin_id`, `idempotency_key`, `estimated_seconds`, `kind`, `project_id`, `gate_state`, `gate_owner`, `gate_requested_by`, `gate_requested_at`, `gate_resolved_by`, `gate_resolved_at`, `gate_released`, `started_at`, `blocked_transition_at`, `completed_at`, `cancelled_at`, `created_at`, `updated_at`, `derived_status` |
+| `issues` | `id` | `identifier`, `title`, `normalized_title`, `description`, `status`, `status_version`, `priority`, `parent_id`, `depth`, `assignee`, `created_by`, `labels`, `acceptance_criteria`, `block_parent_until_done`, `unblock_owner`, `unblock_action`, `origin_kind`, `origin_id`, `idempotency_key`, `estimated_seconds`, `kind`, `project_id`, `gate_state`, `gate_owner`, `gate_requested_by`, `gate_requested_at`, `gate_resolved_by`, `gate_resolved_at`, `gate_released`, `started_at`, `blocked_transition_at`, `completed_at`, `cancelled_at`, `created_at`, `updated_at`, `derived_status`, and the plan fields `plan_maturity`, `plan_horizon_id`, `plan_start`, `plan_target`, `plan_baseline_start`, `plan_baseline_target`, `plan_rank` (workspace migration 020; left out of a create while null, so a task's create is unchanged; new fields on an existing entity, so no protocol change, see [plan](plan.md#storage-seven-columns-on-issues-two-tables-no-new-entity)) |
 | `comments` | `id` | `issue_id`, `author`, `author_type`, `body`, `idempotency_key`, `deleted_at`, `created_at` |
 | `documents` | `(issue_id, key)` | `current_revision`, `title`, `updated_at` |
 | `document_revisions` | `(issue_id, key, revision)` | `body`, `author`, `change_summary`, `created_at` — immutable once written, except that its number is where the log places it ([below](#conflicts-are-preserved-never-resolved-silently)) |
@@ -394,6 +403,7 @@ entity's own primary key.
 | `workspace_kinds` | `id` | `label`, `sort_order`, `is_builtin` (as `isBuiltin` on a create, below) |
 | `milestone_meta` | `issue_id` | `target_date`, `start_date`, `updated_at` — `members_revision` is derived, see below |
 | `milestone_criterion_marks` | `(milestone_id, position)` | `criterion`, `verdict`, `evidence`, `note`, `marked_by`, `run_id`, `marked_at` — as the milestone's field `criterion<position>` (a JSON object; null clears it), one field per criterion, so concurrent marks of one criterion are a field conflict and of two criteria are not. No new entity and no protocol change: the service folds a milestone's keys one by one, as it always has ([milestones](milestones.md#goal)) |
+| `plan_links` | `(idea_id, issue_id)` | `linked_by`, `linked_at` — as the idea's `milestone` entity field `planLink.<issue id>` (`{ linkedBy, linkedAt }`; null unlinks), one field per link, the criterion-mark shape: two devices linking different work to one idea both arrive, and linking and unlinking one issue is a field conflict. No new entity and no protocol change ([plan](plan.md#links-one-row-and-one-synced-field-per-link)) |
 | `attempts` | `id` | `issue_id`, `agent`, `role` (workspace migration 014; a create without it is a `worker` attempt), `opened_by`, `resumes_attempt_id`, `started_at`, `device_id`, `claim_scope`, `claim_fencing_token`, `harness`, `provider_binding`, `estimate_at_start`, `idempotency_key`, `provenance`, `missing` on the create; then only the end: `state`, `outcome`, `end_reason`, `end_detection`, `ended_by`, `ended_at`, `ended_at_source`, always all seven together — protocol 3, see [execution telemetry](execution-telemetry.md#where-it-lives-and-what-synchronizes) |
 | `attempt_transitions` | `id` | `attempt_id`, `kind`, `at`, `actor`, `detection`, `reason`, `detail`, `concurrency` — immutable once written, like a document revision; protocol 3 |
 | `attachments` | `id` | `issue_id`, `filename`, `media_type`, `size`, `sha256`, `author`, `caption`, `byte_sync`, `created_at` — protocol 4. `create` and `delete` only. When `byte_sync` is `inline` the bytes travel inside the create as base64 `bytes`. `attachment_bytes` is not an entity: a `local` file's bytes stay on the device that attached it, and another device can say they are not here |
@@ -667,6 +677,7 @@ this page, not a judgement call for an implementer.
 | `projects.source` where `source_kind = 'local'` | workspace db | An absolute filesystem path; discloses directory layout and the OS account name. Redacted per row, see above. |
 | `events` (whole table) | workspace db | Re-derived on apply, see above. |
 | `runs`, `run_tickets`, and the goal columns on `runs` | workspace db | An autopilot run is a machine-local driver: which agent on which machine is looping over the work (workspace migrations 015 and 016). Another device sees its effect — the claims, statuses and attempts its tickets produce — never the run. |
+| `plan_members` | workspace db | A horizon's derived membership, rebuilt on every device from the plan's synchronized fields and links after each plan write and each pull (workspace migration 020). Sending it would make it an ordered list two devices rewrite, so two offline moves would conflict; see [plan](plan.md#membership-derived-from-the-plan-never-typed-twice). |
 | `relations.id` | workspace db | Local `AUTOINCREMENT` surrogate. The natural key is `(blocker_id, blocked_id, type)`, which the `UNIQUE` constraint already declares. |
 | `sqlite_sequence` | workspace db | SQLite's own `AUTOINCREMENT` high-water marks. Rebuilt by SQLite. |
 | `.staple/snapshots/*.db` | workspace directory | Pre-migration snapshots — full copies of an older database. Replicating one would be catastrophic. |

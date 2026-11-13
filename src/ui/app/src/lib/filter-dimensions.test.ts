@@ -428,6 +428,7 @@ describe("the registry, the count and the chips", () => {
       "status",
       "blocked",
       "kind",
+      "horizon",
       "assignee",
       "priority",
       "label",

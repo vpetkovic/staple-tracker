@@ -115,6 +115,8 @@ import { settingMetaKey } from "../settings-registry.js";
 import { StapleError, nowIso } from "../types.js";
 import { criterionMarkPosition } from "../milestone-goal.js";
 import { criterionMarkFields } from "../milestone-marks.js";
+import { planLinkFields, planLinkIssue } from "../plan-links.js";
+import { planRowFields, planRowId } from "../plan-rows.js";
 import {
   COMMENT_COLUMNS,
   ISSUE_COLUMNS,
@@ -236,6 +238,10 @@ function policy(entity: string, key: string): FieldPolicy | null {
       if (key === "members") return { name: "members" };
       // One criterion's mark is one field, compared whole (`milestone-goal.ts`).
       if (criterionMarkPosition(key) !== null) return { name: key };
+      // One link is one field too (`plan-links.ts`).
+      if (planLinkIssue(key) !== null) return { name: key };
+      // And one breakdown row (`plan-rows.ts`).
+      if (planRowId(key) !== null) return { name: key };
       if (key === "targetDate" || key === "target_date") return named("target_date");
       if (key === "startDate" || key === "start_date") return named("start_date");
       if (key === "updatedAt" || key === "updated_at") return named("updated_at");
@@ -325,6 +331,14 @@ function readField(
         // The mark as the wire carries it, so the comparison is value to value; none is null.
         if (!db.prepare("SELECT 1 AS hit FROM issues WHERE id = ?").get(entityId)) return { present: false, value: null };
         return { present: true, value: criterionMarkFields(db, entityId)[name] ?? null };
+      }
+      if (planLinkIssue(name) !== null) {
+        if (!db.prepare("SELECT 1 AS hit FROM issues WHERE id = ?").get(entityId)) return { present: false, value: null };
+        return { present: true, value: planLinkFields(db, entityId)[name] ?? null };
+      }
+      if (planRowId(name) !== null) {
+        if (!db.prepare("SELECT 1 AS hit FROM issues WHERE id = ?").get(entityId)) return { present: false, value: null };
+        return { present: true, value: planRowFields(db, entityId)[name] ?? null };
       }
       return scalar("milestone_meta", "issue_id", name);
     case "queue":
@@ -699,16 +713,8 @@ function contest(
   baseVersion: number,
   localDeviceId: string | null,
 ): ApplyInput | null {
-  const input: ApplyInput = {
-    entity: op.entity,
-    entityId: op.entityId,
-    verb: op.verb,
-    payload: op.payload,
-    actor: op.actor === "" ? null : op.actor,
-    deviceId: op.deviceId,
-    at: op.createdAt,
-    opId: op.opId,
-  };
+  // The applier's record, seq included: without it a screened claim read as a local decision.
+  const input: ApplyInput = operationToInput(op);
 
   /** Canonical field name -> the newest write of it this device holds. */
   const localWrites = localFieldWrites(db, op.entity, op.entityId, baseVersion);
@@ -777,6 +783,13 @@ function contest(
   for (const [key, carried] of Object.entries(op.payload)) {
     const named = policy(op.entity, key);
     if (!named || named.bookkeeping || named.derivedFrom) continue;
+    /**
+     * An issue's identifier carried by an `update` is a promotion's claim on a number
+     * (design/plan.md, "Ticket numbers"), never an edit somebody chose: the log decides it
+     * (`displaceIdentifierHolder`, `apply.ts`), and screened as an edit, two devices promoting
+     * one idea each kept their own number behind a record nothing would close.
+     */
+    if (op.entity === "issue" && op.verb === "update" && named.name === "identifier") continue;
     // One record per field: an attempt's end is seven keys and one field.
     if (contested.has(named.name)) continue;
     const side = localWrites.get(named.name);

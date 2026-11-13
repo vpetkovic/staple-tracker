@@ -26,7 +26,7 @@ import { HeaderButton } from "@/components/filters/HeaderButton";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useSession } from "@/lib/session";
 // `Button` left with the trigger: the recipe is HeaderButton's now, shared with the row.
-import { GROUP_BY_OPTIONS, type GroupBy } from "@/lib/view-prefs";
+import { GROUP_BY_OPTIONS, groupByOptions, type GroupBy } from "@/lib/view-prefs";
 import { cn } from "@/lib/utils";
 import { useBackToClose } from "@/lib/back-to-close";
 
@@ -62,7 +62,7 @@ export function GroupByMenu({ compact = false }: { compact?: boolean } = {}) {
 
       <PopoverContent align="end" className="w-72 p-1">
         <div role="radiogroup" aria-label="Group tasks by">
-          {GROUP_BY_OPTIONS.map((option) => {
+          {groupByOptions(session.planningEnabled === true).map((option) => {
             const active = session.groupBy === option.id;
             return (
               <button

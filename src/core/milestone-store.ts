@@ -31,6 +31,7 @@ import type { Journal } from "./journal.js";
 import { parseIdentifier } from "./ids.js";
 import {
   MILESTONE_KIND,
+  MILESTONE_MEMBERSHIP,
   type MilestoneProgress,
   type MilestoneState,
   type ProgressNode,
@@ -44,6 +45,8 @@ import {
   rankBetween,
   renumberedRanks,
 } from "./milestones.js";
+import { planKindRefusal, steeringRefusal } from "./plan.js";
+import type { PlanInternal } from "./store.js";
 import {
   CRITERION_VERDICTS,
   type CriterionMark,
@@ -458,6 +461,29 @@ export class MilestoneStore {
       .all(milestoneId) as unknown as MemberRow[];
   }
 
+  /**
+   * A view's members: the ones put in it, in their order, then the ones the plan derives for a
+   * horizon (`plan_members`), in the plan's order and after them. Derived rows are read-only:
+   * every edit below reads `memberRows`, which holds only the members a person or agent added.
+   */
+  private viewRows(milestoneId: string): MemberRow[] {
+    const derived = this.db
+      .prepare(
+        `SELECT p.issue_id, p.milestone_id, 1000000000 + p.position AS rank, 'plan' AS added_by, '' AS added_at, NULL AS note,
+                i.identifier, i.title, i.kind, i.status, i.parent_id
+           FROM plan_members p JOIN issues i ON i.id = p.issue_id
+          WHERE p.milestone_id = ? AND p.issue_id NOT IN (SELECT issue_id FROM milestone_members)
+          ORDER BY p.position`,
+      )
+      .all(milestoneId) as unknown as MemberRow[];
+    return [...this.memberRows(milestoneId), ...derived];
+  }
+
+  /** The milestone an issue is in, put there or derived by the plan. */
+  private effectiveMembershipOf(issueId: string): { milestone_id: string } | undefined {
+    return this.db.prepare(`SELECT milestone_id FROM ${MILESTONE_MEMBERSHIP} WHERE issue_id = ?`).get(issueId) as { milestone_id: string } | undefined;
+  }
+
   private membershipOf(issueId: string): MemberRow | undefined {
     return this.db.prepare(`${MEMBER_SELECT} WHERE m.issue_id = ?`).get(issueId) as unknown as
       | MemberRow
@@ -640,7 +666,14 @@ export class MilestoneStore {
    */
   queueSeam(): MilestoneQueueSeam {
     const rows = this.db
-      .prepare("SELECT milestone_id, issue_id FROM milestone_members ORDER BY milestone_id, rank")
+      .prepare(
+        `SELECT milestone_id, issue_id FROM (
+           SELECT milestone_id, issue_id, rank FROM milestone_members
+           UNION ALL
+           SELECT milestone_id, issue_id, 1000000000 + position AS rank FROM plan_members
+            WHERE issue_id NOT IN (SELECT issue_id FROM milestone_members)
+         ) ORDER BY milestone_id, rank`,
+      )
       .all() as Array<{ milestone_id: string; issue_id: string }>;
     const membersOf = new Map<string, string[]>();
     const milestoneOf = new Map<string, string>();
@@ -722,7 +755,7 @@ export class MilestoneStore {
   private baseView(id: string, facts: QueueFacts): { base: Omit<MilestoneView, "goal" | "remaining">; openIds: string[] } {
     const issue = this.store.getIssue(id);
     const meta = this.meta(id);
-    const rows = this.memberRows(id);
+    const rows = this.viewRows(id);
     const memberIds = new Set(rows.map((row) => row.issue_id));
     const identifierOf = new Map(rows.map((row) => [row.issue_id, row.identifier]));
 
@@ -803,8 +836,9 @@ export class MilestoneStore {
   list(options: { all?: boolean } = {}): MilestoneListRow[] {
     this.assertKindConfigured();
     const rows = this.db
-      .prepare("SELECT id, status FROM issues WHERE kind = ?")
-      .all(MILESTONE_KIND) as Array<{ id: string; status: string }>;
+      .prepare(`SELECT id, status FROM issues WHERE kind = ? AND
+        (? = 0 OR plan_rank IS NULL OR EXISTS (SELECT 1 FROM milestone_meta m WHERE m.issue_id = issues.id AND m.target_date IS NOT NULL))`)
+      .all(MILESTONE_KIND, this.store.planningOn() ? 1 : 0) as Array<{ id: string; status: string }>;
     // One resolver read for the whole list, not one per milestone.
     const facts = this.queueFacts();
     const listed = rows.filter((row) => options.all === true || !this.store.isResolvedStatus(row.status));
@@ -838,7 +872,7 @@ export class MilestoneStore {
         title: string;
       };
     for (const id of [issue.id, ...this.ancestorIds(issue.id)]) {
-      const membership = this.membershipOf(id);
+      const membership = this.effectiveMembershipOf(id);
       if (!membership) continue;
       const milestone = this.store.getIssue(membership.milestone_id);
       return {
@@ -857,7 +891,7 @@ export class MilestoneStore {
   milestoneOf(ref: string): string | null {
     const issue = this.requireIssue(ref, false);
     for (const id of [issue.id, ...this.ancestorIds(issue.id)]) {
-      const membership = this.membershipOf(id);
+      const membership = this.effectiveMembershipOf(id);
       if (membership) {
         return (this.db.prepare("SELECT identifier FROM issues WHERE id = ?").get(membership.milestone_id) as {
           identifier: string;
@@ -1123,7 +1157,7 @@ export class MilestoneStore {
   // ---------- writes ----------
 
   /** `set`: the two dates, and the goal (description, criteria) kept on the issue itself. */
-  update(ref: string, patch: MilestoneDatePatch, actor: string | null): MilestoneView {
+  update(ref: string, patch: MilestoneDatePatch, actor: string | null, internal: PlanInternal = {}): MilestoneView {
     this.assertKindConfigured();
     const goalPatch = patch.description !== undefined || patch.acceptanceCriteria !== undefined;
     if (patch.targetDate === undefined && patch.startDate === undefined && !goalPatch) {
@@ -1133,6 +1167,11 @@ export class MilestoneStore {
       );
     }
     const milestone = this.requireMilestone(ref);
+    // A horizon's dates are the person's, set from the plan (design/plan.md, "Who steers").
+    // So is its goal: what agents work it toward is the person's, set with its run setting.
+    if (!internal.plan && (patch.targetDate !== undefined || patch.startDate !== undefined || goalPatch) && this.store.isHorizon(milestone.id)) {
+      throw steeringRefusal("horizons", milestone.identifier);
+    }
     return this.journaled(() => {
       /**
        * The goal lives on the issue: description and criteria are the issue's own fields,
@@ -1147,6 +1186,9 @@ export class MilestoneStore {
             ...(patch.acceptanceCriteria !== undefined ? { acceptanceCriteria: cleanCriteria(patch.acceptanceCriteria) } : {}),
           },
           actor,
+          undefined,
+          // A horizon's goal reaches here only from the plan (checked above); a milestone's is its own.
+          { plan: true },
         );
       }
       if (patch.targetDate === undefined && patch.startDate === undefined) return this.view(milestone.id);
@@ -1205,6 +1247,7 @@ export class MilestoneStore {
           ? null
           : { id: current.milestone_id, identifier: this.store.getIssue(current.milestone_id).identifier };
       assertMembershipAllowed(milestone, member, currentMilestone);
+      if (this.store.isPlanIssue(member.kind)) throw planKindRefusal(member, "added to a milestone");
       if (current !== undefined && !hasPosition(options)) {
         return { ...this.view(milestone.id), replayed: true };
       }
@@ -1316,7 +1359,7 @@ export class MilestoneStore {
           identifier: member.identifier,
         });
       }
-      const from = this.store.getIssue(current.milestone_id);
+      const from = this.store.writeTarget(current.milestone_id);
       if (target === null || target.id === from.id) {
         if (!hasPosition(options)) return this.view(from.id);
         this.assertBase(from, options.baseRevision);

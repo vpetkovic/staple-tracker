@@ -47,7 +47,8 @@ import {
 } from "@/components/ui/dialog";
 import { SearchX } from "lucide-react";
 import { EmptyState } from "@/components/plain/States";
-import { action, getIssues } from "@/lib/api";
+import { personActor } from "@/detail/parts/person";
+import { action, getIssues, getPlan, planWrite } from "@/lib/api";
 import { withDimension } from "@/lib/filters";
 import { useSession, type Selection } from "@/lib/session";
 import { workspaceSettings } from "@/lib/settings";
@@ -102,6 +103,14 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
 
   const rows = useMemo(() => issues.data ?? [], [issues.data]);
   const selected = session.selection;
+  // The selection's plan record, if it is one: its actions come from its lifecycle state.
+  const selectedWs = selected?.workspace ?? null;
+  const loadPlan = useCallback(() => (selectedWs && session.planningEnabled === true ? getPlan({ ws: selectedWs }) : Promise.resolve(null)), [selectedWs, session.planningEnabled]);
+  const plan = useResource(loadPlan, [selectedWs, session.version], () => undefined);
+  const planRecord = useMemo(() => {
+    if (!selected || !plan.data?.enabled) return null;
+    return plan.data.ideas.find((idea) => idea.id === selected.ref || idea.identifier === selected.ref) ?? null;
+  }, [plan.data, selected]);
   const selectedStatus = useMemo<IssueStatus | null>(() => {
     if (!selected) return null;
     return rows.find((row) => row.issue.identifier === selected.ref)?.issue.status ?? null;
@@ -111,8 +120,10 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
     () =>
       orderCommands(
         buildCommands({
+          planningEnabled: session.planningEnabled,
           selection: selected,
           selectionStatus: selectedStatus,
+          planRecord,
           view: session.view,
           ws: session.ws,
           assignee: session.assignee,
@@ -139,6 +150,8 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
       rows,
       selected,
       selectedStatus,
+      planRecord,
+      session.planningEnabled,
       session.view,
       session.ws,
       session.assignee,
@@ -274,6 +287,22 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
         case "release": {
           if (!selected) return;
           if (await write(selected, { type: "release" })) close();
+          return;
+        }
+        case "plan": {
+          if (!selected) return;
+          // The page is the person: a plan write goes under the person's name, as the drawer's do.
+          setBusy(true);
+          setRefusal(null);
+          try {
+            await planWrite(next.verb, { ws: selected.workspace, actor: personActor() ?? "ui", ...next.body });
+            session.refresh();
+            close();
+          } catch (error) {
+            setRefusal(describeRefusal(error));
+          } finally {
+            setBusy(false);
+          }
           return;
         }
       }

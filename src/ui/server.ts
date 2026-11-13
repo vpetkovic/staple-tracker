@@ -170,6 +170,7 @@ import {
   type BindingHome,
 } from "../core/telemetry/budget-config.js";
 import { usagePollingStatus } from "../core/telemetry/polling/run.js";
+import { hideDraftIdentifiers } from "../core/plan.js";
 
 interface UiOptions {
   port: number;
@@ -706,6 +707,15 @@ function resolveAsset(pathname: string): string | null {
   return candidate;
 }
 
+/**
+ * How long an idle kept-alive connection is held. Every handler shares one event loop, and a
+ * synchronous one (a write waiting out SQLite's five-second busy timeout, say) stalls the rest.
+ * Node's default of five seconds let the idle timer of a socket a client had just reused run out
+ * during such a stall, before the server read the request already on it, and the client got a
+ * reset. Held well past any stall the server can be put through, a reused socket is answered.
+ */
+export const KEEP_ALIVE_MS = 65_000;
+
 export function startUiServer(options: UiOptions): UiHandle {
   const stores = new Map<string, StoreHandle>();
 
@@ -777,7 +787,8 @@ export function startUiServer(options: UiOptions): UiHandle {
   }
 
   function json(res: ServerResponse, status: number, payload: unknown, headers: Record<string, string> = {}): void {
-    const body = JSON.stringify(payload);
+    // Every API answer: no draft identifier leaves the server (design/plan.md, "Ticket numbers").
+    const body = JSON.stringify(payload, hideDraftIdentifiers);
     res.writeHead(status, { "content-type": "application/json; charset=utf-8", ...headers });
     res.end(body);
   }
@@ -901,7 +912,9 @@ export function startUiServer(options: UiOptions): UiHandle {
           .prepare("SELECT COUNT(*) AS c, COALESCE(MAX(updated_at),'') AS u FROM issues")
           .get() as { c: number; u: string };
         const comments = h.store.db.prepare("SELECT COUNT(*) AS c FROM comments").get() as { c: number };
-        return `${h.slug}:${events.s}:${issues.c}:${issues.u}:${comments.c}${driverFingerprint(h)}${clockFingerprint(h)}${membersFingerprint(h)}`;
+        // Sync invalidates settings without writing local issue or event rows.
+        const settings = h.store.db.prepare("SELECT value FROM meta WHERE key = 'settings_revision'").get() as { value: string } | undefined;
+        return `${h.slug}:${events.s}:${issues.c}:${issues.u}:${comments.c}:s${settings?.value ?? "0"}${driverFingerprint(h)}${clockFingerprint(h)}${membersFingerprint(h)}`;
       })
       .join("|");
   }
@@ -1060,7 +1073,25 @@ export function startUiServer(options: UiOptions): UiHandle {
        */
       milestone: orNull(() => milestones.effectiveMilestone(context.issue.id)),
       milestonePlan: context.issue.kind === MILESTONE_KIND ? orNull(() => milestones.get(context.issue.id)) : null,
+      ...planDetail(handle, context.issue.id),
     };
+  }
+
+  /**
+   * The plan's side of a detail (design/plan.md, "Lifecycle"): for a plan record, its plan detail
+   * (state, offered actions, brief, questions, decisions, links); for a horizon, its view and the
+   * records on it. Null outside the plan. The drawer reads its tabs, header and actions from
+   * these, never from the issue's own fields, so an unpromoted idea's stored identifier is never
+   * what it shows.
+   */
+  function planDetail(handle: ReturnType<typeof handleFor>, issueId: string): { planRecord?: unknown; horizonPlan?: unknown } {
+    const plan = handle.store.plan();
+    if (!plan.enabled()) return {};
+    const view = plan.view();
+    const horizon = view.horizons.find((h) => h.id === issueId) ?? null;
+    if (horizon) return { planRecord: null, horizonPlan: { horizon, ideas: view.ideas.filter((idea) => idea.horizonId === issueId) } };
+    if (!view.ideas.some((idea) => idea.id === issueId)) return { planRecord: null, horizonPlan: null };
+    return { planRecord: plan.detail(issueId), horizonPlan: null };
   }
 
   async function readRawBody(req: IncomingMessage): Promise<string> {
@@ -1542,6 +1573,11 @@ export function startUiServer(options: UiOptions): UiHandle {
           url.pathname.startsWith("/api/gate/") ||
           url.pathname.startsWith("/api/milestone/") ||
           /**
+           * The plan writes. The reads are `/api/plan` and `/api/plan-idea`, which do not
+           * share this prefix, so the family admits no read.
+           */
+          url.pathname.startsWith("/api/plan/") ||
+          /**
            * The project writes. `/api/projects` (plural) is the read and does not
            * share this prefix, so the family test admits no read.
            */
@@ -1921,6 +1957,7 @@ export function startUiServer(options: UiOptions): UiHandle {
         json(res, 200, {
           mode: options.hub ? "hub" : "workspace",
           workspaces: handles.map((h) => ({ slug: h.slug, prefix: h.prefix })),
+          features: Object.fromEntries(handles.map(h => [h.slug, { planning: h.store.planningOn() }])),
           /**
            * The origins a write is accepted from (the Origin check below). A page compares
            * its own origin against these to know, before pressing anything, that it is
@@ -3879,10 +3916,15 @@ export function startUiServer(options: UiOptions): UiHandle {
         const assignee = url.searchParams.get("assignee") ?? undefined;
         const targets = options.hub && !wanted ? allHandles() : [handleFor(wanted)];
         const out = targets.flatMap((h) => {
-          const issues = h.store.listIssues({
-            includeResolved: true,
-            assignee: assignee || undefined,
-          });
+          // A horizon is not a task: it shows as a heading under Group: Horizon and as each row's
+          // chip. Plain milestones stay rows.
+          const horizonIds = h.store.plan().horizonIds();
+          const issues = h.store
+            .listIssues({
+              includeResolved: true,
+              assignee: assignee || undefined,
+            })
+            .filter((issue) => !horizonIds.has(issue.id));
           const ids = issues.map((i) => i.id);
           // One batched liveness query per workspace, not one per row.
           const claims = h.store.claimActivityFor(ids);
@@ -3925,6 +3967,8 @@ export function startUiServer(options: UiOptions): UiHandle {
           // The direct milestone of each member, one query for the page: the list nests a
           // parentless member under its milestone, and membership is not a parent link.
           const milestoneOf = h.store.milestones().queueSeam().milestoneOf;
+          // The horizon each row's work belongs to, its own membership or an ancestor's.
+          const horizons = h.store.plan().horizonsOf(ids);
           return issues.map((issue) => ({
             workspace: h.slug,
             issue,
@@ -3940,6 +3984,7 @@ export function startUiServer(options: UiOptions): UiHandle {
               blocks: blocks.get(issue.id) ?? [],
             },
             milestoneId: milestoneOf.get(issue.id) ?? null,
+            ...(h.store.planningOn() ? { horizon: horizons.get(issue.id) ?? null } : {}),
           }));
         });
         json(res, 200, out);
@@ -4605,7 +4650,7 @@ export function startUiServer(options: UiOptions): UiHandle {
         // an op means or about which of them is refused. `settings` (R6a) writes
         // registered WORKSPACE values the same way; a global key is refused by the
         // store with the sentence that names `staple config set`.
-        if (target === "settings") writeHandle.store.applySettingOps(ops as SettingOp[], actor);
+        if (target === "settings") writeHandle.store.applySettingOps(ops as SettingOp[], actor, { via: "settings" });
         else if (target === "statuses") writeHandle.store.applyStatusOps(ops as VocabularyOp[], actor);
         else writeHandle.store.applyKindOps(ops as VocabularyOp[], actor);
         json(res, 200, envelope(writeHandle));
@@ -4889,6 +4934,7 @@ export function startUiServer(options: UiOptions): UiHandle {
            * to refuse, not this branch's.
            */
           if (body.kind !== undefined) patch.kind = body.kind as string;
+          if (body.parent !== undefined) patch.parent = body.parent as string | null;
           if (body.labels !== undefined) {
             const labels = stringList(body.labels);
             // A present-but-malformed labels value must not collapse to "delete all".
@@ -4991,6 +5037,145 @@ export function startUiServer(options: UiOptions): UiHandle {
         return;
       }
 
+      /**
+       * The plan layer (design/plan.md). Two reads and a POST family. The page is the
+       * person: every write carries a person decision from the Plan view, which is what
+       * lets it set maturity, horizons, dates and the baseline that an agent may not.
+       * Each write answers the whole plan, and the idea's detail when it names one.
+       */
+      if (url.pathname === "/api/plan") {
+        const handle = handleFor(url.searchParams.get("ws") ?? undefined);
+        handle.store.plan().assertEnabled();
+        json(res, 200, handle.store.plan().view());
+        return;
+      }
+
+      if (url.pathname === "/api/plan-idea") {
+        const handle = handleFor(url.searchParams.get("ws") ?? undefined);
+        handle.store.plan().assertEnabled();
+        json(res, 200, handle.store.plan().detail(url.searchParams.get("ref") ?? ""));
+        return;
+      }
+
+      if (url.pathname.startsWith("/api/plan/")) {
+        const body = await readBody(req);
+        const handle = handleFor((body.ws as string) ?? undefined);
+        const plan = handle.store.plan();
+        plan.assertEnabled();
+        const actor = bodyActor(body);
+        const person = { person: { via: "plan_view" } };
+        const ref = body.ref as string;
+        const optional = <T>(key: string): T | undefined => (key in body ? (body[key] as T) : undefined);
+        let idea: string | null = ref ?? null;
+        switch (url.pathname) {
+          case "/api/plan/capture":
+            idea = plan.capture(
+              {
+                title: (body.title as string) ?? "",
+                parent: optional<string | null>("parent"),
+                brief: optional<string | null>("brief"),
+                maturity: optional<string>("maturity"),
+                horizon: optional<string | null>("horizon"),
+                plannedStart: optional<string | null>("plannedStart"),
+                plannedTarget: optional<string | null>("plannedTarget"),
+                plan: optional<Record<string, unknown>>("plan") as never,
+              },
+              actor,
+              person,
+            ).id;
+            break;
+          case "/api/plan/update":
+            plan.update(
+              ref,
+              {
+                title: optional<string>("title"),
+                brief: optional<string | null>("brief"),
+                maturity: optional<string>("maturity"),
+                horizon: optional<string | null>("horizon"),
+                parent: optional<string | null>("parent"),
+                plannedStart: optional<string | null>("plannedStart"),
+                plannedTarget: optional<string | null>("plannedTarget"),
+                before: optional<string | null>("before"),
+                plan: optional<Record<string, unknown>>("plan") as never,
+                breakdownBase: optional<string>("breakdownBase"),
+              },
+              actor,
+              person,
+            );
+            break;
+          case "/api/plan/question":
+            plan.addQuestion(ref, (body.text as string) ?? "", actor);
+            break;
+          case "/api/plan/resolve":
+            if (body.deferred !== undefined) plan.deferQuestion(ref, Number(body.position), actor, body.deferred === true);
+            else plan.resolveQuestion(ref, Number(body.position), actor, body.resolved !== false);
+            break;
+          case "/api/plan/scaffold":
+            // A preview writes nothing; the confirm creates what the preview showed.
+            if (body.preview === true) {
+              json(res, 200, { plan: plan.view(), idea: plan.detail(ref), scaffold: plan.scaffoldPreview(ref) });
+              return;
+            }
+            json(res, 200, { scaffold: plan.scaffold(ref, typeof body.fingerprint === "string" ? body.fingerprint : null, actor, person), plan: plan.view(), idea: plan.detail(ref) });
+            return;
+          case "/api/plan/decision":
+            plan.addDecision(ref, (body.text as string) ?? "", actor);
+            break;
+          case "/api/plan/promote":
+            plan.promote(ref, actor, person);
+            break;
+          case "/api/plan/adopt":
+            plan.adopt(ref, (body.issue as string) ?? "", actor);
+            break;
+          case "/api/plan/unlink":
+            plan.unlink(ref, (body.issue as string) ?? "", actor);
+            break;
+          case "/api/plan/reset-baseline":
+            plan.resetBaseline(ref, actor, person);
+            break;
+          case "/api/plan/horizon-create":
+            plan.createHorizon({ name: (body.name as string) ?? "", date: optional<string | null>("date") }, actor, person);
+            idea = null;
+            break;
+          case "/api/plan/horizon-update":
+            plan.updateHorizon(
+              ref,
+              { name: optional<string>("name"), date: optional<string | null>("date"), before: optional<string | null>("before") },
+              actor,
+              person,
+            );
+            idea = null;
+            break;
+          case "/api/plan/horizon-remove":
+            plan.removeHorizon(ref, actor, person);
+            idea = null;
+            break;
+          case "/api/plan/horizon-run":
+            // The horizon's run setting: the person's, as every horizon setting is. Nothing runs from it.
+            plan.setHorizonRun(
+              ref,
+              {
+                ...("mode" in body ? { mode: (body.mode ?? null) as never } : {}),
+                ...("goal" in body ? { goal: Array.isArray(body.goal) ? (body.goal as string[]) : [] } : {}),
+              },
+              actor,
+              person,
+            );
+            idea = null;
+            break;
+          case "/api/plan/horizon-queue":
+            // A horizon is a milestone: queueing it is the queue's own enqueue, held to the horizon's lifecycle.
+            handle.store.queue().enqueue(ref, {}, actor);
+            idea = null;
+            break;
+          default:
+            json(res, 404, { error: "not found" });
+            return;
+        }
+        json(res, 200, { plan: plan.view(), idea: idea ? plan.detail(idea) : null });
+        return;
+      }
+
       if (url.pathname === "/api/milestones") {
         const handle = handleFor(url.searchParams.get("ws") ?? undefined);
         json(res, 200, handle.store.milestones().list({ all: url.searchParams.get("all") === "1" }));
@@ -5031,18 +5216,39 @@ export function startUiServer(options: UiOptions): UiHandle {
               actor,
             );
             break;
-          case "/api/milestone/update":
-            payload = milestones.update(
-              ref,
-              {
-                targetDate: body.targetDate as string | null | undefined,
-                startDate: body.startDate as string | null | undefined,
-                description: body.description as string | null | undefined,
-                acceptanceCriteria: body.acceptanceCriteria as string[] | undefined,
-              },
-              actor,
-            );
+          case "/api/milestone/update": {
+            /**
+             * A horizon's date is the person's, and the page is the person: on a horizon the due
+             * date goes through the plan (its lifecycle and steering rules), the rest as for any
+             * milestone.
+             */
+            const horizon = handle.store.isHorizon(handle.store.getIssue(ref).id);
+            if (horizon) handle.store.plan().assertEnabled();
+            const goal = { description: body.description as string | null | undefined, acceptanceCriteria: body.acceptanceCriteria as string[] | undefined };
+            if (!horizon) {
+              payload = milestones.update(
+                ref,
+                { targetDate: body.targetDate as string | null | undefined, startDate: body.startDate as string | null | undefined, ...goal },
+                actor,
+              );
+              break;
+            }
+            // Everything is checked before anything is written: a horizon has one date.
+            if (body.startDate !== undefined) {
+              throw new StapleError("validation", `${handle.store.getIssue(ref).title} is a horizon, and a horizon has one date, its due date. Set targetDate instead; it takes no start date.`, {
+                field: "startDate",
+              });
+            }
+            payload = handle.store.journaled(() => {
+              if (body.targetDate !== undefined) {
+                handle.store.plan().updateHorizon(ref, { date: body.targetDate as string | null }, actor, { person: { via: "plan_view" } });
+              }
+              // A date alone is done; anything else (or nothing at all) is the milestone's own update.
+              const dateOnly = body.targetDate !== undefined && goal.description === undefined && goal.acceptanceCriteria === undefined;
+              return dateOnly ? milestones.get(ref) : milestones.update(ref, goal, actor);
+            });
             break;
+          }
           case "/api/milestone/criterion":
             payload = milestones.markCriterion(
               ref,
@@ -5287,6 +5493,9 @@ export function startUiServer(options: UiOptions): UiHandle {
       return `unresolved workspace (${envelope.code}: ${envelope.message.split("\n")[0]})`;
     }
   }
+
+  server.keepAliveTimeout = KEEP_ALIVE_MS;
+  server.headersTimeout = KEEP_ALIVE_MS + 1_000;
 
   server.listen(options.port, "127.0.0.1", () => {
     /**

@@ -34,6 +34,19 @@ protocol below is what makes an interrupted task resumable by whoever comes next
 
 Read this before you touch the repo. It takes a minute.
 
+## Planning (experimental)
+
+Read \`staple settings get features.planning\` or MCP \`get_setting\` first. It defaults
+false and synchronizes with the workspace. Only a person can change it in Settings →
+Experimental, or \`staple settings set features.planning true --person\` under their
+configured humanName. Agents may read it; \`set_setting\` refuses to change it.
+
+When off, use ordinary tasks, milestones and the pickup queue. Planning commands and
+tools refuse; no horizon-run instructions are supplied. Ideas remain unnumbered drafts,
+never tasks or pickup work. When on, the experimental plan/idea/horizon tools are
+available; read their lifecycle actions and respect person-only steering. Turning it
+off keeps all data, and turning it on restores the plan. The feature may change.
+
 ## The loop
 
 1. \`staple inbox\` — what is ready, in pickup order. **READY is not a

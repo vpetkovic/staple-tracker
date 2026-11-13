@@ -63,11 +63,16 @@ describe("workspace migration 017", () => {
     db.exec("ALTER TABLE document_revisions DROP COLUMN instructions");
     db.exec("ALTER TABLE runs DROP COLUMN instructions");
     db.exec("ALTER TABLE runs DROP COLUMN instructions_seq");
+    db.exec("DROP INDEX IF EXISTS issues_plan_ranked_idx");
+    for (const column of ["plan_maturity", "plan_horizon_id", "plan_start", "plan_target", "plan_baseline_start", "plan_baseline_target", "plan_rank", "plan_run_mode"]) db.exec(`ALTER TABLE issues DROP COLUMN ${column}`);
+    db.exec("DROP TABLE IF EXISTS plan_members");
+    db.exec("DROP TABLE IF EXISTS plan_links");
+    db.exec("DROP TABLE IF EXISTS plan_rows");
     db.prepare("UPDATE meta SET value = '16' WHERE key = 'schema_version'").run();
-    expect(describeSchema(db, WORKSPACE_TARGET).pending).toEqual([17, 18, 19]);
+    expect(describeSchema(db, WORKSPACE_TARGET).pending).toEqual([17, 18, 19, 20]);
 
     migrateWorkspace(db);
-    expect(describeSchema(db, WORKSPACE_TARGET)).toMatchObject({ current: 19, pending: [] });
+    expect(describeSchema(db, WORKSPACE_TARGET)).toMatchObject({ current: 20, pending: [] });
     expect(owned()).toEqual(recorded);
     expect(db.prepare("SELECT value FROM meta WHERE key = 'derived_status_publish_owed'").get()).toEqual({ value: "1" });
     expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name").all()).toEqual([
@@ -92,6 +97,11 @@ describe("workspace migration 017", () => {
     db.exec("ALTER TABLE document_revisions DROP COLUMN instructions");
     db.exec("ALTER TABLE runs DROP COLUMN instructions");
     db.exec("ALTER TABLE runs DROP COLUMN instructions_seq");
+    db.exec("DROP INDEX IF EXISTS issues_plan_ranked_idx");
+    for (const column of ["plan_maturity", "plan_horizon_id", "plan_start", "plan_target", "plan_baseline_start", "plan_baseline_target", "plan_rank", "plan_run_mode"]) db.exec(`ALTER TABLE issues DROP COLUMN ${column}`);
+    db.exec("DROP TABLE IF EXISTS plan_members");
+    db.exec("DROP TABLE IF EXISTS plan_links");
+    db.exec("DROP TABLE IF EXISTS plan_rows");
     db.prepare("UPDATE meta SET value = '16' WHERE key = 'schema_version'").run();
     migrateWorkspace(db);
     expect(db.prepare("SELECT value FROM meta WHERE key = 'derived_status_publish_owed'").get()).toBeUndefined();

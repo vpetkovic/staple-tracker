@@ -25,7 +25,7 @@ export function ViewTabBar() {
       data-view-tabs
       className="flex shrink-0 border-t bg-card/95 pb-[env(safe-area-inset-bottom)] backdrop-blur supports-[backdrop-filter]:bg-card/85"
     >
-      {VIEWS.map((view) => {
+      {VIEWS.filter(view => view !== "plan" || session.planningEnabled === true).map((view) => {
         const Icon = viewIcon(view);
         const current = session.view === view;
         return (

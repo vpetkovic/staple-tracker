@@ -167,10 +167,10 @@ describe("a fresh repo-local `staple init`", () => {
       // 012-host-binding, to "13" by 013-execution-attempts, to "14" by
       // 014-attempt-role, to "15" by 015-autopilot-runs, to "16" by
       // 016-milestone-goals, to "17" by 017-derived-status, to "18" by
-      // 018-attachments and to "19" by 019-instruction-documents; the TEXT
+      // 018-attachments, to "19" by 019-instruction-documents and to "20" by 020-plan-fields; the TEXT
       // typing is the characterization, the number
       // just tracks the migration list.
-      { key: "schema_version", value: "19" },
+      { key: "schema_version", value: "20" },
       { key: "slug", value: "metarepo" },
     ]);
   }, 30_000);
@@ -206,6 +206,8 @@ describe("a fresh repo-local `staple init`", () => {
       "index:issues_live_origin_uq",
       "index:issues_normalized_title_open_idx",
       "index:issues_parent_idx",
+      // 020-plan-fields: the partial index that says planning is on.
+      "index:issues_plan_ranked_idx",
       // 009-projects: the partial index over `issues.project_id`, indexed only
       // over the rows that carry a project.
       "index:issues_project_idx",
@@ -214,6 +216,8 @@ describe("a fresh repo-local `staple init`", () => {
       // STA-172 (007-milestones): the two milestone tables, their primary keys,
       // the (milestone_id, rank) uniqueness and the member-order index.
       "index:milestone_members_milestone_idx",
+      // 020-plan-fields: the membership the plan derives, read in each milestone's order.
+      "index:plan_members_milestone_idx",
       "index:relations_blocked_idx",
       "index:relations_blocker_idx",
       // 015-autopilot-runs: the one-live-run-per-actor-per-scope rule, and the run list's order.
@@ -236,6 +240,11 @@ describe("a fresh repo-local `staple init`", () => {
       "index:sqlite_autoindex_milestone_members_1",
       "index:sqlite_autoindex_milestone_members_2",
       "index:sqlite_autoindex_milestone_meta_1",
+      // 020-plan-fields: one link per (idea, issue).
+      "index:sqlite_autoindex_plan_links_1",
+      "index:sqlite_autoindex_plan_members_1",
+      // 020-plan-fields: one breakdown row per (idea, row).
+      "index:sqlite_autoindex_plan_rows_1",
       // 009-projects: the projects table's `id` primary key and its `UNIQUE (slug)`.
       "index:sqlite_autoindex_projects_1",
       "index:sqlite_autoindex_projects_2",
@@ -287,6 +296,10 @@ describe("a fresh repo-local `staple init`", () => {
       "table:milestone_criterion_marks",
       "table:milestone_members",
       "table:milestone_meta",
+      "table:plan_links",
+      // 020-plan-fields: machine-local, rebuilt from the plan after every write and pull.
+      "table:plan_members",
+      "table:plan_rows",
       "table:projects",
       "table:queue_entries",
       "table:relations",
@@ -490,7 +503,7 @@ describe("global workspaces", () => {
       { key: "prefix", value: "SOL" },
       // WORKSPACE_SCHEMA_VERSION — 19 since 019-instruction-documents. The hub beside it
       // is still 8; the two databases version independently.
-      { key: "schema_version", value: "19" },
+      { key: "schema_version", value: "20" },
       { key: "slug", value: "solo" },
     ]);
   }, 30_000);

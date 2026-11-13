@@ -11,6 +11,7 @@
  * root, so the app's `@` alias — which lives in src/ui/app/vite.config.ts — does not
  * exist at test time.
  */
+import { planActionItems, type OfferedPlanAction } from "../../detail/plain-actions";
 import { HANDOFF_RISKS, handoffRiskOf, type HandoffRisk } from "../../lib/filters";
 import { VIEWS, selectionTarget, viewLabel, viewUsesIssueFilters, type Selection, type ViewName } from "../../lib/session";
 import { SEED_SETTINGS } from "../../lib/settings";
@@ -70,7 +71,9 @@ export type CommandAction =
    * verb the header's gear does, so there is one way in with two triggers rather than
    * two ways in.
    */
-  | { type: "settings"; section?: string };
+  | { type: "settings"; section?: string }
+  /** A plan write (`/api/plan/<verb>`), one of the actions a plan record's lifecycle state offers. */
+  | { type: "plan"; verb: string; body: Record<string, unknown> };
 
 export type PalettePage = "checkout" | "assignee";
 
@@ -188,6 +191,7 @@ export function issueCommand(row: IssueRow, showWorkspace: boolean): PaletteComm
 // ---------- everything that is not an issue ----------
 
 export interface PaletteContext {
+  planningEnabled?: boolean;
   /** The issue every action command acts on. Null means the actions group is empty. */
   selection: Selection | null;
   /** Status of the selected issue, when known — used to hide a no-op transition. */
@@ -203,6 +207,12 @@ export interface PaletteContext {
    * output depends on what some other test happened to publish.
    */
   statuses?: readonly { id: StatusId; label: string; category?: StatusCategory }[];
+  /**
+   * The selection's plan record, when it is one: its title and the actions its lifecycle state
+   * offers (the payload's `actions`, from the core table). An unpromoted idea is not tracker
+   * work, so it gets those actions and nothing else; a promoted one is an epic with them added.
+   */
+  planRecord?: { id: string; title: string; promoted: boolean; actions: readonly OfferedPlanAction[] } | null;
   view: ViewName;
   ws: string;
   assignee: string;
@@ -280,7 +290,24 @@ export function writeTarget(selected: Selection & { actor?: string }): { ws: str
 export function buildCommands(context: PaletteContext): PaletteCommand[] {
   const commands: PaletteCommand[] = [];
 
-  if (context.selection) {
+  const record = context.planningEnabled === true && context.selection ? (context.planRecord ?? null) : null;
+  if (record) {
+    // The record's one-click actions, as the drawer's buttons are; one held back is not offered.
+    for (const item of planActionItems(context.selection!.workspace, record)) {
+      if (item.call?.route !== "plan") continue;
+      commands.push({
+        id: `plan:${item.id}`,
+        group: "actions",
+        label: item.label,
+        // An idea has no number to show, and its id is not one: its title is how a person knows it.
+        hint: record.promoted ? context.selection!.ref : record.title,
+        keywords: `plan idea ${item.id} ${item.label} ${record.title}`,
+        action: { type: "plan", verb: item.call.verb, body: item.call.body },
+      });
+    }
+  }
+
+  if (context.selection && !(record && !record.promoted)) {
     const ref = context.selection.ref;
     /*
      * The CONFIGURED statuses, not a frozen list — O7b (STA-141). A workspace that
@@ -351,7 +378,7 @@ export function buildCommands(context: PaletteContext): PaletteCommand[] {
   }
 
   for (const view of VIEWS) {
-    if (view === context.view) continue;
+    if (view === context.view || (view === "plan" && context.planningEnabled !== true)) continue;
     // The label is the rail's word for the view ("Tasks"); the internal value stays in
     // the keywords so a reader who still types "tree" finds it.
     commands.push({

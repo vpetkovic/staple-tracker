@@ -1,8 +1,7 @@
 /**
- * The certified plan through every door: `staple compare --json`, MCP `compare_plans` and HTTP
- * `/api/compare` answer one payload, and `planSummary` on `show --json`, `get_task`,
- * `/api/issue` and `/api/agent-context` is the same object. One workspace, written through the
- * CLI the way an agent plans an epic, read back through the others.
+ * The plan layer on every surface (design/plan.md): the CLI, the MCP tools and the HTTP
+ * routes read one plan, refuse an agent's steering with the same `validation`, and let the
+ * person steer from the page (HTTP) and from the CLI with `--person`.
  */
 import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -11,63 +10,73 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
-import { CONTRACT_AGENT, runCliAsync, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
+import { CONTRACT_AGENT, runCliAsync, startMcpClient, toolPayload, type CliResult, type McpHarness } from "./fixtures/contract-support.js";
+import { READY_PLAN } from "./fixtures/plan-ready.js";
 
-const WS = "plans";
+const WS = "planws";
+
 let home: string;
 let emptyDir: string;
 let mcp: McpHarness;
 let ui: UiHandle;
 let origin: string;
 let token: string;
-let epic: string;
-let other: string;
-let inner: string;
-let leaf: string;
-const refs: Record<string, string> = {};
 
-async function cli(...args: string[]) {
+async function cli(...args: string[]): Promise<CliResult> {
   return await runCliAsync(args, { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT });
 }
-async function cliJson(...args: string[]): Promise<any> {
+
+async function cliJson(...args: string[]): Promise<unknown> {
   const result = await cli(...args, "--ws", WS, "--json");
   expect(result.status, result.stderr).toBe(0);
-  return JSON.parse(result.stdout);
+  return JSON.parse(result.stdout) as unknown;
 }
-async function http(path: string): Promise<{ status: number; body: any }> {
-  const response = await fetch(`${origin}${path}`, { headers: { "x-staple-token": token } });
-  return { status: response.status, body: await response.json() };
+
+async function mcpCall(name: string, args: Record<string, unknown>) {
+  return await mcp.call(name, { ws: WS, ...args });
 }
-async function tool(name: string, args: Record<string, unknown>): Promise<any> {
-  const result = await mcp.call(name, { ...args, ws: WS });
-  expect(result.isError, JSON.stringify(result.content)).toBeFalsy();
-  return toolPayload(result);
+
+async function http(path: string, body?: Record<string, unknown>) {
+  const response = await fetch(`${origin}${path}`, {
+    method: body ? "POST" : "GET",
+    headers: { "x-staple-token": token, ...(body ? { "content-type": "application/json", origin } : {}) },
+    body: body ? JSON.stringify({ ws: WS, actor: "VP", ...body }) : undefined,
+  });
+  return { status: response.status, body: (await response.json()) as Record<string, unknown> };
 }
-const mint = async (title: string, ...args: string[]): Promise<string> => String((await cliJson("new", title, ...args)).identifier);
+
+interface Idea {
+  id: string;
+  identifier: string | null;
+  promoted: boolean;
+  title: string;
+  maturity: string;
+  stage: string;
+  horizonId: string | null;
+  planned: { start: string | null; target: string | null };
+  baseline: { start: string | null; target: string | null } | null;
+}
+interface Plan {
+  enabled: boolean;
+  horizons: Array<{ id: string; identifier: string; name: string }>;
+  ideas: Idea[];
+}
+
+const byId = (plan: Plan, id: string) => plan.ideas.find((idea) => idea.id === id)!;
+
+/** An idea has no ticket number before it is promoted: a test names it by its id, found by title. */
+const ids: Record<string, string> = {};
+const ref = (title: string) => ids[title]!;
 
 beforeAll(async () => {
-  home = mkdtempSync(join(tmpdir(), "staple-plans-home-"));
-  emptyDir = mkdtempSync(join(tmpdir(), "staple-plans-cwd-"));
+  home = mkdtempSync(join(tmpdir(), "staple-plan-home-"));
+  emptyDir = mkdtempSync(join(tmpdir(), "staple-plan-cwd-"));
   process.env.STAPLE_HOME = home;
   process.env.NODE_NO_WARNINGS = "1";
   expect((await cli("init", "--global", WS)).status).toBe(0);
-
-  // Epic: container A (a1 1h, a2 2h) -> B 3h -> C 4h, a gap, a cancelled 5h, and an
-  // outside blocker on B.
-  epic = await mint("Epic");
-  inner = await mint("A", "--parent", epic);
-  refs.a1 = await mint("a1", "--parent", inner, "--estimate", "1h");
-  refs.a2 = await mint("a2", "--parent", inner, "--estimate", "2h");
-  other = await mint("Other epic", "--estimate", "6h");
-  refs.b = await mint("B", "--parent", epic, "--estimate", "3h", "--blocked-by", `${refs.a2},${other}`);
-  refs.c = await mint("C", "--parent", epic, "--estimate", "4h", "--blocked-by", refs.b);
-  refs.gap = await mint("Gap", "--parent", epic);
-  refs.dropped = await mint("Dropped", "--parent", epic, "--estimate", "5h");
-  expect((await cli("cancel", refs.dropped, "--ws", WS)).status).toBe(0);
-  leaf = refs.c;
-
+  expect((await cli("new", "Existing epic", "--kind", "epic", "--ws", WS)).status).toBe(0);
   mcp = await startMcpClient({ home, cwd: emptyDir, agent: CONTRACT_AGENT });
-  ui = startUiServer({ port: 0, hub: false, ws: WS });
+  ui = startUiServer({ port: 0, hub: true });
   await once(ui.server, "listening");
   token = ui.token;
   origin = `http://127.0.0.1:${(ui.server.address() as AddressInfo).port}`;
@@ -80,79 +89,230 @@ afterAll(async () => {
   rmSync(emptyDir, { recursive: true, force: true });
 });
 
-describe("compare: one payload through the CLI, MCP and HTTP", () => {
-  it("reports labor, coverage and the path of each ref, and the overlap", async () => {
-    const viaCli = await cliJson("compare", epic, other, inner);
-    const viaMcp = await tool("compare_plans", { refs: [epic, other, inner] });
-    const viaHttp = await http(`/api/compare?ws=${WS}&ref=${epic}&ref=${other}&ref=${inner}`);
-    expect(viaHttp.status).toBe(200);
-    expect(viaMcp).toEqual(viaCli);
-    expect(viaHttp.body).toEqual(viaCli);
-
-    const [e, o, a] = viaCli.plans;
-    // 1 + 2 + 3 + 4 = 10h: the cancelled 5h is no labor, the gap is not a 0.
-    expect(e.labor).toEqual({ seconds: 10 * 3600, source: "descendants", ownSeconds: null, descendantsSeconds: 10 * 3600 });
-    expect(e.coverage).toEqual({ planned: 4, unplanned: 1, units: 5, partial: true, unplannedRefs: [refs.gap], cancelled: 1 });
-    expect(e.criticalPath).toMatchObject({
-      seconds: 9 * 3600,
-      partial: true,
-      missing: ["unplanned_units"],
-      chainLength: 3,
-      crossSubtreeBlockers: [{ blocked: refs.b, blocker: other, blockerStatus: "backlog", resolved: false }],
-      unresolvedCrossSubtreeBlockerCount: 1,
-    });
-    expect(e.criticalPath.chain.map((step: { ref: string }) => step.ref)).toEqual([refs.a2, refs.b, refs.c]);
-    expect(o).toMatchObject({ ref: other, labor: { seconds: 6 * 3600, source: "own" } });
-    expect(a).toMatchObject({ ref: inner, labor: { seconds: 3 * 3600 } });
-    expect(viaCli.overlaps).toEqual([{ ref: inner, within: epic }]);
-  });
-
-  it("prints no tree: two lines per ref and the overlap note", async () => {
-    const result = await cli("compare", epic, other, "--ws", WS);
-    expect(result.status, result.stderr).toBe(0);
-    const lines = result.stdout.trimEnd().split("\n");
-    expect(lines).toHaveLength(8);
-    expect(lines[1]).toBe(`  labor ≥10h (descendants) · 4 of 5 units planned · 1 cancelled · unplanned ${refs.gap}`);
-    expect(lines[2]).toBe(
-      `  planned path ≥9h · ${refs.a2} > ${refs.b} > ${refs.c} · partial: unplanned_units · 1 of 1 outside blockers open (${refs.b} <- ${other})`,
-    );
-    // Nothing is done yet, so what remains is the whole planned path.
-    expect(lines[3]).toBe(`  remaining path ≥9h · ${refs.a2} > ${refs.b} > ${refs.c} · partial: unplanned_units`);
-  });
-
-  it("is refused without a ref, on every surface", async () => {
-    const bare = await cli("compare", "--ws", WS);
-    expect(bare.status).toBe(2);
-    expect(bare.stderr).toMatch(/at least one issue/);
-    const refused = await mcp.call("compare_plans", { refs: [], ws: WS });
+describe("the plan on every surface", () => {
+  it("is off until enabled, and every surface says so the same way", async () => {
+    expect((await cli("plan", "show", "--ws", WS)).status).toBe(2);
+    expect((await mcpCall("list_ideas", {})).isError).toBe(true);
+    expect((await http(`/api/plan?ws=${WS}`)).status).toBe(409);
+    const refused = await mcpCall("capture_idea", { title: "too early" });
     expect(refused.isError).toBe(true);
-    // The UI server answers every staple code but not_found with 409 (`src/ui/server.ts`).
-    const viaHttp = await http(`/api/compare?ws=${WS}`);
-    expect(viaHttp.status).toBe(409);
-    expect(JSON.stringify(viaHttp.body)).toMatch(/at least one issue/);
+    expect(JSON.stringify(refused.content)).toContain("features.planning");
+    expect((await http("/api/settings", { target: "settings", ops: [{ op: "set", key: "features.planning", value: true }] })).status).toBe(200);
+    expect((await cliJson("plan", "show")) as Plan).toMatchObject({ enabled: true });
+  });
+
+  it("captures on every surface and reads the same plan three ways", async () => {
+    await cliJson("idea", "new", "From the CLI");
+    expect((await mcpCall("capture_idea", { title: "From MCP", brief: "why" })).isError).toBeFalsy();
+    expect((await http("/api/plan/capture", { title: "From the page", maturity: "shaped", plan: READY_PLAN })).status).toBe(200);
+    const fromCli = (await cliJson("plan", "show")) as Plan;
+    const fromMcp = toolPayload(await mcpCall("list_ideas", {})) as Plan;
+    const fromHttp = (await http(`/api/plan?ws=${WS}`)).body as unknown as Plan;
+    for (const idea of fromCli.ideas) ids[idea.title] = idea.id;
+    const shape = (plan: Plan) => plan.ideas.map((idea) => [idea.title, idea.identifier, idea.maturity, idea.stage]);
+    expect(shape(fromCli)).toEqual([
+      ["From the CLI", null, "raw", "raw"],
+      ["From MCP", null, "raw", "raw"],
+      ["From the page", null, "shaped", "shaped"],
+    ]);
+    // Captures took no ticket number: the next issue is the one after the epic and the two horizons.
+    const next = (await cliJson("new", "Next ticket")) as { identifier: string };
+    expect(next.identifier).toBe("PLA-4");
+    // And no surface shows the draft identifier an idea is stored under.
+    for (const text of [JSON.stringify(fromCli), JSON.stringify(fromMcp), JSON.stringify(fromHttp), (await cli("idea", "list", "--ws", WS)).stdout]) {
+      expect(text).not.toMatch(/"?~[0-9a-f]{32}/);
+    }
+    expect(shape(fromMcp)).toEqual(shape(fromCli));
+    expect(shape(fromHttp)).toEqual(shape(fromCli));
+    // Ideas never reach a task view.
+    const tasks = toolPayload(await mcpCall("list_tasks", {})) as { items: Array<{ identifier: string; title: string }> };
+    expect(tasks.items.map((task) => task.identifier)).not.toContain(null);
+    for (const title of ["From the CLI", "From MCP", "From the page"]) expect(tasks.items.map((task) => task.title)).not.toContain(title);
+    // The shared drawer's payload for an idea: no number (null, draft), its plan, never the stored key.
+    const drawer = await http(`/api/issue?ws=${WS}&ref=${ref("From the page")}`);
+    expect(drawer.status).toBe(200);
+    expect(JSON.stringify(drawer.body)).not.toMatch(/~[0-9a-f]{32}/);
+    expect(drawer.body.issue).toMatchObject({ id: ref("From the page"), identifier: null, draft: true });
+    expect(drawer.body.planRecord).toMatchObject({ idea: { id: ref("From the page"), state: "shaped", identifier: null } });
+    const now = (fromCli.horizons[0] as { identifier: string; id: string });
+    const horizonDrawer = await http(`/api/issue?ws=${WS}&ref=${now.identifier}`);
+    expect(horizonDrawer.body.horizonPlan).toMatchObject({ horizon: { id: now.id, state: "planned" } });
+  });
+
+  it("refuses an agent's steering on the CLI and over MCP, naming why", async () => {
+    for (const result of [
+      await cli("idea", "set", ref("From the CLI"), "--maturity", "shaped", "--ws", WS),
+      await cli("horizon", "new", "Q2", "--ws", WS),
+      await cli("idea", "reset-baseline", ref("From the CLI"), "--ws", WS),
+    ]) {
+      expect(result.status).not.toBe(0);
+      // Refused for the person rule, or first by the lifecycle (a raw idea is not scheduled or re-baselined).
+      expect(result.stderr).toMatch(/the person's call|is raw; it cannot be/);
+    }
+    for (const args of [{ maturity: "shaped" }, { horizon: "Now" }, { planned_target: "2026-12-01" }, { parent: ref("From MCP") }]) {
+      const result = await mcpCall("update_idea", { ref: ref("From the CLI"), ...args });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result.content)).toMatch(/the person's call|is raw; it cannot be/);
+    }
+    const start = await mcpCall("start_idea", { ref: ref("From the CLI") });
+    expect(start.isError).toBe(true);
+    expect(JSON.stringify(start.content)).toContain("is raw; it cannot be promoted");
+    const plan = (await cliJson("plan", "show")) as Plan;
+    expect(byId(plan, ref("From the CLI"))).toMatchObject({ maturity: "raw", horizonId: null, identifier: null, planned: { start: null, target: null } });
+  });
+
+  it("holds the person rule through the plain tracker tools too", async () => {
+    const plan = (await cliJson("plan", "show")) as Plan;
+    const now = plan.horizons[0]!;
+    for (const [tool, args, words] of [
+      ["update_task", { ref: now.identifier, title: "Renamed by an agent" }, "the person's call"],
+      ["update_milestone", { ref: now.identifier, target_date: "2026-12-31" }, "the person's call"],
+      ["update_task", { ref: now.identifier, status: "cancelled" }, "the person's call"],
+      ["update_task", { ref: ref("From the CLI"), status: "cancelled" }, "its status does not move"],
+      ["set_blocked_by", { ref: "PLA-1", blockers: [ref("From the CLI")] }, "cannot be a blocker"],
+    ] as const) {
+      const result = await mcpCall(tool, args);
+      expect(result.isError, `${tool} ${JSON.stringify(args)}`).toBe(true);
+      expect(JSON.stringify(result.content)).toContain(words);
+    }
+    const made = toolPayload(await mcpCall("create_task", { title: "Agent idea via create_task", kind: "idea" })) as { id: string };
+    const after = (await cliJson("plan", "show")) as Plan;
+    expect(byId(after, made.id)).toMatchObject({ maturity: "raw", stage: "raw", identifier: null });
+    // A milestone an agent makes is an ordinary milestone, never a column.
+    expect(toolPayload(await mcpCall("create_task", { title: "Autopilot milestone", kind: "milestone" }))).toMatchObject({ kind: "milestone" });
+    expect(after.horizons.map((h) => h.name)).toEqual(plan.horizons.map((h) => h.name));
+  });
+
+  it("lets the agent do the capture-side edits and link work over MCP", async () => {
+    const edited = toolPayload(await mcpCall("update_idea", { ref: ref("From MCP"), title: "From MCP, renamed", add_question: "Who?", add_decision: "Keep it small" })) as {
+      idea: { title: string };
+      questions: unknown[];
+      decisions: string[];
+    };
+    expect(edited.idea.title).toBe("From MCP, renamed");
+    expect(edited.questions).toEqual([{ text: "Who?", resolved: false }]);
+    expect(edited.decisions).toHaveLength(1);
+    // Linking work is a shaped idea's: a raw one refuses it, naming its state.
+    const early = await mcpCall("start_idea", { ref: ref("From MCP"), adopt: "PLA-1" });
+    expect(JSON.stringify(early.content)).toContain("is raw; it cannot be linked to work");
+    const adopted = toolPayload(await mcpCall("start_idea", { ref: ref("From the page"), adopt: "PLA-1" })) as { idea: { idea: Idea }; promoted: null };
+    expect(adopted.idea.idea).toMatchObject({ stage: "started", identifier: null, promoted: false });
+    expect(adopted.promoted).toBeNull();
+    const unlinked = toolPayload(await mcpCall("unlink_idea", { ref: ref("From the page"), issue: "PLA-1" })) as { idea: Idea };
+    expect(unlinked.idea.stage).toBe("shaped");
+  });
+
+  it("lets the person steer from the page, and an agent promote what the person shaped", async () => {
+    const plan = (await http(`/api/plan?ws=${WS}`)).body as unknown as Plan;
+    const now = plan.horizons[0]!;
+    const steered = await http("/api/plan/update", { ref: ref("From the page"), horizon: now.id, plannedStart: "2026-10-01", plannedTarget: "2026-11-30" });
+    expect(steered.status).toBe(200);
+    expect(byId(steered.body.plan as Plan, ref("From the page"))).toMatchObject({ horizonId: now.id, stage: "scheduled" });
+    const started = toolPayload(await mcpCall("start_idea", { ref: ref("From the page") })) as {
+      idea: { idea: Idea };
+      promoted: { id: string; identifier: string; kind: string };
+    };
+    expect(started.idea.idea).toMatchObject({ stage: "started", promoted: true, baseline: { start: "2026-10-01", target: "2026-11-30" } });
+    // Promoted in place: the same record, now an epic with the next ticket number, in its horizon's milestone.
+    expect(started.promoted).toMatchObject({ id: ref("From the page"), identifier: "PLA-6", kind: "epic" });
+    const epic = (await cliJson("show", started.promoted.identifier)) as { issue: { id: string; kind: string } };
+    expect(epic.issue).toMatchObject({ id: ref("From the page"), kind: "epic" });
+    const milestone = toolPayload(await mcpCall("get_milestone", { ref: now.identifier })) as { members: Array<{ identifier: string }> };
+    expect(milestone.members.map((member) => member.identifier)).toContain("PLA-6");
+    // A re-plan moves the plan and keeps the baseline; the page's reset moves the baseline.
+    await http("/api/plan/update", { ref: ref("From the page"), plannedTarget: "2026-12-20" });
+    const replanned = (await http(`/api/plan-idea?ws=${WS}&ref=${ref("From the page")}`)).body as unknown as { idea: Idea };
+    expect(replanned.idea.planned.target).toBe("2026-12-20");
+    expect(replanned.idea.baseline).toEqual({ start: "2026-10-01", target: "2026-11-30" });
+    const reset = await http("/api/plan/reset-baseline", { ref: ref("From the page") });
+    expect(byId(reset.body.plan as Plan, ref("From the page")).baseline).toEqual({ start: "2026-10-01", target: "2026-12-20" });
+  });
+
+  it("lets a person at the terminal steer with --person, under the configured name", async () => {
+    const before = await cli("idea", "set", ref("From the CLI"), "--maturity", "exploring", "--person", "--ws", WS);
+    expect(before.status).not.toBe(0);
+    expect(before.stderr).toContain("humanName");
+    expect((await cli("config", "set", "humanName", "VP")).status).toBe(0);
+    const detail = (await cliJson("idea", "set", ref("From the CLI"), "--maturity", "exploring", "--person")) as { idea: Idea };
+    expect(detail.idea.maturity).toBe("exploring");
+    const horizons = (await cliJson("horizon", "new", "Q2", "--date", "2027-06-30", "--person")) as Array<{ name: string }>;
+    // A dated horizon goes in date order ahead of the undated ones.
+    expect(horizons.map((h) => h.name)).toEqual(["Q2", "Now", "Next"]);
+  });
+
+  it("keeps the baseline reset away from the model: the MCP tool is app-only", async () => {
+    const tools = await mcp.listTools();
+    const reset = tools.find((tool) => tool.name === "reset_idea_baseline") as { _meta?: { ui?: { visibility?: string[] } } } | undefined;
+    expect(reset?._meta?.ui?.visibility).toEqual(["app"]);
   });
 });
 
-describe("planSummary rides the detail surfaces", () => {
-  it("is the same object on show --json, get_task, /api/issue and /api/agent-context", async () => {
-    const viaCli = (await cliJson("show", epic)).planSummary;
-    expect(viaCli.labor.seconds).toBe(10 * 3600);
-    expect((await tool("get_task", { ref: epic })).planSummary).toEqual(viaCli);
-    expect((await http(`/api/issue?ws=${WS}&ref=${epic}`)).body.planSummary).toEqual(viaCli);
-    expect((await http(`/api/agent-context?ws=${WS}&ref=${epic}`)).body.planSummary).toEqual(viaCli);
-    // And it is compare's entry for the same ref, field for field.
-    const { ref: _ref, title: _title, kind: _kind, status: _status, ...entry } = (await cliJson("compare", epic)).plans[0];
-    expect(entry).toEqual(viaCli);
-  });
+describe("no surface shows an unpromoted idea's draft identifier", () => {
+  const DRAFT = /~[0-9a-f]{32}/;
 
-  it("is null for a leaf, whose plan is its own estimate on timing", async () => {
-    expect((await cliJson("show", leaf)).planSummary).toBeNull();
-    expect((await tool("get_task", { ref: leaf })).planSummary).toBeNull();
-  });
+  /** Every object in a JSON value that describes the given issue. */
+  function issueObjects(value: unknown, id: string, out: Array<Record<string, unknown>> = []): Array<Record<string, unknown>> {
+    if (Array.isArray(value)) for (const item of value) issueObjects(item, id, out);
+    else if (value !== null && typeof value === "object") {
+      const record = value as Record<string, unknown>;
+      if (record.id === id && "identifier" in record) out.push(record);
+      for (const inner of Object.values(record)) issueObjects(inner, id, out);
+    }
+    return out;
+  }
 
-  it("show prints the plan lines for a parent", async () => {
-    const out = (await cli("show", epic, "--ws", WS)).stdout;
-    expect(out).toContain(`\nlabor ≥10h (descendants) · 4 of 5 units planned`);
-    expect(out).toContain(`\nplanned path ≥9h · ${refs.a2} > ${refs.b} > ${refs.c}`);
+  it("walks the CLI, the MCP tools and the HTTP routes that print or serialize an issue", async () => {
+    const madeText = await cli("new", "Captured through new", "--kind", "idea", "--ws", WS);
+    expect(madeText.status, madeText.stderr).toBe(0);
+    const made = (await cliJson("new", "Captured through new, as JSON", "--kind", "idea")) as { id: string };
+    const id = made.id;
+    const texts: Array<[string, string]> = [["cli new", madeText.stdout]];
+    const documents: Array<[string, unknown]> = [["cli new --json", made]];
+
+    for (const args of [["ls", "--kind", "idea"], ["show", id], ["events"], ["idea", "show", id], ["inbox"]]) {
+      const label = args.filter((arg) => arg !== id).join(" ");
+      const text = await cli(...args, "--ws", WS);
+      expect(text.status, `${args.join(" ")}: ${text.stderr}`).toBe(0);
+      texts.push([`cli ${label}`, text.stdout + text.stderr]);
+      const json = await cli(...args, "--ws", WS, "--json");
+      expect(json.status, `${args.join(" ")} --json: ${json.stderr}`).toBe(0);
+      texts.push([`cli ${label} --json`, json.stdout]);
+      for (const line of json.stdout.trim().split("\n").filter(Boolean)) documents.push([`cli ${label} --json`, JSON.parse(line)]);
+    }
+    // A refusal names the idea too.
+    const refused = await cli("checkout", id, "--ws", WS);
+    expect(refused.status).not.toBe(0);
+    texts.push(["cli refusal", refused.stdout + refused.stderr]);
+
+    for (const [name, args] of [
+      ["get_task", { ref: id }],
+      ["list_tasks", { kind: ["idea"] }],
+      ["show_ticket", { ref: id }],
+      ["events_since", { since: 0, limit: 500 }],
+      ["inbox", {}],
+      ["checkout_task", { ref: id }],
+    ] as const) {
+      const result = await mcpCall(name, args);
+      texts.push([`mcp ${name}`, JSON.stringify(result)]);
+      if (!result.isError) documents.push([`mcp ${name}`, (result as { structuredContent?: unknown }).structuredContent ?? toolPayload(result)]);
+    }
+
+    for (const path of [`/api/issue?ws=${WS}&ref=${id}`, `/api/issues?ws=${WS}&kind=idea`, `/api/events?ws=${WS}`, `/api/bootstrap?ws=${WS}`, `/api/graph?ws=${WS}`]) {
+      const response = await fetch(`${origin}${path}`, { headers: { "x-staple-token": token } });
+      const body = await response.text();
+      texts.push([`http ${path}`, body]);
+      if (response.ok) documents.push([`http ${path}`, JSON.parse(body)]);
+    }
+
+    for (const [where, text] of texts) expect(DRAFT.test(text), `${where} shows a draft: ${text.match(DRAFT)?.[0]}`).toBe(false);
+    const described = documents.flatMap(([where, document]) => issueObjects(document, id).map((issue) => [where, issue] as const));
+    expect(described.map(([where]) => where)).toEqual(expect.arrayContaining(["cli new --json", "cli show --json", "cli ls --kind idea --json", "cli idea show --json", "mcp get_task", `http /api/issue?ws=${WS}&ref=${id}`]));
+    // An issue says it is a draft; the plan's own view of an idea says so as `promoted: false`.
+    for (const [where, issue] of described) {
+      const flag = "promoted" in issue ? { promoted: issue.promoted } : { draft: issue.draft };
+      expect({ where, identifier: issue.identifier, ...flag }).toEqual({ where, identifier: null, ...("promoted" in issue ? { promoted: false } : { draft: true }) });
+    }
+    // The text names it by its id.
+    expect(texts.find(([where]) => where === "cli show")?.[1]).toContain(id);
   });
 });

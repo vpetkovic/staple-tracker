@@ -2,7 +2,7 @@ import { type ResolvedInstruction, resolveInstructions } from "./instructions.js
 import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { EVENT_ORDER, EVENT_ORDER_DESC, insertEvent } from "./event-log.js";
-import { RENUMBER_GUARD_MS, aliasedIssueId, removedByRestore, formerHolderOf, formerHolders, formerMove, noteRenumber, renumbersAcknowledged } from "./identifier-moves.js";
+import { RENUMBER_GUARD_MS, aliasedIssueId, removedByRestore, formerHolderOf, formerHolders, formerMove, noteRenumber, recordIdentifierMove, renumbersAcknowledged } from "./identifier-moves.js";
 import { connectionPath } from "./cloud/connection.js";
 import { MemberLens, withEventMembers } from "./cloud/member-lens.js";
 import { readMembersCache } from "./cloud/members-cache.js";
@@ -94,7 +94,9 @@ import {
   type KindAppearanceMap,
   type KindWithAppearance,
 } from "./kind-appearance.js";
-import { MILESTONE_KIND, assertNotReservedActor, isGoalRunGate } from "./milestones.js";
+import { MILESTONE_KIND, MILESTONE_MEMBERSHIP, assertNotReservedActor, isGoalRunGate } from "./milestones.js";
+import { IDEA_KIND, PLAN_KINDS_MISSING_MESSAGE, PLAN_KINDS, assertPlanParent, assertPlanRekind, displayRef, draftIdentifier, isPlanKind, planKindRefusal, steeringRefusal } from "./plan.js";
+import { PlanStore } from "./plan-store.js";
 import { fallbackTarget, recordRemovalTarget } from "./vocabulary-targets.js";
 import { ProjectStore } from "./project-store.js";
 import { QueueStore } from "./queue-store.js";
@@ -192,6 +194,8 @@ export interface CreateIssueInput {
 }
 
 export interface UpdateIssueInput {
+  /** Explicitly validated; generic updates do not support changing parent. */
+  parent?: string | null;
   title?: string;
   description?: string | null;
   status?: IssueStatus;
@@ -226,6 +230,16 @@ export interface UpdateIssueInput {
  * the key had been used before and the ORIGINAL row is being returned — the
  * caller's retry was absorbed, not applied twice.
  */
+/**
+ * A write the plan layer itself makes (`PlanStore`), which has already applied the person rule.
+ * The tracker's own create and update refuse a horizon and an idea's status without it.
+ */
+export interface PlanInternal {
+  plan?: boolean;
+  /** The id the plan layer derived for a task Scaffold makes (`scaffoldTaskId`); a create otherwise mints one. */
+  id?: string;
+}
+
 export interface CreateIssueResult {
   issue: Issue;
   replayed: boolean;
@@ -262,6 +276,8 @@ export interface IssueFilters {
    * assignees naming another member, from `otherMemberAssignees`). Unassigned issues stay.
    */
   excludeAssignees?: readonly string[];
+  /** List ideas and horizons too. Without it (and without a `kind` filter) they are left out. */
+  includePlan?: boolean;
 }
 
 /**
@@ -297,6 +313,7 @@ export type InboxEntry = Issue & {
 };
 
 interface IssueRow {
+  plan_maturity: string | null;
   id: string;
   identifier: string;
   title: string;
@@ -629,6 +646,38 @@ const milestoneRepairFailed = new WeakSet<DatabaseSync>();
  */
 export function rederiveMilestonesAfterPull(db: DatabaseSync): number {
   return new WorkspaceStore(db, "", "").rederiveEveryMilestone();
+}
+
+/**
+ * After a pull, the milestones whose plan-derived membership it changed (`rebuildPlanMembers`)
+ * re-derive here, from the membership this device now holds. Two devices that moved ideas offline
+ * each derived from their own half; neither status is the one the merged membership implies, and
+ * no device but this one can know which rows changed here. Derivation is a function of synced
+ * facts, so every device that re-derives writes the same status. Logged and skipped, never
+ * thrown: the sync that ran it is the user's.
+ */
+export function rederivePlanMilestonesAfterPull(db: DatabaseSync, changed: readonly string[]): void {
+  /**
+   * And every horizon derivation left cancelled. No build derives one there now, but an older
+   * one could, and its write arrives by a pull; re-derived here it reads its work again.
+   */
+  const cancelledByDerivation = (
+    db
+      .prepare(
+        `SELECT id FROM issues WHERE kind = ? AND plan_rank IS NOT NULL AND derived_status = status
+            AND status IN (SELECT id FROM workspace_statuses WHERE category = 'cancelled')`,
+      )
+      .all(MILESTONE_KIND) as Array<{ id: string }>
+  ).map((row) => row.id);
+  const ids = [...new Set([...changed, ...cancelledByDerivation])].sort();
+  if (ids.length === 0) return;
+  const store = new WorkspaceStore(db, "", "");
+  try {
+    store.journal.run(() => store.rederiveMilestones(ids, "plan", null));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error(`staple: could not re-derive the plan's horizons after the pull (${detail}); the next change re-derives them.`);
+  }
 }
 
 /** Set by migration 017 on a database it backfilled `derived_status` on. */
@@ -1921,6 +1970,10 @@ export class WorkspaceStore {
        * than migrated, and the refusal names the milestones so the operator knows
        * which `staple milestone rm`/`set --target none` to run first.
        */
+      if (id === IDEA_KIND || id === MILESTONE_KIND) {
+        const records = this.db.prepare("SELECT identifier, title FROM issues WHERE kind = ? OR (kind = ? AND plan_rank IS NOT NULL) ORDER BY identifier").all(IDEA_KIND, MILESTONE_KIND) as Array<{ identifier: string; title: string }>;
+        if (records.length) throw new StapleError("validation", `Cannot remove the ${id} kind while planning records ${records.map(r => `${r.title} (${displayRef(r)})`).join(", ")} still exist.`);
+      }
       if (id === MILESTONE_KIND) {
         const owning = this.db
           .prepare(
@@ -2106,7 +2159,8 @@ export class WorkspaceStore {
    * every other connection's snapshot is stale, and logs actor, previous and
    * new value as a `setting_changed` event.
    */
-  setSetting(key: string, value: unknown, actor?: string | null): SettingValueView {
+  setSetting(key: string, value: unknown, actor?: string | null, person?: PersonDecision | null): SettingValueView {
+    if (key === "features.planning" && !person) throw new StapleError("validation", "Only a person can change features.planning, in Settings → Experimental or with `staple settings set features.planning true --person`. The UI is the person and its token is the person's; agents are trusted not to impersonate the person through that token or --person.");
     const definition = requireSettingDefinition(key, "workspace");
     const next = validateSettingValue(definition, value, `workspace ${this.slug}`);
     if (key === "kinds.default") this.assertConfiguredKind(next as string);
@@ -2139,12 +2193,14 @@ export class WorkspaceStore {
         payload: { value: next },
         actor: actor ?? null,
       });
+      if (key === "features.planning" && next === true) this.plan().initialize(actor ?? null);
       return settingValueView(definition, next, "workspace");
     });
   }
 
   /** Clear a stored value so the definition's default applies again. A no-op when nothing is stored. */
-  resetSetting(key: string, actor?: string | null): SettingValueView {
+  resetSetting(key: string, actor?: string | null, person?: PersonDecision | null): SettingValueView {
+    if (key === "features.planning" && !person) throw new StapleError("validation", "Only a person can change features.planning, in Settings → Experimental or with `staple settings set features.planning false --person`. The UI is the person and its token is the person's; agents are trusted not to impersonate the person through that token or --person.");
     const definition = requireSettingDefinition(key, "workspace");
     return this.atomically(() => {
       const stored = this.settings().values.get(key);
@@ -2169,15 +2225,15 @@ export class WorkspaceStore {
   }
 
   /** Apply a batch of setting ops in ONE transaction, in order — the `target: "settings"` twin of `applyStatusOps`. */
-  applySettingOps(ops: readonly SettingOp[], actor?: string | null): SettingValueView[] {
+  applySettingOps(ops: readonly SettingOp[], actor?: string | null, person?: PersonDecision | null): SettingValueView[] {
     return this.atomically(() => {
       for (const op of ops) {
         switch (op.op) {
           case "set":
-            this.setSetting(op.key, op.value, actor);
+            this.setSetting(op.key, op.value, actor, person);
             break;
           case "reset":
-            this.resetSetting(op.key, actor);
+            this.resetSetting(op.key, actor, person);
             break;
           default:
             throw new StapleError("validation", `Unknown setting op "${(op as { op: string }).op}"`);
@@ -2284,6 +2340,7 @@ export class WorkspaceStore {
    */
   private requireTarget(ref: string): IssueRow {
     const row = this.requireRow(ref);
+    if (row.kind === IDEA_KIND || this.isHorizon(row.id)) this.plan().assertEnabled();
     if (renumbersAcknowledged()) return row;
     const trimmed = ref.trim();
     if (trimmed === row.id) return row;
@@ -2523,12 +2580,12 @@ export class WorkspaceStore {
 
   // ---------- creation ----------
 
-  createIssue(input: CreateIssueInput): Issue {
-    return this.createIssueResult(input).issue;
+  createIssue(input: CreateIssueInput, internal: PlanInternal = {}): Issue {
+    return this.createIssueResult(input, internal).issue;
   }
 
   /** createIssue, plus whether an idempotency key replayed an earlier create. */
-  createIssueResult(input: CreateIssueInput): CreateIssueResult {
+  createIssueResult(input: CreateIssueInput, internal: PlanInternal = {}): CreateIssueResult {
     const title = input.title?.trim();
     if (!title) throw new StapleError("validation", "Title is required");
     if (input.priority) assertPriority(input.priority);
@@ -2580,6 +2637,9 @@ export class WorkspaceStore {
           throw new StapleError("validation", `Tree depth cap (${MAX_TREE_DEPTH}) exceeded`);
         }
       }
+      if (kind === IDEA_KIND && !internal.plan && !this.planningOn()) throw new StapleError("validation", PLAN_KINDS_MISSING_MESSAGE);
+      // Parent authority follows record identity, including while planning is hidden.
+      assertPlanParent({ kind }, parent === null ? null : { ...parent, planRecord: parent.plan_maturity !== null });
 
       // Duplicate guard: same normalized title among open siblings.
       const normalized = normalizeTitle(title);
@@ -2601,10 +2661,15 @@ export class WorkspaceStore {
       }
 
       const blockerRows = (input.blockedBy ?? []).map((ref) => this.requireTarget(ref));
+      this.assertNoPlanDependency(kind, blockerRows);
 
-      const id = newId();
-      const number = this.nextIssueNumber();
-      const identifier = `${this.prefix}-${number}`;
+      const id = internal.id ?? newId();
+      /**
+       * An idea holds no ticket number until it is promoted: a draft identifier made from its own
+       * UUID, which consumes nothing from the counter and is never shown (design/plan.md, "Identity").
+       */
+      const draft = kind === IDEA_KIND;
+      const identifier = draft ? draftIdentifier(id) : `${this.prefix}-${this.nextIssueNumber()}`;
       const now = this.journal.mutationAt();
       const row = this.db
         .prepare(
@@ -2745,6 +2810,14 @@ export class WorkspaceStore {
        * (`insertIssue`, `cloud/apply.ts`): two children created offline on two devices both keep
        * their edge. It used to travel nowhere, and existed only on the device that made it.
        */
+      /**
+       * An idea made through the tracker's own create (`create_task` with kind idea) is a captured
+       * idea: raw, at the end of the plan, as `capture_idea` would make it.
+       */
+      if (kind === IDEA_KIND && !internal.plan) {
+        const rank = (this.db.prepare("SELECT MAX(plan_rank) AS rank FROM issues WHERE kind = ?").get(IDEA_KIND) as { rank: number | null }).rank;
+        this.db.prepare("UPDATE issues SET plan_maturity = 'raw', plan_rank = ? WHERE id = ?").run((rank ?? 0) + 1024, id);
+      }
       // Transition site 1 of 5: a child appearing under a parent changes the
       // child landscape as surely as one moving does. The rule is about state,
       // not about which call produced it — so this is no longer gated on the
@@ -2858,6 +2931,7 @@ export class WorkspaceStore {
     return this.journaled(() => {
       const row = this.requireTarget(ref);
       const blockers = blockerRefs.map((blockerRef) => this.requireTarget(blockerRef));
+      this.assertNoPlanDependency(row.kind, blockers, row);
       const deduped = [...new Map(blockers.map((b) => [b.id, b])).values()];
       this.assertNoCycle(
         row.id,
@@ -3134,6 +3208,18 @@ export class WorkspaceStore {
   }
 
   /**
+   * A horizon's rung (design/plan.md, "Derived, never stored"): read from its open and done
+   * work only. Cancelled work is not work it ships, so a horizon never derives to cancelled,
+   * nor to done on the strength of cancelled work; with nothing else in it, it is planned (the
+   * unstarted band) until the person removes it. Reopening the work derives it again.
+   */
+  private deriveHorizonStatus(inputs: readonly string[]): DerivedRung | null {
+    if (inputs.length === 0) return null;
+    const live = inputs.filter((status) => this.categoryOf(status) !== "cancelled");
+    return live.length === 0 ? "workable" : this.deriveStatusFromChildren(live);
+  }
+
+  /**
    * Recompute every ancestor's derived status after a child transition, and
    * write the ones derivation is allowed to write. (STA-98, generalizing
    * STA-79's one-way `in_progress` flip.)
@@ -3234,6 +3320,11 @@ export class WorkspaceStore {
    */
   rederiveMilestones(milestoneIds: readonly string[], trigger: string, actor: string | null): void {
     this.deriveHolders(milestoneIds, trigger, actor, new Set(milestoneIds));
+  }
+
+  /** Re-derive what holds these issues (their parents, their milestones), as a move of theirs would. */
+  rederiveParents(issueIds: readonly string[], trigger: string, actor: string | null): void {
+    this.journaled(() => this.deriveHolders(issueIds, trigger, actor, new Set()));
   }
 
   /**
@@ -3388,7 +3479,7 @@ export class WorkspaceStore {
     const holdersOf = this.db.prepare(
       `SELECT parent_id AS id FROM issues WHERE id = ? AND parent_id IS NOT NULL
         UNION ALL
-       SELECT milestone_id AS id FROM milestone_members WHERE issue_id = ?`,
+       SELECT milestone_id AS id FROM ${MILESTONE_MEMBERSHIP} WHERE issue_id = ?`,
     );
     let frontier = [...start];
     for (let depth = 0; frontier.length > 0 && depth < MAX_TREE_DEPTH; depth += 1) {
@@ -3428,20 +3519,28 @@ export class WorkspaceStore {
   private derivationInputRows(
     ancestor: Pick<IssueRow, "id" | "kind">,
   ): Array<{ id: string; identifier: string; status: string; title: string }> {
+    /**
+     * Plans carry no derived status, and a plan-kind row is never an input to tracker work's:
+     * an idea or a horizon that reached a task's subtree (a sync from a device without the
+     * parent guard, say) must not move that task's status.
+     */
+    if (isPlanKind(ancestor.kind)) return [];
     const rows =
       ancestor.kind === MILESTONE_KIND
         ? this.db
             .prepare(
-              `SELECT id, identifier, status, title FROM issues
+              `SELECT id, identifier, status, title, kind FROM issues
                 WHERE parent_id = ?
-                   OR id IN (SELECT issue_id FROM milestone_members WHERE milestone_id = ?)
+                   OR id IN (SELECT issue_id FROM ${MILESTONE_MEMBERSHIP} WHERE milestone_id = ?)
                 ORDER BY created_at`,
             )
             .all(ancestor.id, ancestor.id)
         : this.db
-            .prepare("SELECT id, identifier, status, title FROM issues WHERE parent_id = ?")
+            .prepare("SELECT id, identifier, status, title, kind FROM issues WHERE parent_id = ?")
             .all(ancestor.id);
-    const typed = rows as Array<{ id: string; identifier: string; status: string; title: string }>;
+    const typed = (rows as Array<{ id: string; identifier: string; status: string; title: string; kind: string }>)
+      .filter((row) => !isPlanKind(row.kind))
+      .map(({ kind: _kind, ...row }) => row);
     if (ancestor.kind !== MILESTONE_KIND) return typed;
     /**
      * A milestone filed under an issue it also holds does not read that issue. The
@@ -3490,7 +3589,8 @@ export class WorkspaceStore {
      */
     if (this.categoryOf(ancestor.status) === "gated") return false;
 
-    const target = this.deriveStatusFromChildren(this.derivationInputs(ancestor));
+    const inputs = this.derivationInputs(ancestor);
+    const target = this.isHorizon(ancestor.id) ? this.deriveHorizonStatus(inputs) : this.deriveStatusFromChildren(inputs);
     if (target === null) return false; // rung 0: no children, so nothing to report
 
     /**
@@ -3712,7 +3812,7 @@ export class WorkspaceStore {
       .prepare(
         `SELECT id FROM issues WHERE id = ?
           UNION
-         SELECT milestone_id AS id FROM milestone_members WHERE issue_id = ?`,
+         SELECT milestone_id AS id FROM ${MILESTONE_MEMBERSHIP} WHERE issue_id = ?`,
       )
       .all(row.parent_id ?? "", row.id) as Array<{ id: string }>;
     for (const { id: holderId } of holders) {
@@ -4109,6 +4209,7 @@ export class WorkspaceStore {
     }
     return this.journaled(() => {
       const row = this.requireTarget(ref);
+      if (this.isPlanIssue(row.kind)) throw planKindRefusal(row, "gated");
       if (this.isResolvedStatus(row.status)) {
         throw new StapleError(
           "conflict",
@@ -4133,7 +4234,7 @@ export class WorkspaceStore {
       ).length;
       const members =
         row.kind === MILESTONE_KIND
-          ? (this.db.prepare("SELECT COUNT(*) AS n FROM milestone_members WHERE milestone_id = ?").get(row.id) as { n: number }).n
+          ? (this.db.prepare(`SELECT COUNT(*) AS n FROM ${MILESTONE_MEMBERSHIP} WHERE milestone_id = ?`).get(row.id) as { n: number }).n
           : 0;
       // A goal run's gate may stand on an empty milestone: it exists to hold the close.
       if (children === 0 && members === 0 && !(row.kind === MILESTONE_KIND && isGoalRunGate(requestedBy))) {
@@ -4594,13 +4695,29 @@ export class WorkspaceStore {
     });
   }
 
-  updateIssue(ref: string, patch: UpdateIssueInput, actor?: string | null, attempt?: AttemptOptions): Issue {
+  updateIssue(ref: string, patch: UpdateIssueInput, actor?: string | null, attempt?: AttemptOptions, internal: PlanInternal = {}): Issue {
     assertAttemptOptions(attempt);
     if (patch.status) this.assertConfiguredStatus(patch.status);
     if (patch.kind) this.assertConfiguredKind(patch.kind);
     if (patch.priority) assertPriority(patch.priority);
     return this.journaled(() => {
       const row = this.requireTarget(ref);
+      /**
+       * Through the tracker's own update a horizon is never edited (it is the person's, and the
+       * plan layer edits it) and an idea's status never moves (maturity is its state; it leaves
+       * the board by being dropped, from the plan). Its title and description are its edit
+       * action, which its lifecycle state offers or not (`plan-lifecycle.ts`).
+       */
+      if (!internal.plan) {
+        if (this.isHorizon(row.id)) throw steeringRefusal("horizons", row.identifier);
+        if (isPlanKind(row.kind) && patch.status !== undefined && patch.status !== row.status) throw steeringRefusal("status", displayRef(row));
+        if (isPlanKind(row.kind) && (patch.title !== undefined || patch.description !== undefined)) this.plan().assertEditable(row.id);
+      }
+      if (patch.parent !== undefined) {
+        const parent = patch.parent === null ? null : this.requireRow(patch.parent);
+        assertPlanParent({ kind: patch.kind ?? row.kind }, parent === null ? null : { ...parent, planRecord: parent.plan_maturity !== null });
+        if ((parent?.id ?? null) !== row.parent_id) throw new StapleError("validation", "Changing parent through update_task is not supported.");
+      }
       if (
         patch.expectedStatusVersion !== undefined &&
         patch.expectedStatusVersion !== row.status_version
@@ -4626,7 +4743,10 @@ export class WorkspaceStore {
       // kind carries no category and therefore no behaviour to violate. The one
       // documented exception (design/milestones.md): a milestone that still owns
       // members or dates cannot stop being one.
-      if (patch.kind !== undefined && patch.kind !== row.kind) assertRekindAllowed(this.db, row, patch.kind);
+      if (patch.kind !== undefined && patch.kind !== row.kind) {
+        assertPlanRekind(row, patch.kind);
+        assertRekindAllowed(this.db, row, patch.kind);
+      }
       if (patch.kind !== undefined) next.kind = patch.kind;
       if (patch.priority !== undefined) next.priority = patch.priority;
       if (patch.assignee !== undefined) next.assignee = patch.assignee;
@@ -6771,6 +6891,8 @@ export class WorkspaceStore {
     const stealIfIdleSeconds = assertIdleThreshold(opts.stealIfIdleSeconds, "stealIfIdleSeconds");
     return this.journaled(() => {
       const row = this.requireTarget(ref);
+      // Ideas and horizons are plans, never work an agent holds (design/plan.md, "Guards").
+      if (this.isPlanIssue(row.kind)) throw planKindRefusal(row, "checked out");
       if (this.isActiveStatus(row.status) && row.checkout_agent === agent) {
         // crash-recovery re-claim: the open attempt stays open, or a new one resumes an ended one
         this.attempts().reclaimed(row, agent, opts.attempt);
@@ -7251,6 +7373,15 @@ export class WorkspaceStore {
 
   // ---------- documents (keyed, revisioned) ----------
 
+  /**
+   * Every document, restore and file on an unpromoted idea is that idea's edit action
+   * (design/plan.md, "Lifecycle"): whatever the key, it is refused where the idea's state offers
+   * no edit, as `update_idea` refuses a brief. The plan layer's own writes have already asked.
+   */
+  private assertIdeaContentWrite(row: Pick<IssueRow, "id" | "kind">): void {
+    if (row.kind === IDEA_KIND) this.plan().assertEditable(row.id);
+  }
+
   putDocument(
     ref: string,
     key: string,
@@ -7267,6 +7398,7 @@ export class WorkspaceStore {
        */
       instructions?: boolean;
     } = {},
+    internal: PlanInternal = {},
   ): { key: string; revision: number; instructions: boolean } {
     const cleanKey = key.trim().toLowerCase();
     if (!/^[a-z0-9._-]{1,64}$/.test(cleanKey)) {
@@ -7274,6 +7406,10 @@ export class WorkspaceStore {
     }
     return this.journaled(() => {
       const row = this.requireTarget(ref);
+      if (!internal.plan) {
+        this.assertIdeaContentWrite(row);
+        this.plan().assertDocumentWrite(row.id, cleanKey, body);
+      }
       const current = this.db
         .prepare(
           `SELECT d.current_revision, COALESCE(r.instructions, 0) AS instructions
@@ -7482,6 +7618,7 @@ export class WorkspaceStore {
     }
     return this.journaled(() => {
       const row = this.requireTarget(ref);
+      this.assertIdeaContentWrite(row);
       const now = this.journal.mutationAt();
       let byteSync: ByteSync = byteSyncFor(input.bytes.byteLength);
       const meta: AttachmentMeta = {
@@ -7549,6 +7686,8 @@ export class WorkspaceStore {
     return this.journaled(() => {
       const meta = readAttachment(this.db, id);
       if (!meta) throw new StapleError("not_found", `No file ${id}.`);
+      const owner = this.db.prepare("SELECT * FROM issues WHERE id = ?").get(meta.issueId) as unknown as IssueRow | undefined;
+      if (owner) this.assertIdeaContentWrite(owner);
       this.db.prepare("DELETE FROM attachments WHERE id = ?").run(id);
       this.emitEvent({
         kind: "file_removed",
@@ -7704,9 +7843,17 @@ export class WorkspaceStore {
     } else if (!filters.includeResolved) {
       where.push(`status NOT IN ${this.resolvedSql()}`);
     }
+    if (!this.planningOn()) {
+      where.push("kind <> ?");
+      params.push(IDEA_KIND);
+    }
     if (filters.kind && filters.kind.length > 0) {
       where.push(`kind IN (${filters.kind.map(() => "?").join(",")})`);
       params.push(...filters.kind);
+    } else if (!filters.includePlan) {
+      // Ideas and horizons live in the Plan view; a task view lists them only when asked by kind.
+      where.push(`kind NOT IN (${[...PLAN_KINDS].map(() => "?").join(",")})`);
+      params.push(...PLAN_KINDS);
     }
     if (filters.assignee) {
       where.push("assignee = ?");
@@ -7906,7 +8053,7 @@ export class WorkspaceStore {
    */
   instructions(ref: string, opts: { runId?: string | null } = {}): ResolvedInstruction[] {
     const row = this.requireRow(ref);
-    return resolveInstructions(this.db, row.id, { runId: opts.runId ?? null });
+    return resolveInstructions(this.db, row.id, { runId: opts.runId ?? null, planning: this.planningOn() });
   }
 
   /**
@@ -7932,6 +8079,8 @@ export class WorkspaceStore {
     instructions: ResolvedInstruction[];
   } {
     const row = this.requireRow(ref);
+    if (row.kind === IDEA_KIND) this.plan().assertEnabled();
+    const planningVisible = this.planningOn();
     const ancestors: Issue[] = [];
     let cursor = row.parent_id;
     let hops = 0;
@@ -7940,7 +8089,7 @@ export class WorkspaceStore {
         | IssueRow
         | undefined;
       if (!parent) break;
-      ancestors.unshift(rowToIssue(parent));
+      if (planningVisible || parent.kind !== IDEA_KIND) ancestors.unshift(rowToIssue(parent));
       cursor = parent.parent_id;
       hops += 1;
     }
@@ -7948,7 +8097,7 @@ export class WorkspaceStore {
       this.db
         .prepare("SELECT * FROM issues WHERE parent_id = ? ORDER BY created_at")
         .all(row.id) as unknown as IssueRow[]
-    ).map(rowToIssue);
+    ).filter(child => planningVisible || child.kind !== IDEA_KIND).map(rowToIssue);
     const toRef = (r: IssueRow) => ({
       identifier: r.identifier,
       title: r.title,
@@ -7966,25 +8115,27 @@ export class WorkspaceStore {
         ? documents.map((doc) => ({ ...doc, body: this.getDocument(row.id, doc.key).body }))
         : documents,
       attachments: listAttachments(this.db, row.id),
-      instructions: resolveInstructions(this.db, row.id, { runId: opts.runId ?? null }),
+      instructions: resolveInstructions(this.db, row.id, { runId: opts.runId ?? null, planning: this.planningOn() }),
     };
   }
 
   /** Nested subtree (or all roots when no ref given). */
   tree(ref?: string): Array<{ issue: Issue; children: unknown[] }> {
+    const planningVisible = this.planningOn();
     const build = (parentId: string | null, depth: number): Array<{ issue: Issue; children: unknown[] }> => {
       if (depth > MAX_TREE_DEPTH) return [];
+      // A sub-idea promoted before its parent is top-level work until that parent is promoted too.
+      const roots = "SELECT * FROM issues WHERE parent_id IS NULL OR (kind <> ? AND parent_id IN (SELECT id FROM issues WHERE kind = ?)) ORDER BY created_at";
       const rows = this.db
-        .prepare(
-          parentId === null
-            ? "SELECT * FROM issues WHERE parent_id IS NULL ORDER BY created_at"
-            : "SELECT * FROM issues WHERE parent_id = ? ORDER BY created_at",
-        )
-        .all(...(parentId === null ? [] : [parentId])) as unknown as IssueRow[];
-      return rows.map((r) => ({ issue: rowToIssue(r), children: build(r.id, depth + 1) }));
+        .prepare(parentId === null ? roots : "SELECT * FROM issues WHERE parent_id = ? ORDER BY created_at")
+        .all(...(parentId === null ? [IDEA_KIND, IDEA_KIND] : [parentId])) as unknown as IssueRow[];
+      return rows
+        .filter((r) => !isPlanKind(r.kind) || (planningVisible && ref !== undefined && depth > 0))
+        .map((r) => ({ issue: rowToIssue(r), children: build(r.id, depth + 1) }));
     };
     if (ref) {
       const row = this.requireRow(ref);
+      if (row.kind === IDEA_KIND) this.plan().assertEnabled();
       return [{ issue: rowToIssue(row), children: build(row.id, 1) }];
     }
     return build(null, 0);
@@ -8020,6 +8171,79 @@ export class WorkspaceStore {
   /** The queue service over this store: the ordered plan and its revision. Built on first use. */
   queue(): QueueStore {
     return (this.queueStore ??= new QueueStore(this));
+  }
+
+  // ---------- the plan layer (design/plan.md) ----------
+
+  /**
+   * The feature setting and structural readiness control feature availability.
+   * Record identity alone protects ideas and horizons, including during partial sync.
+   */
+  planningOn(): boolean {
+    return this.getSetting("features.planning") === true && this.planningInitialized();
+  }
+
+  /** Structural readiness for feature use and initialization, never record protection. */
+  planningInitialized(): boolean {
+    const kinds = this.settings().kinds;
+    if (!kinds.some((k) => k.id === IDEA_KIND) || !kinds.some((k) => k.id === MILESTONE_KIND)) return false;
+    return this.db.prepare("SELECT 1 AS hit FROM issues WHERE kind = ? AND plan_rank IS NOT NULL LIMIT 1").get(MILESTONE_KIND) !== undefined;
+  }
+
+  /**
+   * Promote an idea in place (design/plan.md, "Ticket numbers"): the same row takes the next ticket
+   * number and the given kind. Everything that hangs on the row (documents, comments, files,
+   * events, links, its plan fields) stays. The number travels as an `identifier` write on the
+   * issue, which is a claim like a create's: two devices that promote offline settle by the log,
+   * the earlier claim keeps the number and the later device renumbers its own (`claims.ts`).
+   * Only the plan layer calls this, after its own rules (shaped, person, parent promoted).
+   */
+  promoteInPlace(issueId: string, kind: string, actor: string | null): Issue {
+    this.assertConfiguredKind(kind);
+    return this.journaled(() => {
+      const row = this.requireRow(issueId);
+      const now = this.journal.mutationAt();
+      const identifier = `${this.prefix}-${this.nextIssueNumber()}`;
+      this.db.prepare("UPDATE issues SET identifier = ?, kind = ?, updated_at = ? WHERE id = ?").run(identifier, kind, now, row.id);
+      recordIdentifierMove(this.db, { issueId: row.id, from: row.identifier, to: identifier, at: now });
+      this.journal.record({ entity: "issue", entityId: row.id, verb: "update", payload: { identifier, kind, updatedAt: now }, actor: actor ?? null });
+      this.emitEvent({ kind: "idea_promoted", issueId: row.id, actor, payload: { identifier, kind } });
+      return rowToIssue(this.requireRow(row.id));
+    });
+  }
+
+  /** A horizon: a milestone the plan ranks as a column. Its name, date, order and removal are the person's. */
+  isHorizon(issueId: string): boolean {
+    // Migration fixtures may predate the plan columns. Without a rank a row cannot be
+    // a horizon; SELECT * keeps the identity check valid on those earlier schemas too.
+    const row = this.db.prepare("SELECT * FROM issues WHERE id = ? AND kind = ?").get(issueId, MILESTONE_KIND) as { plan_rank?: number | null } | undefined;
+    return row?.plan_rank != null;
+  }
+
+  /** Reserved idea identity is independent of feature state and structural readiness. */
+  isPlanIssue(kind: string): boolean {
+    return isPlanKind(kind);
+  }
+
+  /** Dependencies are tracker work: a plan neither blocks nor waits (design/plan.md, "Guards"). */
+  private assertNoPlanDependency(
+    kind: string,
+    blockers: ReadonlyArray<{ identifier: string; kind: string; title: string }>,
+    self?: { identifier: string; title: string },
+  ): void {
+    if (blockers.length === 0) return;
+    if (isPlanKind(kind)) {
+      throw planKindRefusal({ identifier: self?.identifier ?? "~", title: self?.title ?? "this one", kind }, "blocked by other work");
+    }
+    const plan = blockers.find((blocker) => isPlanKind(blocker.kind));
+    if (plan) throw planKindRefusal(plan, "a blocker");
+  }
+
+  private planStore: PlanStore | null = null;
+
+  /** Ideas, horizons and the links from ideas to work. Built on first use. */
+  plan(): PlanStore {
+    return (this.planStore ??= new PlanStore(this));
   }
 
   // ---------- autopilot runs (migration 015) ----------

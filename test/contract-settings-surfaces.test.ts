@@ -175,6 +175,7 @@ describe("the queue policy is the same object on every surface", () => {
       // R5a's glyph map is structured, so the line prints it as JSON.
       "kinds.appearance = {}  (default)",
       "queue.policy = strict  (workspace)",
+      "features.planning = false  (default)",
     ]);
   });
 });

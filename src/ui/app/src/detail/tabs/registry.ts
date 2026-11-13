@@ -34,7 +34,7 @@ export interface TabDefinition {
   /** What a person reads on the strip: plain words, not engineer words. */
   label: string;
   component: ComponentType<TabProps>;
-  /** Hide the tab entirely when it has nothing to show. Documents, Files, Connections and Time leave this unset: an empty tab is the answer. */
+  /** Hide the tab entirely when it has nothing to show, or does not apply to this kind. Documents and Files leave this unset: an empty tab is the answer. */
   available?: (detail: IssueDetail) => boolean;
 }
 
@@ -45,9 +45,24 @@ import { ActivityTab } from "./ActivityTab";
 import { AgentViewTab } from "./AgentViewTab";
 import { AnalyticsTab } from "./AnalyticsTab";
 import { RelationsTab } from "./RelationsTab";
+import { PlanTab } from "./PlanTab";
+import { IdeaConnectionsTab } from "./IdeaConnectionsTab";
+import { IdeaAgentViewTab } from "./IdeaAgentViewTab";
+import { PlanTimeTab } from "./PlanTimeTab";
+import { isIdeaDetail, planRecordOf } from "../plan-record";
+
+/**
+ * AN IDEA HAS ITS OWN STRIP. An unpromoted idea is a plan, not work: Plan replaces Details, and
+ * Connections, For agents and Time read the plan rather than the tracker. The kind and the state
+ * choose the tabs here and nowhere else, through `available`; documents, files and activity are
+ * the issue's own and are shared. Once promoted the record is an epic: it gets the task strip,
+ * and keeps the Plan tab for the plan actions its state still offers.
+ */
+const task = (detail: Parameters<NonNullable<TabDefinition["available"]>>[0]) => !isIdeaDetail(detail);
 
 export const TABS: readonly TabDefinition[] = [
-  { id: "overview", label: "Details", component: OverviewTab },
+  { id: "overview", label: "Details", component: OverviewTab, available: task },
+  { id: "plan", label: "Plan", component: PlanTab, available: (detail) => planRecordOf(detail) !== null },
   /**
    * O2b (STA-132) — the ticket's place in the plan, on a mini canvas.
    *
@@ -56,12 +71,13 @@ export const TABS: readonly TabDefinition[] = [
    * as rows; this draws them, and the two belong next to each other rather than either
    * side of the activity feed.
    *
-   * NO `available` predicate, deliberately, and for the same reason Analytics has none:
-   * a ticket with nothing attached to it is a fact worth being able to check, and a tab
+   * Never hidden for a ticket, deliberately, and for the same reason Analytics is not (an idea
+   * has its own Connections below): a ticket with nothing attached to it is a fact worth being able to check, and a tab
    * that vanishes teaches nobody that the feature exists. The tab renders "no relations"
    * rather than an empty canvas, which is the honest version of the same answer.
    */
-  { id: "relations", label: "Connections", component: RelationsTab },
+  { id: "relations", label: "Connections", component: RelationsTab, available: task },
+  { id: "idea-connections", label: "Connections", component: IdeaConnectionsTab, available: isIdeaDetail },
   /**
    * Always on the strip, including when nothing has been written. An empty
    * Documents tab is how a reader learns that a plan lives here and that
@@ -76,18 +92,20 @@ export const TABS: readonly TabDefinition[] = [
    */
   { id: "files", label: "Files", component: FilesTab },
   { id: "activity", label: "Activity", component: ActivityTab },
-  { id: "agent", label: "For agents", component: AgentViewTab },
+  { id: "agent", label: "For agents", component: AgentViewTab, available: task },
+  { id: "idea-agent", label: "For agents", component: IdeaAgentViewTab, available: isIdeaDetail },
   /**
    * STA-82 — estimate vs actual. LAST, after "For agents", per the epic.
    *
-   * Deliberately has NO `available` predicate. It is tempting to hide the tab
+   * Never hidden for a ticket (an idea has its own Time, below). It is tempting to hide the tab
    * when nothing is estimated, but that is exactly backwards: an issue with no
    * estimate is the one where the tab has something to tell you ("no estimate
    * recorded — set one with --estimate at plan time"), and a tab that vanishes
    * teaches nobody that the feature exists. Hiding it would also make the tab
    * strip's width jump around as work moves through statuses.
    */
-  { id: "analytics", label: "Time", component: AnalyticsTab },
+  { id: "analytics", label: "Time", component: AnalyticsTab, available: task },
+  { id: "plan-time", label: "Time", component: PlanTimeTab, available: isIdeaDetail },
 ];
 
 export function visibleTabs(detail: IssueDetail): TabDefinition[] {

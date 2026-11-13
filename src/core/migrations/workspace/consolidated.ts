@@ -3,7 +3,7 @@
  * Regenerate with: npx tsx scripts/regen-migration-snapshots.ts
  *
  * The `sqlite_master` dump of a workspace database that walked migrations
- * 001, 002, 003, 004, 005, 006, 007, 008, 009, 010, 011, 012, 013, 014, 015, 016, 017, 018, 019. Executed verbatim by the runner when — and only when —
+ * 001, 002, 003, 004, 005, 006, 007, 008, 009, 010, 011, 012, 013, 014, 015, 016, 017, 018, 019, 020. Executed verbatim by the runner when — and only when —
  * version detection proved the file has no tables at all.
  *
  * No `IF NOT EXISTS` anywhere, deliberately: reaching this text with tables
@@ -47,7 +47,7 @@ CREATE TABLE issues (
   cancelled_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
-, estimated_seconds INTEGER, kind TEXT NOT NULL DEFAULT 'task', gate_state TEXT, gate_owner TEXT, gate_requested_by TEXT, gate_requested_at TEXT, gate_resolved_by TEXT, gate_resolved_at TEXT, gate_released INTEGER NOT NULL DEFAULT 0, project_id TEXT, derived_status TEXT);
+, estimated_seconds INTEGER, kind TEXT NOT NULL DEFAULT 'task', gate_state TEXT, gate_owner TEXT, gate_requested_by TEXT, gate_requested_at TEXT, gate_resolved_by TEXT, gate_resolved_at TEXT, gate_released INTEGER NOT NULL DEFAULT 0, project_id TEXT, derived_status TEXT, plan_maturity TEXT, plan_horizon_id TEXT, plan_start TEXT, plan_target TEXT, plan_baseline_start TEXT, plan_baseline_target TEXT, plan_rank INTEGER, plan_run_mode TEXT);
 
 CREATE UNIQUE INDEX issues_idempotency_uq
   ON issues(idempotency_key) WHERE idempotency_key IS NOT NULL;
@@ -437,4 +437,30 @@ CREATE TRIGGER attachments_drop_bytes
       BEGIN
         DELETE FROM attachment_bytes WHERE sha256 = OLD.sha256;
       END;
+
+CREATE INDEX issues_plan_ranked_idx ON issues(kind) WHERE plan_rank IS NOT NULL;
+
+CREATE TABLE plan_links (
+        idea_id   TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+        issue_id  TEXT NOT NULL,
+        linked_by TEXT NOT NULL,
+        linked_at TEXT NOT NULL,
+        PRIMARY KEY (idea_id, issue_id)
+      );
+
+CREATE TABLE plan_rows (
+        idea_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+        row_id  TEXT NOT NULL,
+        body    TEXT NOT NULL,
+        rank    REAL NOT NULL,
+        PRIMARY KEY (idea_id, row_id)
+      );
+
+CREATE TABLE plan_members (
+        issue_id     TEXT    PRIMARY KEY REFERENCES issues(id) ON DELETE CASCADE,
+        milestone_id TEXT    NOT NULL    REFERENCES issues(id) ON DELETE CASCADE,
+        position     INTEGER NOT NULL
+      );
+
+CREATE INDEX plan_members_milestone_idx ON plan_members(milestone_id, position);
 `;

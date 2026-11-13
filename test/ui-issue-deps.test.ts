@@ -139,7 +139,7 @@ describe("/api/issues carries dependency identifiers", () => {
     const row = (await issues()).find((r) => r.issue.identifier === ref.target)!;
     // STA-143 added `gate` and `queuedBy` as two further siblings, on the same
     // additive terms this test exists to police, and the milestone list nesting added
-    // `milestoneId`.
+    // `milestoneId`. Planning fields are omitted while the feature is off.
     expect(Object.keys(row).sort()).toEqual([
       "claim",
       "deps",

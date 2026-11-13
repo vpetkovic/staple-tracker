@@ -65,6 +65,7 @@ function row(identifier: string, title: string, overrides: Partial<Issue> = {}):
 }
 
 const context = (overrides: Partial<PaletteContext> = {}): PaletteContext => ({
+  planningEnabled: true,
   selection: null,
   selectionStatus: null,
   view: "tree",
@@ -178,7 +179,7 @@ describe("buildCommands", () => {
      * meaning "every view switch". The action type is what this test was always about.
      */
     const views = buildCommands(context({ view: "tree" })).filter((c) => c.action.type === "view");
-    expect(views.map((c) => c.id)).toEqual(["view:queue", "view:graph", "view:milestones", "view:calibration", "view:budget"]);
+    expect(views.map((c) => c.id)).toEqual(["view:queue", "view:graph", "view:milestones", "view:plan", "view:calibration", "view:budget"]);
   });
 
   it("names the calibration view in plain words, and still finds it by its old name", () => {
@@ -425,5 +426,62 @@ describe("issueCommand", () => {
 
   it("drops the workspace from the hint in workspace mode, where it is noise", () => {
     expect(issueCommand(row("STA-13", "Migrate the UI stack"), false).hint).toBe("todo");
+  });
+});
+
+describe("a plan record's commands come from its lifecycle", () => {
+  const IDEA_ID = "1d4e7a52-0c6e-4b8e-9a51-3f1f3c0b9d21";
+  const shaped = {
+    id: IDEA_ID,
+    title: "Coach shares a program",
+    promoted: false,
+    actions: [
+      { id: "edit", label: "Edit title and brief", who: "anyone" as const },
+      { id: "unshape", label: "Back to exploring", who: "person" as const },
+      { id: "drop", label: "Drop", who: "person" as const },
+      { id: "promote", label: "Promote to epic", who: "anyone" as const },
+    ],
+  };
+  const actionsOf = (commands: ReturnType<typeof buildCommands>) => commands.filter((command) => command.group === "actions");
+
+  it("offers an idea exactly its one-click plan actions, and no status, start or stop", () => {
+    const commands = actionsOf(buildCommands(context({ selection: { workspace: "staple", ref: IDEA_ID }, planRecord: shaped })));
+    expect(commands.map((command) => command.label)).toEqual(["Back to exploring", "Drop", "Promote to epic"]);
+    expect(commands.map((command) => command.action)).toEqual([
+      { type: "plan", verb: "update", body: { ref: IDEA_ID, maturity: "exploring" } },
+      { type: "plan", verb: "update", body: { ref: IDEA_ID, maturity: "dropped" } },
+      { type: "plan", verb: "promote", body: { ref: IDEA_ID } },
+    ]);
+  });
+
+  it("never shows the idea's id or a draft identifier as a hint", () => {
+    const commands = actionsOf(buildCommands(context({ selection: { workspace: "staple", ref: IDEA_ID }, planRecord: shaped })));
+    for (const command of commands) {
+      expect(command.hint).toBe("Coach shares a program");
+      expect(command.hint).not.toContain(IDEA_ID);
+      expect(command.hint).not.toContain("~");
+    }
+  });
+
+  it("offers a shipped idea nothing, and a held-back action not at all", () => {
+    const shipped = { ...shaped, actions: [{ id: "adopt", label: "Adopt existing work", who: "anyone" as const }] };
+    expect(actionsOf(buildCommands(context({ selection: { workspace: "staple", ref: IDEA_ID }, planRecord: shipped })))).toEqual([]);
+    const held = { ...shaped, actions: [{ id: "promote", label: "Promote to epic", who: "anyone" as const, disabledReason: "Not yet." }] };
+    expect(actionsOf(buildCommands(context({ selection: { workspace: "staple", ref: IDEA_ID }, planRecord: held })))).toEqual([]);
+  });
+
+  it("never runs Scaffold in one click: it is a preview first, in the drawer", () => {
+    const scaffoldable = { ...shaped, actions: [...shaped.actions, { id: "scaffold", label: "Scaffold epic and tasks", who: "anyone" as const }] };
+    const commands = actionsOf(buildCommands(context({ selection: { workspace: "staple", ref: IDEA_ID }, planRecord: scaffoldable })));
+    expect(commands.map((command) => command.label)).toEqual(["Back to exploring", "Drop", "Promote to epic"]);
+    expect(commands.some((command) => command.action.type === "plan" && command.action.verb === "scaffold")).toBe(false);
+  });
+
+  it("keeps a promoted record's epic commands, and adds the plan actions its state offers", () => {
+    const promoted = { ...shaped, promoted: true, actions: [{ id: "reset_baseline", label: "Reset baseline to the plan", who: "person" as const }, { id: "open_epic", label: "Open the epic", who: "anyone" as const }] };
+    const labels = actionsOf(buildCommands(context({ selection: { workspace: "staple", ref: "STA-90" }, selectionStatus: "todo", planRecord: promoted }))).map((command) => command.label);
+    expect(labels).toContain("Stop working on it");
+    expect(labels).toContain("Reset baseline to the plan");
+    expect(labels).not.toContain("Open the epic");
   });
 });

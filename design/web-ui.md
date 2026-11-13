@@ -195,7 +195,7 @@ it is part of the filter state and of the address (`q`).
 ### Grouping
 
 The tree is ungrouped by default: one hierarchy, parents over children. The
-"Group" control adds an axis (*Status*, *Pickup order*, *Epic* or *Kind*;
+"Group" control adds an axis (*Status*, *Pickup order*, *Epic*, *Kind* or *Horizon*;
 *No grouping* goes back) and each axis is a way of *displaying* the same rows,
 never a second copy of them. *Pickup order* reads `GET /api/inbox`: the store's
 own dependency-ordered sections, with *Pending approval* first.
@@ -236,7 +236,14 @@ in it carries four readings, and none of them changes the row's height (the
   identifier. Below 480px the marks become one plain pill.
 - **Milestone**: a `◇` marker when the row is planned under a milestone, shown
   on a desk as a chip with the milestone's name. It is a button: it opens the
-  Milestones view with that milestone focused.
+  Milestones view with that milestone focused. When the row's work belongs to a
+  horizon of the plan (`row.horizon`: its membership, derived from the plan or put
+  there, else its nearest ancestor's), the chip names the horizon with `◇`, in
+  every grouping and on landed work too. Below 480px, where this mark is dropped,
+  a compact `◇ Now` chip keeps its own slot and gives the full name on a tap.
+  *Group: Horizon* sections the list by horizon in the plan's order, then *No
+  horizon*, and does not nest members under their milestone again. Horizons
+  themselves are not rows when planning is on: `/api/issues` leaves them out.
 
 **The pickup cue speaks the queue's vocabulary** (see [queue.md](queue.md)), one
 word per row, first match wins:
@@ -354,6 +361,7 @@ ancestry. Nothing in the menu is a value this build invented.
 | **Status** | the workspace's configured statuses | the issue |
 | **Blocked** | Blocked or waiting on another task | the status and the open blockers |
 | **Kind** | the kinds present, in the configured order | the issue |
+| **Horizon** | the horizons on the page in the plan's order, plus No horizon; offered only when some row is on one | the row's `horizon` |
 | **Assignee** | the names on the page, plus Unassigned | the issue |
 | **Priority** | Urgent, High, Medium, Low | the issue |
 | **Label** | the labels on the page | the issue |
@@ -1941,3 +1949,22 @@ the per-id rules so the category wins. Adding a status never needs a new token.
 
 Working on the app itself is a contributor path — dev server, rebuild loop, and
 the rest are in [CONTRIBUTING.md](https://github.com/vpetkovic/staple-tracker/blob/master/CONTRIBUTING.md).
+
+
+## Plan navigation and horizon cues
+
+The Plan lenses use `detail/tabs/DetailTabStrip.tsx`, shared with `IssueDetailPanel`.
+Desktop tabs use its line treatment; phone tabs use its 48px segment track. Radix owns
+roving focus, arrow keys and tab/panel relationships. Scroll reveal and edge fades are shared.
+Plan remembers its lens, drawer, scroll and phone column per workspace, while filters use
+the shell's existing URL and per-viewer preferences. Every storage access fails safe.
+
+Unscheduled replaces the default Later bucket. Optional-date named horizons remain available
+in Plan, Tasks grouping, chip and filter; only dated horizons list in Milestones. Plain
+milestones retain their existing listing behavior. The synchronized upgrade is documented
+in [plan.md](plan.md#unscheduled-and-optional-dates).
+
+Milestones and horizon drawers link each planned idea directly to its Plan drawer, by stable id.
+Promoted epics link back to that same original idea. Both layouts use the same links.
+At phone widths below 480px, a quiet diamond in the row's secondary metadata replaces the
+short-name badge. Tap reveals the full name and an Open link. The desktop chip stays.

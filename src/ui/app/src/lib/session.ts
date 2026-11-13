@@ -27,7 +27,7 @@ import type { Resource } from "./useStaple";
  * preference. What the user sees is `VIEW_LABELS` — the tree view is called "Tasks"
  * everywhere a human reads it.
  */
-export const VIEWS = ["tree", "queue", "graph", "milestones", "calibration", "budget"] as const;
+export const VIEWS = ["tree", "queue", "graph", "milestones", "plan", "calibration", "budget"] as const;
 export type ViewName = (typeof VIEWS)[number];
 
 /** The human name of each view — the rail row, the content header, the palette command. */
@@ -36,6 +36,7 @@ export const VIEW_LABELS: Record<ViewName, string> = {
   queue: "Queue",
   graph: "Graph",
   milestones: "Milestones",
+  plan: "Plan",
   // The ids stay `calibration` and `budget` (routes, saved preferences, commands key off them);
   // readers see one plain name for each, the same in the rail, the tab bar, the header and
   // the palette, and the same word Settings uses for the matching section ("Usage").
@@ -82,6 +83,7 @@ const VIEW_CONTROLS: Record<ViewName, ViewControls> = {
   tree: { arrange: true, filter: true, done: true },
   graph: { arrange: false, filter: true, done: false },
   milestones: { arrange: false, filter: false, done: true },
+  plan: { arrange: false, filter: false, done: false },
   queue: { arrange: false, filter: false, done: false },
   calibration: { arrange: false, filter: false, done: false },
   budget: { arrange: false, filter: false, done: false },
@@ -175,6 +177,8 @@ export function pinSelection(current: Selection | null, loaded: { workspace: str
 }
 
 export interface StapleSession {
+  /** Effective workspace flag; absent and all-workspace scope default to off. */
+  planningEnabled?: boolean;
   mode: UiMode;
   workspaces: WorkspaceRef[];
 

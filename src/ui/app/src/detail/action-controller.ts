@@ -24,6 +24,7 @@ export interface ControllerDeps {
     requestGate: (body: Extract<ApiRequest, { fn: "requestGate" }>["body"]) => Promise<unknown>;
     approveGate: (body: Extract<ApiRequest, { fn: "approveGate" }>["body"]) => Promise<unknown>;
     requestGateChanges: (body: Extract<ApiRequest, { fn: "requestGateChanges" }>["body"]) => Promise<unknown>;
+    planWrite: (verb: string, body: Record<string, unknown>) => Promise<unknown>;
   };
   /** Ask for a name (window.prompt in the page). Null when cancelled. */
   ask: (prompt: string, prefill: string) => string | null;
@@ -66,6 +67,8 @@ export function send(post: ControllerDeps["post"], request: ApiRequest): Promise
       return post.approveGate(request.body);
     case "requestGateChanges":
       return post.requestGateChanges(request.body);
+    case "planWrite":
+      return post.planWrite(request.verb, request.body);
   }
 }
 

@@ -173,6 +173,11 @@ export interface RowPlan {
   cues: "marks" | "pill";
   /** The milestone marker is drawn. */
   milestoneMark: boolean;
+  /**
+   * The horizon chip: the full `◇ name` while the milestone mark has room, and a compact
+   * `◇` with a short name once it is dropped, in its own slot. A horizon is always shown.
+   */
+  horizonChip: "full" | "compact";
 }
 
 /** Every drop that applies at `width`. */
@@ -210,6 +215,7 @@ export function rowPlan(width: number): RowPlan {
     plainKindGlyph: has("plainKindGlyph"),
     cues: has("cueMarks") ? "marks" : "pill",
     milestoneMark: has("milestoneMark"),
+    horizonChip: has("milestoneMark") ? "full" : "compact",
   };
 }
 

@@ -684,7 +684,7 @@ describe("the hidden-parent invariant (STA-97)", () => {
 // ---------- the registry ----------
 
 describe("the dimension registry", () => {
-  it("carries the nine menu dimensions (text has its own box)", () => {
+  it("carries the ten menu dimensions (text has its own box)", () => {
     // Order is the menu order AND the chip order. `handoff` sits directly after `claim`
     // because that is the pair it means something in — see the note on the entry.
     //
@@ -698,11 +698,13 @@ describe("the dimension registry", () => {
     // the only dimension about a decision somebody owes rather than about the issue.
     // `blocked` (the Blocked quick filter's dimension) sits directly after `status`: "what
     // is stuck" is the question people ask of status, and it is answered by status OR by
-    // an unresolved blocker — see `isBlockedRow`.
+    // an unresolved blocker — see `isBlockedRow`. `horizon` sits after `kind`: both ask
+    // "which part of the work".
     expect(FILTER_DIMENSIONS.map((d) => d.id)).toEqual([
       "status",
       "blocked",
       "kind",
+      "horizon",
       "assignee",
       "priority",
       "label",

@@ -24,7 +24,7 @@ const sidebars: SidebarsConfig = {
       type: 'category',
       label: 'Planning',
       collapsible: false,
-      items: ['epics-and-dependencies', 'approval-gates', 'queue', 'milestones', 'runs'],
+      items: ['epics-and-dependencies', 'approval-gates', 'queue', 'milestones', 'plan', 'runs'],
     },
     {
       type: 'category',
