@@ -162,6 +162,39 @@ returns its ideas to Unscheduled. A horizon that still holds open work, or sits 
 cannot be removed until you move that work or take it off the queue. The refusal names what to
 move.
 
+### How a horizon reads
+
+A horizon reads the same in three places: its column in the **Horizons** lens, its drawer, and
+its detail in **Milestones**. Each shows the same header and the same tree.
+
+The header says `3 ideas (+1 parent) · 2 members`: the ideas on it, with parent ideas counted
+apart, and the tickets in its milestone. Below that are its ideas by state
+(`1 shipped · 1 started · 1 exploring`), a bar split into done, open and planned work with its
+percentage, and **Needs you: n** when n of its next steps wait on you.
+
+Under the header each parent idea is a group. Its sub-ideas sit indented under it, always
+visible on a desk. Each one shows its own state, its own bar, its open questions and what it needs
+next, in a few words:
+
+| it reads | meaning |
+|---|---|
+| starts Dec 1 / waits on Audit trail | shaped, not its turn yet: its planned start is later, or an idea it depends on has not shipped |
+| ready to scaffold | its turn has come: an agent can build its tickets |
+| needs you: 2 questions | still being explored, with questions for you |
+| plan needed | its plan is missing something the shaped gate asks for |
+| ready to mark shaped | its plan is complete: mark it shaped |
+| to develop | a sub-idea not developed yet |
+
+A sub-idea scheduled on another horizon, or on none, is shown dimmed with *on Later* or
+*unscheduled*. It counts there, not here. An idea still being explored that you scheduled on the
+horizon shows as a **reserved row**: its state and questions, with no card and no drag. It is also
+still a card in the **Ideas** lens. An idea delivered outside the tracker shows ✓ Shipped with
+*outside the tracker*.
+
+On a phone, each group starts folded. **Show sub-ideas** opens it, and nothing is dragged; use
+a card's ⋯ menu to move it. Every number comes from the server, so the three places always agree.
+A horizon at `100% incomplete` stays open and is never folded away.
+
 ## 6. Scaffold, or adopt what exists
 
 Open a shaped idea and press **Scaffold epic and tasks**. It shows a preview first: the epic
@@ -204,7 +237,7 @@ done; its column then folds to a ✓ summary.
 open, and each breakdown row of an idea that has no tickets yet counts as one **planned** item.
 So a horizon whose tickets are nearly all done, with three ideas still waiting to be scaffolded,
 reads the share of all its work that is done, not of the tickets alone. The horizon header, its
-drawer, the **Milestones** view, `staple horizon ls`, `staple milestone show` and the agent tools
+drawer, the **Milestones** view ([How a horizon reads](#how-a-horizon-reads)), `staple horizon ls`, `staple milestone show` and the agent tools
 all show the same numbers and the same percentage. An idea with no work, no rows and no
 sub-ideas has no size yet: it is counted as **unsized**, never as no work. A parent idea's
 sub-ideas carry its size, so its own breakdown, which usually names them, is not counted again;
