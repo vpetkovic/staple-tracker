@@ -124,4 +124,5 @@ blocker, a gate or another agent's claim.
 
 - [Milestones and goals](milestones.md): queue a dated plan that spans several epics.
 - [Autopilot runs](runs.md): let one agent work the queue ticket after ticket.
+- [Planning (experimental)](plan.md): queue a whole horizon and set how far agents take it.
 - [Configuration](configuration.md): the `queue.policy` setting.

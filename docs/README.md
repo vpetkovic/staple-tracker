@@ -51,7 +51,7 @@ the reference pages at the end are for looking things up.
 | [Approval gates](approval-gates.md) | Hold an epic for your review, then approve it or send it back |
 | [The pickup queue](queue.md) | Set the order agents take work in |
 | [Milestones and goals](milestones.md) | Put a date and a goal on work from several epics, and track it |
-| [The plan](plan.md) | Keep ideas out of the task list: mature them, put them on horizons and a timeline, start them as epics |
+| [Planning (experimental)](plan.md) | Off by default. Capture ideas, shape them into plans, schedule them on horizons and scaffold the epic and its tasks |
 | [Autopilot runs](runs.md) | Let one agent work a scope ticket after ticket, within a budget |
 
 ## Across machines and repositories

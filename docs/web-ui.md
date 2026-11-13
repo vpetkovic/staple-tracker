@@ -90,12 +90,15 @@ what is in it and what comes next; reorder or remove members from their rows.
 **Open** shows its goal: each criterion with its verdict, and whether the
 milestone is on pace for its date.
 
-**Plan** sits beside it: ideas that are not work yet, in three lenses. **Ideas** has a
-column per maturity and a capture box; **Horizons** has Unscheduled and each horizon (Now,
-Next, Later, or your own), with late and not-started counts; **Timeline** shows planned
-windows you drag and resize, with the real dates of started ideas beside them. An idea opens in
-the same panel as a task, with a Plan tab for its brief and questions and only the actions its
-state offers, such as promoting a shaped idea to an epic. See [The plan](plan.md).
+**Plan** sits beside it once a person turns on the experimental planning setting
+(**Settings → Experimental**). It holds ideas that are not work yet, in three lenses.
+**Ideas** has the raw and exploring columns and a capture box; **Horizons** has each horizon
+(Now, Next or your own) and Unscheduled, with progress, shipped, late and not-started counts;
+**Timeline** shows planned windows you drag and resize, with the real dates of started ideas
+beside them. An idea opens in the same panel as a task, with a Plan tab for its plan and only
+the actions its state offers, such as scaffolding a shaped idea into an epic and its tasks.
+With planning on, Tasks also shows each task's horizon as a ◇ chip and can group and filter by
+it. See [Planning](plan.md).
 
 ## 7. Open a task
 
@@ -147,7 +150,8 @@ Open **Settings** from the foot of the rail, or `⌘K` then *Settings*.
   [view in an agent's thread](mcp-apps.md) are recorded under).
 - **Per workspace:** *Statuses* and *Task types* (rename, add, reorder; turn on
   milestones here), *Picking up work* (the queue's advisory or strict policy) and
-  *Cloud sync* for that workspace.
+  *Cloud sync* for that workspace, and *Experimental*, where a person turns
+  [planning](plan.md) on or off.
 
 ## Next
 

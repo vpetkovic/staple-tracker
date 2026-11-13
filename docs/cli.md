@@ -172,7 +172,8 @@ staple milestone criterion APP-7 1 --met --evidence APP-4
 
 ### The plan
 
-Guide: [The plan](plan.md). Ideas and horizons sit above the tracker: they are never queued,
+Guide: [Planning](plan.md). Experimental and off by default: these commands refuse until a
+person sets `features.planning` to true. Ideas and horizons sit above the tracker: they are never queued,
 checked out or listed by `ls`. Maturity, horizons, dates and the baseline are the person's and
 need `--person`, which records the change under `humanName`.
 

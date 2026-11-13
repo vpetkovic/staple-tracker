@@ -110,13 +110,17 @@ The [documentation](https://github.com/vpetkovic/staple-tracker/blob/master/docs
   [Views in the thread](https://github.com/vpetkovic/staple-tracker/blob/master/docs/mcp-apps.md)
 - **Planning:** [Epics and dependencies](https://github.com/vpetkovic/staple-tracker/blob/master/docs/epics-and-dependencies.md),
   [Approval gates](https://github.com/vpetkovic/staple-tracker/blob/master/docs/approval-gates.md), [The pickup queue](https://github.com/vpetkovic/staple-tracker/blob/master/docs/queue.md),
-  [Milestones and goals](https://github.com/vpetkovic/staple-tracker/blob/master/docs/milestones.md), [The plan](https://github.com/vpetkovic/staple-tracker/blob/master/docs/plan.md), [Autopilot runs](https://github.com/vpetkovic/staple-tracker/blob/master/docs/runs.md)
+  [Milestones and goals](https://github.com/vpetkovic/staple-tracker/blob/master/docs/milestones.md), [Planning (experimental)](https://github.com/vpetkovic/staple-tracker/blob/master/docs/plan.md), [Autopilot runs](https://github.com/vpetkovic/staple-tracker/blob/master/docs/runs.md)
 - **Across machines and repositories:** [Cloud sync](https://github.com/vpetkovic/staple-tracker/blob/master/docs/cloud-sync.md),
   [Several repositories](https://github.com/vpetkovic/staple-tracker/blob/master/docs/hub.md)
 - **The web UI:** [Tour](https://github.com/vpetkovic/staple-tracker/blob/master/docs/web-ui.md),
   [Budget and estimates](https://github.com/vpetkovic/staple-tracker/blob/master/docs/budget-and-estimates.md)
 - **Reference:** [CLI](https://github.com/vpetkovic/staple-tracker/blob/master/docs/cli.md), [MCP tools](https://github.com/vpetkovic/staple-tracker/blob/master/docs/mcp-tools.md),
   [Configuration](https://github.com/vpetkovic/staple-tracker/blob/master/docs/configuration.md), [Errors and exit codes](https://github.com/vpetkovic/staple-tracker/blob/master/docs/errors.md)
+
+**Planning (experimental, off by default):** capture ideas, shape them into plans, schedule them
+on horizons and scaffold the epic and its tasks. A person turns it on per workspace. See
+[Planning, from idea to shipped](https://github.com/vpetkovic/staple-tracker/blob/master/docs/plan.md).
 
 The design documents behind the code live in
 [design/](https://github.com/vpetkovic/staple-tracker/tree/master/design).
