@@ -282,6 +282,31 @@ the horizon reads *Waiting for your approval* until you approve it or request ch
 staple horizon set Now --run goal --goal "Gift cards pay at checkout" --person
 ```
 
+### What agents do with the ideas that are not tickets yet
+
+A horizon also hands agents its **plan steps**: for each idea it carries that still needs
+planning, what it needs next and who acts. Agents get them beside the ticket on every pickup
+(`queue next`, `next_task`, `run continue`), and as the `horizon-plan` instruction on every ticket
+of the horizon. They take tickets first; with none left, they take the first step that is theirs
+and stop for you on the rest.
+
+| The idea | Step | Who |
+|---|---|---|
+| Exploring, with open questions | Answer the questions (deferred ones are left out) | You: the agent brings them to you and records your answers |
+| Exploring, the plan not written enough to shape | Write the plan sections the gate names | Agent |
+| Exploring, ready to shape | Mark it shaped | You |
+| Shaped, but edited since so it fails the gate | Fix the plan | Agent |
+| Shaped, no tickets, its planned start ahead or an idea it depends on not shipped | Wait | Nobody yet |
+| Shaped, no tickets, its turn has come | Re-check the breakdown, then Scaffold (or Adopt) | Agent |
+| Raw, or exploring but not scheduled itself, under a scheduled idea | Brainstorm it | Agent |
+
+A shaped idea with no tickets is not a to-do: it **waits** until its planned start (or its
+parent's, when it has none) or until the ideas it depends on ship, and agents never scaffold it
+before then. To release one early, move its planned start. When a horizon has no ticket left and
+its remaining steps are yours or are waiting, a run over it stops with `planning_needed`, lists the
+steps and, when they all wait, says when the earliest one starts. The horizon itself stays
+*planned* (nothing to queue) until its ideas become tickets.
+
 ## 11. Turn it off
 
 Turn **Planning (experimental)** off in **Settings → Experimental**, or run
@@ -290,7 +315,8 @@ Turn **Planning (experimental)** off in **Settings → Experimental**, or run
 - Plan, its lenses, the idea tabs, the palette commands and the Tasks horizon chip, grouping and
   filter disappear.
 - Planning commands, tools and routes refuse with one sentence that says planning is off.
-- Pickup answers and run briefs carry no horizon run settings.
+- Pickup answers and run briefs carry no horizon run settings, no plan steps and no
+  `horizon-plan` instruction, and a run never stops with `planning_needed`.
 - Horizons read as plain milestones and scaffolded epics as ordinary epics.
 - Ideas stay unnumbered drafts, never tasks or pickup work.
 
@@ -335,7 +361,7 @@ what it offers.
 |---|---|---|
 | `staple idea ls`, `staple plan show` | `list_ideas` | Horizons and ideas with state and flags |
 | `staple idea show <id>` | `get_idea` | One idea: plan, questions, decisions, links and what it offers |
-| `staple horizon ls` | `list_horizons` | Horizons in order, with their run setting |
+| `staple horizon ls` | `list_horizons` | Horizons in order, with their run setting and plan steps |
 | `staple idea new` | `capture_idea` | Capture a raw idea |
 | `staple idea set`, `ask`, `resolve`, `defer`, `decide` | `update_idea` | Edit an idea and its questions |
 | `staple idea plan`, `task` | `update_idea` (`plan`) | Write plan sections and breakdown rows |

@@ -88,6 +88,7 @@ run stays stopped; start a new one to carry on.
 | Reason | Meaning |
 |---|---|
 | `scope_empty` | Everything in scope is done or cancelled |
+| `planning_needed` | No ticket is left, but the horizon's ideas still need planning (with planning on); the steps are listed ([plan steps](plan.md#what-agents-do-with-the-ideas-that-are-not-tickets-yet)) |
 | `stopped_by_human` | Someone ran `run stop` or pressed Stop; the note says why |
 | `budget` | It reached `--max-tickets`, `--until` or `--ceiling` |
 | `failure_streak` | Two tickets in a row failed; read their comments and logs |

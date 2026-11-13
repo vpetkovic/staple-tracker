@@ -100,7 +100,8 @@ list nothing changes.
 
 --json prints {revision, entries, effective} on every subcommand, and
 {revision, next, skipped} for "queue next" ({revision, scope, next, skipped}
-with --scope) — the same shape MCP and the UI server answer. Full contract: design/queue.md.`;
+with --scope; with planning on also planSteps, the plan steps of the horizons it
+concerns) — the same shape MCP and the UI server answer. Full contract: design/queue.md.`;
 
 function integerOption(raw: string | undefined, flag: string): number | undefined {
   if (raw === undefined) return undefined;
