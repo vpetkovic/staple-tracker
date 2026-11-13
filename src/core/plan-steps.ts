@@ -139,6 +139,22 @@ export function planStepOf(input: PlanStepInput): PlanStep | null {
 }
 
 /**
+ * A record whose Scaffold would also build sub-ideas that still wait (Scaffold builds every shaped
+ * sub-idea beneath it) waits with them: scaffolding it now would scaffold them early. Its
+ * sub-ideas whose turn has come keep their own `scaffold` steps and are scaffolded one by one.
+ */
+export function heldBySubIdeas(step: PlanStep, waiting: readonly PlanStep[]): PlanStep {
+  const names = waiting.map((sub) => `"${sub.title}"`).join(", ");
+  return {
+    ...step,
+    need: "wait",
+    who: "nobody",
+    instruction: `Nothing to do yet: Scaffold on "${step.title}" would also build ${names}, which still wait${waiting.length === 1 ? "s" : ""}. Never scaffold it before then; scaffold each of its sub-ideas on its own when its turn comes.`,
+    waitingOn: { records: waiting.map((sub) => ({ id: sub.ideaId, title: sub.title, state: sub.state })) },
+  };
+}
+
+/**
  * A horizon's steps in plan order: its carried records by rank, then id, each parent before the
  * records beneath it; a record whose parent the horizon does not carry is a top one.
  */

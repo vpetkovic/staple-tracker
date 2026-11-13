@@ -129,6 +129,21 @@ describe("a waiting idea's turn", () => {
   });
 });
 
+describe("a parent whose Scaffold would build a waiting sub-idea", () => {
+  it("waits with it, while its sub-ideas whose turn has come keep their own scaffold step", () => {
+    const parent = capture("Reporting", { maturity: "shaped", horizon: now, plan: READY_PLAN });
+    const ready = capture("Usage report", { maturity: "shaped", parent, plan: READY_PLAN });
+    const later = capture("Audit trail", { maturity: "shaped", parent, plan: READY_PLAN, plannedStart: "2026-12-01" });
+    expect(stepOf(ready)).toMatchObject({ need: "scaffold", who: "agent" });
+    expect(stepOf(later)).toMatchObject({ need: "wait", waitingOn: { start: "2026-12-01" } });
+    expect(stepOf(parent)).toMatchObject({ need: "wait", who: "nobody", waitingOn: { records: [{ id: later, title: "Audit trail", state: "shaped" }] } });
+    expect(stepOf(parent)!.instruction).toContain("Never scaffold it before then");
+    // Its turn comes with its last waiting sub-idea's.
+    plan.update(later, { plannedStart: "2026-11-01" }, "vp", PERSON);
+    expect(stepOf(parent)).toMatchObject({ need: "scaffold", who: "agent" });
+  });
+});
+
 describe("records that need nothing from planning", () => {
   it("an exploring idea that adopted work still asks its questions, then needs nothing", () => {
     const id = capture("Checkout API", { maturity: "exploring", horizon: now });

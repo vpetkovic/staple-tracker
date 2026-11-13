@@ -101,7 +101,7 @@ import {
   type PlanSections,
 } from "./plan-sections.js";
 import { LISTED_HORIZON, rebuildPlanMembers } from "./plan-members.js";
-import { orderPlanSteps, planStepOf, type PlanStep, type PlanStepInput } from "./plan-steps.js";
+import { heldBySubIdeas, orderPlanSteps, planStepOf, type PlanStep, type PlanStepInput } from "./plan-steps.js";
 import { holdsHorizon, horizonAccounting, ownUnits, unitPercent, unitProgress, units, type HorizonAccounting, type OwnUnits, type RecordCounts, type RecordSize, type ScheduledRecord, type Units } from "./plan-accounting.js";
 import type { MilestoneProgress } from "./milestones.js";
 import type { WorkspaceStore } from "./store.js";
@@ -1269,6 +1269,19 @@ export class PlanStore {
     for (const [id, input] of facts.stepInputs) {
       const step = planStepOf({ ...input, today });
       if (step !== null) byRecord.set(id, step);
+    }
+    /** The waiting records beneath one, which its Scaffold would build too. */
+    const waitingBeneath = (id: string, seen = new Set<string>()): PlanStep[] =>
+      (facts.childIds.get(id) ?? []).flatMap((child) => {
+        if (seen.has(child)) return [];
+        seen.add(child);
+        const step = byRecord.get(child);
+        return [...(step?.need === "wait" ? [step] : []), ...waitingBeneath(child, seen)];
+      });
+    for (const [id, step] of byRecord) {
+      if (step.need !== "scaffold") continue;
+      const waiting = waitingBeneath(id);
+      if (waiting.length > 0) byRecord.set(id, heldBySubIdeas(step, waiting));
     }
     facts.steps = { today, byRecord };
     return byRecord;

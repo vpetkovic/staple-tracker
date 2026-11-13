@@ -109,7 +109,7 @@ describe("a run over a horizon with steps pending and nothing to take", () => {
     finish(ledger);
     const stop = store.runs().continue({ actor: BOT, outcome: "done" });
     expect(stop).toMatchObject({ action: "stop", reason: "planning_needed" });
-    const detail = (stop as { detail: { planSteps: PlanStep[]; earliestWait?: unknown } }).detail;
+    const detail = (stop as unknown as { detail: { planSteps: PlanStep[]; earliestWait?: unknown } }).detail;
     expect(detail.planSteps.find((step) => step.who === "agent")?.ideaId).toBe(search);
     expect(detail).not.toHaveProperty("earliestWait");
     expect(store.runs().get(run.id).state).toBe("stopped");
@@ -143,8 +143,8 @@ describe("a run over a horizon with steps pending and nothing to take", () => {
     const run = store.runs().start({ actor: BOT, scope: "queue" });
     const stop = store.runs().continue({ actor: BOT });
     expect(stop).toMatchObject({ action: "stop", reason: "planning_needed", detail: { earliestWait: "2026-11-20" } });
-    expect((stop as { detail: { planSteps: PlanStep[] } }).detail.planSteps.map((step) => step.need)).toEqual(["wait", "wait"]);
-    expect((stop as { detail: { planSteps: PlanStep[] } }).detail.planSteps[0]!.ideaId).toBe(audit);
+    expect((stop as unknown as { detail: { planSteps: PlanStep[] } }).detail.planSteps.map((step) => step.need)).toEqual(["wait", "wait"]);
+    expect((stop as unknown as { detail: { planSteps: PlanStep[] } }).detail.planSteps[0]!.ideaId).toBe(audit);
     expect(store.runs().get(run.id).state).toBe("stopped");
   });
 
@@ -202,8 +202,8 @@ describe("the stop rules", () => {
   });
 
   it("name the earliest wait when every step left waits, and null when none waits on a date", () => {
-    expect(evaluateStopRules(run, { ...empty, planSteps: [step("wait", "nobody", "2026-12-01"), step("wait", "nobody", "2026-11-20")] }).detail).toMatchObject({ earliestWait: "2026-11-20" });
-    expect(evaluateStopRules(run, { ...empty, planSteps: [step("wait", "nobody")] }).detail).toMatchObject({ earliestWait: null });
+    expect(evaluateStopRules(run, { ...empty, planSteps: [step("wait", "nobody", "2026-12-01"), step("wait", "nobody", "2026-11-20")] })).toMatchObject({ reason: "planning_needed", detail: { earliestWait: "2026-11-20" } });
+    expect(evaluateStopRules(run, { ...empty, planSteps: [step("wait", "nobody")] })).toMatchObject({ reason: "planning_needed", detail: { earliestWait: null } });
   });
 });
 
