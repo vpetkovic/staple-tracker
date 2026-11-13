@@ -153,8 +153,8 @@ describe("a server started with no workspace in reach", () => {
     // progress view's show_progress (72), the queue view's show_queue (73), and the
     // app-only approve_gate_from_view and request_changes_from_view the views' buttons call (75).
     // The plan layer then added list_ideas, get_idea, list_horizons, capture_idea, update_idea,
-    // start_idea, unlink_idea and the app-only reset_idea_baseline (83).
-    expect(tools).toHaveLength(83);
+    // start_idea, unlink_idea and the app-only reset_idea_baseline (83), and scaffold_idea (84).
+    expect(tools).toHaveLength(84);
   });
 
   it("pins the not_found guidance a read tool returns instead of an empty result", async () => {

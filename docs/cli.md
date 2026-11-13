@@ -178,17 +178,23 @@ need `--person`, which records the change under `humanName`.
 
 | Command | What it does |
 |---|---|
-| `staple plan enable` | Turn planning on: the `idea` and `milestone` kinds and the horizons Now, Next and Later, which are milestones. |
-| `staple plan show` / `staple horizon ls` | Horizons in order, with their late and not-started counts. |
+| `staple plan enable --person` | Set `features.planning` true, initializing the `idea` and `milestone` kinds and the default horizons Now and Next. The same experimental switch is in Settings. |
+| `staple plan show` / `staple horizon ls` | Horizons in order, with their late and not-started counts and their run setting. |
 | `staple idea ls` | Ideas with stage, horizon and progress. `--maturity M`, `--horizon H` filter. An idea has no ticket number until it is promoted; its `<ref>` is the id this prints. |
 | `staple idea new <title>` | Capture a raw idea. `--brief T`, `--parent REF`. |
 | `staple idea show <ref>` | Stage, planned and actual windows, baseline, brief, questions, decisions and links. |
 | `staple idea set <ref>` | `--title`, `--brief`; with `--person` also `--maturity`, `--horizon H\|none`, `--parent REF\|none`, `--start D\|none`, `--target D\|none`, `--before REF\|end`. |
 | `staple idea promote <ref>` | The idea becomes an epic on the same record and takes its ticket number. An agent may promote only a shaped idea. |
+| `staple idea scaffold <ref> [--confirm FP]` | Without `--confirm`, the preview: the epic and every task it would make from the breakdown (estimate, blockers, acceptance, a context page each), what holds it back, and its fingerprint. `--confirm FP` makes exactly that preview, and is refused when the plan changed since. A retry makes only what is missing. |
+| `staple idea plan <ref>` | Write plan sections: `--goal`, `--context`, `--acceptance`…, `--dependency`…, `--out-of-scope`, `--risks`, `--source`…. |
+| `staple idea task <ref> add\|set\|rm <key>` | One breakdown row: title, `--estimate`, `--depends`, `--acceptance`, `--owner`, `--notes`. |
+| `staple idea import <plan.md>` | Capture an idea from a plan file, with `--parent`, `--horizon`, `--maturity`; prints what it kept in Context instead of its section. |
+| `staple idea defer <ref> <n>` | Leave question `n` open on purpose; it no longer holds shaping back. |
 | `staple idea adopt <ref> <issue>` / `unlink` | Link existing work, or remove a link. |
 | `staple idea ask` / `resolve <ref> <n>` / `decide` | Add a question, resolve question `n`, record a decision. |
 | `staple idea reset-baseline <ref> --person` | The current planned window becomes the baseline. |
 | `staple horizon new <name> --person` | Add a horizon; `--date D` makes it a release line. `set`, `mv --before H\|--end` and `rm` likewise need `--person`. |
+| `staple horizon set <ref> --run work\|goal\|epic\|none --goal TEXT --person` | The horizon's run setting: how far agents take it (until its work is done, until its goal is met, stop for review after each epic) and its goal, one `--goal` per criterion (`--no-goal` clears them). Agents read it with every ticket of the horizon; nothing runs from it. |
 
 ## Autopilot runs
 

@@ -9,20 +9,23 @@
  * write runs inside the store's journaled scope, so the plan columns travel as fields of the
  * `issue` entity and links as fields of the idea's `milestone` entity.
  *
- * Two rules shape every write:
+ * Three rules shape every write:
  *
+ *  - The lifecycle decides what a record's state offers (`plan-lifecycle.ts`). Every write is
+ *    one of its actions and is refused, naming the state and what it offers, when the state
+ *    does not offer it. That check comes first, so the refusal says why for anyone.
  *  - Steering is the person's. Maturity, horizon assignment, horizon definitions and dates,
  *    planned dates, order and the baseline need a `PersonDecision`; a write without one is an
  *    agent's and is refused with `steeringRefusal`. Agents capture raw ideas, edit titles and
- *    briefs, add and resolve questions, add decisions, adopt and unlink work, and promote an
- *    idea the person has marked shaped.
+ *    briefs, add and resolve questions, add decisions, adopt and unlink work, and promote a
+ *    shaped idea (the only state that offers promotion).
  *  - Derived facts are never stored: stage beyond maturity, progress, actual dates, forecast,
  *    lateness and a horizon's members are read or rebuilt from the work every time.
  */
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { insertEvent } from "./event-log.js";
 import { moveIdentifier } from "./identifier-moves.js";
-import { MILESTONE_KIND, rankBetween, renumberedRanks } from "./milestones.js";
+import { MILESTONE_KIND, MILESTONE_MEMBERSHIP, rankBetween, renumberedRanks } from "./milestones.js";
 import {
   DEFAULT_HORIZONS,
   aKind,
@@ -48,7 +51,55 @@ import {
   type Stage,
   type SteeringWrite,
 } from "./plan.js";
+import {
+  HORIZON_ACTIONS,
+  HORIZON_LIFECYCLE,
+  IDEA_ACTIONS,
+  assertHorizonAction,
+  assertIdeaAction,
+  horizonState,
+  ideaOffered,
+  ideaState,
+  isRunMode,
+  RUN_MODE_IDS,
+  RUN_MODES,
+  type RunMode,
+  maturityAction,
+  type HorizonAction,
+  type HorizonState,
+  type IdeaAction,
+  type IdeaState,
+  type OfferedAction,
+} from "./plan-lifecycle.js";
+import { createHash, randomUUID } from "node:crypto";
+import { readStoredRepositoryId } from "./repo-identity.js";
 import { planLinkField, planLinksOf, writePlanLink } from "./plan-links.js";
+import { planRowField, planRowsOf, planRowValue, writePlanRow, type PlanRowValue } from "./plan-rows.js";
+import {
+  BREAKDOWN_KEY,
+  DOCUMENT_SECTIONS,
+  LIST_KEYS,
+  SECTION_KEYS,
+  assertListBody,
+  checkPlanPatch,
+  completeness,
+  dependencyOrder,
+  emptySections,
+  estimateProblem,
+  estimateSeconds,
+  gateSentence,
+  normalizeRow,
+  parsePlanMarkdown,
+  planWarnings,
+  readSection,
+  renderSection,
+  dependencyResolver,
+  shapedGate,
+  type BreakdownRow,
+  type BreakdownRowInput,
+  type PlanPatch,
+  type PlanSections,
+} from "./plan-sections.js";
 import { LISTED_HORIZON, rebuildPlanMembers } from "./plan-members.js";
 import type { WorkspaceStore } from "./store.js";
 import { StapleError, type PersonDecision } from "./types.js";
@@ -63,7 +114,7 @@ export interface HorizonView {
   /** The milestone's ticket number: a horizon is real work, so it has one. */
   identifier: string;
   name: string;
-  /** YYYY-MM-DD, or null for an undated horizon such as Later (the milestone's target date). */
+  /** YYYY-MM-DD, or null for an undated named horizon (the milestone's target date). */
   date: string | null;
   rank: number;
   /** The milestone's own status, derived from its members like any milestone's. */
@@ -77,7 +128,29 @@ export interface HorizonView {
   lateCount: number;
   /** Plan records on it with nothing started whose planned start has passed. */
   notStartedCount: number;
+  /** Plan records on it whose work has all landed. */
+  shippedCount: number;
+  /** Members landed over members it holds, 0..1; null while it holds none. */
+  progress: number | null;
+  /** How far agents take it when they pick its work up; null until the person sets it. */
+  runMode: RunMode | null;
+  /** Its goal: the milestone's acceptance criteria, set by the person. */
+  goal: string[];
+  /** Its close waits for the person's approval (a goal run gated it, or a person did). */
+  awaitingApproval: boolean;
   late: boolean;
+  /** Its lifecycle state, and the actions that state offers (`plan-lifecycle.ts`). */
+  state: HorizonState;
+  actions: OfferedAction[];
+}
+
+/** The horizon a task's work belongs to, as the task list shows it. */
+export interface RowHorizon {
+  id: string;
+  identifier: string;
+  name: string;
+  date: string | null;
+  rank: number;
 }
 
 export interface PlanWindow {
@@ -120,6 +193,19 @@ export interface IdeaView {
   childIds: string[];
   /** Questions not yet resolved, from the `questions` document. */
   openQuestions: number;
+  /**
+   * A shaped record whose plan no longer passes the shaped gate (it was edited since): what it
+   * lacks. Its maturity stays; Scaffold and Promote are held back until the plan passes again.
+   * Empty otherwise.
+   */
+  planIncomplete: string[];
+  /** How much of its plan is written: the starred sections and all ten. */
+  completeness: { starred: number; starredTotal: number; filled: number; total: number };
+  /** The records it waits on, by id: those its dependencies and outside depends-on cells name. */
+  dependsOn: string[];
+  /** Its lifecycle state, and the actions that state offers (`plan-lifecycle.ts`). */
+  state: IdeaState;
+  actions: OfferedAction[];
   createdAt: string;
   updatedAt: string;
 }
@@ -151,6 +237,8 @@ export interface LinkView {
 export interface Question {
   text: string;
   resolved: boolean;
+  /** Left open on purpose: it does not hold the idea back from being shaped. */
+  deferred?: boolean;
 }
 
 export interface IdeaDetail {
@@ -162,11 +250,68 @@ export interface IdeaDetail {
   questions: Question[];
   decisions: string[];
   linked: LinkView[];
+  /** The plan sections (design/plan.md, "Plan sections"). */
+  plan: PlanSections;
+  /** How much of the plan is written: starred sections and all ten. */
+  completeness: { starred: number; starredTotal: number; filled: number; total: number };
+  /** What the shaped gate still needs; empty when it may be shaped. */
+  missingForShaped: string[];
+  /** What is worth a look in the plan without stopping it: estimates that are not durations. */
+  planWarnings: string[];
+  /**
+   * The breakdown as this read saw it. A breakdown write that names it (`breakdownBase`) is
+   * refused when the breakdown changed since, so a stale editor never overwrites a newer edit.
+   */
+  breakdownRevision: string;
+  /** What scaffolding it would create, while its state offers scaffolding (held back or not); else null. */
+  scaffold: ScaffoldPreview | null;
   today: string;
 }
 
+/** One task Scaffold creates from a breakdown row. */
+export interface ScaffoldTask {
+  /** The breakdown row it comes from; its task's identity follows from it and the idea's. */
+  rowId: string;
+  key: string;
+  title: string;
+  estimate: string | null;
+  estimatedSeconds: number | null;
+  /** Why the estimate as written reads as none; null when it reads, or none was written. */
+  estimateWarning: string | null;
+  /** Keys of rows in this breakdown it waits on: they become its blockers. */
+  blockedBy: string[];
+  /** What it waits on outside this breakdown: carried in its context, not as blockers. */
+  waitsOutside: string[];
+  acceptance: string[];
+  /** Its row had no "done when", so it takes the plan's acceptance criteria, flagged to be sharpened. */
+  acceptanceInherited: boolean;
+  /** The context document it gets: workable from the ticket alone. */
+  context: string;
+  /** Already created by an earlier scaffold of this idea (then it is not created again). */
+  existing: string | null;
+}
+
+/** What Scaffold creates: the idea promoted into the epic, its tasks, and its shaped sub-ideas'. */
+export interface ScaffoldPreview {
+  idea: { id: string; title: string };
+  epic: { identifier: string | null; kind: string; planDocument: string; acceptance: string[]; promoted: boolean };
+  tasks: ScaffoldTask[];
+  children: ScaffoldPreview[];
+  /** What the plan lacks, here or in a sub-idea it carries: while any is listed, confirming is refused. */
+  problems: string[];
+  /** Worth a look, not a stop: estimates that are not durations. */
+  warnings: string[];
+  /** Exactly what this preview shows. Confirming names it, and is refused when the plan changed since. */
+  fingerprint: string;
+}
+
+/** The label on a task whose acceptance came from the plan's, until someone sharpens it. */
+export const INHERITED_ACCEPTANCE_LABEL = "acceptance-inherited";
+
 export interface CaptureInput {
   title: string;
+  /** Plan sections to start with; the shaped gate reads them when it is captured shaped. */
+  plan?: PlanPatch | null;
   parent?: string | null;
   brief?: string | null;
   maturity?: string;
@@ -185,6 +330,14 @@ export interface IdeaPatch {
   plannedTarget?: string | null;
   /** Place this record immediately before that one in the plan order; null moves it to the end. */
   before?: string | null;
+  /** Plan sections to replace, each whole; a section left out is left alone. The edit action. */
+  plan?: PlanPatch;
+  /**
+   * The `breakdownRevision` the writer read. Given with a breakdown, the write is refused when
+   * the breakdown changed since; left out, the breakdown given replaces it (rows matched by id,
+   * else by key).
+   */
+  breakdownBase?: string;
 }
 
 export interface HorizonPatch {
@@ -212,6 +365,7 @@ interface PlanRow {
   plan_baseline_start: string | null;
   plan_baseline_target: string | null;
   plan_rank: number | null;
+  plan_run_mode: string | null;
 }
 
 interface HorizonRow extends PlanRow {
@@ -232,7 +386,7 @@ interface WorkRow {
 
 const RANK_STEP = 1024;
 const PLAN_COLUMNS = `id, identifier, title, description, kind, status, parent_id, depth, created_at, updated_at,
-  plan_maturity, plan_horizon_id, plan_start, plan_target, plan_baseline_start, plan_baseline_target, plan_rank`;
+  plan_maturity, plan_horizon_id, plan_start, plan_target, plan_baseline_start, plan_baseline_target, plan_rank, plan_run_mode`;
 
 /** Column name to the payload field the issue entity carries it as. */
 const FIELD_OF: Record<string, string> = {
@@ -243,6 +397,7 @@ const FIELD_OF: Record<string, string> = {
   plan_baseline_start: "planBaselineStart",
   plan_baseline_target: "planBaselineTarget",
   plan_rank: "planRank",
+  plan_run_mode: "planRunMode",
   parent_id: "parentId",
 };
 
@@ -250,18 +405,41 @@ const QUESTIONS_KEY = "questions";
 const DECISIONS_KEY = "decisions";
 const BRIEF_KEY = "brief";
 
+/**
+ * The task Scaffold makes from a breakdown row has an id that follows from the idea's and the
+ * row's, the same on every device: two devices scaffolding one idea offline create the same
+ * records, and sync merges them as one (design/plan.md, "Scaffold").
+ */
+export function scaffoldTaskId(ideaId: string, rowId: string): string {
+  const hex = createHash("sha256").update(`staple:plan-scaffold:${ideaId}:${rowId}`).digest("hex");
+  const variant = ((parseInt(hex[16]!, 16) & 0x3) | 0x8).toString(16);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+/** Stable within a repository, separate from user-created horizons and scaffolded work. */
+function defaultHorizonId(repositoryId: string, name: string): string {
+  const hex = createHash("sha256").update(`staple:default-horizon:${repositoryId}:${name}`).digest("hex");
+  const variant = ((parseInt(hex[16]!, 16) & 0x3) | 0x8).toString(16);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+/** A short digest of a value, as previews and the breakdown name what they showed. */
+function digest(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
+}
+
 export function parseQuestions(body: string | null): Question[] {
   if (!body) return [];
   const out: Question[] = [];
   for (const line of body.split("\n")) {
-    const match = /^\s*[-*]\s+\[( |x|X)\]\s+(.*)$/.exec(line);
-    if (match) out.push({ text: match[2]!.trim(), resolved: match[1] !== " " });
+    const match = /^\s*[-*]\s+\[( |x|X|~)\]\s+(.*)$/.exec(line);
+    if (match) out.push({ text: match[2]!.trim(), resolved: match[1] === "x" || match[1] === "X", ...(match[1] === "~" ? { deferred: true } : {}) });
   }
   return out;
 }
 
 export function renderQuestions(questions: readonly Question[]): string {
-  return questions.map((q) => `- [${q.resolved ? "x" : " "}] ${q.text}`).join("\n") + "\n";
+  return questions.map((q) => `- [${q.resolved ? "x" : q.deferred ? "~" : " "}] ${q.text}`).join("\n") + "\n";
 }
 
 export function parseDecisions(body: string | null): string[] {
@@ -283,6 +461,20 @@ function shownIdentifier(identifier: string): string | null {
   return isDraftIdentifier(identifier) ? null : identifier;
 }
 
+/** The steering word a person-only idea action is refused with (`steeringRefusal`). */
+const STEERED_AS: Partial<Record<IdeaAction, SteeringWrite>> = {
+  explore: "maturity",
+  shape: "maturity",
+  unshape: "maturity",
+  drop: "maturity",
+  restore: "maturity",
+  schedule: "horizon",
+  plan_dates: "planned dates",
+  reorder: "horizon",
+  reparent: "parent",
+  reset_baseline: "baseline",
+};
+
 export class PlanStore {
   /** The clock the derived dates read; replaceable so tests can stand on a fixed day. */
   clock: () => Date = () => new Date();
@@ -303,12 +495,77 @@ export class PlanStore {
     return this.store.planningOn();
   }
 
-  private assertEnabled(): void {
+  assertEnabled(): void {
     if (!this.store.planningOn()) throw new StapleError("validation", PLAN_KINDS_MISSING_MESSAGE, { kinds: [IDEA_KIND, MILESTONE_KIND] });
   }
 
   private steer(what: SteeringWrite, subject: string | null, options: PlanWriteOptions): void {
     if (!options.person) throw steeringRefusal(what, subject);
+  }
+
+  /** A record's lifecycle state, read from the same derivation every view uses. */
+  stateOf(ref: string): IdeaState {
+    return this.ideaView(ref).state;
+  }
+
+  /**
+   * Refuse an idea action its record's state does not offer, naming the state and what it offers;
+   * then a person-only action taken without a person. In that order, so the first refusal says why
+   * for anyone, and the second only once the action itself is possible.
+   */
+  private allowIdea(row: PlanRow, action: IdeaAction, options: PlanWriteOptions, state: IdeaState = this.stateOf(row.id)): void {
+    assertIdeaAction(displayRef(row), state, action, row.kind !== IDEA_KIND);
+    if (IDEA_ACTIONS[action].who === "person") this.steer(STEERED_AS[action] ?? "maturity", displayRef(row), options);
+  }
+
+  /**
+   * A write on an idea's own content from outside the plan: the tracker's edit of its title or
+   * description (`staple set`, `update_task`), and any document, file or restore on it. Each is
+   * the edit action, held to its state and to who may take it, as `update_idea` is. A promoted
+   * record is an ordinary epic, edited by the epic's rules.
+   */
+  assertEditable(ref: string): void {
+    const row = this.row(ref, false);
+    if (row.plan_maturity === null || row.kind !== IDEA_KIND) return;
+    this.assertEnabled();
+    this.allowIdea(row, "edit", {});
+  }
+
+  /**
+   * A raw document write (`put_document`, `staple doc put`, a restore) on a plan record's section
+   * keys, checked before it lands: the breakdown is rows, never a document, and a list section
+   * must read as the list it holds. A body that would read as fewer items is refused, not stored.
+   */
+  assertDocumentWrite(ref: string, key: string, body: string): void {
+    const row = this.row(ref, false);
+    if (row.plan_maturity === null) return;
+    if (key === BREAKDOWN_KEY) {
+      throw new StapleError(
+        "validation",
+        `The task breakdown of ${displayRef(row)} is structured rows, not a document. Edit it with update_idea (plan.breakdown), \`staple idea task\`, or the Plan tab.`,
+        { key },
+      );
+    }
+    if (LIST_KEYS.has(key)) assertListBody(key, body);
+    if (key === QUESTIONS_KEY && body.split("\n").some((line) => line.trim() !== "" && !/^\s*[-*]\s+\[( |x|X|~)\]\s+\S/.test(line))) {
+      throw new StapleError("validation", `The questions of ${displayRef(row)} are a checklist, one "- [ ] question" per line ("- [x]" resolved, "- [~]" deferred).`, { key });
+    }
+  }
+
+  private horizonStateOf(id: string): HorizonState {
+    return this.horizonOf(id).state;
+  }
+
+  /** Refuse a horizon action its state does not offer. Every horizon write but queueing is the person's, checked first by the caller. */
+  private allowHorizon(row: PlanRow, action: HorizonAction): void {
+    assertHorizonAction(`"${row.title}"`, this.horizonStateOf(row.id), action);
+  }
+
+  /** Whether a queue may take this milestone: any milestone that is not a horizon, or a horizon whose state offers queueing. */
+  assertQueueable(issueId: string): void {
+    if (!this.store.isHorizon(issueId)) return;
+    const row = this.row(issueId, false);
+    assertHorizonAction(`"${row.title}"`, this.horizonStateOf(row.id), "queue");
   }
 
   private row(ref: string, forWrite = true): PlanRow {
@@ -325,14 +582,6 @@ export class PlanStore {
     return row;
   }
 
-  /** An idea not yet promoted. */
-  private ideaRow(ref: string, forWrite = true): PlanRow {
-    const row = this.recordRow(ref, forWrite);
-    if (row.kind !== IDEA_KIND) {
-      throw new StapleError("validation", `${row.identifier} is already promoted: it is ${aKind(row.kind)} in the tracker now.`, { identifier: row.identifier });
-    }
-    return row;
-  }
 
   private horizonRow(ref: string, forWrite = true): PlanRow {
     const row = this.row(ref, forWrite);
@@ -377,29 +626,64 @@ export class PlanStore {
    * Run again on a workspace where planning is on, it converts what an earlier build left: a
    * numbered idea back to a draft identifier.
    */
-  enable(actor: string | null): PlanView {
-    if (this.store.planningOn()) {
+  enable(actor: string | null, options: PlanWriteOptions = {}): PlanView {
+    this.store.setSetting("features.planning", true, actor, options.person);
+    return this.view();
+  }
+
+  /** Only the feature-setting transaction calls this structural upgrade. */
+  initialize(actor: string | null): void {
+    if (this.store.planningInitialized()) {
       this.store.journaled(() => {
+        this.migrateLegacyLater();
         this.draftNumberedIdeas(actor);
         this.settleMembership(actor);
       });
-      return this.view();
+      return;
     }
     const unrelated = this.db.prepare("SELECT identifier FROM issues WHERE kind = ? ORDER BY identifier").all(IDEA_KIND) as Array<{ identifier: string }>;
     if (unrelated.length > 0) {
       const names = unrelated.map((row) => row.identifier);
       throw new StapleError(
         "validation",
-        `Planning uses the kind "idea", and ${names.slice(0, 10).join(", ")}${names.length > 10 ? ` and ${names.length - 10} more` : ""} already use it for other work. Re-kind ${names.length === 1 ? "it" : "them"} first (staple set <ref> --kind <other>), then turn planning on.`,
+        `Planning uses the kind "idea", and ${names.slice(0, 10).join(", ")}${names.length > 10 ? ` and ${names.length - 10} more` : ""} already use it for other work. The idea kind is reserved; these legacy records are kept intact and generic kind migration is refused. A person must resolve the legacy vocabulary before enabling planning.`,
         { issues: names },
       );
     }
-    return this.store.journaled(() => {
+    this.store.journaled(() => {
       const ids = this.store.getKinds().map((kind) => kind.id);
       if (!ids.includes(IDEA_KIND)) this.store.addKind({ id: IDEA_KIND, label: "Idea" }, actor);
       if (!ids.includes(MILESTONE_KIND)) this.store.addKind({ id: MILESTONE_KIND, label: "Milestone" }, actor);
-      DEFAULT_HORIZONS.forEach((name, index) => this.insertHorizon(name, null, (index + 1) * RANK_STEP, actor));
+      const repositoryId = readStoredRepositoryId(this.db);
+      DEFAULT_HORIZONS.forEach((name, index) => {
+        // Concurrent first enables create the same records, including before either syncs.
+        // Isolated in-memory stores without repository identity keep independent random ids.
+        const id = repositoryId === null ? undefined : defaultHorizonId(repositoryId, name);
+        this.insertHorizon(name, null, (index + 1) * RANK_STEP, actor, id);
+      });
       return this.view();
+    });
+  }
+
+  /** Upgrade the old default bucket through ordinary synchronized issue updates.
+   * Keep hand membership, queue and history on a plain milestone rather than cancel open work.
+   * Dated Later is intentional and stays. No marker is needed: clearing rank is idempotent.
+   */
+  migrateLegacyLater(): void {
+    if (!this.enabled()) return;
+    const sync = this.db.prepare("SELECT epoch FROM sync_state WHERE id = 1").get() as { epoch: number } | undefined;
+    // A connected workspace must journal this upgrade. If its device is unavailable, sync
+    // retries after binding the real journal, rather than making local-only data changes.
+    if ((sync?.epoch ?? 0) > 0 && !this.store.journal.deviceIdentity()) return;
+    const legacy = this.horizonRows().filter(row => row.title === "Later" && row.target_date === null);
+    if (legacy.length === 0) return;
+    this.store.journaled(() => {
+      for (const row of legacy) {
+        const ideas = this.db.prepare("SELECT id FROM issues WHERE plan_horizon_id = ?").all(row.id) as Array<{ id: string }>;
+        for (const idea of ideas) this.write(idea.id, { plan_horizon_id: null }, null, "idea_updated", { fields: ["plan_horizon_id"], upgrade: "unscheduled" });
+        this.write(row.id, { plan_rank: null }, null, "horizon_updated", { fields: ["plan_rank"], upgrade: "unscheduled" });
+      }
+      this.settleMembership(null);
     });
   }
 
@@ -431,6 +715,45 @@ export class PlanStore {
     ).sort((a, b) => (a.plan_rank ?? Number.MAX_SAFE_INTEGER) - (b.plan_rank ?? Number.MAX_SAFE_INTEGER) || a.created_at.localeCompare(b.created_at));
   }
 
+  /**
+   * The horizon each issue's work belongs to: the milestone it is a member of (put there or
+   * derived from the plan), else its nearest ancestor's, when that milestone is a horizon.
+   * What the task list reads for its ◇ chip, its Horizon grouping and its horizon filter.
+   */
+  horizonsOf(ids: readonly string[]): Map<string, RowHorizon> {
+    const out = new Map<string, RowHorizon>();
+    if (ids.length === 0 || !this.enabled()) return out;
+    const horizons = new Map(this.horizonRows().map((row) => [row.id, { id: row.id, identifier: row.identifier, name: row.title, date: row.target_date, rank: row.plan_rank ?? 0 }]));
+    if (horizons.size === 0) return out;
+    const memberOf = new Map((this.db.prepare(`SELECT issue_id, milestone_id FROM ${MILESTONE_MEMBERSHIP}`).all() as Array<{ issue_id: string; milestone_id: string }>).map((row) => [row.issue_id, row.milestone_id]));
+    const parentOf = new Map((this.db.prepare("SELECT id, parent_id FROM issues").all() as Array<{ id: string; parent_id: string | null }>).map((row) => [row.id, row.parent_id]));
+    for (const id of ids) {
+      // A horizon is its own: it never falls under "No horizon".
+      const own = horizons.get(id);
+      if (own) {
+        out.set(id, own);
+        continue;
+      }
+      let cursor: string | null = id;
+      for (let hops = 0; cursor !== null && hops < 64; hops += 1) {
+        const milestone = memberOf.get(cursor);
+        if (milestone !== undefined) {
+          const horizon = horizons.get(milestone);
+          if (horizon) out.set(id, horizon);
+          break;
+        }
+        cursor = parentOf.get(cursor) ?? null;
+      }
+    }
+    return out;
+  }
+
+  /** The horizons' issue ids: the task list leaves them out of its rows, and shows each as a heading or a chip. */
+  horizonIds(): Set<string> {
+    if (!this.enabled()) return new Set();
+    return new Set(this.horizonRows().map((row) => row.id));
+  }
+
   /** Every plan record: unpromoted ideas while open, promoted ones whatever their status. */
   private recordRows(): PlanRow[] {
     const resolved = this.resolvedStatuses();
@@ -458,6 +781,8 @@ export class PlanStore {
     const memberCount = (
       this.db.prepare("SELECT COUNT(*) AS n FROM milestone_members WHERE milestone_id = ?").get(row.id) as { n: number }
     ).n + (this.db.prepare("SELECT COUNT(*) AS n FROM plan_members WHERE milestone_id = ? AND issue_id NOT IN (SELECT issue_id FROM milestone_members)").get(row.id) as { n: number }).n;
+    const open = this.openWorkOf(row.id);
+    const own = this.db.prepare("SELECT gate_state, acceptance_criteria FROM issues WHERE id = ?").get(row.id) as { gate_state: string | null; acceptance_criteria: string | null };
     return {
       id: row.id,
       identifier: row.identifier,
@@ -470,8 +795,27 @@ export class PlanStore {
       ideaCount: on.length,
       lateCount,
       notStartedCount: on.filter((idea) => idea.notStarted).length,
+      shippedCount: on.filter((idea) => idea.stage === "shipped").length,
+      progress: memberCount > 0 ? (memberCount - open) / memberCount : null,
+      runMode: isRunMode(row.plan_run_mode) ? row.plan_run_mode : null,
+      goal: own.acceptance_criteria ? (JSON.parse(own.acceptance_criteria) as string[]) : [],
+      awaitingApproval: own.gate_state === "pending",
       late: lateCount > 0,
+      ...horizonLifecycle(this.store.categoryOf(row.status) === "done", open, this.isQueued(row.id)),
     };
+  }
+
+  /** Members of a horizon, put there or derived, that are not resolved: the work removing it would strand. */
+  private openWorkOf(horizonId: string): number {
+    const resolved = [...this.resolvedStatuses()];
+    const rows = this.db
+      .prepare(`SELECT i.status FROM ${MILESTONE_MEMBERSHIP} m JOIN issues i ON i.id = m.issue_id WHERE m.milestone_id = ?`)
+      .all(horizonId) as Array<{ status: string }>;
+    return rows.filter((row) => !resolved.includes(row.status)).length;
+  }
+
+  private isQueued(issueId: string): boolean {
+    return this.db.prepare("SELECT 1 AS hit FROM queue_entries WHERE issue_id = ?").get(issueId) !== undefined;
   }
 
   /** Every tracker issue (never an unpromoted idea), read once per view: the work's subtrees come from this. */
@@ -545,7 +889,25 @@ export class PlanStore {
     };
   }
 
+  /**
+   * Every record's view, derived once per state of the database: a request that checks a state,
+   * writes, and answers the plan and a record's detail rebuilds it only when something changed.
+   * The key moves with any change this connection makes (`total_changes()`), any commit another
+   * connection makes (`data_version`), and the day the dates are read against.
+   */
   private ideaViews(today: string): IdeaView[] {
+    const { changes } = this.db.prepare("SELECT total_changes() AS changes").get() as { changes: number };
+    const { data_version: version } = this.db.prepare("PRAGMA data_version").get() as { data_version: number };
+    const key = `${changes}:${version}:${today}`;
+    if (this.viewMemo?.key === key) return this.viewMemo.views;
+    const views = this.buildIdeaViews(today);
+    this.viewMemo = { key, views };
+    return views;
+  }
+
+  private viewMemo: { key: string; views: IdeaView[] } | null = null;
+
+  private buildIdeaViews(today: string): IdeaView[] {
     const rows = this.recordRows();
     const byId = new Map(rows.map((row) => [row.id, row]));
     const childIds = new Map<string, string[]>();
@@ -569,22 +931,47 @@ export class PlanStore {
       for (const child of childIds.get(id) ?? []) for (const item of rolledWork(child, seen)) out.add(item);
       return out;
     };
+    // Every record's sections first: a depends-on cell may name a row of another record's breakdown.
+    const sectionsOf = new Map(rows.map((row) => [row.id, this.sectionsOf(row.id)]));
+    const dependsOn = dependencyResolver(
+      rows.map((row) => ({ id: row.id, identifier: shownIdentifier(row.identifier), title: row.title, rowKeys: sectionsOf.get(row.id)!.breakdown.map((entry) => entry.key) })),
+    );
     return rows.map((row) => {
-      const workIds = [...rolledWork(row.id)];
-      // Linked work whose issue is gone (a rewind, say) still counts: the stage does not slip back.
-      const present = workIds.filter((id) => work.rows.has(id));
-      const missing = workIds.length - present.length;
-      const measured = this.measure(present, work);
+      const promoted = row.kind !== IDEA_KIND;
+      const sections = sectionsOf.get(row.id)!;
+      const questions = parseQuestions(this.documentBody(row.id, QUESTIONS_KEY));
+      const ownLinks = planLinksOf(this.db, row.id);
+      // Its own state reads its own work only: itself once promoted, and its own links. Linked
+      // work whose issue is gone (a rewind, say) still counts, so the state does not slip back.
+      const ownWork = [...(promoted ? [row.id] : []), ...ownLinks];
+      const ownPresent = ownWork.filter((id) => work.rows.has(id));
+      const own = this.measure(ownPresent, work);
       const maturity = readMaturity(row.plan_maturity);
       const horizonId = row.plan_horizon_id !== null && horizonDates.has(row.plan_horizon_id) ? row.plan_horizon_id : null;
-      const stage = deriveStage({ maturity, scheduled: horizonId !== null, links: workIds.length, resolvedLinks: measured.resolved, missingLinks: missing });
+      const stage = deriveStage({
+        maturity,
+        scheduled: horizonId !== null,
+        links: ownWork.length,
+        resolvedLinks: own.resolved,
+        missingLinks: ownWork.length - ownPresent.length,
+      });
+      // The rollup adds its sub-records' work: what the record displays, never its state.
+      const workIds = [...rolledWork(row.id)];
+      const present = workIds.filter((id) => work.rows.has(id));
+      const measured = this.measure(present, work);
+      const rolledShipped = present.length > 0 && measured.resolved >= present.length;
       const actual: ActualWindow = {
         start: measured.start,
         end: measured.end,
         forecastEnd: forecastEnd({ start: measured.start, end: measured.end, progress: measured.progress ?? 0, today }),
       };
       const started = workIds.length > 0;
-      const hasBaseline = row.plan_baseline_start !== null || row.plan_baseline_target !== null;
+      const hasBaseline = ownWork.length > 0 && (row.plan_baseline_start !== null || row.plan_baseline_target !== null);
+      const state = ideaState({ stage, maturity });
+      // Scaffolded before: a started record scaffolds again only then, to add new rows.
+      const scaffolded = state === "started" && promoted && planRowsOf(this.db, row.id).some((planRow) => this.issueExists(scaffoldTaskId(row.id, planRow.id)));
+      // A shaped plan is held to the gate again before anything is built from it.
+      const planIncomplete = maturity === "shaped" && (state === "shaped" || scaffolded) ? this.gateOf(row.id) : [];
       return {
         id: row.id,
         identifier: shownIdentifier(row.identifier),
@@ -597,10 +984,10 @@ export class PlanStore {
         parentId: row.parent_id !== null && byId.has(row.parent_id) ? row.parent_id : null,
         horizonId,
         planned: { start: row.plan_start, target: row.plan_target },
-        baseline: started && hasBaseline ? { start: row.plan_baseline_start, target: row.plan_baseline_target } : null,
+        baseline: hasBaseline ? { start: row.plan_baseline_start, target: row.plan_baseline_target } : null,
         rank: row.plan_rank ?? 0,
-        links: planLinksOf(this.db, row.id),
-        missingLinks: planLinksOf(this.db, row.id).filter((id) => !work.rows.has(id)),
+        links: ownLinks,
+        missingLinks: ownLinks.filter((id) => !work.rows.has(id)),
         linkCount: workIds.length,
         resolvedLinks: measured.resolved,
         progress: started ? measured.progress : null,
@@ -610,12 +997,23 @@ export class PlanStore {
           horizonDate: horizonId === null ? null : (horizonDates.get(horizonId) ?? null),
           actual,
           links: workIds.length,
-          open: stage !== "shipped" && stage !== "dropped",
+          open: !rolledShipped && stage !== "dropped",
           today,
         }),
         notStarted: isNotStarted({ plannedStart: row.plan_start, links: workIds.length, dropped: maturity === "dropped", today }),
         childIds: childIds.get(row.id) ?? [],
-        openQuestions: parseQuestions(this.documentBody(row.id, QUESTIONS_KEY)).filter((q) => !q.resolved).length,
+        openQuestions: questions.filter((q) => !q.resolved).length,
+        completeness: completeness(sections, questions, parseDecisions(this.documentBody(row.id, DECISIONS_KEY))),
+        dependsOn: dependsOn(row.id, sections),
+        planIncomplete,
+        ...ideaLifecycle({
+          state,
+          promoted,
+          ownLinks: ownLinks.length,
+          gate: maturity === "raw" || maturity === "exploring" ? () => this.gateOf(row.id) : () => [],
+          scaffolded,
+          planIncomplete,
+        }),
         createdAt: row.created_at,
         updatedAt: row.updated_at,
       };
@@ -649,7 +1047,45 @@ export class PlanStore {
       questions: parseQuestions(this.documentBody(row.id, QUESTIONS_KEY)),
       decisions: parseDecisions(this.documentBody(row.id, DECISIONS_KEY)),
       linked: idea.links.map((id) => this.linkView(id, work)),
+      ...this.planOf(row.id, idea),
       today,
+    };
+  }
+
+  /** A record's plan sections, as stored: the document sections and the breakdown's rows. */
+  sectionsOf(id: string): PlanSections {
+    const sections = emptySections();
+    for (const name of DOCUMENT_SECTIONS) (sections as unknown as Record<string, unknown>)[name] = readSection(name, this.documentBody(id, SECTION_KEYS[name]));
+    sections.breakdown = planRowsOf(this.db, id).map(({ rank: _rank, ...row }) => row);
+    return sections;
+  }
+
+  /** What the shaped gate finds missing in a record's plan as it stands. */
+  private gateOf(id: string): string[] {
+    return shapedGate(this.sectionsOf(id), parseQuestions(this.documentBody(id, QUESTIONS_KEY)));
+  }
+
+  /** The breakdown's revision: a digest of its rows, ids and order. */
+  private breakdownRevision(id: string): string {
+    return digest(planRowsOf(this.db, id).map(({ rank: _rank, ...row }) => row));
+  }
+
+  private issueExists(id: string): boolean {
+    return this.db.prepare("SELECT 1 AS hit FROM issues WHERE id = ?").get(id) !== undefined;
+  }
+
+  private planOf(id: string, idea: IdeaView): Pick<IdeaDetail, "plan" | "completeness" | "missingForShaped" | "planWarnings" | "breakdownRevision" | "scaffold"> {
+    const plan = this.sectionsOf(id);
+    const questions = parseQuestions(this.documentBody(id, QUESTIONS_KEY));
+    const decisions = parseDecisions(this.documentBody(id, DECISIONS_KEY));
+    const offersScaffold = idea.actions.some((action) => action.id === "scaffold");
+    return {
+      plan,
+      completeness: completeness(plan, questions, decisions),
+      missingForShaped: shapedGate(plan, questions),
+      planWarnings: planWarnings(plan),
+      breakdownRevision: this.breakdownRevision(id),
+      scaffold: offersScaffold ? this.scaffoldPreview(id) : null,
     };
   }
 
@@ -712,21 +1148,50 @@ export class PlanStore {
     }
   }
 
+  /**
+   * A document's head body by the record's id, or null when it has none. One indexed read: the
+   * plan reads several documents of every record it shows, so this never resolves a reference.
+   */
   private documentBody(id: string, key: string): string | null {
-    const known = this.store.listDocuments(id).some((doc) => doc.key === key);
-    return known ? this.store.getDocument(id, key).body : null;
+    this.headBody ??= this.db.prepare(
+      `SELECT r.body FROM documents d JOIN document_revisions r ON r.issue_id = d.issue_id AND r.key = d.key AND r.revision = d.current_revision
+        WHERE d.issue_id = ? AND d.key = ?`,
+    );
+    const row = this.headBody.get(id, key) as { body: string } | undefined;
+    return row === undefined ? null : row.body;
   }
+
+  private headBody: StatementSync | null = null;
 
   // ---------- records ----------
 
   /** Capture an idea. An agent captures raw ideas only: title, parent and brief. No ticket number. */
   capture(input: CaptureInput, actor: string | null, options: PlanWriteOptions = {}): IdeaView {
+    return this.captureWith(input, { questions: [], decisions: [] }, actor, options);
+  }
+
+  /**
+   * Capture with the questions and decisions it starts with (an import's): the shaped gate reads
+   * everything the capture writes, questions included, before any of it is written.
+   */
+  private captureWith(input: CaptureInput, extra: { questions: Question[]; decisions: string[] }, actor: string | null, options: PlanWriteOptions): IdeaView {
     this.assertEnabled();
     const title = oneLine(input.title ?? "", "An idea's title");
     const maturity = input.maturity === undefined ? "raw" : parseMaturity(input.maturity);
     if (maturity !== "raw") this.steer("maturity", null, options);
-    if (input.horizon) this.steer("horizon", null, options);
-    if (input.plannedStart || input.plannedTarget) this.steer("planned dates", null, options);
+    // Captured straight into a maturity, it is in that state: what it may carry follows the table.
+    const subject = `the idea "${title}"`;
+    if (input.horizon) {
+      assertIdeaAction(subject, maturity, "schedule");
+      this.steer("horizon", null, options);
+    }
+    if (input.plannedStart || input.plannedTarget) {
+      assertIdeaAction(subject, maturity, "plan_dates");
+      this.steer("planned dates", null, options);
+    }
+    const patch = checkPlanPatch(input.plan);
+    const sections = mergeSections(emptySections(), patch);
+    if (maturity === "shaped") assertShaped(subject, sections, extra.questions);
     const id = this.store.journaled(() => {
       const issue = this.store.createIssue({ title, kind: IDEA_KIND, parent: input.parent ?? null, createdBy: actor, allowDuplicate: true }, { plan: true });
       const columns: Record<string, unknown> = { plan_maturity: maturity, plan_rank: this.nextRecordRank() };
@@ -739,7 +1204,14 @@ export class PlanStore {
       if (window.start) columns.plan_start = window.start;
       if (window.target) columns.plan_target = window.target;
       this.write(issue.id, columns, actor, "idea_captured", { maturity });
-      if (input.brief?.trim()) this.store.putDocument(issue.id, BRIEF_KEY, input.brief, { author: actor });
+      if (input.brief?.trim()) this.store.putDocument(issue.id, BRIEF_KEY, input.brief, { author: actor }, { plan: true });
+      if (input.plan) this.writeSections(issue.id, emptySections(), sections, patch, actor);
+      if (extra.questions.length > 0) {
+        this.store.putDocument(issue.id, QUESTIONS_KEY, renderQuestions(extra.questions), { author: actor, changeSummary: "imported" }, { plan: true });
+      }
+      if (extra.decisions.length > 0) {
+        this.store.putDocument(issue.id, DECISIONS_KEY, extra.decisions.map((line) => `- ${line}`).join("\n") + "\n", { author: actor, changeSummary: "imported" }, { plan: true });
+      }
       this.settleMembership(actor);
       return issue.id;
     });
@@ -749,17 +1221,42 @@ export class PlanStore {
   update(ref: string, patch: IdeaPatch, actor: string | null, options: PlanWriteOptions = {}): IdeaView {
     this.assertEnabled();
     const row = this.recordRow(ref);
-    const name = displayRef(row);
-    if (patch.maturity !== undefined) this.steer("maturity", name, options);
-    if (patch.horizon !== undefined) this.steer("horizon", name, options);
-    if (patch.parent !== undefined) this.steer("parent", name, options);
-    if (patch.plannedStart !== undefined || patch.plannedTarget !== undefined) this.steer("planned dates", name, options);
-    if (patch.before !== undefined) this.steer("horizon", name, options);
+    const before = this.stateOf(row.id);
+    let state = before;
+    const allow = (action: IdeaAction) => this.allowIdea(row, action, options, state);
+    if (patch.title !== undefined || patch.brief !== undefined || patch.plan !== undefined) allow("edit");
+    const planPatch = patch.plan === undefined ? undefined : checkPlanPatch(patch.plan);
+    if (planPatch?.breakdown !== undefined && patch.breakdownBase !== undefined && patch.breakdownBase !== this.breakdownRevision(row.id)) {
+      throw new StapleError(
+        "revision_conflict",
+        `The task breakdown of ${displayRef(row)} changed since it was read (it is at ${this.breakdownRevision(row.id)}, not ${patch.breakdownBase}). Re-read it and make the edit again.`,
+        { current: this.breakdownRevision(row.id) },
+      );
+    }
+    const current = this.sectionsOf(row.id);
+    const sections = planPatch ? mergeSections(current, planPatch) : current;
+    // A maturity it already has is no change: nothing to allow and nothing to write.
+    const maturity = patch.maturity === undefined ? undefined : parseMaturity(patch.maturity);
+    const moves = maturity !== undefined && maturity !== readMaturity(row.plan_maturity);
+    if (moves) {
+      const action = maturityAction({ state: before, maturity: readMaturity(row.plan_maturity) }, maturity);
+      if (action !== null) allow(action);
+      // Shaped only when the plan, as this write leaves it, passes the gate.
+      if (action === "shape") assertShaped(displayRef(row), sections, parseQuestions(this.documentBody(row.id, QUESTIONS_KEY)));
+      // The rest of one write is held to the state its maturity change leads to: shaping a raw idea
+      // and scheduling it is one decision. A started or shipped record keeps its state.
+      if (before !== "started" && before !== "shipped") state = maturity;
+    }
+    if (patch.horizon !== undefined) allow("schedule");
+    if (patch.parent !== undefined) allow("reparent");
+    if (patch.plannedStart !== undefined || patch.plannedTarget !== undefined) allow("plan_dates");
+    if (patch.before !== undefined) allow("reorder");
     this.store.journaled(() => {
       if (patch.title !== undefined) this.store.updateIssue(row.id, { title: oneLine(patch.title, "An idea's title") }, actor);
-      if (patch.brief !== undefined) this.store.putDocument(row.id, BRIEF_KEY, patch.brief ?? "", { author: actor });
+      if (patch.brief !== undefined) this.store.putDocument(row.id, BRIEF_KEY, patch.brief ?? "", { author: actor }, { plan: true });
+      if (planPatch) this.writeSections(row.id, current, sections, planPatch, actor);
       const columns: Record<string, unknown> = {};
-      if (patch.maturity !== undefined) columns.plan_maturity = parseMaturity(patch.maturity);
+      if (moves) columns.plan_maturity = maturity;
       if (patch.horizon !== undefined) columns.plan_horizon_id = patch.horizon === null ? null : this.horizonRow(patch.horizon).id;
       if (patch.plannedStart !== undefined || patch.plannedTarget !== undefined) {
         const window = {
@@ -779,13 +1276,62 @@ export class PlanStore {
     return this.ideaView(row.id);
   }
 
+  /**
+   * Each document section that changed, as its own revisioned document (an emptied one keeps an
+   * empty revision); and the breakdown, when the patch names it, one row field at a time.
+   */
+  private writeSections(id: string, before: PlanSections, after: PlanSections, patch: PlanPatch, actor: string | null): void {
+    for (const name of DOCUMENT_SECTIONS) {
+      const body = renderSection(name, after);
+      if (body === renderSection(name, before)) continue;
+      this.store.putDocument(id, SECTION_KEYS[name], body, { author: actor, changeSummary: `${name} updated` }, { plan: true });
+    }
+    if (patch.breakdown !== undefined) this.writeBreakdown(id, after.breakdown, actor);
+  }
+
+  /**
+   * The breakdown as `rows` says, written as only the rows that changed: each is one field of
+   * the idea's `milestone` entity (`plan-rows.ts`), a removed row a null. A row keeps its rank
+   * while the order allows, so an edit to one row never rewrites the others. One operation.
+   */
+  private writeBreakdown(id: string, rows: readonly BreakdownRow[], actor: string | null): void {
+    const current = new Map(planRowsOf(this.db, id).map((row) => [row.id, row]));
+    const payload: Record<string, PlanRowValue | null> = {};
+    const counts = { added: 0, changed: 0, removed: 0 };
+    let previous = -Infinity;
+    rows.forEach((row, index) => {
+      const held = current.get(row.id);
+      let rank: number;
+      if (held !== undefined && held.rank > previous) {
+        rank = held.rank;
+      } else {
+        const following = rows.slice(index + 1).map((next) => current.get(next.id)?.rank).find((value): value is number => value !== undefined);
+        const floor = previous === -Infinity ? 0 : previous;
+        rank = following !== undefined && following > floor + 1e-6 ? (previous === -Infinity ? following - 1024 : (floor + following) / 2) : floor + 1024;
+      }
+      previous = rank;
+      const value = planRowValue(row, rank);
+      if (held !== undefined && JSON.stringify(planRowValue(held, held.rank)) === JSON.stringify(value)) return;
+      writePlanRow(this.db, id, row.id, value);
+      payload[planRowField(row.id)] = value;
+      counts[held === undefined ? "added" : "changed"] += 1;
+    });
+    const kept = new Set(rows.map((row) => row.id));
+    for (const rowId of current.keys()) {
+      if (kept.has(rowId)) continue;
+      writePlanRow(this.db, id, rowId, null);
+      payload[planRowField(rowId)] = null;
+      counts.removed += 1;
+    }
+    if (Object.keys(payload).length === 0) return;
+    this.store.journal.record({ entity: "milestone", entityId: id, verb: "update", payload, actor: actor ?? null });
+    insertEvent(this.db, { kind: "idea_breakdown_updated", issueId: id, actor, payload: counts });
+  }
+
   /** Re-file a record under another record (or at the top), moving its subtree's depth with it. */
   private reparent(row: PlanRow, parentRef: string | null, actor: string | null): void {
     const parent = parentRef === null ? null : this.recordRow(parentRef);
     if (parent !== null) {
-      if (row.kind !== IDEA_KIND && parent.kind === IDEA_KIND) {
-        throw new StapleError("validation", `${row.identifier} is promoted; it cannot sit under ${displayRef(parent)}, which is not.`);
-      }
       let cursor: string | null = parent.id;
       for (let hops = 0; cursor !== null && hops < 64; hops += 1) {
         if (cursor === row.id) throw new StapleError("validation", `${displayRef(parent)} sits under ${displayRef(row)}; an idea cannot be its own ancestor.`);
@@ -805,30 +1351,48 @@ export class PlanStore {
 
   addQuestion(ref: string, text: string, actor: string | null): IdeaDetail {
     const row = this.recordRow(ref);
+    this.allowIdea(row, "ask", {});
     const questions = parseQuestions(this.documentBody(row.id, QUESTIONS_KEY));
     questions.push({ text: oneLine(text, "A question"), resolved: false });
-    this.store.putDocument(row.id, QUESTIONS_KEY, renderQuestions(questions), { author: actor, changeSummary: "question added" });
+    this.store.putDocument(row.id, QUESTIONS_KEY, renderQuestions(questions), { author: actor, changeSummary: "question added" }, { plan: true });
     return this.detail(row.id);
   }
 
   /** Resolve (or reopen) the question at a 1-based position. */
   resolveQuestion(ref: string, position: number, actor: string | null, resolved = true): IdeaDetail {
     const row = this.recordRow(ref);
+    this.allowIdea(row, "ask", {});
     const questions = parseQuestions(this.documentBody(row.id, QUESTIONS_KEY));
     const question = questions[position - 1];
     if (!question) {
       throw new StapleError("validation", `${displayRef(row)} has ${questions.length} question${questions.length === 1 ? "" : "s"}; there is no #${position}.`);
     }
     question.resolved = resolved;
-    this.store.putDocument(row.id, QUESTIONS_KEY, renderQuestions(questions), { author: actor, changeSummary: resolved ? "question resolved" : "question reopened" });
+    this.store.putDocument(row.id, QUESTIONS_KEY, renderQuestions(questions), { author: actor, changeSummary: resolved ? "question resolved" : "question reopened" }, { plan: true });
+    return this.detail(row.id);
+  }
+
+  /** Defer (or un-defer) the question at a 1-based position: left open on purpose, it no longer holds shaping back. */
+  deferQuestion(ref: string, position: number, actor: string | null, deferred = true): IdeaDetail {
+    const row = this.recordRow(ref);
+    this.allowIdea(row, "ask", {});
+    const questions = parseQuestions(this.documentBody(row.id, QUESTIONS_KEY));
+    const question = questions[position - 1];
+    if (!question) {
+      throw new StapleError("validation", `${displayRef(row)} has ${questions.length} question${questions.length === 1 ? "" : "s"}; there is no #${position}.`);
+    }
+    question.deferred = deferred;
+    if (deferred) question.resolved = false;
+    this.store.putDocument(row.id, QUESTIONS_KEY, renderQuestions(questions), { author: actor, changeSummary: deferred ? "question deferred" : "question reopened" }, { plan: true });
     return this.detail(row.id);
   }
 
   addDecision(ref: string, text: string, actor: string | null): IdeaDetail {
     const row = this.recordRow(ref);
+    this.allowIdea(row, "decide", {});
     const decisions = parseDecisions(this.documentBody(row.id, DECISIONS_KEY));
     decisions.push(`${this.today()}: ${oneLine(text, "A decision")}`);
-    this.store.putDocument(row.id, DECISIONS_KEY, decisions.map((line) => `- ${line}`).join("\n") + "\n", { author: actor, changeSummary: "decision added" });
+    this.store.putDocument(row.id, DECISIONS_KEY, decisions.map((line) => `- ${line}`).join("\n") + "\n", { author: actor, changeSummary: "decision added" }, { plan: true });
     return this.detail(row.id);
   }
 
@@ -837,37 +1401,265 @@ export class PlanStore {
   /**
    * Promote in place: the idea becomes the epic on the same record. It takes the next ticket
    * number then, and keeps its documents, comments, files, events, links and plan fields; its
-   * sub-ideas stay under it. A person may promote any idea that is not dropped; an agent only one
-   * the person marked shaped. An idea under an idea that is not promoted yet waits for it.
+   * sub-ideas stay under it. Only a shaped idea offers promotion, to a person or an agent alike,
+   * whether or not its parent is promoted.
+   *
+   * The plan's tree is the tracker's: a record's parent stays its parent through promotion. An
+   * epic whose parent is still an idea is top-level work to the tracker (`WorkspaceStore.tree`,
+   * and ideas derive nothing), and the moment that parent is promoted the same write makes it the
+   * epic above them, so its status is derived from theirs here, in this transaction.
    */
   promote(ref: string, actor: string | null, options: PlanWriteOptions = {}): IdeaView {
     this.assertEnabled();
-    const row = this.ideaRow(ref);
-    const maturity = readMaturity(row.plan_maturity);
-    if (!options.person && maturity !== "shaped") throw steeringRefusal("promote", displayRef(row));
-    if (maturity === "dropped") throw new StapleError("validation", `${displayRef(row)} is dropped; restore it before promoting it.`);
-    if (row.parent_id !== null) {
-      const parent = this.db.prepare("SELECT identifier, title, kind, plan_maturity FROM issues WHERE id = ?").get(row.parent_id) as
-        | { identifier: string; title: string; kind: string; plan_maturity: string | null }
-        | undefined;
-      if (parent?.kind === IDEA_KIND) {
-        throw new StapleError("validation", `${displayRef(row)} sits under ${displayRef(parent)}, which is not promoted yet. Promote the parent first, so the epic has an epic above it.`);
-      }
+    const row = this.recordRow(ref);
+    // A record already promoted says what it is now, which tells more than its state does.
+    if (row.kind !== IDEA_KIND) {
+      throw new StapleError("validation", `${row.identifier} is already promoted: it is ${aKind(row.kind)} in the tracker now.`, { identifier: row.identifier });
     }
-    const kinds = this.store.getKinds().map((kind) => kind.id);
-    const kind = kinds.includes(PROMOTED_KIND) ? PROMOTED_KIND : this.store.defaultKind();
+    this.allowIdea(row, "promote", options);
+    this.assertPlanComplete(row, "promoted");
     this.store.journaled(() => {
-      this.store.promoteInPlace(row.id, kind, actor);
-      this.keepBaselines(row.id, actor);
+      this.promoteRecord(row.id, this.promotedKind(), actor);
       this.settleMembership(actor);
     });
     return this.ideaView(row.id);
+  }
+
+  /**
+   * A shaped record is built from only while its plan passes the gate: an edit since it was
+   * shaped (a cleared goal, an open question, a removed row) holds Scaffold and Promote back,
+   * naming what is missing. Its maturity is left as it is; the person decides that.
+   */
+  private assertPlanComplete(row: PlanRow, verb: "promoted" | "scaffolded"): void {
+    const missing = this.gateOf(row.id);
+    if (missing.length === 0) return;
+    throw new StapleError(
+      "validation",
+      `${displayRef(row)} is shaped, but its plan is incomplete, so it cannot be ${verb}: ${gateSentence(missing).replace(/ before it is shaped$/, "")}.`,
+      { missing },
+    );
+  }
+
+  /**
+   * The record becomes its epic in place, and sub-records promoted before it now hang under that
+   * epic, which derives its status from theirs in the same write. Promotion and Scaffold share it.
+   */
+  private promoteRecord(id: string, kind: string, actor: string | null): void {
+    this.store.promoteInPlace(id, kind, actor);
+    const promotedChildren = this.db
+      .prepare("SELECT id FROM issues WHERE parent_id = ? AND plan_maturity IS NOT NULL AND kind <> ?")
+      .all(id, IDEA_KIND) as Array<{ id: string }>;
+    if (promotedChildren.length > 0) this.store.rederiveParents(promotedChildren.map((child) => child.id), "plan", actor);
+    this.keepBaselines(id, actor);
+  }
+
+  // ---------- import: a plan file becomes an idea ----------
+
+  /**
+   * Import a plan written as markdown (`staple idea import`): one idea captured with the file's
+   * title, its sections, open questions and decisions, and the file itself attached as its source.
+   * Captured raw unless a maturity is given (a person's call, held to the shaped gate like any:
+   * the gate reads everything the import writes, its open questions included). One transaction.
+   * Answers the idea, how many breakdown rows were read, and what the parser kept elsewhere.
+   */
+  importPlan(
+    file: { name: string; markdown: string },
+    input: { parent?: string | null; horizon?: string | null; maturity?: string },
+    actor: string | null,
+    options: PlanWriteOptions = {},
+  ): { idea: IdeaDetail; rows: number; warnings: string[] } {
+    this.assertEnabled();
+    const parsed = parsePlanMarkdown(file.markdown, file.name.replace(/\.md$/i, ""));
+    const sources = [`${file.name} (attached)`, ...parsed.sections.sources];
+    const id = this.store.journaled(() => {
+      const idea = this.captureWith(
+        {
+          title: parsed.title,
+          brief: parsed.brief,
+          parent: input.parent ?? null,
+          horizon: input.horizon ?? null,
+          maturity: input.maturity,
+          plan: { ...parsed.sections, sources },
+        },
+        { questions: parsed.questions, decisions: parsed.decisions },
+        actor,
+        options,
+      );
+      this.store.attachFile(idea.id, { filename: file.name, bytes: new TextEncoder().encode(file.markdown), caption: "The plan this idea was imported from", author: actor });
+      return idea.id;
+    });
+    return { idea: this.detail(id), rows: parsed.sections.breakdown.length, warnings: parsed.warnings };
+  }
+
+  // ---------- Scaffold: promote, and the breakdown becomes the epic's tasks ----------
+
+  private promotedKind(): string {
+    return this.store.getKinds().some((kind) => kind.id === PROMOTED_KIND) ? PROMOTED_KIND : this.store.defaultKind();
+  }
+
+  /**
+   * What Scaffold would create, read from the plan as it stands: the epic (this record, promoted),
+   * its plan document and acceptance criteria, one task per breakdown row with its estimate,
+   * blockers, acceptance and context, and the same for each shaped sub-idea; what the plan lacks
+   * (`problems`, which hold the confirm back) and what is worth a look (`warnings`); and the
+   * fingerprint of all of it, which the confirm names. The create path builds from this very
+   * preview, so what is shown is what is made. Only a record whose state offers Scaffold has one.
+   */
+  scaffoldPreview(ref: string): ScaffoldPreview {
+    this.assertEnabled();
+    const row = this.recordRow(ref, false);
+    this.scaffoldOffer(row);
+    return this.previewOf(row);
+  }
+
+  /** The state's offer of Scaffold, refused by name where the state makes none. */
+  private scaffoldOffer(row: PlanRow): OfferedAction {
+    const offer = this.ideaView(row.id).actions.find((action) => action.id === "scaffold");
+    if (offer !== undefined) return offer;
+    const state = this.stateOf(row.id);
+    if (state === "started") {
+      throw new StapleError("validation", `${displayRef(row)} cannot be scaffolded: it was started by promotion or linked work, not by a scaffold. Add tasks to its epic, or adopt more work.`);
+    }
+    assertIdeaAction(displayRef(row), state, "scaffold", row.kind !== IDEA_KIND);
+    throw new StapleError("validation", `${displayRef(row)} offers no Scaffold in its state (${state}).`);
+  }
+
+  private previewOf(row: PlanRow): ScaffoldPreview {
+    const sections = this.sectionsOf(row.id);
+    const decisions = parseDecisions(this.documentBody(row.id, DECISIONS_KEY));
+    const keys = new Set(sections.breakdown.map((task) => task.key));
+    const titles = new Map(sections.breakdown.map((task) => [task.key, task.title]));
+    const identifierOf = (id: string) => (this.db.prepare("SELECT identifier FROM issues WHERE id = ?").get(id) as { identifier: string } | undefined)?.identifier ?? null;
+    const children = (this.db.prepare(`SELECT id FROM issues WHERE parent_id = ? AND plan_maturity IS NOT NULL ORDER BY plan_rank`).all(row.id) as Array<{ id: string }>)
+      .map((child) => this.ideaView(child.id))
+      .filter((child) => child.actions.some((action) => action.id === "scaffold"))
+      .map((child) => this.previewOf(this.row(child.id, false)));
+    const problems = [
+      ...this.gateOf(row.id),
+      ...children.flatMap((child) => child.problems.map((problem) => `sub-idea "${child.idea.title}": ${problem}`)),
+    ];
+    const warnings = [...planWarnings(sections), ...children.flatMap((child) => child.warnings.map((warning) => `sub-idea "${child.idea.title}": ${warning}`))];
+    const preview: Omit<ScaffoldPreview, "fingerprint"> = {
+      idea: { id: row.id, title: row.title },
+      epic: {
+        identifier: row.kind === IDEA_KIND ? null : row.identifier,
+        kind: row.kind === IDEA_KIND ? this.promotedKind() : row.kind,
+        planDocument: epicPlanDocument(row.title, sections, decisions),
+        acceptance: sections.acceptance,
+        promoted: row.kind !== IDEA_KIND,
+      },
+      tasks: sections.breakdown.map((task) => {
+        const inherited = !task.acceptance && sections.acceptance.length > 0;
+        return {
+          rowId: task.id,
+          key: task.key,
+          title: taskTitle(task),
+          estimate: task.estimate,
+          estimatedSeconds: estimateSeconds(task.estimate),
+          estimateWarning: estimateProblem(task.estimate),
+          blockedBy: task.dependsOn.filter((dep) => keys.has(dep)),
+          waitsOutside: task.dependsOn.filter((dep) => !keys.has(dep)),
+          acceptance: task.acceptance ? [task.acceptance] : [...sections.acceptance],
+          acceptanceInherited: inherited,
+          context: taskContextDocument(row.title, sections, task, titles),
+          existing: identifierOf(scaffoldTaskId(row.id, task.id)),
+        };
+      }),
+      children,
+      problems,
+      warnings,
+    };
+    return { ...preview, fingerprint: digest(preview) };
+  }
+
+  /**
+   * Scaffold: the idea promotes in place into the epic (stage A), takes its plan document and
+   * acceptance criteria, and each breakdown row becomes a child task with its estimate, its
+   * blockers (the rows it depends on), its acceptance and a context document. Each shaped
+   * sub-idea is scaffolded under it as a child epic.
+   *
+   * Confirmed only against a preview: `fingerprint` is the one the preview answered, and the
+   * write is refused when the plan changed since, or when the plan (here or in a sub-idea it
+   * carries) no longer passes the shaped gate. A row's task has an id that follows from the idea
+   * and the row, so a retry, a scaffold after rows were added, or a second device scaffolding the
+   * same idea offline makes each task once. Scaffold adds the blockers its rows' depends-on name
+   * and never removes a blocker someone else set.
+   */
+  scaffold(ref: string, fingerprint: string | null | undefined, actor: string | null, options: PlanWriteOptions = {}): ScaffoldPreview {
+    this.assertEnabled();
+    const row = this.recordRow(ref);
+    this.allowIdea(row, "scaffold", options);
+    this.scaffoldOffer(row);
+    if (!fingerprint) {
+      throw new StapleError("validation", `Preview ${displayRef(row)}'s scaffold first, then confirm it with the preview's fingerprint: what is created is what was shown.`);
+    }
+    const preview = this.previewOf(row);
+    if (preview.problems.length > 0) {
+      throw new StapleError("validation", `${displayRef(row)} is shaped, but its plan is incomplete, so it cannot be scaffolded: ${gateSentence(preview.problems).replace(/^it needs /, "").replace(/ before it is shaped$/, "")}.`, {
+        missing: preview.problems,
+      });
+    }
+    if (preview.fingerprint !== fingerprint) {
+      throw new StapleError("revision_conflict", `Not scaffolded: the plan changed since the preview (it is at ${preview.fingerprint}, not ${fingerprint}). Preview ${displayRef(row)} again and confirm what it shows now.`, {
+        fingerprint: preview.fingerprint,
+      });
+    }
+    this.store.journaled(() => this.build(row, preview, actor, options));
+    return this.previewOf(this.row(row.id, false));
+  }
+
+  /** Make what a checked preview shows, its sub-ideas' after its own. */
+  private build(row: PlanRow, preview: ScaffoldPreview, actor: string | null, options: PlanWriteOptions): void {
+    if (row.kind === IDEA_KIND) this.promoteRecord(row.id, preview.epic.kind, actor);
+    const epic = this.store.getIssue(row.id);
+    if (this.documentBody(row.id, "plan") === null) this.store.putDocument(row.id, "plan", preview.epic.planDocument, { author: actor, changeSummary: "scaffolded from the idea" });
+    if (preview.epic.acceptance.length > 0 && (epic.acceptanceCriteria ?? []).length === 0) {
+      this.store.updateIssue(row.id, { acceptanceCriteria: preview.epic.acceptance }, actor);
+    }
+    const idOf = new Map(preview.tasks.map((task) => [task.key, scaffoldTaskId(row.id, task.rowId)]));
+    const byKey = new Map(preview.tasks.map((task) => [task.key, task]));
+    let made = 0;
+    // Each after the tasks it waits on, so its blockers ride in its own create.
+    for (const task of dependencyOrder(preview.tasks.map((task) => ({ key: task.key, dependsOn: task.blockedBy })))) {
+      const planned = byKey.get(task.key)!;
+      const id = idOf.get(task.key)!;
+      const blockers = planned.blockedBy.map((key) => idOf.get(key)!).filter((blocker) => this.issueExists(blocker));
+      if (!this.issueExists(id)) {
+        this.store.createIssueResult(
+          {
+            title: planned.title,
+            parent: epic.identifier,
+            createdBy: actor,
+            acceptanceCriteria: planned.acceptance,
+            labels: planned.acceptanceInherited ? [INHERITED_ACCEPTANCE_LABEL] : [],
+            estimatedSeconds: planned.estimatedSeconds,
+            blockedBy: blockers,
+            allowDuplicate: true,
+          },
+          { plan: true, id },
+        );
+        this.store.putDocument(id, "context", planned.context, { author: actor, changeSummary: "scaffolded from the idea" });
+        made += 1;
+        continue;
+      }
+      const held = new Set(this.store.blockersOf(id).map((blocker) => blocker.id));
+      const missing = blockers.filter((blocker) => !held.has(blocker));
+      if (missing.length > 0) this.store.setBlockedBy(id, [...held, ...missing], actor ?? "staple");
+    }
+    insertEvent(this.db, { kind: "idea_scaffolded", issueId: row.id, actor, payload: { tasks: preview.tasks.length, created: made } });
+    this.settleMembership(actor);
+    for (const child of preview.children) {
+      const childRow = this.row(child.idea.id);
+      this.allowIdea(childRow, "scaffold", options);
+      this.build(childRow, child, actor, options);
+    }
   }
 
   /** Adopt: link an existing issue (an epic or a ticket) to a plan record. */
   adopt(ref: string, issueRef: string, actor: string | null): IdeaView {
     this.assertEnabled();
     const row = this.recordRow(ref);
+    this.allowIdea(row, "adopt", {});
     const target = this.store.writeTarget(issueRef);
     if (isPlanKind(target.kind) || target.id === row.id) {
       throw new StapleError("validation", `${displayRef(target)} is an idea; only tracker work can be adopted.`);
@@ -887,6 +1679,7 @@ export class PlanStore {
   unlink(ref: string, issueRef: string, actor: string | null): IdeaView {
     this.assertEnabled();
     const row = this.recordRow(ref);
+    this.allowIdea(row, "unlink", {});
     const links = planLinksOf(this.db, row.id);
     const issueId = links.includes(issueRef.trim()) ? issueRef.trim() : this.store.getIssue(issueRef).id;
     if (!links.includes(issueId)) {
@@ -916,47 +1709,30 @@ export class PlanStore {
   // ---------- the baseline ----------
 
   /**
-   * The first planned window a record has once it is started is kept as its baseline. Run after
-   * anything that can start one (a promotion, a link, on it or on a sub-idea) or give a started
-   * record its first window: it and every record above it that is started, has a window and has
-   * no baseline yet gets one. A baseline that exists is never moved here.
+   * The first planned window a record has once it is started itself is kept as its baseline. Run
+   * after anything that can start it (a promotion, a link) or give a started record its first
+   * window. A sub-idea's start is its own and starts no baseline above it. A baseline that exists
+   * is never moved here.
    */
   private keepBaselines(id: string, actor: string | null): void {
-    let cursor: string | null = id;
-    for (let hops = 0; cursor !== null && hops < 64; hops += 1) {
-      const row = this.db.prepare(`SELECT ${PLAN_COLUMNS} FROM issues WHERE id = ?`).get(cursor) as unknown as PlanRow | undefined;
-      if (!row || row.plan_maturity === null) return;
-      const hasWindow = row.plan_start !== null || row.plan_target !== null;
-      const hasBaseline = row.plan_baseline_start !== null || row.plan_baseline_target !== null;
-      if (hasWindow && !hasBaseline && this.isStarted(row.id)) {
-        this.write(row.id, { plan_baseline_start: row.plan_start, plan_baseline_target: row.plan_target }, actor, "idea_baseline_kept", {
-          start: row.plan_start,
-          target: row.plan_target,
-        });
-      }
-      cursor = row.parent_id;
+    const row = this.db.prepare(`SELECT ${PLAN_COLUMNS} FROM issues WHERE id = ?`).get(id) as unknown as PlanRow | undefined;
+    if (!row || row.plan_maturity === null) return;
+    const hasWindow = row.plan_start !== null || row.plan_target !== null;
+    const hasBaseline = row.plan_baseline_start !== null || row.plan_baseline_target !== null;
+    const started = row.kind !== IDEA_KIND || planLinksOf(this.db, row.id).length > 0;
+    if (hasWindow && !hasBaseline && started) {
+      this.write(row.id, { plan_baseline_start: row.plan_start, plan_baseline_target: row.plan_target }, actor, "idea_baseline_kept", {
+        start: row.plan_start,
+        target: row.plan_target,
+      });
     }
-  }
-
-  /** Started: promoted, or links work, itself or through a sub-idea. */
-  private isStarted(id: string, seen = new Set<string>()): boolean {
-    if (seen.has(id)) return false;
-    seen.add(id);
-    const row = this.db.prepare("SELECT kind FROM issues WHERE id = ?").get(id) as { kind: string } | undefined;
-    if (row !== undefined && row.kind !== IDEA_KIND) return true;
-    if (planLinksOf(this.db, id).length > 0) return true;
-    const children = this.db.prepare("SELECT id FROM issues WHERE parent_id = ? AND plan_maturity IS NOT NULL").all(id) as Array<{ id: string }>;
-    return children.some((child) => this.isStarted(child.id, seen));
   }
 
   /** Reset baseline: the current planned window becomes the baseline. The person's, and only on request. */
   resetBaseline(ref: string, actor: string | null, options: PlanWriteOptions = {}): IdeaView {
     this.assertEnabled();
     const row = this.recordRow(ref);
-    this.steer("baseline", displayRef(row), options);
-    if (!this.isStarted(row.id)) {
-      throw new StapleError("validation", `${displayRef(row)} is not started, so it has no baseline to reset.`);
-    }
+    this.allowIdea(row, "reset_baseline", options);
     this.store.journaled(() =>
       this.write(row.id, { plan_baseline_start: row.plan_start, plan_baseline_target: row.plan_target }, actor, "idea_baseline_reset", {
         from: { start: row.plan_baseline_start, target: row.plan_baseline_target },
@@ -968,8 +1744,8 @@ export class PlanStore {
 
   // ---------- horizons: milestones the plan shows as columns (all the person's) ----------
 
-  private insertHorizon(name: string, date: string | null, rank: number, actor: string | null): string {
-    const issue = this.store.createIssue({ title: name, kind: MILESTONE_KIND, createdBy: actor, allowDuplicate: true }, { plan: true });
+  private insertHorizon(name: string, date: string | null, rank: number, actor: string | null, id?: string): string {
+    const issue = this.store.createIssue({ title: name, kind: MILESTONE_KIND, createdBy: actor, allowDuplicate: true }, { plan: true, id });
     this.write(issue.id, { plan_rank: rank }, actor, "horizon_created", { date });
     if (date !== null) this.store.milestones().update(issue.id, { targetDate: date }, actor, { plan: true });
     return issue.id;
@@ -994,12 +1770,35 @@ export class PlanStore {
     this.assertEnabled();
     const row = this.horizonRow(ref);
     this.steer("horizons", row.identifier, options);
+    if (patch.name !== undefined) this.allowHorizon(row, "rename");
+    if (patch.date !== undefined) this.allowHorizon(row, "date");
+    if (patch.before !== undefined) this.allowHorizon(row, "reorder");
     this.store.journaled(() => {
       if (patch.name !== undefined) this.store.updateIssue(row.id, { title: oneLine(patch.name, "A horizon's name") }, actor, undefined, { plan: true });
       if (patch.date !== undefined) {
         this.store.milestones().update(row.id, { targetDate: patch.date === null ? null : parsePlanDate(patch.date) }, actor, { plan: true });
       }
       if (patch.before !== undefined) this.write(row.id, { plan_rank: this.rankBefore("horizons", row.id, patch.before, actor) }, actor, "horizon_updated", { fields: ["plan_rank"] });
+    });
+    return this.horizonOf(row.id);
+  }
+
+  /**
+   * A horizon's run setting: how far agents take it when they pick its work up (`mode`), and its
+   * goal, the milestone's acceptance criteria. Both are the person's; nothing runs from here.
+   * Agents read them in every take of the horizon's work (`instructions.ts`, "horizon-run").
+   */
+  setHorizonRun(ref: string, patch: { mode?: RunMode | null; goal?: readonly string[] }, actor: string | null, options: PlanWriteOptions = {}): HorizonView {
+    this.assertEnabled();
+    const row = this.horizonRow(ref);
+    this.allowHorizon(row, "run");
+    this.steer("horizons", row.identifier, options);
+    if (patch.mode !== undefined && patch.mode !== null && !isRunMode(patch.mode)) {
+      throw new StapleError("validation", `A horizon runs ${RUN_MODE_IDS.map((id) => `${id} (${RUN_MODES[id].label.toLowerCase()})`).join(", ")}; not "${String(patch.mode)}".`);
+    }
+    this.store.journaled(() => {
+      if (patch.mode !== undefined && patch.mode !== row.plan_run_mode) this.write(row.id, { plan_run_mode: patch.mode }, actor, "horizon_updated", { fields: ["plan_run_mode"] });
+      if (patch.goal !== undefined) this.store.milestones().update(row.id, { acceptanceCriteria: [...patch.goal] }, actor, { plan: true });
     });
     return this.horizonOf(row.id);
   }
@@ -1014,6 +1813,8 @@ export class PlanStore {
     this.assertEnabled();
     const row = this.horizonRow(ref);
     this.steer("horizons", row.identifier, options);
+    // The lifecycle's remove cell, said with what to move first: an active horizon is one holding
+    // open work, and this refuses exactly that, and a queued one; planned and done ones may go.
     this.assertRemovable(row);
     this.store.journaled(() => {
       const on = this.db.prepare("SELECT id FROM issues WHERE plan_maturity IS NOT NULL AND plan_horizon_id = ?").all(row.id) as Array<{ id: string }>;
@@ -1094,4 +1895,145 @@ export class PlanStore {
     });
     return rankBetween(index > 0 ? ranks[index - 1]! : null, ranks[index]!) ?? ranks[index]! - 1;
   }
+}
+
+/**
+ * A record's state and the actions it offers, with the preconditions the table cannot know: the
+ * epic opens only once promoted, and unlinking needs a link.
+ */
+function ideaLifecycle(input: {
+  state: IdeaState;
+  promoted: boolean;
+  ownLinks: number;
+  /** What the shaped gate still needs, read only when the state offers shaping. */
+  gate: () => string[];
+  /** Scaffolded before: a started record scaffolds again only then, to add new rows. */
+  scaffolded: boolean;
+  /** A shaped plan that no longer passes the gate: Scaffold and Promote are held back, saying why. */
+  planIncomplete: readonly string[];
+}): { state: IdeaState; actions: OfferedAction[] } {
+  const actions: OfferedAction[] = [];
+  for (const id of ideaOffered(input.state, input.promoted)) {
+    if (id === "open_epic" && !input.promoted) continue;
+    // A started record that was promoted or linked some other way has nothing to scaffold into.
+    if (id === "scaffold" && input.state === "started" && !input.scaffolded) continue;
+    const rule = IDEA_ACTIONS[id];
+    const offered: OfferedAction = { id, label: rule.label, who: rule.who };
+    if (id === "unlink" && input.ownLinks === 0) offered.disabledReason = "Nothing is linked to it.";
+    if (id === "shape") {
+      const missing = input.gate();
+      if (missing.length > 0) offered.disabledReason = `It needs ${gateSentence(missing).replace(/^it needs /, "")}.`;
+    }
+    if ((id === "scaffold" || id === "promote") && input.planIncomplete.length > 0) {
+      offered.disabledReason = `Plan incomplete: it needs ${gateSentence(input.planIncomplete).replace(/^it needs /, "").replace(/ before it is shaped$/, "")}.`;
+    }
+    actions.push(offered);
+  }
+  return { state: input.state, actions };
+}
+
+/** A horizon's state and offers. Removing it is held back while it sits in the queue: take it off first. */
+function horizonLifecycle(shipped: boolean, openWork: number, queued: boolean): { state: HorizonState; actions: OfferedAction[] } {
+  const state = horizonState({ shipped, openWork });
+  return {
+    state,
+    actions: HORIZON_LIFECYCLE[state].map((id) => ({
+      id,
+      label: HORIZON_ACTIONS[id].label,
+      who: HORIZON_ACTIONS[id].who,
+      ...(id === "remove" && queued ? { disabledReason: "It is in the queue; take it off first." } : {}),
+      ...(id === "queue" && queued ? { disabledReason: "It is in the queue already." } : {}),
+    })),
+  };
+}
+
+/**
+ * Sections with a checked patch applied: each section given replaces the stored one whole. A
+ * breakdown row keeps its id: the one it names, else the stored row with its key, else a new one.
+ */
+export function mergeSections(base: PlanSections, patch: PlanPatch): PlanSections {
+  const out: PlanSections = { ...base };
+  const text = (value: unknown): string | null => (typeof value === "string" && value.trim() ? value.trim() : null);
+  const list = (value: unknown): string[] => (Array.isArray(value) ? value.map((item) => String(item).trim()).filter(Boolean) : []);
+  if (patch.goal !== undefined) out.goal = text(patch.goal);
+  if (patch.context !== undefined) out.context = text(patch.context);
+  if (patch.outOfScope !== undefined) out.outOfScope = text(patch.outOfScope);
+  if (patch.risks !== undefined) out.risks = text(patch.risks);
+  if (patch.acceptance !== undefined) out.acceptance = list(patch.acceptance);
+  if (patch.dependencies !== undefined) out.dependencies = list(patch.dependencies);
+  if (patch.sources !== undefined) out.sources = list(patch.sources);
+  if (patch.breakdown !== undefined) {
+    const inputs = patch.breakdown.map((row: BreakdownRowInput) => normalizeRow(row));
+    const keys = new Set<string>();
+    for (const row of inputs) {
+      if (keys.has(row.key)) throw new StapleError("validation", `Two task breakdown rows share the key ${row.key}; each row needs its own.`);
+      keys.add(row.key);
+    }
+    const named = new Set(inputs.map((row) => row.id).filter((id): id is string => id !== null));
+    const used = new Set<string>();
+    out.breakdown = inputs.map((row) => {
+      let id = row.id;
+      if (id !== null && used.has(id)) throw new StapleError("validation", `Two task breakdown rows share the id ${id}; each row has its own.`);
+      id ??= base.breakdown.find((held) => held.key === row.key && !used.has(held.id) && !named.has(held.id))?.id ?? randomUUID();
+      used.add(id);
+      return { ...row, id };
+    });
+  }
+  return out;
+}
+
+/** The shaped gate as a refusal: what the plan still needs, named. */
+function assertShaped(subject: string, sections: PlanSections, questions: readonly Question[]): void {
+  const missing = shapedGate(sections, questions);
+  if (missing.length === 0) return;
+  throw new StapleError("validation", `${subject.charAt(0).toUpperCase()}${subject.slice(1)} cannot be marked shaped yet: ${gateSentence(missing)}.`, { missing });
+}
+
+/** A task's title from its row: the key leads, so the plan and the tracker name it alike. */
+function taskTitle(row: BreakdownRow): string {
+  const clean = row.title.replace(/\*\*(.*?)\*\*/g, "$1").replace(/\s+/g, " ").trim();
+  return /^\d/.test(row.key) ? `${row.key} ${clean}` : clean;
+}
+
+/** The epic's plan document: the idea's goal, context, decisions, scope and risks, as one page. */
+function epicPlanDocument(title: string, sections: PlanSections, decisions: readonly string[]): string {
+  const parts = [`# ${title}`];
+  if (sections.goal) parts.push(`## Goal\n\n${sections.goal}`);
+  if (sections.context) parts.push(`## Context and constraints\n\n${sections.context}`);
+  if (decisions.length > 0) parts.push(`## Decisions\n\n${decisions.map((decision) => `- ${decision}`).join("\n")}`);
+  if (sections.dependencies.length > 0) parts.push(`## Dependencies\n\n${sections.dependencies.map((dep) => `- ${dep}`).join("\n")}`);
+  if (sections.outOfScope) parts.push(`## Out of scope\n\n${sections.outOfScope}`);
+  if (sections.risks) parts.push(`## Risks\n\n${sections.risks}`);
+  if (sections.sources.length > 0) parts.push(`## Sources\n\n${sections.sources.map((source) => `- ${source}`).join("\n")}`);
+  return parts.join("\n\n") + "\n";
+}
+
+/** The most of the idea's context a task's own page carries; the epic's plan holds all of it. */
+const CONTEXT_EXCERPT = 2000;
+
+/**
+ * A task's context document: workable from the ticket alone. What the epic is for, this task,
+ * what done means, what it waits on, and the constraints and scope it must respect.
+ */
+function taskContextDocument(epicTitle: string, sections: PlanSections, row: BreakdownRow, titles: ReadonlyMap<string, string>): string {
+  const parts = [`# ${taskTitle(row)}`, `Part of **${epicTitle}**. The epic's plan document holds the whole plan.`];
+  if (sections.goal) parts.push(`## What the epic is for\n\n${sections.goal}`);
+  const facts = [row.estimate ? `Estimate: ${row.estimate}` : null, row.owner ? `Owner: ${row.owner}` : null, row.notes ? `Notes: ${row.notes}` : null].filter(Boolean);
+  if (facts.length > 0) parts.push(`## This task\n\n${facts.join("\n\n")}`);
+  if (row.acceptance) parts.push(`## Done when\n\n${row.acceptance}`);
+  else if (sections.acceptance.length > 0) {
+    parts.push(
+      `## Done when (inherited)\n\nThis row had no "done when" of its own, so it takes the plan's acceptance criteria. Sharpen them to this task, then remove the \`${INHERITED_ACCEPTANCE_LABEL}\` label.\n\n${sections.acceptance.map((item) => `- ${item}`).join("\n")}`,
+    );
+  } else parts.push("## Done when\n\nNo acceptance was written for this row; agree it before starting.");
+  if (row.dependsOn.length > 0) {
+    const lines = row.dependsOn.map((dep) => (titles.has(dep) ? `- ${dep} ${titles.get(dep)} (a blocker in this epic)` : `- ${dep} (outside this plan)`));
+    parts.push(`## Waits on\n\n${lines.join("\n")}`);
+  }
+  if (sections.context) {
+    const excerpt = sections.context.length > CONTEXT_EXCERPT ? `${sections.context.slice(0, CONTEXT_EXCERPT).trimEnd()}\n\n(continued in the epic's plan document)` : sections.context;
+    parts.push(`## Context and constraints\n\n${excerpt}`);
+  }
+  if (sections.outOfScope) parts.push(`## Out of scope\n\n${sections.outOfScope}`);
+  return parts.join("\n\n") + "\n";
 }

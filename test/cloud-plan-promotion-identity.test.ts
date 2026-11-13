@@ -7,6 +7,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { FakeSyncServer } from "./fixtures/fake-sync-server.js";
 import { Fleet, type Machine } from "./fixtures/sync-machines.js";
+import { READY_PLAN } from "./fixtures/plan-ready.js";
 
 const REPO = "5eed0000-0000-4000-8000-0000000001d3";
 const PERSON = { person: { via: "plan_view" } } as const;
@@ -58,8 +59,8 @@ describe("one idea promoted on two devices offline", () => {
     it(`ends on one number when one device also made a ticket offline (${fold} fold)`, async () => {
       const { server, fleet } = setup(fold);
       const a = fleet.machine("a");
-      a.store.plan().enable("vp");
-      const p = a.store.plan().capture({ title: "Same idea", maturity: "shaped" }, "vp", PERSON).id;
+      a.store.plan().enable("vp", { person: { via: "settings" } });
+      const p = a.store.plan().capture({ title: "Same idea", maturity: "shaped", plan: READY_PLAN }, "vp", PERSON).id;
       await a.sync();
       const b = fleet.machine("b");
       await b.sync();
@@ -92,8 +93,8 @@ describe("one idea promoted on two devices offline", () => {
     it(`ends on one number when a third device moved one counter ahead (${fold} fold)`, async () => {
       const { fleet } = setup(fold);
       const a = fleet.machine("a");
-      a.store.plan().enable("vp");
-      const p = a.store.plan().capture({ title: "Same idea", maturity: "shaped" }, "vp", PERSON).id;
+      a.store.plan().enable("vp", { person: { via: "settings" } });
+      const p = a.store.plan().capture({ title: "Same idea", maturity: "shaped", plan: READY_PLAN }, "vp", PERSON).id;
       await a.sync();
       const b = fleet.machine("b");
       await b.sync();
@@ -120,8 +121,8 @@ describe("one idea promoted on two devices offline", () => {
     it(`ends on one number when both devices took the same one (${fold} fold)`, async () => {
       const { fleet } = setup(fold);
       const a = fleet.machine("a");
-      a.store.plan().enable("vp");
-      const p = a.store.plan().capture({ title: "Same idea", maturity: "shaped" }, "vp", PERSON).id;
+      a.store.plan().enable("vp", { person: { via: "settings" } });
+      const p = a.store.plan().capture({ title: "Same idea", maturity: "shaped", plan: READY_PLAN }, "vp", PERSON).id;
       await a.sync();
       const b = fleet.machine("b");
       await b.sync();
@@ -139,8 +140,8 @@ describe("one idea promoted on two devices offline", () => {
     it(`ends on one number whichever device sends first (${fold} fold)`, async () => {
       const { fleet } = setup(fold);
       const a = fleet.machine("a");
-      a.store.plan().enable("vp");
-      const p = a.store.plan().capture({ title: "Same idea", maturity: "shaped" }, "vp", PERSON).id;
+      a.store.plan().enable("vp", { person: { via: "settings" } });
+      const p = a.store.plan().capture({ title: "Same idea", maturity: "shaped", plan: READY_PLAN }, "vp", PERSON).id;
       await a.sync();
       const b = fleet.machine("b");
       await b.sync();

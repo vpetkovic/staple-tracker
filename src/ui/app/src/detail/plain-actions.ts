@@ -28,8 +28,15 @@
  * The store stays the authority: a race can still refuse, and the refusal is shown in plain
  * words (`plainRefusal`). What this file guarantees is that the page never OFFERS a write the
  * store's rules already refuse.
+ *
+ * THE PLAN'S RULES ARE NOT MIRRORED HERE: THEY ARRIVE. An idea's or a horizon's actions come from
+ * the core lifecycle table (src/core/plan-lifecycle.ts), computed by the server into each record's
+ * `actions`. `planActionItems` and `horizonActionItems` turn exactly those into items, and the
+ * Plan tab's editors render only when `offers` says the state offers them; nothing on the page
+ * decides on its own what a state allows.
  */
 import type { ActionPayload, ClaimActivity, Issue, IssueGate, IssueStatus, QueuedBy, StatusCategory } from "@/lib/types";
+import { maturityAction, type IdeaState } from "../../../../core/plan-lifecycle-table";
 
 /** Silence, in seconds, after which a claim may be taken over or freed. Mirrors lib/claim. */
 export const STALE_SECONDS = 30 * 60;
@@ -171,6 +178,8 @@ export interface UnreachableBlocker {
 
 export type WriteCall =
   | { route: "action"; ws: string; ref: string; payload: ActionPayload; actor: ActorSource }
+  /** A plan write (`/api/plan/<verb>`). The page is the person, so it is sent under the person's name. */
+  | { route: "plan"; ws: string; verb: string; body: Record<string, unknown>; actor: ActorSource }
   | { route: "gate-request"; ws: string; ref: string; owner: string; actor: ActorSource }
   | { route: "gate-approve"; ws: string; ref: string; children?: string[]; comment?: string; actor: ActorSource }
   | { route: "gate-changes"; ws: string; ref: string; comment: string; actor: ActorSource };
@@ -178,6 +187,7 @@ export type WriteCall =
 /** What the page does for a call, once the actor is known: which API function, with what. */
 export type ApiRequest =
   | { fn: "action"; target: { ws: string; ref: string; actor?: string }; payload: ActionPayload }
+  | { fn: "planWrite"; verb: string; body: Record<string, unknown> }
   | { fn: "requestGate"; body: { ws: string; ref: string; owner: string; actor?: string } }
   | { fn: "approveGate"; body: { ws: string; ref: string; children?: string[]; comment?: string; actor?: string } }
   | { fn: "requestGateChanges"; body: { ws: string; ref: string; comment: string; actor?: string } };
@@ -187,6 +197,8 @@ export function toRequest(call: WriteCall, actor: string | null): ApiRequest {
   switch (call.route) {
     case "action":
       return { fn: "action", target: { ws: call.ws, ref: call.ref, ...who }, payload: call.payload };
+    case "plan":
+      return { fn: "planWrite", verb: call.verb, body: { ws: call.ws, ...call.body, ...who } };
     case "gate-request":
       return { fn: "requestGate", body: { ws: call.ws, ref: call.ref, owner: call.owner, ...who } };
     case "gate-approve":
@@ -581,4 +593,112 @@ export function rekindReason(members: number, dated: boolean): string | null {
   if (members > 0) return `Remove ${who} first.`;
   if (dated) return "Clear its dates first.";
   return null;
+}
+
+// ──────────────────────────────────────────────────────────────── the plan
+
+/** An action as a record's payload carries it (src/core/plan-lifecycle.ts, `OfferedAction`). */
+export interface OfferedPlanAction {
+  id: string;
+  label: string;
+  who: "anyone" | "person";
+  disabledReason?: string;
+}
+
+/** A plan item: the offered action, and its write when it is one click. */
+export interface PlanItem {
+  id: string;
+  label: string;
+  disabledReason?: string;
+  call?: WriteCall;
+  /** Not a write: opens the epic this record became, Scaffold's preview, or how to start a goal run (never one click). */
+  opens?: "epic" | "scaffold" | "run";
+}
+
+/**
+ * The offered actions that are one click, and their writes. The rest of the table (edit, ask,
+ * decide, schedule, plan dates, reorder, move under, adopt, unlink) needs input, so the Plan tab
+ * renders an editor for each instead, under the same `offers` check.
+ */
+const ONE_CLICK: Record<string, (ref: string) => { verb: string; body: Record<string, unknown> }> = {
+  explore: (ref) => ({ verb: "update", body: { ref, maturity: "exploring" } }),
+  shape: (ref) => ({ verb: "update", body: { ref, maturity: "shaped" } }),
+  unshape: (ref) => ({ verb: "update", body: { ref, maturity: "exploring" } }),
+  drop: (ref) => ({ verb: "update", body: { ref, maturity: "dropped" } }),
+  restore: (ref) => ({ verb: "update", body: { ref, maturity: "exploring" } }),
+  promote: (ref) => ({ verb: "promote", body: { ref } }),
+  reset_baseline: (ref) => ({ verb: "reset-baseline", body: { ref } }),
+};
+
+const HORIZON_ONE_CLICK: Record<string, (ref: string) => { verb: string; body: Record<string, unknown> }> = {
+  queue: (ref) => ({ verb: "horizon-queue", body: { ref } }),
+  remove: (ref) => ({ verb: "horizon-remove", body: { ref } }),
+};
+
+/** Whether a record's state offers an action at all (it may still be held back by a reason). */
+export function offers(record: { actions: readonly OfferedPlanAction[] }, id: string): boolean {
+  return record.actions.some((action) => action.id === id);
+}
+
+/** The offered actions that open something instead of writing: the epic, Scaffold's preview, a goal run's start. */
+const OPENS: Record<string, PlanItem["opens"]> = { open_epic: "epic", scaffold: "scaffold", run: "run" };
+
+function itemsOf(ws: string, ref: string, actions: readonly OfferedPlanAction[], oneClick: typeof ONE_CLICK): PlanItem[] {
+  const items: PlanItem[] = [];
+  for (const action of actions) {
+    const write = oneClick[action.id];
+    if (OPENS[action.id]) {
+      const opens = OPENS[action.id]!;
+      const item: PlanItem = { id: action.id, label: opens === "epic" ? action.label : `${action.label}…`, opens };
+      if (action.disabledReason) item.disabledReason = action.disabledReason;
+      items.push(item);
+      continue;
+    }
+    if (!write) continue;
+    const item: PlanItem = { id: action.id, label: action.label };
+    if (action.disabledReason) item.disabledReason = action.disabledReason;
+    else item.call = { route: "plan", ws, ...write(ref), actor: PERSON };
+    items.push(item);
+  }
+  return items;
+}
+
+/** The one-click actions an idea's state offers, in the table's order: the drawer's buttons and the card's ⋯ menu. */
+export function planActionItems(ws: string, record: { id: string; actions: readonly OfferedPlanAction[] }): PlanItem[] {
+  return itemsOf(ws, record.id, record.actions, ONE_CLICK);
+}
+
+/** The one-click actions a horizon's state offers: queue it, or remove it while it holds no open work. */
+export function horizonActionItems(ws: string, horizon: { id: string; actions: readonly OfferedPlanAction[] }): PlanItem[] {
+  return itemsOf(ws, horizon.id, horizon.actions, HORIZON_ONE_CLICK);
+}
+
+/** The order the drawer picks its one primary plan action in: the step forward the state offers. */
+const PRIMARY_ORDER = ["scaffold", "promote", "explore", "shape", "restore", "open_epic"] as const;
+
+/** The primary plan action, or null; every other item goes in ⋯. */
+export function planPrimary(items: readonly PlanItem[]): PlanItem | null {
+  for (const id of PRIMARY_ORDER) {
+    const item = items.find((candidate) => candidate.id === id);
+    if (item) return item;
+  }
+  return null;
+}
+
+/**
+ * Which lifecycle action a board move is: into a maturity column it is exploring, shaping, going
+ * back or restoring, depending on where the idea stands; into a horizon column it is scheduling.
+ * Only the NAME of the action is worked out here. Whether it is allowed is `offers`, from the table.
+ */
+export function moveActionOf(idea: { state: string; maturity: string; horizonId: string | null }, target: { maturity: string } | { horizon: string | null }): string | null {
+  if ("horizon" in target) return idea.horizonId === target.horizon ? null : "schedule";
+  return maturityAction({ state: idea.state as IdeaState, maturity: idea.maturity }, target.maturity);
+}
+
+/** Whether a board move is one the idea's state offers (and can run now). */
+export function moveOffered(idea: { state: string; maturity: string; horizonId: string | null; actions: readonly OfferedPlanAction[] }, target: { maturity: string } | { horizon: string | null }): boolean {
+  const action = moveActionOf(idea, target);
+  if (action === null) return false;
+  const offered = idea.actions.find((candidate) => candidate.id === action);
+  return offered !== undefined && !offered.disabledReason;
 }

@@ -62,7 +62,7 @@ import { applySnapshotEntity, hydrate } from "./hydrate.js";
 import { owedLeaseReleases, settleOwedLeaseRelease } from "./lease-store.js";
 import { countQuarantined, markWaitingAcrossRewind, quarantineOperation, retryQuarantine, withoutLaterWrites } from "./quarantine.js";
 import { refreshPresence, writeOwnOrphanEnds } from "../telemetry/attempts.js";
-import { owedMilestoneRederive, publishDerivedStatuses, rederiveMilestonesAfterPull, rederivePlanMilestonesAfterPull } from "../store.js";
+import { WorkspaceStore, owedMilestoneRederive, publishDerivedStatuses, rederiveMilestonesAfterPull, rederivePlanMilestonesAfterPull } from "../store.js";
 import { rebuildPlanMembers } from "../plan-members.js";
 import { blockerSets, narrateRewoundSets, reconcileAfterRead, reconcileBeforeRead } from "./rewind.js";
 import { TailFold, refusedAsStillFolding, refusedAsTooLargeToFold, type Entry } from "./tail-fold.js";
@@ -540,6 +540,7 @@ async function syncRepositoryOnce(
    * point the seam's author left for exactly this.
    */
   const journal = bindJournal(db, session.deviceId);
+  new WorkspaceStore(db, "", "").plan().migrateLegacyLater();
 
   const capabilities = await negotiate(session, options);
 

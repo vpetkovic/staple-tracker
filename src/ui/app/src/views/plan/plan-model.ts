@@ -3,7 +3,7 @@
  * how child ideas nest under their parent, what a drop writes, and where a bar sits on the
  * timeline. Pure, so `plan-model.test.ts` pins it without rendering.
  */
-import type { HorizonData, IdeaData, Maturity, PlanData } from "@/lib/plan-types";
+import type { HorizonData, IdeaData, Maturity, PlanData } from "../../lib/plan-types.js";
 
 export type Lens = "ideas" | "horizons" | "timeline";
 
@@ -26,10 +26,10 @@ export interface BoardColumn {
   horizon?: HorizonData;
 }
 
-export const MATURITY_COLUMNS: ReadonlyArray<{ id: Exclude<Maturity, "dropped">; title: string; hint: string }> = [
+/** The Ideas lens's columns: thinking. Shaping is the hand-off to Horizons, so shaped has no column here. */
+export const MATURITY_COLUMNS: ReadonlyArray<{ id: Exclude<Maturity, "dropped" | "shaped">; title: string; hint: string }> = [
   { id: "raw", title: "Raw", hint: "just captured" },
   { id: "exploring", title: "Exploring", hint: "questions open" },
-  { id: "shaped", title: "Shaped", hint: "scope is clear" },
 ];
 
 /** Work started from an idea lives in the tracker; the Ideas lens shows what is still being shaped. */
@@ -67,12 +67,29 @@ export function descendantsOf(plan: PlanData, idea: IdeaData): IdeaData[] {
   return out;
 }
 
+/** The states that are still thinking. Shaping is the hand-off: a shaped record is delivery's. */
+const THINKING = new Set(["raw", "exploring"]);
+
+/** The states delivery tracks: shaped and ready, underway, landed. */
+const DELIVERY = new Set(["shaped", "started", "shipped"]);
+
 /**
- * The Ideas lens holds what is still being shaped: an idea that is started, or sits under a
- * started idea, has left it for the Horizons lens and the timeline.
+ * The Ideas lens is thinking only: a record in its own raw or exploring state. Shaped, it is
+ * ready and moves to Horizons, whatever its parent is doing; under a started parent, a sub-idea
+ * still being explored is still thinking. No record is ever in both lenses.
  */
-export function inIdeasLens(plan: PlanData, idea: IdeaData): boolean {
-  return !isStarted(idea) && !ancestorsOf(plan, idea).some(isStarted);
+export function inIdeasLens(_plan: PlanData, idea: IdeaData): boolean {
+  return THINKING.has(idea.state);
+}
+
+/** The Horizons lens is delivery: shaped, started and shipped records, nothing still being thought. */
+export function inHorizonsLens(idea: IdeaData): boolean {
+  return DELIVERY.has(idea.state);
+}
+
+/** Its work has all landed: the one test every shipped mark reads. */
+export function isShipped(idea: IdeaData): boolean {
+  return idea.state === "shipped";
 }
 
 export function ideasColumns(plan: PlanData): BoardColumn[] {
@@ -86,15 +103,15 @@ export function ideasColumns(plan: PlanData): BoardColumn[] {
 }
 
 export function droppedIdeas(plan: PlanData): IdeaData[] {
-  return plan.ideas.filter((idea) => idea.maturity === "dropped" && inIdeasLens(plan, idea));
+  return plan.ideas.filter((idea) => idea.state === "dropped");
 }
 
 export function horizonsColumns(plan: PlanData): BoardColumn[] {
   const unscheduled: BoardColumn = {
     key: "h:",
     title: "Unscheduled",
-    hint: "shaped, no when yet",
-    ideas: plan.ideas.filter((idea) => idea.horizonId === null && idea.maturity !== "dropped" && (idea.maturity === "shaped" || isStarted(idea))),
+    hint: "Ready, no horizon yet",
+    ideas: plan.ideas.filter((idea) => idea.horizonId === null && inHorizonsLens(idea)),
     drop: { horizon: null },
   };
   return [
@@ -103,11 +120,20 @@ export function horizonsColumns(plan: PlanData): BoardColumn[] {
       key: `h:${horizon.id}`,
       title: horizon.name,
       hint: horizon.date ? "" : "no date",
-      ideas: plan.ideas.filter((idea) => idea.horizonId === horizon.id && idea.maturity !== "dropped"),
+      ideas: plan.ideas.filter((idea) => idea.horizonId === horizon.id && inHorizonsLens(idea)),
       drop: { horizon: horizon.id },
       horizon,
     })),
   ];
+}
+
+/**
+ * A horizon whose work has all landed, as the server reads it: the milestone is done, or every
+ * member has landed. Never read from the cards: a hand-added member or a record still being
+ * explored is work the column does not show. Its column folds to a ✓ summary.
+ */
+export function horizonDone(horizon: Pick<HorizonData, "shipped" | "progress" | "awaitingApproval">): boolean {
+  return !horizon.awaitingApproval && (horizon.shipped || horizon.progress === 1);
 }
 
 /** The late and not-started split of a set of ideas: never one lumped number. */
@@ -252,7 +278,7 @@ export function timelineGroups(plan: PlanData, folded: ReadonlySet<string> = new
       for (const idea of group.ideas.filter((candidate) => candidate.parentId === null || !here.has(candidate.parentId))) place(idea, 0);
       return { key: group.key, title: group.title, date: group.date, horizon: group.horizon, rows, undated };
     })
-    .filter((group) => group.rows.length > 0 || group.undated.length > 0);
+    .filter((group) => group.rows.length > 0 || group.undated.length > 0 || (group.horizon !== null && (group.horizon.memberCount > 0 || group.horizon.awaitingApproval || group.horizon.shipped)));
 }
 
 /** The days the timeline spans: every planned, baseline and actual day, today and every dated horizon, padded. */
@@ -298,4 +324,20 @@ export function dragWindow(
   if (mode === "move") return { start: window.start + deltaDays, end: window.end + deltaDays };
   if (mode === "start") return { start: Math.min(window.start + deltaDays, window.end), end: window.end };
   return { start: window.start, end: Math.max(window.end + deltaDays, window.start) };
+}
+
+/** A dependency drawn on the timeline: from the record waited on to the one waiting. */
+export interface DependencyEdge {
+  from: string;
+  to: string;
+}
+
+/** Every dependency between two rows the timeline shows, each once. */
+export function dependencyEdges(plan: PlanData, shown: ReadonlySet<string>): DependencyEdge[] {
+  const edges: DependencyEdge[] = [];
+  for (const idea of plan.ideas) {
+    if (!shown.has(idea.id)) continue;
+    for (const from of idea.dependsOn) if (shown.has(from) && from !== idea.id) edges.push({ from, to: idea.id });
+  }
+  return edges;
 }

@@ -243,6 +243,8 @@ describe("a fresh repo-local `staple init`", () => {
       // 020-plan-fields: one link per (idea, issue).
       "index:sqlite_autoindex_plan_links_1",
       "index:sqlite_autoindex_plan_members_1",
+      // 020-plan-fields: one breakdown row per (idea, row).
+      "index:sqlite_autoindex_plan_rows_1",
       // 009-projects: the projects table's `id` primary key and its `UNIQUE (slug)`.
       "index:sqlite_autoindex_projects_1",
       "index:sqlite_autoindex_projects_2",
@@ -297,6 +299,7 @@ describe("a fresh repo-local `staple init`", () => {
       "table:plan_links",
       // 020-plan-fields: machine-local, rebuilt from the plan after every write and pull.
       "table:plan_members",
+      "table:plan_rows",
       "table:projects",
       "table:queue_entries",
       "table:relations",

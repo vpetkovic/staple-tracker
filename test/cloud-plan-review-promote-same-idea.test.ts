@@ -6,6 +6,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { FakeSyncServer } from "./fixtures/fake-sync-server.js";
 import { Fleet, type Machine } from "./fixtures/sync-machines.js";
+import { READY_PLAN } from "./fixtures/plan-ready.js";
 
 const REPO = "5eed0000-0000-4000-8000-0000000001c9";
 const PERSON = { person: { via: "plan_view" } } as const;
@@ -35,8 +36,8 @@ describe("the same idea promoted on two devices", () => {
     const server = new FakeSyncServer({ repositoryId: REPO });
     fleet = new Fleet(server, REPO);
     const a = fleet.machine("a");
-    a.store.plan().enable("vp");
-    const p = a.store.plan().capture({ title: "Same idea", maturity: "shaped" }, "vp", PERSON).id;
+    a.store.plan().enable("vp", { person: { via: "settings" } });
+    const p = a.store.plan().capture({ title: "Same idea", maturity: "shaped", plan: READY_PLAN }, "vp", PERSON).id;
     await a.sync();
     const b = fleet.machine("b");
     await b.sync();
@@ -68,8 +69,8 @@ describe("the same idea promoted on two devices", () => {
     const server = new FakeSyncServer({ repositoryId: REPO });
     fleet = new Fleet(server, REPO);
     const a = fleet.machine("a");
-    a.store.plan().enable("vp");
-    const p = a.store.plan().capture({ title: "Same idea", maturity: "shaped" }, "vp", PERSON).id;
+    a.store.plan().enable("vp", { person: { via: "settings" } });
+    const p = a.store.plan().capture({ title: "Same idea", maturity: "shaped", plan: READY_PLAN }, "vp", PERSON).id;
     await a.sync();
     const b = fleet.machine("b");
     await b.sync();

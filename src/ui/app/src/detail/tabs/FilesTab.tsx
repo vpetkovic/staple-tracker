@@ -26,6 +26,7 @@ import {
 } from "./file-panel";
 import { FILE_GROUPS, evidenceLabel, fileGroupId, formatFileSize, isMarkdownFile, type FileGroupId } from "./files";
 import type { TabProps } from "./registry";
+import { recordNoun } from "../plan-record";
 import "./tabs.css";
 
 const personKind = (name: string) => (/[-_]/.test(name) ? "agent" : "human");
@@ -647,7 +648,7 @@ export function FilesTab({ detail, workspace }: TabProps) {
   if (files.length === 0) {
     return (
       <div data-files="">
-        <EmptyState icon={Paperclip}>No files on this ticket.</EmptyState>
+        <EmptyState icon={Paperclip}>No files on this {recordNoun(detail)}.</EmptyState>
       </div>
     );
   }

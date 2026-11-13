@@ -459,9 +459,11 @@ describe("registered settings on /api/settings", () => {
       "kinds:workspace:kinds",
       // R6d (STA-179): the Workflow category reaches the page from the registry alone.
       "queue:workspace:fields",
+      "features:workspace:fields",
       "machine:global:fields",
     ]);
     expect(settings.registry.definitions.map((d) => `${d.key}:${d.scope}`)).toEqual([
+      "features.planning:workspace",
       "kinds.default:workspace",
       "machine.browser:global",
       "queue.policy:workspace",
@@ -475,6 +477,7 @@ describe("registered settings on /api/settings", () => {
   it("serves the workspace values with source default until one is stored, and the globals beside them", async () => {
     const settings = await read();
     expect(settings.values).toEqual({
+      "features.planning": { key: "features.planning", scope: "workspace", value: false, source: "default", version: 1 },
       "kinds.default": { key: "kinds.default", scope: "workspace", value: "task", source: "default", version: 1 },
       "kinds.appearance": { key: "kinds.appearance", scope: "workspace", value: {}, source: "default", version: 1 },
       "queue.policy": { key: "queue.policy", scope: "workspace", value: "advisory", source: "default", version: 1 },

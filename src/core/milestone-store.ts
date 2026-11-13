@@ -836,8 +836,9 @@ export class MilestoneStore {
   list(options: { all?: boolean } = {}): MilestoneListRow[] {
     this.assertKindConfigured();
     const rows = this.db
-      .prepare("SELECT id, status FROM issues WHERE kind = ?")
-      .all(MILESTONE_KIND) as Array<{ id: string; status: string }>;
+      .prepare(`SELECT id, status FROM issues WHERE kind = ? AND
+        (? = 0 OR plan_rank IS NULL OR EXISTS (SELECT 1 FROM milestone_meta m WHERE m.issue_id = issues.id AND m.target_date IS NOT NULL))`)
+      .all(MILESTONE_KIND, this.store.planningOn() ? 1 : 0) as Array<{ id: string; status: string }>;
     // One resolver read for the whole list, not one per milestone.
     const facts = this.queueFacts();
     const listed = rows.filter((row) => options.all === true || !this.store.isResolvedStatus(row.status));
@@ -1167,7 +1168,8 @@ export class MilestoneStore {
     }
     const milestone = this.requireMilestone(ref);
     // A horizon's dates are the person's, set from the plan (design/plan.md, "Who steers").
-    if (!internal.plan && (patch.targetDate !== undefined || patch.startDate !== undefined) && this.store.isHorizon(milestone.id)) {
+    // So is its goal: what agents work it toward is the person's, set with its run setting.
+    if (!internal.plan && (patch.targetDate !== undefined || patch.startDate !== undefined || goalPatch) && this.store.isHorizon(milestone.id)) {
       throw steeringRefusal("horizons", milestone.identifier);
     }
     return this.journaled(() => {
@@ -1185,7 +1187,7 @@ export class MilestoneStore {
           },
           actor,
           undefined,
-          // A horizon's goal is execution's, like any milestone's; its name and status stay guarded.
+          // A horizon's goal reaches here only from the plan (checked above); a milestone's is its own.
           { plan: true },
         );
       }
@@ -1357,7 +1359,7 @@ export class MilestoneStore {
           identifier: member.identifier,
         });
       }
-      const from = this.store.getIssue(current.milestone_id);
+      const from = this.store.writeTarget(current.milestone_id);
       if (target === null || target.id === from.id) {
         if (!hasPosition(options)) return this.view(from.id);
         this.assertBase(from, options.baseRevision);

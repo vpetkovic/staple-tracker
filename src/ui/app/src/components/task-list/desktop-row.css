@@ -499,6 +499,14 @@
   color: var(--foreground);
 }
 
+/* A horizon of the plan: the ◇ glyph, in the same 12px slot the milestone icon takes. */
+.staple-row-horizon-glyph {
+  width: 12px;
+  flex-shrink: 0;
+  text-align: center;
+  line-height: 1;
+}
+
 .staple-row-milestone-chip svg {
   width: 12px;
   height: 12px;
@@ -530,4 +538,19 @@
 .staple-row[data-desk] .staple-row-cue[data-pickup-pill="next"] {
   border-color: color-mix(in oklab, var(--foreground) 30%, transparent);
   color: var(--foreground);
+}
+
+/* The phone's horizon is secondary metadata, revealed on tap without a badge. */
+.staple-row-horizon-indicator {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: var(--text-caption, 11px);
 }

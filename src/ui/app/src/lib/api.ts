@@ -709,7 +709,19 @@ export const getInbox = (params: { assignee?: string } = {}) =>
   request<InboxRow[]>(`/api/inbox${qs(params)}`);
 
 export const getIssue = (params: { ws?: string; ref: string }) =>
-  request<IssueDetail>(`/api/issue${qs(params)}`);
+  request<IssueDetail>(`/api/issue${qs(params)}`).then(addressDrafts);
+
+/**
+ * An unpromoted idea has no ticket number: the server sends it, and any idea among its ancestors
+ * and children, with `identifier: null, draft: true`. The page addresses such an issue by its id,
+ * the one ref every route resolves, so a tab that names its issue in a request never sends null.
+ * What the page SHOWS for it is decided by the drawer (`detail/plan-record.ts`), never this.
+ */
+export function addressDrafts(detail: IssueDetail): IssueDetail {
+  const address = <I extends { id: string; identifier: string | null }>(issue: I): I & { identifier: string } =>
+    (issue.identifier === null ? { ...issue, identifier: issue.id } : issue) as I & { identifier: string };
+  return { ...detail, issue: address(detail.issue), ancestors: detail.ancestors.map(address), children: detail.children.map(address) };
+}
 
 export const getDocument = (params: { ws?: string; ref: string; key: string; revision?: number }) =>
   request<IssueDocument>(`/api/document${qs(params)}`);

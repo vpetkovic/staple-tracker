@@ -429,9 +429,10 @@ describe("schema migration against a live database", () => {
       // Migration 019's revision column (its `runs` columns went with the table above).
       legacyDb.exec("ALTER TABLE document_revisions DROP COLUMN instructions");
       // Migration 020 added the plan columns: off they come, as every later column does.
-      for (const column of ["plan_maturity", "plan_horizon_id", "plan_start", "plan_target", "plan_baseline_start", "plan_baseline_target", "plan_rank"]) legacyDb.exec(`ALTER TABLE issues DROP COLUMN ${column}`);
+      for (const column of ["plan_maturity", "plan_horizon_id", "plan_start", "plan_target", "plan_baseline_start", "plan_baseline_target", "plan_rank", "plan_run_mode"]) legacyDb.exec(`ALTER TABLE issues DROP COLUMN ${column}`);
       legacyDb.exec("DROP TABLE IF EXISTS plan_members");
       legacyDb.exec("DROP TABLE IF EXISTS plan_links");
+      legacyDb.exec("DROP TABLE IF EXISTS plan_rows");
       legacyDb.prepare("UPDATE meta SET value = '1' WHERE key = 'schema_version'").run();
       legacyDb.close();
 

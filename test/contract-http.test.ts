@@ -325,6 +325,7 @@ describe("read shapes", () => {
   it("/api/bootstrap reports the mode and the workspaces it serves", async () => {
     expect(await (await get("/api/bootstrap")).json()).toEqual({
       mode: "workspace",
+      features: { [WS]: { planning: false } },
       workspaces: [{ slug: WS, prefix: "CON" }],
       writeOrigins: [origin, origin.replace("127.0.0.1", "localhost")],
     });
@@ -804,14 +805,16 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/plan/adopt",
       "/api/plan/capture",
       "/api/plan/decision",
-      "/api/plan/enable",
       "/api/plan/horizon-create",
+      "/api/plan/horizon-queue",
       "/api/plan/horizon-remove",
+      "/api/plan/horizon-run",
       "/api/plan/horizon-update",
       "/api/plan/promote",
       "/api/plan/question",
       "/api/plan/reset-baseline",
       "/api/plan/resolve",
+      "/api/plan/scaffold",
       "/api/plan/unlink",
       "/api/plan/update",
       "/api/poll",

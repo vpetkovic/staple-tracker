@@ -55,6 +55,7 @@ import { Dot } from "./Dot";
 import { commentWrite } from "./writes";
 import { isClear, shouldBringBack } from "./keep-in-view";
 import { buildTimeline, groupByDay, type TimelineEntry } from "../timeline";
+import { isIdeaDetail } from "../plan-record";
 import type { TabProps } from "./registry";
 import "./tabs.css";
 
@@ -80,6 +81,7 @@ function When({ iso, today, now }: { iso: string; today: boolean; now: Date }) {
 
 const EVENT_ICON: Record<string, LucideIcon> = {
   "created this task": CirclePlus,
+  "captured this idea": CirclePlus,
   "started working on it": Play,
   "stopped working on it": CircleStop,
 };
@@ -339,8 +341,9 @@ export function ActivityTab({ detail, workspace, onAuthError, refresh }: TabProp
         events: events.data ?? [],
         revisions: revisions.data ?? [],
         worklogKey: WORKLOG_KEY,
+        noun: isIdeaDetail(detail) ? "idea" : "task",
       }),
-    [detail.comments, events.data, revisions.data],
+    [detail, events.data, revisions.data],
   );
   // Regrouped when the minute ticks, so a tab left open past midnight moves today's rows
   // under "Yesterday" rather than keeping a stale heading.

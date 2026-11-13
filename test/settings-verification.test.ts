@@ -352,7 +352,7 @@ describe("a category nothing was written for reaches the page by being registere
   it("the real HTTP envelope carries the new category and its typed definition", () => {
     expect(served.registry.categories.map((c) => c.id)).toContain(FIXTURE_CATEGORY.id);
     // In shell order, between the Workflow category (30) and This machine (90).
-    expect(served.registry.categories.map((c) => c.id)).toEqual(["statuses", "kinds", "queue", "verification", "machine"]);
+    expect(served.registry.categories.map((c) => c.id)).toEqual(["statuses", "kinds", "queue", "features", "verification", "machine"]);
     expect(served.registry.categories.find((c) => c.id === "verification")).toEqual({
       id: "verification",
       label: "Verification",

@@ -318,7 +318,8 @@ function entityHeld(db: DatabaseSync, entity: string, entityId: string): boolean
       return hit("SELECT 1 FROM relations WHERE blocked_id = ? AND type = 'blocks'", entityId);
     case "milestone":
       return hit(
-        "SELECT 1 FROM milestone_meta WHERE issue_id = ? UNION SELECT 1 FROM milestone_members WHERE milestone_id = ? UNION SELECT 1 FROM milestone_criterion_marks WHERE milestone_id = ? UNION SELECT 1 FROM plan_links WHERE idea_id = ?",
+        "SELECT 1 FROM milestone_meta WHERE issue_id = ? UNION SELECT 1 FROM milestone_members WHERE milestone_id = ? UNION SELECT 1 FROM milestone_criterion_marks WHERE milestone_id = ? UNION SELECT 1 FROM plan_links WHERE idea_id = ? UNION SELECT 1 FROM plan_rows WHERE idea_id = ?",
+        entityId,
         entityId,
         entityId,
         entityId,

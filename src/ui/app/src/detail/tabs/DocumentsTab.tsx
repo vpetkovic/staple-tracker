@@ -28,6 +28,7 @@ import { action, ApiError, getDocument, getRevisions } from "@/lib/api";
 import { Markdown } from "@/lib/markdown";
 import type { DocumentRevision } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
+import { contentLocked, recordNoun } from "../plan-record";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
 import { diffBodies } from "../diff";
 import { DocumentDiff } from "../DocumentDiff";
@@ -106,6 +107,7 @@ function RevisionRow({
   onDiff,
   onRestore,
   restoring,
+  canRestore,
 }: {
   rev: DocumentRevision;
   current: boolean;
@@ -113,6 +115,7 @@ function RevisionRow({
   onDiff: () => void;
   onRestore: () => void;
   restoring: boolean;
+  canRestore: boolean;
 }) {
   return (
     <li className="flex flex-col gap-2 border-b border-border px-3.5 py-3 last:border-b-0 sm:flex-row sm:items-start">
@@ -142,7 +145,7 @@ function RevisionRow({
             Compare with previous
           </Button>
         ) : null}
-        {current ? null : (
+        {current || !canRestore ? null : (
           <Button size="sm" variant={restoring ? "default" : "ghost"} className="max-sm:h-10" onClick={onRestore}>
             {restoring ? "Confirm restore" : "Restore"}
           </Button>
@@ -154,6 +157,8 @@ function RevisionRow({
 
 export function DocumentsTab({ detail, workspace, onAuthError, refresh }: TabProps) {
   const ref = detail.issue.identifier;
+  // An idea whose state offers no edit (shipped, dropped) is read here, never restored.
+  const locked = contentLocked(detail);
   /**
    * `takePendingDocumentKey` first — W3 (STA-115). Arriving here from Overview's
    * "Show all" means the reader has already named the document they want, and
@@ -267,7 +272,7 @@ export function DocumentsTab({ detail, workspace, onAuthError, refresh }: TabPro
   if (detail.documents.length === 0) {
     return (
       <EmptyState icon={FileText}>
-        No plan or notes on this ticket yet. Screenshots and other files are under Files.
+        No plan or notes on this {recordNoun(detail)} yet. Screenshots and other files are under Files.
       </EmptyState>
     );
   }
@@ -353,16 +358,18 @@ export function DocumentsTab({ detail, workspace, onAuthError, refresh }: TabPro
                 <Button size="sm" variant="ghost" className="max-sm:h-10" onClick={() => setReading(null)}>
                   Back to latest
                 </Button>
-                <Button
-                  size="sm"
-                  variant={arming === reading ? "default" : "outline"}
-                  className="max-sm:h-10"
-                  disabled={busy}
-                  onClick={() => void restore(reading)}
-                >
-                  <RotateCcw aria-hidden className="size-3.5" />
-                  {arming === reading ? "Confirm restore" : "Restore this version"}
-                </Button>
+                {locked ? null : (
+                  <Button
+                    size="sm"
+                    variant={arming === reading ? "default" : "outline"}
+                    className="max-sm:h-10"
+                    disabled={busy}
+                    onClick={() => void restore(reading)}
+                  >
+                    <RotateCcw aria-hidden className="size-3.5" />
+                    {arming === reading ? "Confirm restore" : "Restore this version"}
+                  </Button>
+                )}
               </div>
             </div>
           ) : null}
@@ -484,6 +491,7 @@ export function DocumentsTab({ detail, workspace, onAuthError, refresh }: TabPro
                       }}
                       onDiff={() => openDiff(rev.revision)}
                       onRestore={() => void restore(rev.revision)}
+                      canRestore={!locked}
                     />
                   ))}
                 </ul>

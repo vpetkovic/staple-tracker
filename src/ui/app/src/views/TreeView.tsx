@@ -52,7 +52,7 @@ import { describeRefusal, type Refusal } from "@/lib/refusal";
 import { FilterEmptyState } from "@/components/filters/FilterEmptyState";
 import { applyFilterDimensions } from "@/lib/filter-dimensions";
 import { hiddenParents } from "@/lib/filters";
-import { placeUnderMilestones } from "./tree/milestone-placement";
+import { placeForAxis } from "./tree/milestone-placement";
 import { AutopilotTreeContext, autopilotAncestors, useRuns } from "@/lib/runs";
 import { currentWorkspace, useSession } from "@/lib/session";
 import { JoinOfferCard } from "@/components/join/JoinOffer";
@@ -424,12 +424,9 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
    * page whose queue has not landed) pays nothing and re-renders nothing.
    */
   const all = useMemo(
-    // Then milestones become the top of the tree — see views/tree/milestone-placement.ts —
-    // except when grouped by epic, whose axis IS the epics a milestone would fold together.
-    () => {
-      const cued = attachRowCues(session.issues.data ?? [], cueIndex);
-      return groupBy === "parent" ? cued : placeUnderMilestones(cued);
-    },
+    // Then milestones become the top of the tree (views/tree/milestone-placement.ts), except
+    // on the axes that are already sections: by epic, and by horizon.
+    () => placeForAxis(attachRowCues(session.issues.data ?? [], cueIndex), groupBy),
     [session.issues.data, cueIndex, groupBy],
   );
   /*

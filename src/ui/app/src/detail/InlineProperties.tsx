@@ -114,7 +114,8 @@ function RefusalSlot({ refusal, onDismiss, report }: { refusal: Refusal | null; 
 
 // ---------------------------------------------------------------- title
 
-export function InlineTitle({ issue, workspace, refresh, size = "display", report }: EditorProps & { size?: "display" | "heading" }) {
+/** The title, renamed in place; `readOnly` when the record offers no edit (an idea's state, from the lifecycle). */
+export function InlineTitle({ issue, workspace, refresh, size = "display", report, readOnly = false }: EditorProps & { size?: "display" | "heading"; readOnly?: boolean }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(issue.title);
   const { update, busy, refusal, dismiss } = useUpdate(issue, workspace, refresh);
@@ -139,6 +140,14 @@ export function InlineTitle({ issue, workspace, refresh, size = "display", repor
     // store's sentence to say, not this component's.
     if (await update({ type: "update", title: draft })) setEditing(false);
   };
+
+  if (readOnly) {
+    return (
+      <h2 data-title-read-only="" className={cn("min-w-0 font-semibold text-balance wrap-anywhere text-foreground", size === "display" ? "text-display" : "text-heading")}>
+        {issue.title}
+      </h2>
+    );
+  }
 
   if (!editing) {
     return (

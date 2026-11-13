@@ -236,8 +236,7 @@ export function isNotStarted(input: { plannedStart: string | null; links: number
 
 // ---------- guards ----------
 
-export const PLAN_KINDS_MISSING_MESSAGE =
-  "Planning is not turned on in this workspace. Run `staple plan enable` (it adds the `idea` and `milestone` kinds and the horizons Now, Next and Later).";
+export const PLAN_KINDS_MISSING_MESSAGE = "Planning is off in this workspace; a person turns it on in Settings → Experimental or with `staple settings set features.planning true --person`.";
 
 /** The one sentence every tracker door gives an unpromoted idea. */
 export function planKindRefusal(issue: { identifier: string; kind: string; title?: string | null }, action: string): StapleError {
@@ -319,4 +318,4 @@ export function steeringRefusal(what: SteeringWrite, subject: string | null): St
 }
 
 /** Default horizons for `staple plan enable`, in order. */
-export const DEFAULT_HORIZONS: readonly string[] = ["Now", "Next", "Later"];
+export const DEFAULT_HORIZONS: readonly string[] = ["Now", "Next"];

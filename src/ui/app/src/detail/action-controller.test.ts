@@ -35,7 +35,7 @@ function harness(names: Names = { worker: null, person: null }, answers: Array<s
     return {};
   };
   const deps: ControllerDeps = {
-    post: { action: record("action"), requestGate: record("requestGate"), approveGate: record("approveGate"), requestGateChanges: record("requestGateChanges") },
+    post: { action: record("action"), requestGate: record("requestGate"), approveGate: record("approveGate"), requestGateChanges: record("requestGateChanges"), planWrite: record("planWrite") },
     ask: (prompt, prefill) => {
       asked.push({ prompt, prefill });
       return answers.shift() ?? null;
@@ -170,7 +170,7 @@ describe("the name on a write", () => {
 
   it("a refusal comes back as refused, with the error", async () => {
     const deps: ControllerDeps = {
-      post: { action: () => Promise.reject(new Error("409")), requestGate: async () => ({}), approveGate: async () => ({}), requestGateChanges: async () => ({}) },
+      post: { action: () => Promise.reject(new Error("409")), requestGate: async () => ({}), approveGate: async () => ({}), requestGateChanges: async () => ({}), planWrite: async () => ({}) },
       ask: () => null,
       names: () => ({ worker: null, person: null }),
       remember: () => {},

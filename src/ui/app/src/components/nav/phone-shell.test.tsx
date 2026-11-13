@@ -24,6 +24,7 @@ const WORKSPACES = [
 
 function session(over: Partial<StapleSession> = {}): StapleSession {
   return {
+    planningEnabled: true,
     mode: "hub",
     workspaces: WORKSPACES,
     view: "tree",

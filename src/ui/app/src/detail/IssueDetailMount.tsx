@@ -410,14 +410,12 @@ export function IssueDetailMount() {
           }}
         >
           {/*
-            The accessible name, present from the first frame. It is the identifier
-            rather than the title because the title is not known until the fetch
-            lands, and a dialog whose name arrives a beat after it opens is a dialog
-            that gets announced as "dialog". The human title is the <h2> immediately
-            inside, which is the next thing read either way.
+            A stable accessible name, present before the detail loads. The selection
+            can be an unpromoted idea's internal id, which is never a reader-facing
+            label. The loaded record's title is the heading immediately inside.
           */}
           <VisuallyHidden.Root asChild>
-            <DialogPrimitive.Title>{selection?.ref ?? "Issue detail"}</DialogPrimitive.Title>
+            <DialogPrimitive.Title>Issue detail</DialogPrimitive.Title>
           </VisuallyHidden.Root>
 
           {selection ? (

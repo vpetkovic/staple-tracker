@@ -375,7 +375,7 @@ describe("a folded parent", () => {
     // built from `all` (the placed, unfiltered list) and wraps the grid that draws the rows.
     const source = readFileSync(fileURLToPath(new URL("../../views/TreeView.tsx", import.meta.url)), "utf8");
     expect(source).toMatch(/autopilotAncestors\(all, claimed\)/);
-    expect(source).toMatch(/return groupBy === "parent" \? cued : placeUnderMilestones\(cued\);/);
+    expect(source).toMatch(/placeForAxis\(attachRowCues\(session\.issues\.data \?\? \[\], cueIndex\), groupBy\)/);
     const wrapped = /<AutopilotTreeContext value=\{autopilotTree\}>[\s\S]*?<\/AutopilotTreeContext>/.exec(source)?.[0] ?? "";
     expect(wrapped).toContain("<TreeGrid");
   });

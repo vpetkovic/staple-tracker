@@ -1,3 +1,4 @@
+import type { HorizonData, IdeaData, IdeaDetailData } from "./plan-types.js";
 /**
  * The wire vocabulary — one mirror of src/core/types.ts plus the envelopes
  * src/ui/server.ts actually returns.
@@ -291,7 +292,10 @@ export type CommentAuthorType = "user" | "agent" | "system";
 
 export interface Issue {
   id: string;
+  /** Its ticket number. An unpromoted idea has none: the server sends null with `draft: true`, and the page addresses it by `id` (`getIssue`). */
   identifier: string;
+  /** An unpromoted idea: no ticket number yet. */
+  draft?: boolean;
   title: string;
   description: string | null;
   status: IssueStatus;
@@ -816,6 +820,7 @@ export interface WorkspaceRef {
 
 /** GET /api/bootstrap */
 export interface Bootstrap {
+  features?: Record<string, { planning: boolean }>;
   mode: UiMode;
   workspaces: WorkspaceRef[];
   /** The page origins the server accepts writes from (its Origin check). */
@@ -924,6 +929,12 @@ export interface IssueRow {
    * nest a parentless member under its milestone. Optional for the reason `deps` is.
    */
   milestoneId?: string | null;
+  /**
+   * The horizon this row's work belongs to: its milestone (put there or derived from the
+   * plan), else its nearest ancestor's, when that milestone is a horizon. The ◇ chip, the
+   * Horizon grouping and the horizon filter all read it. Optional for the reason `deps` is.
+   */
+  horizon?: RowHorizon | null;
   /**
    * Linked pull requests, newest-first. OPTIONAL and absent today — see `PullRequestRef`.
    *
@@ -1043,6 +1054,17 @@ export interface RowMilestoneCue {
   identifier: string;
   /** From `/api/milestones`; null when the page has not listed that milestone. */
   title: string | null;
+  /** The milestone is a horizon of the plan: the chip reads `◇ <horizon>`. */
+  horizon?: boolean;
+}
+
+/** A horizon as a task row carries it (`/api/issues`, `horizon`). */
+export interface RowHorizon {
+  id: string;
+  identifier: string;
+  name: string;
+  date: string | null;
+  rank: number;
 }
 
 export interface RowCues {
@@ -1133,6 +1155,14 @@ export interface IssueDetail {
   milestone?: EffectiveMilestone | null;
   /** On a milestone's own detail: its plan (dates, state, progress, members). Else null. */
   milestonePlan?: MilestoneView | null;
+  /**
+   * A plan record's plan detail (state, offered actions, brief, questions, decisions, links), or
+   * null when the issue is not part of the plan. An unpromoted idea is drawn from this, never from
+   * `issue.identifier`, which it holds only for lookups.
+   */
+  planRecord?: IdeaDetailData | null;
+  /** On a horizon's own detail: the horizon as the plan reads it, and the records on it. Else null. */
+  horizonPlan?: { horizon: HorizonData; ideas: IdeaData[] } | null;
 }
 
 /** Mirror of `EffectiveMilestone` in src/core/milestone-store.ts. */
