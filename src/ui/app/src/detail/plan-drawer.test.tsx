@@ -73,6 +73,7 @@ function idea(state: keyof typeof OFFERED, patch: Partial<IdeaData> = {}): IdeaD
     actual: { start: null, end: null, forecastEnd: null },
     late: false,
     notStarted: false,
+    delivered: null,
     childIds: [],
     openQuestions: 0,
     planIncomplete: [],
@@ -298,6 +299,35 @@ describe("the Plan tab", () => {
         <PlanTab detail={detail({ issue: issue({ id: ID, identifier: ID, draft: true, kind: "idea" }), planRecord: rec })} workspace="ws" onAuthError={noop} refresh={noop} />
       </SessionContext.Provider>,
     );
+
+  it("shows a mark delivered outside the tracker with its day, its note and the person's clear, and the form where the state offers the mark", () => {
+    const marked = planned("raw", {
+      state: "shipped",
+      stage: "shipped",
+      delivered: { on: "2026-10-12", note: "Shipped by the **platform** team." },
+      actual: { start: null, end: "2026-10-12", forecastEnd: null },
+      actions: [
+        { id: "adopt", label: "Adopt existing work", who: "anyone" },
+        { id: "edit", label: "Edit title and brief", who: "anyone" },
+        { id: "clear_delivered", label: "Clear the delivered mark", who: "person" },
+      ],
+    });
+    const html = renderTab(marked);
+    expect(html).toContain('data-delivered-mark="2026-10-12"');
+    expect(html.replace(/<[^>]*>/g, "")).toContain("Delivered outside the tracker · Oct 12, 2026");
+    expect(html).toContain("<strong>platform</strong>");
+    expect(html).toContain('data-plan-action="clear_delivered"');
+    expect(html).not.toContain("data-plan-delivered-on");
+    // The status line says it too, in the header, not only the tab.
+    const sentence = /data-status-sentence="">(.*?)<\/p>/.exec(render(ideaDetail(marked.idea)))?.[1] ?? "";
+    expect(sentence.replace(/<[^>]*>/g, "")).toContain("Delivered outside the tracker · Oct 12, 2026");
+    // Not offered the clear: the mark is shown, the button is not.
+    expect(renderTab(planned("raw", { ...marked.idea, actions: [] }))).not.toContain('data-plan-action="clear_delivered"');
+    const offered = renderTab(planned("shaped", { actions: [...OFFERED.shaped!, { id: "mark_delivered", label: "Mark delivered outside the tracker", who: "person" }] }));
+    expect(offered).toContain("data-plan-delivered-on");
+    expect(offered).toContain('data-plan-action="mark_delivered"');
+    expect(renderTab(planned("shaped"))).not.toContain('data-plan-section="delivered"');
+  });
 
   it("shows the lifecycle as phases, so a scheduled idea still reads as thinking, with its maturity", () => {
     const html = renderTab(planned("raw", { stage: "scheduled", maturity: "exploring", horizonId: "h1" }));

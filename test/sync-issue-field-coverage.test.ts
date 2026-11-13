@@ -166,6 +166,14 @@ describe("issue.create replicates every issues column, or says why not", () => {
     store.db.close();
   });
 
+  it("leaves the plan fields out of a task's create, so it carries what it carried before the plan layer", () => {
+    const store = armed();
+    const payload = createPayload(store);
+    const plan = Object.keys(payload).filter((key) => key.startsWith("plan"));
+    expect(plan, "a plan field null on a task travels as no key at all (PLAN_ISSUE_FIELDS)").toEqual([]);
+    store.db.close();
+  });
+
   it("maps every payload key it carries onto a real column, except blockedBy, its edges and the events it narrates", () => {
     const store = armed();
     const payload = createPayload(store);

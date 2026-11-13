@@ -56,8 +56,8 @@ function childWithWork(parent: string, done: boolean): { child: string; work: st
 }
 
 const RAW = ["edit", "ask", "decide", "explore", "shape", "drop", "reparent", "reorder"];
-const EXPLORING = ["edit", "ask", "decide", "shape", "drop", "schedule", "plan_dates", "reparent", "reorder", "adopt"];
-const SHAPED = ["edit", "ask", "decide", "unshape", "drop", "schedule", "plan_dates", "reparent", "reorder", "promote", "scaffold", "adopt"];
+const EXPLORING = ["edit", "ask", "decide", "shape", "drop", "schedule", "plan_dates", "reparent", "reorder", "adopt", "mark_delivered"];
+const SHAPED = ["edit", "ask", "decide", "unshape", "drop", "schedule", "plan_dates", "reparent", "reorder", "promote", "scaffold", "adopt", "mark_delivered"];
 
 describe("a parent's own state is its own; its sub-ideas' work is a rollup", () => {
   it("keeps a raw parent raw while a sub-idea's work is underway: never schedulable, still refinable", () => {

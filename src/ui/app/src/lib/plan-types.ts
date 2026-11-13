@@ -86,6 +86,8 @@ export interface IdeaData {
   actual: ActualWindow;
   late: boolean;
   notStarted: boolean;
+  /** The person's mark that it was delivered outside the tracker: the day (its actual end) and the note. */
+  delivered: { on: string; note: string | null } | null;
   childIds: string[];
   openQuestions: number;
   /** A shaped plan that no longer passes the shaped gate: what it lacks. Scaffold and Promote wait for it. */

@@ -1334,7 +1334,7 @@ export class PlanStore {
       if (delivery !== undefined) {
         columns.plan_delivered_on = deliveredOn;
         // The note goes with the mark: written with it, and emptied when the mark is cleared or given none.
-        const note = delivery?.note?.trim() || "";
+        const note = typeof delivery?.note === "string" ? delivery.note.trim() : "";
         if (note !== "" || this.documentBody(row.id, DELIVERED_NOTE_KEY)) this.store.putDocument(row.id, DELIVERED_NOTE_KEY, note, { author: actor }, { plan: true });
       }
       this.write(row.id, columns, actor, "idea_updated", { fields: Object.keys(columns) });

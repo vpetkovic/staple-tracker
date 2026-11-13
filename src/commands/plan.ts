@@ -96,7 +96,9 @@ function printDetail(detail: IdeaDetail): void {
   console.log(`${idea.identifier ?? `idea ${idea.id}`} · ${idea.title}`);
   console.log(`state ${idea.state} · stage ${idea.stage} · maturity ${idea.maturity} · horizon ${detail.horizon?.name ?? "unscheduled"}${detail.parent ? ` · part of ${detail.parent.identifier ?? detail.parent.title}` : ""}`);
   console.log(`planned ${idea.planned.start ?? "—"} → ${idea.planned.target ?? "—"}${idea.baseline ? ` · baseline ${idea.baseline.start ?? "—"} → ${idea.baseline.target ?? "—"}` : ""}`);
-  if (idea.linkCount > 0) {
+  if (idea.delivered) {
+    console.log(`delivered outside the tracker ${idea.delivered.on}${idea.late ? " · late" : ""}${idea.delivered.note ? ` · ${idea.delivered.note.split("\n")[0]}` : ""}`);
+  } else if (idea.linkCount > 0) {
     console.log(`actual ${idea.actual.start ?? "—"} → ${idea.actual.end ?? (idea.actual.forecastEnd ? `~${idea.actual.forecastEnd}` : "open")} · ${Math.round((idea.progress ?? 0) * 100)}%${idea.late ? " · late" : ""}`);
   } else if (idea.notStarted) {
     console.log("not started: its planned start has passed and nothing is linked");
@@ -175,6 +177,9 @@ export function runIdeaCommand(rest: string[]): void {
       notes: { type: "string" },
       preview: { type: "boolean" },
       confirm: { type: "string" },
+      delivered: { type: "string" },
+      note: { type: "string" },
+      undelivered: { type: "boolean" },
     },
   });
   const [sub = "ls", first, ...others] = positionals;
@@ -224,6 +229,8 @@ export function runIdeaCommand(rest: string[]): void {
       return show(need(first, "an idea reference"));
     case "set": {
       const ref = need(first, "an idea reference");
+      if (values.delivered !== undefined && values.undelivered) throw new StapleError("validation", "staple idea set takes --delivered D or --undelivered, not both.");
+      if (values.note !== undefined && values.delivered === undefined) throw new StapleError("validation", "--note goes with --delivered D: it is the note kept with the mark.");
       plan.update(
         ref,
         {
@@ -235,6 +242,7 @@ export function runIdeaCommand(rest: string[]): void {
           plannedStart: clearable(values.start),
           plannedTarget: clearable(values.target),
           before: values.before === undefined ? undefined : values.before === "end" ? null : values.before,
+          delivered: values.undelivered ? null : values.delivered === undefined ? undefined : { on: values.delivered, note: values.note ?? null },
         },
         actor,
         options,

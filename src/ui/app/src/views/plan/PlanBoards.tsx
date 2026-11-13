@@ -380,7 +380,7 @@ export function DeliveryChips({ idea }: { idea: IdeaData }) {
   if (isShipped(idea)) {
     return (
       <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-caption">
-        <ShippedMark on={idea.actual.end} />
+        <ShippedMark on={idea.actual.end} outside={idea.delivered !== null} />
         {idea.linkCount > 0 ? <span className="text-text-tertiary">{idea.linkCount} linked</span> : null}
       </div>
     );
@@ -418,7 +418,7 @@ export function HorizonChip({ label }: { label: string }) {
 }
 
 function StatusDot({ idea }: { idea: IdeaData }) {
-  if (isShipped(idea)) return <ShippedMark on={idea.actual.end} className="text-caption" />;
+  if (isShipped(idea)) return <ShippedMark on={idea.actual.end} outside={idea.delivered !== null} className="text-caption" />;
   if (idea.late) return <Chip tone="red">late</Chip>;
   if (idea.notStarted) return <Chip tone="amber">not started</Chip>;
   if (isStarted(idea)) return <Chip tone="blue">{idea.stage}</Chip>;

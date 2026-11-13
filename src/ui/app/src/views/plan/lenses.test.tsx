@@ -36,6 +36,7 @@ function idea(id: string, extra: Partial<IdeaData> = {}): IdeaData {
     actual: { start: null, end: null, forecastEnd: null },
     late: false,
     notStarted: false,
+    delivered: null,
     childIds: [],
     openQuestions: 0,
     planIncomplete: [],
@@ -160,6 +161,12 @@ describe("the Horizons lens is delivery", () => {
     const board = renderToStaticMarkup(<HorizonsBoard plan={plan([shipped, started])} write={async () => true} onOpen={() => {}} selected={null} />);
     expect(board).toMatch(/data-plan-card="shipped"[^>]*data-plan-card-shipped=""/);
     expect(board).not.toMatch(/data-plan-card="started"[^>]*data-plan-card-shipped/);
+  });
+
+  it("captions a card delivered outside the tracker, and only that card", () => {
+    const delivered = { ...shipped, promoted: false, identifier: null, linkCount: 0, delivered: { on: "2026-10-03", note: null }, actual: { start: null, end: "2026-10-03", forecastEnd: null } };
+    expect(text(renderToStaticMarkup(<DeliveryChips idea={delivered} />))).toContain("Shipped Oct 3 outside the tracker");
+    expect(renderToStaticMarkup(<DeliveryChips idea={shipped} />)).not.toContain("data-shipped-outside");
   });
 
   it("heads a horizon with its progress, ✓ n shipped, late and not started, all as the server counts them, and Queue and its run setting", () => {

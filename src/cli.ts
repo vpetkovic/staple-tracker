@@ -1138,8 +1138,9 @@ The plan (experimental; features.planning defaults off)
               file attached; prints what it kept in Context instead of its section
   idea set <ref> [--title T] [--brief T]
               the agent's edits; with --person also --maturity raw|exploring|shaped|dropped,
-              --horizon H|none, --parent REF|none, --start D|none, --target D|none and
-              --before REF|end
+              --horizon H|none, --parent REF|none, --start D|none, --target D|none,
+              --before REF|end, and --delivered D [--note T] (it was delivered outside the
+              tracker on day D: it reads shipped with no ticket) or --undelivered
   idea promote <ref>                    the idea becomes an epic on the same record and takes
               its ticket number; only a shaped idea offers it
   idea scaffold <ref> [--confirm FP]   without --confirm, the preview: the epic and every task it
