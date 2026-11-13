@@ -25,6 +25,8 @@ export interface RecordSize {
   rows: number;
   /** It has at least one sub-record that is not dropped. */
   liveSubRecords: boolean;
+  /** The person marked it delivered outside the tracker. */
+  delivered?: boolean;
 }
 
 export interface OwnUnits {
@@ -42,10 +44,14 @@ export interface Units {
   total: number;
 }
 
-/** A record's own units: its tickets' leaves, else none for an umbrella, else its rows as planned, else unsized. */
+/**
+ * A record's own units: its tickets' leaves, else none for an umbrella, else, delivered outside the
+ * tracker, its rows (at least one) all done, else its rows as planned, else unsized.
+ */
 export function ownUnits(size: RecordSize): OwnUnits {
   if (size.work !== null) return { done: size.work.done, open: size.work.open, planned: 0, unsized: false };
   if (isUmbrella(size)) return { done: 0, open: 0, planned: 0, unsized: false };
+  if (size.delivered) return { done: Math.max(size.rows, 1), open: 0, planned: 0, unsized: false };
   if (size.rows > 0) return { done: 0, open: 0, planned: size.rows, unsized: false };
   return { done: 0, open: 0, planned: 0, unsized: true };
 }
@@ -103,11 +109,16 @@ export interface RecordCounts {
 /** One non-dropped record a horizon carries, as the horizon's accounting reads it. */
 export interface ScheduledRecord {
   state: IdeaState;
-  /** Its own units; own work counts among the members' ticket leaves, so only its planned units add here. */
+  /**
+   * Its own units; own work counts among the members' ticket leaves, so only its planned units
+   * add here, and its done ones when it was delivered outside the tracker (no ticket counts those).
+   */
   own: OwnUnits;
   liveSubRecords: boolean;
   /** It keeps the horizon from shipping (`holdsHorizon`). */
   holds: boolean;
+  /** The person marked it delivered outside the tracker: its done units are a third source. */
+  delivered?: boolean;
 }
 
 export interface HorizonAccounting {
@@ -119,6 +130,8 @@ export interface HorizonAccounting {
   percent: number | null;
   /** How many of its records keep it from shipping. */
   held: number;
+  /** Done units of records delivered outside the tracker: counted by no member's leaf. */
+  deliveredUnits: number;
   /** Something is counted, all of it is done and nothing holds it: what derives its milestone done. */
   complete: boolean;
 }
@@ -130,11 +143,14 @@ export interface HorizonAccounting {
  */
 export function horizonAccounting(tickets: Pick<MilestoneProgress, "countable" | "counts">, records: readonly ScheduledRecord[]): HorizonAccounting {
   let planned = 0;
+  let delivered = 0;
   let unsizedCount = 0;
   let held = 0;
   const counts: RecordCounts = { leaves: 0, shipped: 0, started: 0, shaped: 0, exploring: 0, raw: 0, parentCount: 0 };
   for (const record of records) {
     planned += record.own.planned;
+    // Delivered outside the tracker: done units no member's leaf counts.
+    if (record.delivered) delivered += record.own.done;
     if (record.own.unsized) unsizedCount += 1;
     if (record.holds) held += 1;
     if (record.liveSubRecords) counts.parentCount += 1;
@@ -143,8 +159,8 @@ export function horizonAccounting(tickets: Pick<MilestoneProgress, "countable" |
       counts.leaves += 1;
     }
   }
-  const done = tickets.counts.done;
-  const counted = units(done, tickets.countable - done, planned);
+  const done = tickets.counts.done + delivered;
+  const counted = units(done, tickets.countable - tickets.counts.done, planned);
   return {
     units: counted,
     unsizedCount,
@@ -152,6 +168,7 @@ export function horizonAccounting(tickets: Pick<MilestoneProgress, "countable" |
     progress: unitProgress(counted),
     percent: unitPercent(counted),
     held,
+    deliveredUnits: delivered,
     complete: counted.total > 0 && counted.done === counted.total && held === 0,
   };
 }
@@ -160,11 +177,12 @@ export function horizonAccounting(tickets: Pick<MilestoneProgress, "countable" |
  * The milestone view's progress for a horizon: the same units, with the planned ones in the
  * denominator and the unsized records named. Complete only when its milestone would derive done.
  */
-export function withPlannedUnits(progress: MilestoneProgress, accounting: Pick<HorizonAccounting, "units" | "unsizedCount" | "percent" | "complete">): MilestoneProgress {
+export function withPlannedUnits(progress: MilestoneProgress, accounting: Pick<HorizonAccounting, "units" | "unsizedCount" | "percent" | "complete" | "deliveredUnits">): MilestoneProgress {
   return {
     ...progress,
     planned: accounting.units.planned,
     unsized: accounting.unsizedCount,
+    delivered: accounting.deliveredUnits,
     percent: accounting.percent,
     complete: accounting.complete,
   };

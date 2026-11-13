@@ -62,6 +62,7 @@ const EXCLUDED: Record<string, string> = {
   plan_baseline_target: "as plan_maturity",
   plan_rank: "as plan_maturity",
   plan_run_mode: "null at create; the person's horizon setting journals it (test/cloud-plan-sync.test.ts)",
+  plan_delivered_on: "null at create; the person's delivered-outside-the-tracker mark journals it (test/cloud-plan-sync.test.ts)",
 };
 
 function armed(): WorkspaceStore {
@@ -162,6 +163,14 @@ describe("issue.create replicates every issues column, or says why not", () => {
     // `blockedBy` is not an issues column; it rides inside the create so a
     // receiver never sees an issue whose declared blockers have not arrived.
     expect(Array.isArray(payload.blockedBy)).toBe(true);
+    store.db.close();
+  });
+
+  it("leaves the plan fields out of a task's create, so it carries what it carried before the plan layer", () => {
+    const store = armed();
+    const payload = createPayload(store);
+    const plan = Object.keys(payload).filter((key) => key.startsWith("plan"));
+    expect(plan, "a plan field null on a task travels as no key at all (PLAN_ISSUE_FIELDS)").toEqual([]);
     store.db.close();
   });
 

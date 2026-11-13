@@ -22,7 +22,7 @@ import { useSession } from "@/lib/session";
 import { useResource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
 import { Chip, Progress } from "@/views/plan/PlanBoards";
-import { ShippedMark } from "../ShippedMark";
+import { DeliveredMark, ShippedMark } from "../ShippedMark";
 import { dayLabel, descendantsOf } from "@/views/plan/plan-model";
 import { offers } from "../plain-actions";
 import { STATE_WORDS, onScaffoldRequest, planRecordOf, usePlanWrite, type PlanWrite } from "../plan-record";
@@ -60,6 +60,7 @@ export function PlanTab({ detail, workspace, onAuthError, refresh }: TabProps) {
     <div className="space-y-6" data-plan-tab={record.idea.id} data-plan-state={record.idea.state}>
       {refusal ? <GuardRefusal refusal={refusal} /> : null}
       <Stage record={record} />
+      <Delivered record={record} write={write} />
       <Completeness record={record} />
       {record.scaffold ? <ScaffoldSection preview={record.scaffold} open={scaffoldOpen} onToggle={() => setScaffoldOpen((open) => !open)} onConfirm={(fingerprint) => void scaffold(fingerprint)} busy={busy} /> : null}
       <Fields record={record} plan={plan} write={write} />
@@ -103,8 +104,51 @@ function Stage({ record }: { record: IdeaDetailData }) {
       <div className="mt-2 flex flex-wrap gap-1.5 text-caption">
         {idea.late ? <Chip tone="red">late</Chip> : null}
         {idea.notStarted ? <Chip tone="amber">not started</Chip> : null}
-        {idea.state === "shipped" ? <ShippedMark on={idea.actual.end} withYear /> : null}
+        {idea.state === "shipped" && !idea.delivered ? <ShippedMark on={idea.actual.end} withYear /> : null}
       </div>
+    </Section>
+  );
+}
+
+/**
+ * Delivered outside the tracker: the person's mark, its day and note, and the person's button to
+ * clear it; or, where the state offers it, the form that marks it. The page is the person.
+ */
+function Delivered({ record, write }: { record: IdeaDetailData; write: PlanWrite }) {
+  const { idea } = record;
+  const today = new Date().toISOString().slice(0, 10);
+  const [on, setOn] = useState(today);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const run = async (delivered: { on: string; note: string } | null) => {
+    setBusy(true);
+    await write("update", { ref: idea.id, delivered });
+    setBusy(false);
+  };
+  if (idea.delivered) {
+    return (
+      <Section label="Delivered outside the tracker" testId="delivered">
+        <DeliveredMark on={idea.delivered.on} className="text-label" />
+        {idea.delivered.note ? <Markdown text={idea.delivered.note} className="staple-detail-prose mt-2 text-body" /> : null}
+        {offers(idea, "clear_delivered") ? (
+          <Button variant="outline" size="sm" className="mt-2" disabled={busy} onClick={() => void run(null)} data-plan-action="clear_delivered">
+            Clear the delivered mark
+          </Button>
+        ) : null}
+      </Section>
+    );
+  }
+  if (!offers(idea, "mark_delivered")) return null;
+  return (
+    <Section label="Delivered outside the tracker" testId="delivered">
+      <p className="m-0 text-label text-text-secondary">Work that shipped before or outside the tracker: it reads shipped, with no ticket.</p>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <input type="date" aria-label="Delivered on" className="h-9 rounded-md border bg-field px-2" value={on} max={today} onChange={(event) => setOn(event.target.value)} data-plan-delivered-on />
+        <Button size="sm" disabled={busy || on === ""} onClick={() => void run({ on, note })} data-plan-action="mark_delivered">
+          Mark delivered
+        </Button>
+      </div>
+      <Textarea className="mt-2 min-h-16" placeholder="A note: where and how it was delivered (optional)" value={note} onChange={(event) => setNote(event.target.value)} data-plan-delivered-note />
     </Section>
   );
 }

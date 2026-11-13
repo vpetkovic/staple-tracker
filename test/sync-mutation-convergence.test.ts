@@ -381,6 +381,17 @@ const SCENARIOS: readonly Scenario[] = [
     run: (w) =>
       void w.a.store.plan().update(w.ids["Child idea"]!, { maturity: "shaped", plan: READY_PLAN, plannedTarget: "2026-11-20", parent: null, before: w.ids["Idea"]!, brief: "more" }, "alice", { person: { via: "test" } }),
   },
+  {
+    method: "PlanStore.update",
+    name: "mark an idea delivered outside the tracker, with its note",
+    prep: (w) => void (w.ids["Delivered"] = w.a.store.plan().capture({ title: "Delivered", maturity: "shaped", plan: READY_PLAN }, "alice", { person: { via: "test" } }).id),
+    run: (w) => void w.a.store.plan().update(w.ids["Delivered"]!, { delivered: { on: "2026-10-01", note: "Shipped by hand." } }, "alice", { person: { via: "test" } }),
+  },
+  {
+    method: "PlanStore.update",
+    name: "clear the delivered mark, emptying its note",
+    run: (w) => void w.a.store.plan().update(w.ids["Delivered"]!, { delivered: null }, "alice", { person: { via: "test" } }),
+  },
   { method: "PlanStore.addQuestion", name: "ask on an idea", run: (w) => void w.a.store.plan().addQuestion(w.ids["Idea"]!, "Which units?", "alice") },
   { method: "PlanStore.resolveQuestion", name: "resolve a question", run: (w) => void w.a.store.plan().resolveQuestion(w.ids["Idea"]!, 1, "alice") },
   { method: "PlanStore.deferQuestion", name: "defer a question", prep: (w) => void w.a.store.plan().addQuestion(w.ids["Idea"]!, "Later?", "alice"), run: (w) => void w.a.store.plan().deferQuestion(w.ids["Idea"]!, 2, "alice") },

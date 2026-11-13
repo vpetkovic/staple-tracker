@@ -20,7 +20,7 @@ import type { IssueActionsController } from "./IssueActions";
 import { cn } from "./parts/cn";
 import { RunSettingDialog, runSettingLabel } from "@/views/plan/RunSetting";
 import { horizonActionItems, planActionItems, planPrimary, type PlanItem } from "./plain-actions";
-import { ShippedCheck, ShippedMark } from "./ShippedMark";
+import { DeliveredMark, ShippedCheck, ShippedMark } from "./ShippedMark";
 import { STATE_WORDS, requestScaffold } from "./plan-record";
 import { openDetailTab } from "./tabs/registry";
 
@@ -53,7 +53,7 @@ export function IdeaStatusLine({ record, className, children }: { record: IdeaDe
         {idea.planIncomplete.length > 0 ? " · plan incomplete" : ""}
       </span>
       <p className="m-0 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-body text-text-secondary" data-status-sentence="">
-        {idea.state === "shipped" ? <ShippedMark on={idea.actual.end} withYear /> : <span>{sentence(record)}</span>}
+        {idea.state === "shipped" ? idea.delivered ? <DeliveredMark on={idea.delivered.on} /> : <ShippedMark on={idea.actual.end} withYear /> : <span>{sentence(record)}</span>}
         {idea.late ? <Chip tone="red">late</Chip> : null}
         {idea.notStarted ? <Chip tone="amber">not started</Chip> : null}
       </p>

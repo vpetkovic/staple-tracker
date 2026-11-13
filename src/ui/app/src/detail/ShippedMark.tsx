@@ -25,13 +25,31 @@ export function ShippedCheck({ className, label = "Shipped" }: { className?: str
   );
 }
 
-/** `✓ Shipped Oct 3` (or `✓ 4 shipped` for a count): the check and the words, never colour alone. */
-export function ShippedMark({ on, count, withYear = false, className }: { on?: string | null; count?: number; withYear?: boolean; className?: string }) {
+/**
+ * `✓ Shipped Oct 3` (or `✓ 4 shipped` for a count): the check and the words, never colour alone.
+ * A record delivered outside the tracker carries the caption that says so.
+ */
+export function ShippedMark({ on, count, withYear = false, outside = false, className }: { on?: string | null; count?: number; withYear?: boolean; outside?: boolean; className?: string }) {
   const words = count !== undefined ? `${count} shipped` : on ? `Shipped ${day(on, withYear)}` : "Shipped";
   return (
     <span data-shipped-mark className={cn("inline-flex shrink-0 items-center gap-1 font-medium text-foreground", className)}>
       <ShippedCheck label="" className="size-3.5 [&_svg]:size-2.5" />
       <span>{words}</span>
+      {outside ? (
+        <span className="font-normal text-text-tertiary" data-shipped-outside>
+          outside the tracker
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/** `✓ Delivered outside the tracker · Oct 3, 2026`: the drawer's words for the person's mark. */
+export function DeliveredMark({ on, className }: { on: string; className?: string }) {
+  return (
+    <span data-shipped-mark data-delivered-mark={on} className={cn("inline-flex shrink-0 items-center gap-1 font-medium text-foreground", className)}>
+      <ShippedCheck label="" className="size-3.5 [&_svg]:size-2.5" />
+      <span>Delivered outside the tracker · {day(on, true)}</span>
     </span>
   );
 }

@@ -28,6 +28,7 @@ import { moveIdentifier } from "./identifier-moves.js";
 import { MILESTONE_KIND, MILESTONE_MEMBERSHIP, rankBetween, renumberedRanks } from "./milestones.js";
 import {
   DEFAULT_HORIZONS,
+  DELIVERED_NOTE_KEY,
   aKind,
   IDEA_KIND,
   PLAN_KINDS_MISSING_MESSAGE,
@@ -37,10 +38,12 @@ import {
   displayRef,
   draftIdentifier,
   forecastEnd,
+  isDelivered,
   isDraftIdentifier,
   isLate,
   isNotStarted,
   isPlanKind,
+  parseDeliveredOn,
   parseMaturity,
   parsePlanDate,
   readMaturity,
@@ -217,6 +220,12 @@ export interface IdeaView {
   late: boolean;
   /** Nothing started yet and the planned start has passed. */
   notStarted: boolean;
+  /**
+   * The person's mark that it was delivered outside the tracker: the day, which is its actual
+   * end, and the note kept with it (the `delivered-note` document). A marked record reads shipped
+   * with no ticket. Null while it is not marked.
+   */
+  delivered: { on: string; note: string | null } | null;
   childIds: string[];
   /** Questions not yet resolved, from the `questions` document. */
   openQuestions: number;
@@ -414,6 +423,11 @@ export interface IdeaPatch {
   plannedTarget?: string | null;
   /** Place this record immediately before that one in the plan order; null moves it to the end. */
   before?: string | null;
+  /**
+   * The person's mark that it was delivered outside the tracker: the day (required) and an
+   * optional note; null clears the mark. A record not marked is cleared as no change.
+   */
+  delivered?: { on: string; note?: string | null } | null;
   /** Plan sections to replace, each whole; a section left out is left alone. The edit action. */
   plan?: PlanPatch;
   /**
@@ -450,6 +464,7 @@ interface PlanRow {
   plan_baseline_target: string | null;
   plan_rank: number | null;
   plan_run_mode: string | null;
+  plan_delivered_on: string | null;
 }
 
 interface HorizonRow extends PlanRow {
@@ -470,7 +485,7 @@ interface WorkRow {
 
 const RANK_STEP = 1024;
 const PLAN_COLUMNS = `id, identifier, title, description, kind, status, parent_id, depth, created_at, updated_at,
-  plan_maturity, plan_horizon_id, plan_start, plan_target, plan_baseline_start, plan_baseline_target, plan_rank, plan_run_mode`;
+  plan_maturity, plan_horizon_id, plan_start, plan_target, plan_baseline_start, plan_baseline_target, plan_rank, plan_run_mode, plan_delivered_on`;
 
 /** Column name to the payload field the issue entity carries it as. */
 const FIELD_OF: Record<string, string> = {
@@ -482,6 +497,7 @@ const FIELD_OF: Record<string, string> = {
   plan_baseline_target: "planBaselineTarget",
   plan_rank: "planRank",
   plan_run_mode: "planRunMode",
+  plan_delivered_on: "planDeliveredOn",
   parent_id: "parentId",
 };
 
@@ -565,6 +581,8 @@ const STEERED_AS: Partial<Record<IdeaAction, SteeringWrite>> = {
   reorder: "horizon",
   reparent: "parent",
   reset_baseline: "baseline",
+  mark_delivered: "delivery",
+  clear_delivered: "delivery",
 };
 
 export class PlanStore {
@@ -606,7 +624,7 @@ export class PlanStore {
    * for anyone, and the second only once the action itself is possible.
    */
   private allowIdea(row: PlanRow, action: IdeaAction, options: PlanWriteOptions, state: IdeaState = this.stateOf(row.id)): void {
-    assertIdeaAction(displayRef(row), state, action, row.kind !== IDEA_KIND, readMaturity(row.plan_maturity));
+    assertIdeaAction(displayRef(row), state, action, row.kind !== IDEA_KIND, readMaturity(row.plan_maturity), isDelivered(row.plan_delivered_on));
     if (IDEA_ACTIONS[action].who === "person") this.steer(STEERED_AS[action] ?? "maturity", displayRef(row), options);
   }
 
@@ -635,6 +653,13 @@ export class PlanStore {
       throw new StapleError(
         "validation",
         `The task breakdown of ${displayRef(row)} is structured rows, not a document. Edit it with update_idea (plan.breakdown), \`staple idea task\`, or the Plan tab.`,
+        { key },
+      );
+    }
+    if (key === DELIVERED_NOTE_KEY) {
+      throw new StapleError(
+        "validation",
+        `The delivered note of ${displayRef(row)} is written with the mark that it was delivered outside the tracker, which is the person's (the Plan view, or staple idea set --delivered YYYY-MM-DD --note T --person).`,
         { key },
       );
     }
@@ -1143,6 +1168,7 @@ export class PlanStore {
         links: ownWork.length,
         resolvedLinks: own.resolved,
         missingLinks: ownWork.length - ownPresent.length,
+        deliveredOn: row.plan_delivered_on,
       });
       records.set(row.id, { promoted, ownLinks, ownWork, ownPresent, own, maturity, horizonId, stage, state: ideaState({ stage, maturity }) });
     }
@@ -1154,6 +1180,7 @@ export class PlanStore {
         work: facts.ownPresent.length > 0 ? { done: facts.own.done, open: facts.own.leaves - facts.own.done } : null,
         rows: breakdowns.get(row.id)?.length ?? 0,
         liveSubRecords,
+        delivered: isDelivered(row.plan_delivered_on),
       };
       sizes.set(row.id, { size, own: ownUnits(size) });
     }
@@ -1182,7 +1209,8 @@ export class PlanStore {
       carrier.set(row.id, horizonId);
       const { size, own } = sizes.get(row.id)!;
       const list = carried.get(horizonId) ?? [];
-      list.push({ state: facts.state, own, liveSubRecords: size.liveSubRecords, holds: holdsHorizon(facts.stage, size) });
+      // Delivered outside the tracker with no own work: its done units are counted by no member's leaf.
+      list.push({ state: facts.state, own, liveSubRecords: size.liveSubRecords, holds: holdsHorizon(facts.stage, size), delivered: size.delivered === true && size.work === null });
       carried.set(horizonId, list);
     }
     const stepInputs = this.stepInputsOf(rows, byId, records, sizes, carrier, breakdowns);
@@ -1316,22 +1344,37 @@ export class PlanStore {
       const own = records.get(id)!.stage === "dropped" ? 0 : sizes.get(id)!.own.planned;
       return own + (childIds.get(id) ?? []).reduce((sum, child) => sum + rolledPlanned(child, seen), 0);
     };
+    /** Done units of records delivered outside the tracker with no own work, itself and beneath it: no ticket leaf counts those. */
+    const rolledDelivered = (id: string, seen = new Set<string>()): number => {
+      if (seen.has(id)) return 0;
+      seen.add(id);
+      const { size, own } = sizes.get(id)!;
+      const ownDone = records.get(id)!.stage !== "dropped" && size.delivered === true && size.work === null ? own.done : 0;
+      return ownDone + (childIds.get(id) ?? []).reduce((sum, child) => sum + rolledDelivered(child, seen), 0);
+    };
     const steps = this.stepsOn(facts, today);
     return rows.map((row) => {
       const { promoted, ownLinks, ownWork, maturity, horizonId, stage, state } = records.get(row.id)!;
       const sections = sectionsOf.get(row.id)!;
       const questions = parseQuestions(this.documentBody(row.id, QUESTIONS_KEY));
+      const delivered = isDelivered(row.plan_delivered_on) ? { on: row.plan_delivered_on, note: this.documentBody(row.id, DELIVERED_NOTE_KEY) || null } : null;
       // The rollup adds its sub-records' work: what the record displays, never its state.
       const workIds = [...rolledWork(row.id)];
       const present = workIds.filter((id) => work.rows.has(id));
       const measured = this.measure(present, work, categoryOf);
-      const rolled = units(measured.done, measured.leaves - measured.done, rolledPlanned(row.id));
+      const rolled = units(measured.done + rolledDelivered(row.id), measured.leaves - measured.done, rolledPlanned(row.id));
       const rolledShipped = present.length > 0 && measured.resolved >= present.length;
-      const actual: ActualWindow = {
-        start: measured.start,
-        end: measured.end,
-        forecastEnd: forecastEnd({ start: measured.start, end: measured.end, progress: measured.progress ?? 0, today }),
-      };
+      // Delivered outside the tracker with no work present: the delivery day is its actual end,
+      // and nothing is forecast. Once work is linked, the window is that work's, as for any
+      // record, ending no earlier than the delivery day once it has all landed.
+      const deliveredAlone = delivered !== null && present.length === 0;
+      const actual: ActualWindow = deliveredAlone
+        ? { start: null, end: delivered.on, forecastEnd: null }
+        : {
+            start: measured.start,
+            end: delivered !== null && measured.end !== null && delivered.on > measured.end ? delivered.on : measured.end,
+            forecastEnd: forecastEnd({ start: measured.start, end: measured.end, progress: measured.progress ?? 0, today }),
+          };
       const started = workIds.length > 0;
       const hasBaseline = ownWork.length > 0 && (row.plan_baseline_start !== null || row.plan_baseline_target !== null);
       // An umbrella: a sub-idea that is not dropped stands in for its own rows.
@@ -1365,8 +1408,8 @@ export class PlanStore {
         resolvedLinks: measured.resolved,
         units: rolled,
         unsized: sizes.get(row.id)!.own.unsized,
-        progress: started ? (unitProgress(rolled) ?? measured.progress) : null,
-        percent: started ? unitPercent(rolled) : null,
+        progress: started || deliveredAlone ? (unitProgress(rolled) ?? measured.progress) : null,
+        percent: started || deliveredAlone ? unitPercent(rolled) : null,
         actual,
         late: isLate({
           plannedTarget: row.plan_target,
@@ -1375,8 +1418,11 @@ export class PlanStore {
           links: workIds.length,
           open: !rolledShipped && stage !== "dropped",
           today,
+          // With work present, late reads that work's window, which the delivery day already bounds.
+          deliveredOn: deliveredAlone ? delivered.on : null,
         }),
-        notStarted: isNotStarted({ plannedStart: row.plan_start, links: workIds.length, dropped: maturity === "dropped", today }),
+        notStarted: isNotStarted({ plannedStart: row.plan_start, links: workIds.length, dropped: maturity === "dropped", today, deliveredOn: row.plan_delivered_on }),
+        delivered,
         childIds: childIds.get(row.id) ?? [],
         openQuestions: questions.filter((q) => !q.resolved).length,
         completeness: completeness(sections, questions, parseDecisions(this.documentBody(row.id, DECISIONS_KEY))),
@@ -1386,6 +1432,7 @@ export class PlanStore {
           state,
           promoted,
           maturity,
+          delivered: delivered !== null,
           ownLinks: ownLinks.length,
           gate: maturity === "raw" || maturity === "exploring" ? () => this.gateOf(row.id, undefined, subIdea) : () => [],
           scaffolded,
@@ -1650,6 +1697,11 @@ export class PlanStore {
     if (patch.parent !== undefined) allow("reparent");
     if (patch.plannedStart !== undefined || patch.plannedTarget !== undefined) allow("plan_dates");
     if (patch.before !== undefined) allow("reorder");
+    // Clearing a mark the record does not carry is no change, as a maturity it already has is.
+    const marked = isDelivered(row.plan_delivered_on);
+    const delivery = patch.delivered === undefined || (patch.delivered === null && !marked) ? undefined : patch.delivered;
+    if (delivery !== undefined) allow(delivery === null ? "clear_delivered" : "mark_delivered");
+    const deliveredOn = delivery ? parseDeliveredOn(delivery.on, this.today()) : null;
     this.store.journaled(() => {
       if (patch.title !== undefined) this.store.updateIssue(row.id, { title: oneLine(patch.title, "An idea's title") }, actor);
       if (patch.brief !== undefined) this.store.putDocument(row.id, BRIEF_KEY, patch.brief ?? "", { author: actor }, { plan: true });
@@ -1667,6 +1719,12 @@ export class PlanStore {
         columns.plan_target = window.target;
       }
       if (patch.before !== undefined) columns.plan_rank = this.rankBefore("records", row.id, patch.before, actor);
+      if (delivery !== undefined) {
+        columns.plan_delivered_on = deliveredOn;
+        // The note goes with the mark: written with it, and emptied when the mark is cleared or given none.
+        const note = typeof delivery?.note === "string" ? delivery.note.trim() : "";
+        if (note !== "" || this.documentBody(row.id, DELIVERED_NOTE_KEY)) this.store.putDocument(row.id, DELIVERED_NOTE_KEY, note, { author: actor }, { plan: true });
+      }
       this.write(row.id, columns, actor, "idea_updated", { fields: Object.keys(columns) });
       if (patch.parent !== undefined) this.reparent(row, patch.parent, actor);
       this.keepBaselines(row.id, actor);
@@ -2305,6 +2363,8 @@ function ideaLifecycle(input: {
   promoted: boolean;
   /** A started record still exploring offers Mark shaped on top of its row. */
   maturity: string;
+  /** Marked delivered outside the tracker: its edits and clearing the mark on top of its row. */
+  delivered: boolean;
   ownLinks: number;
   /** What the shaped gate still needs, read only when the state offers shaping. */
   gate: () => string[];
@@ -2314,7 +2374,7 @@ function ideaLifecycle(input: {
   planIncomplete: readonly string[];
 }): { state: IdeaState; actions: OfferedAction[] } {
   const actions: OfferedAction[] = [];
-  for (const id of ideaOffered(input.state, input.promoted, input.maturity)) {
+  for (const id of ideaOffered(input.state, input.promoted, input.maturity, input.delivered)) {
     if (id === "open_epic" && !input.promoted) continue;
     // A started record that was promoted or linked some other way has nothing to scaffold into.
     if (id === "scaffold" && input.state === "started" && !input.scaffolded) continue;

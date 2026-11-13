@@ -5098,6 +5098,7 @@ export function startUiServer(options: UiOptions): UiHandle {
                 before: optional<string | null>("before"),
                 plan: optional<Record<string, unknown>>("plan") as never,
                 breakdownBase: optional<string>("breakdownBase"),
+                delivered: optional<{ on: string; note?: string | null } | null>("delivered"),
               },
               actor,
               person,

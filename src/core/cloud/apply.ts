@@ -160,6 +160,8 @@ export const ISSUE_FIELDS: Record<string, Column> = {
   planBaselineTarget: col("plan_baseline_target"),
   planRank: col("plan_rank"),
   planRunMode: col("plan_run_mode"),
+  // Delivered outside the tracker: the person's mark (migration 021, design/plan.md).
+  planDeliveredOn: col("plan_delivered_on"),
 };
 
 /**
@@ -177,6 +179,7 @@ export const PLAN_ISSUE_FIELDS: ReadonlySet<string> = new Set([
   "planBaselineTarget",
   "planRank",
   "planRunMode",
+  "planDeliveredOn",
 ]);
 
 export const COMMENT_FIELDS: Record<string, Column> = {

@@ -1433,6 +1433,8 @@ export interface MilestoneProgress {
   planned?: number;
   /** A horizon's, with planning on: its ideas with nothing to count yet. */
   unsized?: number;
+  /** A horizon's, with planning on: done work items of its ideas delivered outside the tracker, counted by no task. */
+  delivered?: number;
 }
 
 export interface MilestoneMemberRow {

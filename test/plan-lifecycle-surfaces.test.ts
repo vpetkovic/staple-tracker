@@ -187,6 +187,7 @@ const WRITES: Write[] = [
   { key: "adopt", action: () => "adopt", http: (ref, c) => ["adopt", { ref, issue: c.adoptable }], mcp: (ref, c) => ["start_idea", { ref, adopt: c.adoptable }], cli: (ref, c) => ["idea", "adopt", ref, c.adoptable] },
   { key: "unlink", action: () => "unlink", http: (ref, c) => ["unlink", { ref, issue: c.linked ?? c.adoptable }], mcp: (ref, c) => ["unlink_idea", { ref, issue: c.linked ?? c.adoptable }], cli: (ref, c) => ["idea", "unlink", ref, c.linked ?? c.adoptable] },
   { key: "reset_baseline", action: () => "reset_baseline", http: (ref) => ["reset-baseline", { ref }], mcp: null, cli: (ref) => ["idea", "reset-baseline", ref] },
+  { key: "mark_delivered", action: () => "mark_delivered", http: (ref) => ["update", { ref, delivered: { on: "2026-11-01", note: "By hand." } }], mcp: (ref) => ["update_idea", { ref, delivered_on: "2026-11-01" }], cli: (ref) => ["idea", "set", ref, "--delivered", "2026-11-01", "--note", "By hand."] },
 ];
 
 type Outcome = "ok" | "lifecycle" | "person";
@@ -371,6 +372,57 @@ describe("promoted records and parents with sub-ideas on every surface", () => {
     expect((await http("/api/plan/update", { ref: id, maturity: "shaped" })).status).toBe(200);
     expect((await mcpCall("update_idea", { ref: id, maturity: "shaped" })).isError).toBeFalsy();
     expect((await cli(true, "idea", "set", id, "--maturity", "shaped")).status).toBe(0);
+  }, 60_000);
+});
+
+describe("an idea delivered outside the tracker on every surface", () => {
+  /** A fresh shaped idea the person marked delivered outside the tracker. */
+  async function marked(): Promise<string> {
+    const { id } = await fixture("shaped");
+    const result = await http("/api/plan/update", { ref: id, delivered: { on: "2026-11-01", note: "Shipped by hand." } });
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    return id;
+  }
+
+  it("carries the shipped row with its edits and the clear, on HTTP, MCP and the CLI", async () => {
+    const id = await marked();
+    const table = ideaOffered("shipped", false, "shaped", true).filter((action) => action !== "open_epic");
+    const row = (await plan()).ideas.find((idea) => idea.id === id)! as IdeaRow & { delivered: unknown };
+    expect(row).toMatchObject({ state: "shipped", identifier: null, delivered: { on: "2026-11-01", note: "Shipped by hand." } });
+    expect(row.actions.map((action) => action.id)).toEqual(table);
+    const got = toolPayload(await mcpCall("get_idea", { ref: id })) as { idea: { state: string; actions: Offered[]; delivered: unknown } };
+    expect(got.idea.actions.map((action) => action.id)).toEqual(table);
+    expect(got.idea.delivered).toEqual({ on: "2026-11-01", note: "Shipped by hand." });
+    const shown = await cli(false, "idea", "show", id);
+    expect(shown.stdout).toContain("delivered outside the tracker 2026-11-01 · Shipped by hand.");
+    expect(shown.stdout).toContain("clear the delivered mark");
+  }, 60_000);
+
+  it("clears for the person on the page and the CLI, and refuses an agent on MCP and the CLI as the person's call", async () => {
+    for (const surface of ["http", "cli --person"] as const) {
+      const id = await marked();
+      const result = surface === "http" ? await http("/api/plan/update", { ref: id, delivered: null }) : await cli(true, "idea", "set", id, "--undelivered");
+      expect("status" in result && (result.status === 200 || result.status === 0), surface).toBe(true);
+      expect((await plan()).ideas.find((idea) => idea.id === id), surface).toMatchObject({ state: "shaped", delivered: null });
+    }
+    const id = await marked();
+    const viaMcp = await mcpCall("update_idea", { ref: id, undelivered: true });
+    expect(viaMcp.isError).toBe(true);
+    expect(JSON.stringify(viaMcp.content)).toContain("the person's call");
+    const viaCli = await cli(false, "idea", "set", id, "--undelivered");
+    expect(viaCli.status).toBe(2);
+    expect(viaCli.stderr).toContain("the person's call");
+    expect(viaCli.stderr).toContain("adopt its ticket onto the idea");
+    // An agent still edits it, asks and decides, as its row offers.
+    expect((await mcpCall("update_idea", { ref: id, title: unique("Delivered, renamed"), add_question: "Who owns it?", add_decision: "Keep it" })).isError).toBeFalsy();
+    expect((await plan()).ideas.find((idea) => idea.id === id)).toMatchObject({ state: "shipped" });
+  }, 60_000);
+
+  it("refuses the mark without a day on every surface, before writing", async () => {
+    const { id } = await fixture("shaped");
+    expect((await http("/api/plan/update", { ref: id, delivered: { note: "No day." } })).body).toMatchObject({ code: "validation" });
+    expect((await cli(true, "idea", "set", id, "--note", "No day.")).stderr).toContain("--note goes with --delivered D");
+    expect((await plan()).ideas.find((idea) => idea.id === id)).toMatchObject({ state: "shaped", delivered: null });
   }, 60_000);
 });
 

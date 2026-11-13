@@ -14,7 +14,8 @@ export const TABLES: Record<string, { readonly key: readonly string[]; readonly 
                  origin_kind, origin_id, idempotency_key, estimated_seconds, kind, project_id, gate_state, gate_owner,
                  gate_requested_by, gate_requested_at, gate_resolved_by, gate_resolved_at, gate_released, started_at,
                  blocked_transition_at, completed_at, cancelled_at, checkout_agent, checkout_at, created_at, updated_at,
-                 derived_status
+                 derived_status, plan_maturity, plan_horizon_id, plan_start, plan_target, plan_baseline_start,
+                 plan_baseline_target, plan_rank, plan_run_mode, plan_delivered_on
             FROM issues ORDER BY id`,
   },
   comments: {

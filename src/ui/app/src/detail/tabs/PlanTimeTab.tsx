@@ -81,6 +81,8 @@ function barClass(bar: Bar): string {
 }
 
 function summary(idea: IdeaData): string {
+  // Marked delivered outside the tracker with nothing linked: it landed on its delivery day.
+  if (idea.delivered && idea.linkCount === 0) return `Delivered outside the tracker ${dayLabel(idea.delivered.on)}${idea.late ? ", later than planned" : ""}.`;
   if (idea.linkCount === 0) {
     if (idea.notStarted) return "Not started: its planned start has passed and nothing is linked or promoted yet.";
     return idea.planned.start || idea.planned.target ? "Planned, not started. The actual window appears once work is linked or the idea is promoted." : "No planned window yet.";

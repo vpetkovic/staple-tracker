@@ -143,10 +143,11 @@ issue row changes shape, and the draft:
 `recordIdentifierMove` keeps the draft as an alias. An idea an earlier build numbered takes its
 draft back when planning is enabled (`draftNumberedIdeas`), and its old number still resolves.
 
-## Storage: eight columns on `issues`, three tables, no new entity
+## Storage: nine columns on `issues`, three tables, no new entity
 
-What an issue cannot already say lives in eight nullable `issues` columns added by workspace
-migration **020** (`020-plan-fields.ts`), NULL on every row outside the plan, and three tables:
+What an issue cannot already say lives in nine nullable `issues` columns, eight added by workspace
+migration **020** (`020-plan-fields.ts`) and one by **021** (`021-plan-delivered.ts`), NULL on
+every row outside the plan, and three tables:
 `plan_links` and `plan_rows` (synchronized, one field per link and per breakdown row) and
 `plan_members` (derived on each device, never sent).
 
@@ -158,6 +159,7 @@ migration **020** (`020-plan-fields.ts`), NULL on every row outside the plan, an
 | `plan_baseline_start`, `plan_baseline_target` | plan record | the window kept when it was started |
 | `plan_rank` | both | order of records, and of horizons; a ranked milestone is a horizon |
 | `plan_run_mode` | horizon | its run setting: `work`, `goal`, `epic` or NULL |
+| `plan_delivered_on` | plan record | the day the person marked it delivered outside the tracker, `YYYY-MM-DD`, or NULL (below) |
 
 A horizon's date is its milestone's `target_date`, and its goal is the milestone's acceptance
 criteria. An idea's brief, open questions, decisions and text and list plan sections are
@@ -376,21 +378,21 @@ only a person's removal cancels one.
 | state | offers |
 |---|---|
 | raw | edit, ask, decide, explore, shape, drop, reparent, reorder |
-| exploring | edit, ask, decide, shape, drop, schedule, plan dates, reparent, reorder, adopt |
-| shaped | edit, ask, decide, back to exploring, drop, schedule, plan dates, reparent, reorder, promote, scaffold, adopt |
+| exploring | edit, ask, decide, shape, drop, schedule, plan dates, reparent, reorder, adopt, mark delivered outside the tracker |
+| shaped | edit, ask, decide, back to exploring, drop, schedule, plan dates, reparent, reorder, promote, scaffold, adopt, mark delivered outside the tracker |
 | started | edit, ask, decide, schedule, plan dates, reorder, scaffold (only if it was scaffolded), adopt, unlink, reset baseline, open the epic; shape while its maturity is exploring |
-| shipped | adopt (linking more work: landed work keeps it shipped, open work reopens it), open the epic; a promoted record adds edit, ask, decide |
+| shipped | adopt (linking more work: landed work keeps it shipped, open work reopens it), open the epic; a promoted record adds edit, ask, decide; a record marked delivered outside the tracker adds edit, ask, decide and clear the mark |
 | dropped | restore |
 | horizon planned | rename, date, reorder, run setting, remove (held back while it is queued) |
 | horizon active | rename, date, reorder, queue (held back once it is queued), run setting |
 | horizon shipped | remove |
 
 So raw is never scheduled, promoted or linked to work, a started or promoted idea never offers promotion again, an
-unpromoted shipped idea offers no edits (only linking more work), and a horizon is removed only
+unpromoted shipped idea offers no edits (only linking more work) unless the person marked it delivered outside the tracker, and a horizon is removed only
 while it holds no open work and is not queued, queued only while it holds open work, and given its
 run setting until it ships. Each action also says who may take it: the steering actions (maturity
-moves, schedule, dates, order, parent, baseline, every horizon definition and the run setting) are
-the person's; the rest are anyone's. A few preconditions need data and travel with the offer as a
+moves, schedule, dates, order, parent, baseline, the delivered-outside-the-tracker mark, every
+horizon definition and the run setting) are the person's; the rest are anyone's. A few preconditions need data and travel with the offer as a
 `disabledReason`: unlinking needs a link, the epic opens once promoted.
 
 **Its own state against its rollup.** The state reads only the record's own facts: its maturity,
@@ -423,6 +425,34 @@ already has is no change and succeeds as one, in any state; out of dropped is re
 exploring is going back from shaped and exploring otherwise; to raw is going back to raw, an
 action (`back_to_raw`) that no state offers, so its refusal says so in those words.
 
+### Delivered outside the tracker
+
+Work that shipped before the tracker existed, or somewhere it does not reach, is a record the person
+marks **delivered outside the tracker**, with the day it was delivered and an optional note. It
+then reads shipped with no ticket: no placeholder chore is created, no number is taken, and it is
+never a member, queued or checked out (every guard below holds; it is still an unpromoted idea).
+
+- **The mark.** `plan_delivered_on` holds the day; the note is the record's `delivered-note`
+  document, written only with the mark (a raw document write of that key is refused, as the
+  breakdown is). The day is required, a calendar day, and not after today. Clearing the mark
+  empties the note, and clearing a record that carries none is no change, as a maturity it already
+  has is.
+- **Who and when.** `mark_delivered` is in the exploring and shaped rows: an unpromoted record with
+  no work of its own. `clear_delivered` is in no row; a marked record gets it, with edit, ask and
+  decide, from one cell on top of its row (`DELIVERED_MARKED`), the way `PROMOTED_ALWAYS` gives a
+  promoted record its edits: `ideaOffered(state, promoted, maturity, delivered)`. So a delivered
+  record's title, brief, questions and decisions are still edited (by anyone), and its schedule,
+  dates, maturity and order are not, as for any shipped record. Both actions are the person's
+  (`steeringRefusal("delivery")`), whose refusal tells an agent to adopt the ticket that landed
+  the work instead, or to tell the person.
+- **What it derives.** One rule each, in `plan.ts`: `deriveStage` reads a marked record shipped
+  whatever its maturity, unless work linked to it since is open (open work reopens it, as it
+  reopens any shipped record); while no work is present its actual window ends on the delivery
+  day, with no start and no forecast, and `isLate` is true only when that day is after the earlier
+  of its planned target and its horizon's date; once work is present the window and lateness are
+  that work's, as for any record, the window ending no earlier than the delivery day once it has
+  all landed; and `isNotStarted` is false. Its maturity stays what the person last set.
+
 **Every write on an idea's own content is its edit action.** A document under any key, a restore
 of an old revision, and adding or removing a file are refused where the idea's state offers no
 edit, on every surface: `WorkspaceStore.putDocument`, `attachFile` and `removeFile` ask the table
@@ -444,7 +474,8 @@ is, never whether it is allowed.
 An agent may capture raw ideas (title, brief, parent), edit titles, briefs and plan sections, add,
 answer and defer questions, add decisions, adopt work onto an exploring or shaped idea or unlink
 it, and promote or scaffold an idea the person has marked shaped. Maturity, horizon assignment, parent, planned dates, order, horizon
-definitions, dates and run settings, the baseline and the feature flag are the person's.
+definitions, dates and run settings, the baseline, the delivered-outside-the-tracker mark and the
+feature flag are the person's.
 
 The distinction is the one the tracker already uses for gate decisions: a write carries a
 `PersonDecision` or it does not. The store cannot tell a person from an agent and does not try;
@@ -498,12 +529,12 @@ well as on (`test/planning-feature*.test.ts`).
 
 | fact | rule |
 |---|---|
-| stage | from its own facts only: `started` when it is promoted or links work itself, `shipped` when every issue of its own work that is present is resolved, `dropped`, `scheduled` when it has a horizon, otherwise its maturity (`deriveStage`) |
+| stage | from its own facts only: `shipped` when the person marked it delivered outside the tracker and no work linked since is open, `started` when it is promoted or links work itself, `shipped` when every issue of its own work that is present is resolved, `dropped`, `scheduled` when it has a horizon, otherwise its maturity (`deriveStage`) |
 | progress | done units over all units of the record's rollup ([Accounting](#accounting)): the ticket leaves of its work (itself once promoted, its links, its sub-records'), each leaf once, cancelled leaves not counted, and the planned units of itself and every non-dropped sub-record (rows of a record with no work that is not an umbrella); null before any of that work is started |
-| actual window | the first `started_at` anywhere under that work (an epic whose own start is null reads its children's) to the last `completed_at`/`cancelled_at` once all are resolved; work nobody started draws no actual window |
+| actual window | the first `started_at` anywhere under that work (an epic whose own start is null reads its children's) to the last `completed_at`/`cancelled_at` once all are resolved; work nobody started draws no actual window. A record delivered outside the tracker with no work present ends on its delivery day with no start; with work present, its window is that work's, ending no earlier than the delivery day once it has all landed |
 | forecast end | a straight line from the days spent and the share done, while open and partly done |
-| late | the work landed, or is forecast to land, after the earlier of the planned end and the horizon's date, or that day has passed while it is open (`isLate`) |
-| not started | nothing linked or promoted and the planned start has passed (`isNotStarted`) |
+| late | the work landed, or is forecast to land, after the earlier of the planned end and the horizon's date, or that day has passed while it is open; a record delivered outside the tracker with no work present only when its delivery day is after that line; with work present, that work's window as for any record (`isLate`) |
+| not started | nothing linked or promoted, not delivered outside the tracker, and the planned start has passed (`isNotStarted`) |
 | rollups | a parent record reads its sub-records' work and planned rows for progress, and their work for dates, the forecast and late / not started, which it displays; never for its stage, state or actions |
 | units | a record's own, and a horizon's: [Accounting](#accounting) |
 | horizon shipped | its milestone's derived status is done, derived from its open and done work (cancelled work is not counted, so a horizon never derives to cancelled), and never while a record it carries that is not dropped and not an umbrella is not shipped (`heldByPlan`); the page folds a horizon on this flag alone, never on its progress |
@@ -532,8 +563,10 @@ of a fraction, so 29 of 50 reads 58 everywhere. A horizon, a record and a link c
    dropped. Its sub-records carry its size, so it has no units of its own. A parent's breakdown
    usually names its sub-ideas, and counting both would count that work twice; its rows count
    once they are tickets (rule 1);
-3. it has breakdown rows: one **planned** unit per row, none done;
-4. otherwise it is **unsized**: zero units, flagged, never read as zero work.
+3. the person marked it **delivered outside the tracker**: its breakdown rows, at least one, all
+   done, none open or planned;
+4. it has breakdown rows: one **planned** unit per row, none done;
+5. otherwise it is **unsized**: zero units, flagged, never read as zero work.
 
 **A parent's rollup** is its rolled ticket leaves (each once, as before) plus the planned units of
 itself and every non-dropped descendant. Its `progress` is done over that total while any of its
@@ -549,7 +582,11 @@ anyone's; its planned rows and its hold count on the horizon that carries it.
 **A horizon's units** (`horizonAccounting`) are the ticket leaves under its members
 (`MILESTONE_MEMBERSHIP`, hand-placed included, each leaf once: exactly what its milestone's
 progress counts, `MilestoneStore.leafProgress`) plus the planned units of every non-dropped record
-it carries. `progress = done / (done + open + planned)`, null when the total is 0. The horizon
+it carries, plus the done units of every record it carries that was delivered outside the tracker
+with no own work (no leaf counts those; `deliveredUnits`). `progress = done / (done + open + planned)`,
+null when the total is 0. A horizon whose only units are delivered outside the tracker reads
+`complete` with no member to derive its milestone's status from, so closing it stays the
+person's. The horizon
 carries `units: { done, open, planned, total }`, `percent`, `complete` (all its units are done and
 nothing holds it: what derives its milestone done), `unsizedCount`, and `records`: the non-dropped
 **leaf** records it carries (no live sub-record) by state, `shipped`, `started`, `shaped`,
@@ -559,8 +596,9 @@ included), but every surface prints `records`: `3 ideas (+1 parent)`, never the 
 its children.
 
 **The milestone view of a horizon** reads the same derivation (`PlanStore.accountingOf`), with
-planning on only: its `progress` adds `planned` and `unsized`, `percent` is over
-`countable + planned`, and it is `complete` only when its milestone would derive done: nothing
+planning on only: its `progress` adds `planned`, `delivered` (the units of ideas delivered outside
+the tracker, in the numerator beside `counts.done`) and `unsized`, `percent` is over
+`countable + planned + delivered`, and it is `complete` only when its milestone would derive done: nothing
 open, planned or unsized, and no record holding it (`withPlannedUnits`). `milestone show` prints `progress 78/155 50% · 69 planned · 87 leaves`.
 Plain milestones, and every horizon with planning off, carry exactly the fields they always did.
 
@@ -868,12 +906,15 @@ What converges, under both folds, on a tail device and a freshly hydrated one:
   third, or closed before a device joined and reopened by an offline write, it ends open with no
   completion time anywhere. A person's cancel still conflicts with a derived close or reopen, and
   keeps its own timestamps while it does.
+- **A mark delivered outside the tracker** is one issue field and one document: a tail device and
+  a fresh one read the same shipped record, day and note, and the same again once it is cleared.
 
 ## Known limits
 
 - **Experimental.** The model, its surfaces and its storage may change in any release.
 - **Mixed builds.** A device that has not migrated refuses a pulled operation page stamped schema
-  20 with `schema_ahead`. The snapshot route checks the protocol only, so an older build that
+  20 with `schema_ahead`, and one on schema 20 refuses a page stamped 21 (the delivered mark) the
+  same way. The snapshot route checks the protocol only, so an older build that
   hydrates from a snapshot drops the plan fields, links and rows and shows each unpromoted idea as
   an ordinary issue under its `~hex` draft. Upgrade every device before planning.
 - **The person is declared, not authenticated.** The UI token and `--person` are trusted; an agent
@@ -893,8 +934,11 @@ What converges, under both folds, on a tail device and a freshly hydrated one:
 
 - **CLI** `staple plan enable|show`, `staple idea ls|new|show|set|plan|task|promote|scaffold|import|adopt|unlink|ask|resolve|defer|decide|reset-baseline`,
   `staple horizon ls|new|set|mv|rm`, with `--person` for steering. An idea's ref is its id.
+  `staple idea set <ref> --delivered YYYY-MM-DD [--note T] --person` marks it delivered outside
+  the tracker and `--undelivered` clears the mark.
 - **MCP** `list_ideas`, `get_idea`, `list_horizons` (reads); `capture_idea`, `update_idea` (also
-  `plan` sections, `breakdown_base` and `defer_question`), `start_idea` (promote in place, or with
+  `plan` sections, `breakdown_base` and `defer_question`; `delivered_on`, `delivered_note` and
+  `undelivered` only to refuse them), `start_idea` (promote in place, or with
   `adopt` link an existing issue; answers the promoted `{ id, identifier, kind }` or `null`),
   `unlink_idea`, `scaffold_idea` (preview without `confirm`; with it and the preview's
   `fingerprint`, create); `reset_idea_baseline` (a view button).
@@ -905,7 +949,7 @@ What converges, under both folds, on a tail device and a freshly hydrated one:
   left out); `POST /api/plan/{enable, capture, update, question, resolve, decision, promote,
   scaffold, adopt, unlink, reset-baseline, horizon-create, horizon-update, horizon-remove,
   horizon-queue, horizon-run}`; `update` and `capture` take `plan`, `update` takes
-  `breakdownBase`, `resolve` takes `deferred`, `scaffold` takes `preview` or the preview's
+  `breakdownBase` and `delivered` (`{ on, note }`, or null to clear), `resolve` takes `deferred`, `scaffold` takes `preview` or the preview's
   `fingerprint`. Every write answers `{ plan, idea }`. `GET /api/issue` adds `planRecord` and
   `horizonPlan`.
 - **Web UI** the Plan view with its three lenses, the shared drawer, and the Tasks horizon chip,
@@ -927,10 +971,11 @@ What converges, under both folds, on a tail device and a freshly hydrated one:
 | `test/cloud-plan-sync.test.ts` | under both folds: the plan, its membership and its numbers converge on a tail device and a hydrated one; offline adopts and unlinks; offline moves derive the same membership with no conflict; two offline promotions end with two distinct numbers; a third device never shows a numberless epic; a horizon whose only work is cancelled stays listed; a horizon a scheduled idea holds stays open, reopens after a concurrent close, and converges with no conflict when one device releases it while another reopens its ticket; a horizon's start and completion times converge with no conflict when devices derive it offline, a person's cancel still conflicts, and a plain milestone is unchanged; an idea an earlier build numbered resolves by its old number |
 | `test/cloud-plan-promotion-identity.test.ts` | under both folds: one idea promoted on two devices offline ends on one number per record on every device and a fresh one, no number on two records, no open conflict |
 | `test/cloud-plan-breakdown-sync.test.ts` | under both folds: different rows edited or added offline both kept with no conflict; one row edited on both is a recorded conflict, and resolving it settles both; two devices scaffolding one idea create the same tasks, and one umbrella with no rows the same epics, which either device or a fresh one retries after sync to build a sub-idea shaped since |
-| `test/sync-mutation-convergence.test.ts` | every `PlanStore` mutation, and `promoteInPlace`, converges column for column |
+| `test/sync-mutation-convergence.test.ts` | every `PlanStore` mutation, and `promoteInPlace`, converges column for column, the plan columns included; the delivered mark and its clear among them |
+| `test/plan-delivered.test.ts`, `test/cloud-plan-delivered-sync.test.ts` | a record delivered outside the tracker: shipped with no ticket and no number, never a member, queued, checked out or listed; late only when delivered after its line, never not started; offered in exploring and shaped only; its day required and not in the future; the person's alone, an agent told what to do instead; its edits and the clear; the note kept to the mark; reopened by open work linked since; refused with planning off and back when it is on; the same on a tail device and a fresh one under both folds |
 | `test/plan-surfaces.test.ts` | CLI, MCP and HTTP read one plan with no idea numbers and no draft shown on any surface, consume no number at capture, refuse the same agent writes, promote into the horizon's milestone, and let the person steer |
-| `test/plan-lifecycle.test.ts` | the table itself, pinned: every state's actions, who takes each, the promoted record's epic edits, Mark shaped on a record started while exploring, adopt from exploring on and never raw, back to raw offered nowhere, how a maturity change is named |
-| `test/plan-lifecycle-surfaces.test.ts` | every idea (state, write) cell and every horizon (state, action) cell agrees with the table on HTTP, MCP and the CLI with and without `--person`; every payload carries exactly the table's row; a record started while exploring carries the started row and Mark shaped, and only the person shapes it; every document and file write in every state |
+| `test/plan-lifecycle.test.ts` | the table itself, pinned: every state's actions, who takes each, the promoted record's epic edits, Mark shaped on a record started while exploring, adopt from exploring on and never raw, back to raw offered nowhere, how a maturity change is named, the delivered mark in exploring and shaped and the marked record's edits and clear |
+| `test/plan-lifecycle-surfaces.test.ts` | every idea (state, write) cell and every horizon (state, action) cell agrees with the table on HTTP, MCP and the CLI with and without `--person`; every payload carries exactly the table's row; a record started while exploring carries the started row and Mark shaped, and only the person shapes it; a record delivered outside the tracker carries the shipped row with its edits and the clear, the mark and the clear are the person's on every surface, and a mark without a day is refused before anything is written; every document and file write in every state |
 | `test/plan-own-state.test.ts` | with hand-written expectations: a parent's own state against its rollup; a sub-idea promoted on its own and re-parented by its parent's promotion; a promoted record edited as an epic once shipped; an exploring idea that adopts work reads started, keeps its maturity, offers Mark shaped, joins its horizon, keeps its baseline and stays out of the tracker; every document key, restore and file on a shipped, dropped or raw idea |
 | `test/plan-lenses.test.ts`, `test/plan-lenses-review.test.ts` | what the lenses read: dependencies only from explicit references, a sub-idea's title key over its ancestor's row key, never a wait between a record and its ancestor or descendant; completeness and `dependsOn` on the payload; a horizon's shipped count, progress and server counts; Queue and the run setting offered and held back; each issue's horizon; the run setting is the person's on every path, reaches every ticket as the `horizon-run` instruction, and allows a goal run only when set to `goal` |
 | `test/plan-accounting.test.ts`, `test/plan-accounting-surfaces.test.ts` | a horizon's done, open and planned units and its percentage, the same on the plan, the milestone view and every CLI, MCP and HTTP surface; unsized ideas never zero work; leaf ideas counted with the parent apart; a parent's rollup counting its sub-ideas' rows once; plain milestones and planning off unchanged; a horizon held open by a scheduled idea when its last ticket closes, in both flag states, released when the idea is dropped or moved (closing whether or not derivation wrote its status before), reopened when one is scheduled onto it, with or without members; a scheduled parent carrying its sub-ideas scheduled on no horizon, a sub-idea scheduled elsewhere counted there alone; `complete` and the page's fold false while every counted unit landed but an idea holds it; one whole percent rounded down from the counts; the hold reading the record's own stage, missing links included; with planning off, the hold named in the refusal and on the milestone view |

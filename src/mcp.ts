@@ -2916,6 +2916,7 @@ const milestoneProgressShape = {
     .optional()
     .describe("A horizon's only, with planning on: breakdown rows of the ideas it carries (scheduled on it, or sub-ideas of those scheduled on no horizon) that have no tickets yet, counted as work items beside the countable leaves"),
   unsized: z.number().optional().describe("A horizon's only, with planning on: ideas it carries with no work, no rows and no sub-ideas yet (never counted as zero work)"),
+  delivered: z.number().optional().describe("A horizon's only, with planning on: done work items of the ideas it carries that were delivered outside the tracker (their breakdown rows, at least one each), counted in percent's numerator beside counts.done since no leaf counts them"),
 };
 /** The goal check (`milestone-goal.ts`): each criterion's verdict with its evidence, and the pace. */
 const milestoneGoalShape = z
@@ -3301,7 +3302,7 @@ server.registerTool(
   "update_idea",
   {
     description:
-      "Edit an idea as an agent may: title, brief, its plan sections (plan: goal, context, breakdown rows {key, title, estimate, dependsOn, acceptance, owner, notes}, acceptance, dependencies, outOfScope, risks, sources; each section given replaces that section whole), add_question, resolve_question (1-based; reopen with resolved: false), defer_question (left open on purpose, it no longer holds shaping back), add_decision, as its lifecycle state offers them (a shipped or dropped idea offers no edits; see the record's actions). maturity, horizon, parent, planned_start and planned_target are accepted only to be refused with validation: they are the person's, set in the Plan view. Answers the idea's detail.",
+      "Edit an idea as an agent may: title, brief, its plan sections (plan: goal, context, breakdown rows {key, title, estimate, dependsOn, acceptance, owner, notes}, acceptance, dependencies, outOfScope, risks, sources; each section given replaces that section whole), add_question, resolve_question (1-based; reopen with resolved: false), defer_question (left open on purpose, it no longer holds shaping back), add_decision, as its lifecycle state offers them (a shipped or dropped idea offers no edits; see the record's actions). maturity, horizon, parent, planned_start and planned_target are accepted only to be refused with validation: they are the person's, set in the Plan view. So are delivered_on, delivered_note and undelivered: marking an idea delivered outside the tracker (it then reads shipped with no ticket) is the person's; to record work that landed in the tracker, adopt its ticket with start_idea. Answers the idea's detail.",
     inputSchema: {
       ref: ideaRefSchema,
       title: z.string().optional(),
@@ -3346,6 +3347,9 @@ server.registerTool(
       parent: z.string().nullable().optional(),
       planned_start: planDateSchema,
       planned_target: planDateSchema,
+      delivered_on: z.string().optional().describe("Accepted only to be refused: the person marks an idea delivered outside the tracker, on this YYYY-MM-DD day"),
+      delivered_note: z.string().optional().describe("Accepted only to be refused: the note kept with the person's delivered mark"),
+      undelivered: z.boolean().optional().describe("Accepted only to be refused: true clears the person's delivered mark"),
       actor: actorSchema,
       ws: wsSchema,
     },
@@ -3365,6 +3369,8 @@ server.registerTool(
         plannedTarget: input.planned_target,
         plan: input.plan as PlanPatch | undefined,
         breakdownBase: input.breakdown_base,
+        // The person's mark, taken only so its refusal can say whose it is and what to do instead.
+        delivered: input.undelivered === true ? null : input.delivered_on !== undefined || input.delivered_note !== undefined ? { on: input.delivered_on ?? "", note: input.delivered_note ?? null } : undefined,
       };
       if (Object.values(fields).some((value) => value !== undefined)) plan.update(input.ref, fields, actor);
       if (input.add_question !== undefined) plan.addQuestion(input.ref, input.add_question, actor);
