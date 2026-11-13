@@ -218,11 +218,13 @@ export function progressSentence(progress: MilestoneProgress): string {
  */
 function horizonProgressSentence(progress: MilestoneProgress, planned: number): string {
   const unsized = progress.unsized ? ` ${progress.unsized} ${progress.unsized === 1 ? "idea has" : "ideas have"} no size yet.` : "";
-  if (progress.countable === 0 && planned === 0) return `No work to count yet.${unsized}`;
+  const delivered = progress.delivered ?? 0;
+  if (progress.countable === 0 && planned === 0 && delivered === 0) return `No work to count yet.${unsized}`;
   const tasks = `${progress.counts.done} of ${progress.countable} ${progress.countable === 1 ? "task" : "tasks"} finished`;
+  const deliveredText = delivered === 0 ? "" : `, ${delivered} delivered outside the tracker`;
   const plannedText = planned === 0 ? "" : `, ${planned} planned in ideas with no tickets yet`;
   const incomplete = progress.percent === 100 && !progress.complete ? ", incomplete" : "";
-  return `${tasks}${plannedText} (${progress.percent ?? 0}% of all work${incomplete}).${unsized}`;
+  return `${tasks}${deliveredText}${plannedText} (${progress.percent ?? 0}% of all work${incomplete}).${unsized}`;
 }
 
 /**

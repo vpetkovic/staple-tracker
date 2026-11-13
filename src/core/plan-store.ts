@@ -1118,6 +1118,7 @@ export class PlanStore {
         work: facts.ownPresent.length > 0 ? { done: facts.own.done, open: facts.own.leaves - facts.own.done } : null,
         rows: rowCounts.get(row.id) ?? 0,
         liveSubRecords,
+        delivered: isDelivered(row.plan_delivered_on),
       };
       sizes.set(row.id, { size, own: ownUnits(size) });
     }
@@ -1144,7 +1145,8 @@ export class PlanStore {
       if (horizonId === null) continue;
       const { size, own } = sizes.get(row.id)!;
       const list = carried.get(horizonId) ?? [];
-      list.push({ state: facts.state, own, liveSubRecords: size.liveSubRecords, holds: holdsHorizon(facts.stage, size) });
+      // Delivered outside the tracker with no own work: its done units are counted by no member's leaf.
+      list.push({ state: facts.state, own, liveSubRecords: size.liveSubRecords, holds: holdsHorizon(facts.stage, size), delivered: size.delivered === true && size.work === null });
       carried.set(horizonId, list);
     }
     return { rows, byId, childIds, horizons, horizonDates, work, links, categoryOf, records, sizes, carried, accounting: new Map() };
@@ -1176,6 +1178,14 @@ export class PlanStore {
       const own = records.get(id)!.stage === "dropped" ? 0 : sizes.get(id)!.own.planned;
       return own + (childIds.get(id) ?? []).reduce((sum, child) => sum + rolledPlanned(child, seen), 0);
     };
+    /** Done units of records delivered outside the tracker with no own work, itself and beneath it: no ticket leaf counts those. */
+    const rolledDelivered = (id: string, seen = new Set<string>()): number => {
+      if (seen.has(id)) return 0;
+      seen.add(id);
+      const { size, own } = sizes.get(id)!;
+      const ownDone = records.get(id)!.stage !== "dropped" && size.delivered === true && size.work === null ? own.done : 0;
+      return ownDone + (childIds.get(id) ?? []).reduce((sum, child) => sum + rolledDelivered(child, seen), 0);
+    };
     return rows.map((row) => {
       const { promoted, ownLinks, ownWork, maturity, horizonId, stage, state } = records.get(row.id)!;
       const sections = sectionsOf.get(row.id)!;
@@ -1185,7 +1195,7 @@ export class PlanStore {
       const workIds = [...rolledWork(row.id)];
       const present = workIds.filter((id) => work.rows.has(id));
       const measured = this.measure(present, work, categoryOf);
-      const rolled = units(measured.done, measured.leaves - measured.done, rolledPlanned(row.id));
+      const rolled = units(measured.done + rolledDelivered(row.id), measured.leaves - measured.done, rolledPlanned(row.id));
       const rolledShipped = present.length > 0 && measured.resolved >= present.length;
       // Delivered outside the tracker with no work present: the delivery day is its actual end,
       // and nothing is forecast. Once work is linked, the window is that work's, as for any
@@ -1231,8 +1241,8 @@ export class PlanStore {
         resolvedLinks: measured.resolved,
         units: rolled,
         unsized: sizes.get(row.id)!.own.unsized,
-        progress: started ? (unitProgress(rolled) ?? measured.progress) : null,
-        percent: started ? unitPercent(rolled) : null,
+        progress: started || deliveredAlone ? (unitProgress(rolled) ?? measured.progress) : null,
+        percent: started || deliveredAlone ? unitPercent(rolled) : null,
         actual,
         late: isLate({
           plannedTarget: row.plan_target,

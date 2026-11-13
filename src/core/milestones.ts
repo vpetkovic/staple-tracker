@@ -273,6 +273,8 @@ export interface MilestoneProgress {
   planned?: number;
   /** A horizon's, with planning on only: scheduled ideas with nothing to count yet. */
   unsized?: number;
+  /** A horizon's, with planning on only: done units of ideas delivered outside the tracker, counted by no leaf. */
+  delivered?: number;
 }
 
 function emptyCounts(): Record<StatusCategory, number> {

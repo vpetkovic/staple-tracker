@@ -53,16 +53,17 @@ function integerOption(raw: string | undefined, flag: string): number | undefine
 }
 
 function progressCell(row: Pick<MilestoneView, "progress">): string {
-  const { done } = row.progress.counts;
   const percent = percentText(row.progress.percent, row.progress.complete);
-  // A horizon's planned work items (planning on) are in the denominator, as in its percent.
-  return `${done}/${row.progress.countable + (row.progress.planned ?? 0)} ${percent}`;
+  // A horizon's planned work items (planning on) are in the denominator, as in its percent, and
+  // the units of its ideas delivered outside the tracker in the numerator.
+  const done = row.progress.counts.done + (row.progress.delivered ?? 0);
+  return `${done}/${row.progress.countable + (row.progress.planned ?? 0) + (row.progress.delivered ?? 0)} ${percent}`;
 }
 
-/** A horizon's planned and unsized ideas, with planning on; nothing for a plain milestone. */
+/** A horizon's planned, delivered-outside and unsized ideas, with planning on; nothing for a plain milestone. */
 function plannedText(progress: MilestoneView["progress"]): string {
   if (progress.planned === undefined) return "";
-  return ` · ${progress.planned} planned${progress.unsized ? ` · ${progress.unsized} unsized` : ""}`;
+  return ` · ${progress.planned} planned${progress.delivered ? ` · ${progress.delivered} delivered outside the tracker` : ""}${progress.unsized ? ` · ${progress.unsized} unsized` : ""}`;
 }
 
 function summaryLine(row: MilestoneListRow | MilestoneView): string {

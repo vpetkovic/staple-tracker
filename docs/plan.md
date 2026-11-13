@@ -248,6 +248,10 @@ where it was. Linking open work to it later reopens it, as it would any shipped 
 its window and lateness follow that work, and once it lands the idea's end is the later of the
 delivery day and the work's end.
 
+A marked idea counts as done work: its breakdown rows, at least one, all done, on its own bar, in
+its parent's rollup and on its horizon, where `milestone show` names them as delivered outside the
+tracker. It no longer holds its horizon open.
+
 ## 8. Read the Timeline
 
 The **Timeline** lens draws each idea on a month axis, grouped by horizon:

@@ -2885,6 +2885,7 @@ const milestoneProgressShape = {
     .optional()
     .describe("A horizon's only, with planning on: breakdown rows of the ideas it carries (scheduled on it, or sub-ideas of those scheduled on no horizon) that have no tickets yet, counted as work items beside the countable leaves"),
   unsized: z.number().optional().describe("A horizon's only, with planning on: ideas it carries with no work, no rows and no sub-ideas yet (never counted as zero work)"),
+  delivered: z.number().optional().describe("A horizon's only, with planning on: done work items of the ideas it carries that were delivered outside the tracker (their breakdown rows, at least one each), counted in percent's numerator beside counts.done since no leaf counts them"),
 };
 /** The goal check (`milestone-goal.ts`): each criterion's verdict with its evidence, and the pace. */
 const milestoneGoalShape = z

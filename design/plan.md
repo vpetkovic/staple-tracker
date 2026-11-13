@@ -562,8 +562,10 @@ of a fraction, so 29 of 50 reads 58 everywhere. A horizon, a record and a link c
    dropped. Its sub-records carry its size, so it has no units of its own. A parent's breakdown
    usually names its sub-ideas, and counting both would count that work twice; its rows count
    once they are tickets (rule 1);
-3. it has breakdown rows: one **planned** unit per row, none done;
-4. otherwise it is **unsized**: zero units, flagged, never read as zero work.
+3. the person marked it **delivered outside the tracker**: its breakdown rows, at least one, all
+   done, none open or planned;
+4. it has breakdown rows: one **planned** unit per row, none done;
+5. otherwise it is **unsized**: zero units, flagged, never read as zero work.
 
 **A parent's rollup** is its rolled ticket leaves (each once, as before) plus the planned units of
 itself and every non-dropped descendant. Its `progress` is done over that total while any of its
@@ -579,7 +581,11 @@ anyone's; its planned rows and its hold count on the horizon that carries it.
 **A horizon's units** (`horizonAccounting`) are the ticket leaves under its members
 (`MILESTONE_MEMBERSHIP`, hand-placed included, each leaf once: exactly what its milestone's
 progress counts, `MilestoneStore.leafProgress`) plus the planned units of every non-dropped record
-it carries. `progress = done / (done + open + planned)`, null when the total is 0. The horizon
+it carries, plus the done units of every record it carries that was delivered outside the tracker
+with no own work (no leaf counts those; `deliveredUnits`). `progress = done / (done + open + planned)`,
+null when the total is 0. A horizon whose only units are delivered outside the tracker reads
+`complete` with no member to derive its milestone's status from, so closing it stays the
+person's. The horizon
 carries `units: { done, open, planned, total }`, `percent`, `complete` (all its units are done and
 nothing holds it: what derives its milestone done), `unsizedCount`, and `records`: the non-dropped
 **leaf** records it carries (no live sub-record) by state, `shipped`, `started`, `shaped`,
@@ -589,8 +595,9 @@ included), but every surface prints `records`: `3 ideas (+1 parent)`, never the 
 its children.
 
 **The milestone view of a horizon** reads the same derivation (`PlanStore.accountingOf`), with
-planning on only: its `progress` adds `planned` and `unsized`, `percent` is over
-`countable + planned`, and it is `complete` only when its milestone would derive done: nothing
+planning on only: its `progress` adds `planned`, `delivered` (the units of ideas delivered outside
+the tracker, in the numerator beside `counts.done`) and `unsized`, `percent` is over
+`countable + planned + delivered`, and it is `complete` only when its milestone would derive done: nothing
 open, planned or unsized, and no record holding it (`withPlannedUnits`). `milestone show` prints `progress 78/155 50% · 69 planned · 87 leaves`.
 Plain milestones, and every horizon with planning off, carry exactly the fields they always did.
 
