@@ -658,13 +658,12 @@ describe("Promote, Adopt and Unlink", () => {
     expect(plan.ideaView(child).stage).toBe("started");
     const half = plan.ideaView(parent);
     // The parent's own state is its own: the child's work is its rollup.
-    // Its rollup counts its own breakdown row as planned beside the child's two leaves.
-    expect(half).toMatchObject({ stage: "shaped", state: "shaped", progress: 1 / 3, linkCount: 1 });
+    expect(half).toMatchObject({ stage: "shaped", state: "shaped", progress: 0.5, linkCount: 1 });
     expect(half.actual.start).toBe(store.getIssue(a.identifier).startedAt!.slice(0, 10));
     expect(half.actual.end).toBeNull();
     finish(b.identifier);
     expect(plan.ideaView(child).stage).toBe("shipped");
-    expect(plan.ideaView(parent)).toMatchObject({ stage: "shaped", progress: 2 / 3 });
+    expect(plan.ideaView(parent)).toMatchObject({ stage: "shaped", progress: 1 });
     expect(plan.ideaView(parent).actual.end).not.toBeNull();
     // Shipped offers no edits: its link stays.
     expect(refused(() => plan.unlink(child, epic.identifier, "agent")).message).toContain("is shipped; it cannot be unlinked");

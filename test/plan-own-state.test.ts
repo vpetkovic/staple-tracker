@@ -89,8 +89,7 @@ describe("a parent's own state is its own; its sub-ideas' work is a rollup", () 
     const { child } = childWithWork(parent, true);
     expect(plan.ideaView(child).state).toBe("shipped");
     const view = plan.ideaView(parent);
-    // Its own breakdown row has no ticket yet: planned beside the sub-idea's landed leaf.
-    expect(view).toMatchObject({ state: "raw", progress: 0.5, resolvedLinks: 1 });
+    expect(view).toMatchObject({ state: "raw", progress: 1, resolvedLinks: 1 });
     expect(view.actual.end).not.toBeNull();
     expect(plan.addQuestion(parent, "What next?", "agent").questions).toEqual([{ text: "What next?", resolved: false }]);
     expect(plan.update(parent, { brief: "Still thinking" }, "agent").state).toBe("raw");

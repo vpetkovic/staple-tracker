@@ -816,8 +816,8 @@ export class PlanStore {
     const open = this.openWorkOf(row.id);
     const own = this.db.prepare("SELECT gate_state, acceptance_criteria FROM issues WHERE id = ?").get(row.id) as { gate_state: string | null; acceptance_criteria: string | null };
     const accounting = this.accountingOf(row.id);
-    // Not shipped while a scheduled record is not, whatever status an older build left on it.
-    const shipped = this.store.categoryOf(row.status) === "done" && !this.heldByPlan(row.id);
+    // Its status never derives done while a scheduled record holds it (`heldByPlan`).
+    const shipped = this.store.categoryOf(row.status) === "done";
     return {
       id: row.id,
       identifier: row.identifier,
@@ -871,7 +871,6 @@ export class PlanStore {
       .all(horizonId) as Array<{ id: string; kind: string; status: string; plan_maturity: string }>;
     if (records.length === 0) return false;
     const work = this.db.prepare("SELECT kind, status FROM issues WHERE id = ?");
-    const rowCount = this.db.prepare("SELECT COUNT(*) AS n FROM plan_rows WHERE idea_id = ?");
     const children = this.db.prepare("SELECT id, kind, status, plan_maturity FROM issues WHERE parent_id = ? AND plan_maturity IS NOT NULL");
     const open = (row: { kind: string; status: string }) => row.kind !== IDEA_KIND || !resolved.has(row.status);
     const ownWork = (row: { id: string; kind: string }) => [...(row.kind !== IDEA_KIND ? [row.id] : []), ...planLinksOf(this.db, row.id)];
@@ -888,8 +887,7 @@ export class PlanStore {
       const liveSubRecords = (children.all(row.id) as Array<{ id: string; kind: string; status: string; plan_maturity: string }>)
         .filter(open)
         .some((child) => readMaturity(child.plan_maturity) !== "dropped" || ownWork(child).length > 0);
-      const rows = (rowCount.get(row.id) as { n: number }).n;
-      return holdsHorizon(stage, { work: present.length > 0 ? { done: 0, open: 0 } : null, rows, liveSubRecords });
+      return holdsHorizon(stage, { work: present.length > 0 ? { done: 0, open: 0 } : null, liveSubRecords });
     });
   }
 

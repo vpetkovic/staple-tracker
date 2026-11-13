@@ -142,6 +142,25 @@ describe("a parent's rollup", () => {
   });
 });
 
+describe("a parent whose breakdown names its sub-ideas", () => {
+  it("counts its sub-ideas' rows once, not its own beside them, on the horizon and in its rollup", () => {
+    const now = horizon("Now");
+    const parent = idea("Payments", { horizon: now, plan: { ...READY_PLAN, breakdown: rows(2) } });
+    idea("Card vault", { horizon: now, parent, plan: { ...READY_PLAN, breakdown: rows(3) } });
+    idea("Refunds", { horizon: now, parent, plan: { ...READY_PLAN, breakdown: rows(4) } });
+    expect(horizonView("Now")).toMatchObject({ units: { done: 0, open: 0, planned: 7, total: 7 }, unsizedCount: 0, records: { leaves: 2, shaped: 2, parentCount: 1 } });
+    expect(plan.ideaView(parent)).toMatchObject({ unsized: false, units: { planned: 7, total: 7 } });
+  });
+
+  it("counts its own rows again once its sub-ideas are dropped", () => {
+    const now = horizon("Now");
+    const parent = idea("Payments", { horizon: now, plan: { ...READY_PLAN, breakdown: rows(2) } });
+    const child = idea("Card vault", { horizon: now, parent, plan: { ...READY_PLAN, breakdown: rows(3) } });
+    plan.update(child, { maturity: "dropped" }, "vp", PERSON);
+    expect(horizonView("Now")).toMatchObject({ units: { planned: 2, total: 2 }, records: { leaves: 1, parentCount: 0 } });
+  });
+});
+
 describe("a horizon is not shipped while a scheduled idea is not", () => {
   it("stays open when its last open ticket closes and an idea on it has no work yet", () => {
     const { now, tasks } = mixedHorizon();

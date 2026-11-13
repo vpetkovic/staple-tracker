@@ -2,9 +2,11 @@
  * What the plan counts (design/plan.md, "Accounting"): work items done, open and planned.
  *
  * A record's own units come from the first of these that applies: the ticket leaves under its own
- * work (it is promoted, or links issues present on this device), else one planned unit per
- * breakdown row, else nothing, and then it is *unsized* unless it is an umbrella over live
- * sub-records, which carry its size. A parent's rollup adds every non-dropped descendant's units.
+ * work (it is promoted, or links issues present on this device); else nothing when it is an
+ * *umbrella* over live sub-records, which carry its size (a parent's breakdown usually names its
+ * sub-ideas, and counting both would count that work twice; its rows count once they are
+ * tickets); else one planned unit per breakdown row; else nothing, and it is *unsized*. A
+ * parent's rollup adds every non-dropped descendant's units.
  * A horizon's units are the ticket leaves under its members, counted as its milestone counts them,
  * plus the planned units of every scheduled, non-dropped record with no own work.
  *
@@ -28,7 +30,7 @@ export interface OwnUnits {
   done: number;
   open: number;
   planned: number;
-  /** Nothing to count: no own work, no rows and no live sub-records. Never read as zero work. */
+  /** Nothing to count: no own work, no live sub-records and no rows. Never read as zero work. */
   unsized: boolean;
 }
 
@@ -39,23 +41,24 @@ export interface Units {
   total: number;
 }
 
-/** A record's own units: its tickets' leaves, else its rows as planned, else unsized (an umbrella is not). */
+/** A record's own units: its tickets' leaves, else none for an umbrella, else its rows as planned, else unsized. */
 export function ownUnits(size: RecordSize): OwnUnits {
   if (size.work !== null) return { done: size.work.done, open: size.work.open, planned: 0, unsized: false };
+  if (isUmbrella(size)) return { done: 0, open: 0, planned: 0, unsized: false };
   if (size.rows > 0) return { done: 0, open: 0, planned: size.rows, unsized: false };
-  return { done: 0, open: 0, planned: 0, unsized: !size.liveSubRecords };
+  return { done: 0, open: 0, planned: 0, unsized: true };
 }
 
-/** An umbrella: no own work and no rows of its own, over live sub-records that carry its size. */
-export function isUmbrella(size: Pick<RecordSize, "work" | "rows" | "liveSubRecords">): boolean {
-  return size.work === null && size.rows === 0 && size.liveSubRecords;
+/** An umbrella: no own work, over live sub-records that carry its size (its own rows count once they are tickets). */
+export function isUmbrella(size: Pick<RecordSize, "work" | "liveSubRecords">): boolean {
+  return size.work === null && size.liveSubRecords;
 }
 
 /**
  * Whether a record scheduled on a horizon keeps it from shipping: it is not dropped, not shipped,
  * and not an umbrella (an umbrella holds a horizon through its sub-records, where they are scheduled).
  */
-export function holdsHorizon(stage: Stage, size: Pick<RecordSize, "work" | "rows" | "liveSubRecords">): boolean {
+export function holdsHorizon(stage: Stage, size: Pick<RecordSize, "work" | "liveSubRecords">): boolean {
   return stage !== "shipped" && stage !== "dropped" && !isUmbrella(size);
 }
 
