@@ -54,6 +54,7 @@ import { registerTelemetryReadTools } from "./core/telemetry/mcp-read-tools.js";
 import type { PlanComparison, PlanSummary } from "./core/plan-rollup.js";
 import { takeRenumberNotices, withRenumberAcknowledged } from "./core/identifier-moves.js";
 import { publicOutput, publicValue } from "./core/plan.js";
+import type { PlanPatch } from "./core/plan-sections.js";
 import type { CrossBlockerState } from "./core/hub.js";
 import { requireMineLens } from "./core/cloud/member-lens.js";
 import { CONTINUE_STOP_REASONS, RUN_STATES, RUN_STOP_REASONS, RUN_TICKET_OUTCOMES, RUN_WAIT_REASONS } from "./core/run-store.js";
@@ -196,7 +197,14 @@ function resetWorkspaceCache(): void {
   byAlias.clear();
 }
 
-const server = new McpServer({ name: "staple", version: "0.1.0" });
+const featureInstructions = (() => {
+  try { return `This workspace has features.planning ${storeFor().planningOn() ? "on" : "off"}.`; }
+  catch { return "Resolve the workspace and read get_setting features.planning first."; }
+})();
+const server = new McpServer({ name: "staple", version: "0.1.0" }, {
+  instructions: `${featureInstructions} Planning is experimental, defaults off, and only a person changes it in Settings → Experimental or with staple settings set features.planning true --person. Read get_setting or show_about for the current workspace state; explicit ws may differ from this handshake. When off, use ordinary tasks and milestones; plan tools refuse. Ideas remain drafts and are never pickup work.`,
+});
+const PLANNING_TOOLS = new Set(["list_ideas", "get_idea", "list_horizons", "capture_idea", "update_idea", "scaffold_idea", "start_idea", "unlink_idea", "reset_idea_baseline"]);
 
 /**
  * S10: this server's automatic-sync registration.
@@ -244,6 +252,7 @@ const autoSync = new SurfaceAutoSync({
 const MACHINE_LOCAL_WRITES = new Set(["record_budget_sample", "stop_run", "pause_run", "resume_run"]);
 {
   type ToolConfig = {
+    description?: string;
     annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean };
     inputSchema?: Record<string, unknown>;
     outputSchema?: unknown;
@@ -386,6 +395,15 @@ const MACHINE_LOCAL_WRITES = new Set(["record_budget_sample", "stop_run", "pause
     rawCb: ToolCallback,
   ) => {
     assertAnnotated(name, rawConfig);
+    if (PLANNING_TOOLS.has(name)) {
+      rawConfig = { ...rawConfig, description: `Experimental, only when features.planning is on. ${rawConfig.description ?? ""}` };
+      const planCallback = rawCb;
+      rawCb = (...args: unknown[]) => {
+        const ws = (args[0] as { ws?: string } | undefined)?.ws;
+        try { storeFor(ws).plan().assertEnabled(); } catch (error) { return fail(error); }
+        return planCallback(...args);
+      };
+    }
     // A tool that declares an MCP Apps view: checked, both meta spellings, results stamped.
     const [viewConfig, cb] = linkToolView(name, rawConfig, rawCb);
     const config = declaringNotices(viewConfig);
@@ -1665,6 +1683,7 @@ server.registerTool(
       description: z.string().optional(),
       status: statusEnum.optional(),
       kind: kindSchema.optional().describe("Re-declare the kind. Omit to leave unchanged."),
+      parent: refSchema.nullable().optional().describe("Validated explicitly; changing parent through update_task is refused."),
       priority: priorityEnum.optional(),
       assignee: z.string().nullable().optional(),
       labels: z.array(z.string()).optional(),
@@ -1703,6 +1722,7 @@ server.registerTool(
           description: input.description,
           status: input.status,
           kind: input.kind,
+          parent: input.parent,
           priority: input.priority,
           assignee: input.assignee,
           labels: input.labels,
@@ -2958,7 +2978,7 @@ server.registerTool(
   "list_milestones",
   {
     description:
-      "Every open milestone with its dates, derived state, progress and members revision, sorted by plan position, then target date, then identifier. Milestones are issues of the reserved `milestone` kind; a workspace without that kind refuses with validation naming the `kinds add` that enables it.",
+      "Every open plain milestone and dated horizon (undated horizons stay in Plan), with dates, derived state, progress and members revision, sorted by plan position, then target date, then identifier. Milestones are issues of the reserved `milestone` kind; a workspace without that kind refuses with validation naming the `kinds add` that enables it.",
     inputSchema: {
       all: z.boolean().optional().describe("Include done and cancelled milestones"),
       ws: wsSchema,
@@ -3172,7 +3192,7 @@ server.registerTool(
   "list_ideas",
   {
     description:
-      "The plan: every horizon in order (a horizon is a milestone shown as a column: name, date, status, shipped, member count, idea count, late and not-started counts) and every plan record with its maturity, derived stage (raw, exploring, shaped, scheduled, started, shipped, dropped), horizon, parent, planned window, baseline, linked issues, progress, actual dates, the late / notStarted flags, and its lifecycle state with the actions that state offers (state, actions: id, label, who: anyone or person, disabledReason). A write the state does not offer is refused with validation naming the state and what it offers. An unpromoted idea has identifier null (it holds no ticket number; refer to it by id) and never appears in list_tasks, the queue or next_task; a promoted one is an ordinary epic with its number. Filter with maturity or horizon (an identifier or name). A workspace without planning answers enabled: false.",
+      "The plan: every horizon in order (a horizon is a milestone shown as a column: name, date, status, shipped, member count, idea count, late and not-started counts) and every plan record with its maturity, derived stage (raw, exploring, shaped, scheduled, started, shipped, dropped), horizon, parent, planned window, baseline, linked issues, progress, actual dates, the late / notStarted flags, and its lifecycle state with the actions that state offers (state, actions: id, label, who: anyone or person, disabledReason). A write the state does not offer is refused with validation naming the state and what it offers. An unpromoted idea has identifier null (it holds no ticket number; refer to it by id) and never appears in list_tasks, the queue or next_task; a promoted one is an ordinary epic with its number. Filter with maturity or horizon (an identifier or name). A workspace with planning off refuses with validation.",
     inputSchema: {
       maturity: z.enum(["raw", "exploring", "shaped", "dropped"]).optional(),
       horizon: z.string().optional().describe("A horizon's identifier or name"),
@@ -3194,7 +3214,8 @@ server.registerTool(
 server.registerTool(
   "get_idea",
   {
-    description: "One idea: its view (stage, windows, flags), parent, sub-ideas, horizon, brief, open questions, decisions, and each linked issue with its progress and the milestone (and live run) holding it.",
+    description:
+      "One idea, everything an agent needs to build from it: its view (lifecycle state and the actions it offers, maturity, stage, windows, flags, and planIncomplete: what a shaped plan edited since it was shaped now lacks, which holds Scaffold and Promote back), parent, sub-ideas, horizon, brief, questions (open, resolved, deferred), decisions, each linked issue with its progress and the milestone (and live run) holding it; its plan sections (plan: goal, context, breakdown rows {id, key, title, estimate, dependsOn, acceptance, owner, notes}, acceptance, dependencies, outOfScope, risks, sources), completeness, missingForShaped (what the shaped gate still needs), planWarnings (estimates that are not durations), breakdownRevision (pass it to update_idea as breakdown_base to refuse a stale breakdown edit), and while its state offers Scaffold the scaffold preview (scaffold_idea without confirm answers the same): the epic, every task with estimate, blockers, acceptance (inherited from the plan when its row has none, flagged), context and the task it already made, problems that hold the confirm back, warnings, and the fingerprint the confirm names.",
     inputSchema: { ref: ideaRefSchema, ws: wsSchema },
     annotations: { title: "Get idea", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
@@ -3204,7 +3225,7 @@ server.registerTool(
 server.registerTool(
   "list_horizons",
   {
-    description: "The horizons in order. A horizon is a milestone the plan shows as a column, so it can be queued (enqueue_task) and goal-run; its members are the work of its ideas, derived, plus any added by hand. Each has name, optional date (a dated horizon is a release line), status, shipped, member count, idea count, and the late and not-started counts, and its lifecycle state (planned: no work yet; active: holds work and may be queued; shipped) with the actions that state offers. Horizons are defined by the person.",
+    description: "The horizons in order. A horizon is a milestone the plan shows as a column, so it can be queued (enqueue_task) like a task; its members are the work of its ideas, derived, plus any added by hand. Each has name, optional date (a dated horizon is a release line), status, shipped, progress, member count, idea count, the shipped, late and not-started counts, its lifecycle state (planned: no work yet; active: holds work and may be queued; shipped) with the actions that state offers, and its run setting: runMode (how far agents take it: work, until its work is done; goal, until its goal is met; epic, stop for review after each epic; null when unset), goal (its acceptance criteria) and awaitingApproval. The run setting is the person's and reaches you as the horizon-run instruction on every ticket of the horizon (next_task, get_task, continue_run); a goal run (start_run) over a horizon is refused unless it is set to goal. Horizons are defined by the person.",
     inputSchema: { ws: wsSchema },
     annotations: { title: "List horizons", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
@@ -3236,7 +3257,7 @@ server.registerTool(
   "update_idea",
   {
     description:
-      "Edit an idea as an agent may: title, brief, add_question, resolve_question (1-based; reopen with resolved: false), add_decision, as its lifecycle state offers them (a shipped or dropped idea offers no edits; see the record's actions). maturity, horizon, parent, planned_start and planned_target are accepted only to be refused with validation: they are the person's, set in the Plan view. Answers the idea's detail.",
+      "Edit an idea as an agent may: title, brief, its plan sections (plan: goal, context, breakdown rows {key, title, estimate, dependsOn, acceptance, owner, notes}, acceptance, dependencies, outOfScope, risks, sources; each section given replaces that section whole), add_question, resolve_question (1-based; reopen with resolved: false), defer_question (left open on purpose, it no longer holds shaping back), add_decision, as its lifecycle state offers them (a shipped or dropped idea offers no edits; see the record's actions). maturity, horizon, parent, planned_start and planned_target are accepted only to be refused with validation: they are the person's, set in the Plan view. Answers the idea's detail.",
     inputSchema: {
       ref: ideaRefSchema,
       title: z.string().optional(),
@@ -3245,6 +3266,37 @@ server.registerTool(
       resolve_question: z.number().int().min(1).optional(),
       resolved: z.boolean().optional().describe("With resolve_question: false reopens it"),
       add_decision: z.string().optional(),
+      defer_question: z.number().int().min(1).optional().describe("The 1-based question to defer; with resolved: false it is reopened instead"),
+      plan: z
+        .object({
+          goal: z.string().nullable().optional(),
+          context: z.string().nullable().optional(),
+          breakdown: z
+            .array(
+              z.object({
+                id: z.string().optional().describe("The row's id from get_idea; left out, a row keeps the id of the stored row with its key, or is new"),
+                key: z.string(),
+                title: z.string(),
+                estimate: z.string().nullable().optional(),
+                dependsOn: z.array(z.string()).optional(),
+                acceptance: z.string().nullable().optional(),
+                owner: z.string().nullable().optional(),
+                notes: z.string().nullable().optional(),
+              }),
+            )
+            .optional(),
+          acceptance: z.array(z.string()).optional(),
+          dependencies: z.array(z.string()).optional(),
+          outOfScope: z.string().nullable().optional(),
+          risks: z.string().nullable().optional(),
+          sources: z.array(z.string()).optional(),
+        })
+        .optional()
+        .describe("Plan sections to replace; a section left out is left alone"),
+      breakdown_base: z
+        .string()
+        .optional()
+        .describe("The breakdownRevision you read (get_idea). With plan.breakdown, the edit is refused with revision_conflict when the breakdown changed since; re-read and redo it"),
       maturity: z.enum(["raw", "exploring", "shaped", "dropped"]).optional(),
       horizon: z.string().nullable().optional(),
       parent: z.string().nullable().optional(),
@@ -3259,12 +3311,45 @@ server.registerTool(
     run(() => {
       const plan = storeFor(input.ws).plan();
       const actor = requireActor(input.actor);
-      const fields = { title: input.title, brief: input.brief, maturity: input.maturity, horizon: input.horizon, parent: input.parent, plannedStart: input.planned_start, plannedTarget: input.planned_target };
+      const fields = {
+        title: input.title,
+        brief: input.brief,
+        maturity: input.maturity,
+        horizon: input.horizon,
+        parent: input.parent,
+        plannedStart: input.planned_start,
+        plannedTarget: input.planned_target,
+        plan: input.plan as PlanPatch | undefined,
+        breakdownBase: input.breakdown_base,
+      };
       if (Object.values(fields).some((value) => value !== undefined)) plan.update(input.ref, fields, actor);
       if (input.add_question !== undefined) plan.addQuestion(input.ref, input.add_question, actor);
       if (input.resolve_question !== undefined) plan.resolveQuestion(input.ref, input.resolve_question, actor, input.resolved !== false);
+      if (input.defer_question !== undefined) plan.deferQuestion(input.ref, input.defer_question, actor, input.resolved !== false);
       if (input.add_decision !== undefined) plan.addDecision(input.ref, input.add_decision, actor);
       return plan.detail(input.ref);
+    }),
+);
+
+server.registerTool(
+  "scaffold_idea",
+  {
+    description:
+      "Scaffold a shaped idea, in two calls. First without confirm: the preview, writing nothing: the epic it becomes (promoted in place; its goal, context, decisions, scope and risks become the epic's plan document, its acceptance criteria the epic's), every task its breakdown rows become (estimate, blockers from depends-on, acceptance, a context document; a row with no \"done when\" inherits the plan's acceptance criteria and its task is labelled acceptance-inherited to be sharpened), each shaped sub-idea as a child epic the same way, problems (what the plan lacks; while any is listed the confirm is refused), warnings (estimates that are not durations) and a fingerprint. Then confirm: true with that fingerprint creates exactly what the preview showed; a confirm without a fingerprint is refused, and one whose plan changed since the preview is refused with revision_conflict (preview again). Idempotent: each task's identity follows from the idea and its row, so a retry, a scaffold after rows were added, or another device scaffolding the same idea creates each task once; it adds the blockers depends-on names and never removes one someone set. Only a shaped idea offers it (or one scaffolded before); a raw or exploring idea or a plain task is refused, preview included.",
+    inputSchema: {
+      ref: ideaRefSchema,
+      confirm: z.boolean().optional().describe("true creates what the preview with this fingerprint showed; absent or false only previews"),
+      fingerprint: z.string().optional().describe("The preview's fingerprint; required with confirm: true"),
+      actor: actorSchema,
+      ws: wsSchema,
+    },
+    annotations: { title: "Scaffold idea", ...milestoneWriteAnnotations },
+  },
+  ({ ref, confirm, fingerprint, actor, ws }) =>
+    run(() => {
+      const plan = storeFor(ws).plan();
+      if (confirm !== true) return { preview: true, scaffold: plan.scaffoldPreview(ref) };
+      return { preview: false, scaffold: plan.scaffold(ref, fingerprint ?? null, requireActor(actor)) };
     }),
 );
 
@@ -4149,6 +4234,7 @@ server.registerTool(
     inputSchema: { ws: wsSchema },
     outputSchema: {
       server: z.object({ name: z.string(), version: z.string() }),
+      features: z.object({ planning: z.boolean() }).nullable(),
       workspace: z
         .object({ slug: z.string(), prefix: z.string(), total: z.number().int(), statuses: z.array(z.object(aboutStatusShape)) })
         .nullable()
@@ -4176,7 +4262,8 @@ server.registerTool(
       workspace = null;
     }
     const views = VIEWS.map((view) => ({ name: view.name, uri: viewUri(view.name), title: view.title }));
-    const payload = { server: { name: "staple", version: STAPLE_VERSION }, workspace, views };
+    const features = workspace === null ? null : { planning: storeFor(ws).planningOn() };
+    const payload = { server: { name: "staple", version: STAPLE_VERSION }, workspace, views, features };
     // The text is the whole answer for a host without MCP Apps, so it is prose, not JSON.
     const lines = [
       `staple ${STAPLE_VERSION}`,
@@ -4189,6 +4276,7 @@ server.registerTool(
                 .filter((status) => status.count > 0)
                 .map((status) => `${status.count} ${status.label.toLowerCase()}`)
                 .join(", ")}.`),
+      `Experimental features: planning ${features?.planning ? "on" : "off"}. Only a person changes features.planning.`,
       `Views: ${views.map((view) => `${view.name} (${view.uri})`).join(", ")}.`,
     ];
     return { content: [{ type: "text" as const, text: lines.join("\n") }], structuredContent: payload };

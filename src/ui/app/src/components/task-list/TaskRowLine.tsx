@@ -50,7 +50,8 @@ import { LabelPills } from "./LabelPills";
 import { ParentRollupBar } from "./ParentRollup";
 import { PrBadge } from "./PrBadge";
 import { PrioritySignal } from "./PrioritySignal";
-import { DeskPickupCue, MilestoneCue, PickupCue, PickupPill } from "./RowCues";
+import { DeskPickupCue, HorizonCompactChip, MilestoneCue, PickupCue, PickupPill } from "./RowCues";
+import { rowMilestoneCue } from "./row-cues";
 import { StatusIcon } from "./StatusIcon";
 import { Avatar, RowClaimSlot } from "./WorkingPill";
 import { AutopilotBadge } from "@/components/autopilot/AutopilotBadge";
@@ -305,6 +306,7 @@ export function TaskRowLine({
    * at the top of this file.
    */
   const cues = row.cues ?? null;
+  const milestoneCue = rowMilestoneCue(row);
   const { columns, labelMax } = config;
   /**
    * What this width keeps — row-layout.ts. Every element below that the ladder can drop is
@@ -537,7 +539,7 @@ export function TaskRowLine({
         {/* The desktop row says where a task stands in the plan with the phone's plain pill
             ("Next", "Queued"), after the title, never with the marks before it. */}
         {cues?.pickup && plan.cues === "marks" && !desk ? <PickupCue cue={cues.pickup} compact={!plan.cueWords} /> : null}
-        {cues?.milestone && plan.milestoneMark && !desk ? <MilestoneCue cue={cues.milestone} onOpen={onOpenMilestone} /> : null}
+        {milestoneCue && plan.milestoneMark && !desk ? <MilestoneCue cue={milestoneCue} onOpen={onOpenMilestone} /> : null}
         {columns.workspace ? (
           <span className="staple-row-workspace" data-testid="workspace-pill" title={`Workspace: ${row.workspace}`}>
             {row.workspace}
@@ -631,9 +633,7 @@ export function TaskRowLine({
             {columns.claim && !ghost ? <AutopilotBadge workspace={row.workspace} issueId={issue.id} folded={collapsedParent} /> : null}
             {columns.deps ? <DependencyBadges row={row} merged={plan.deps === "merged"} words /> : null}
             {columns.pr && plan.prBadge ? <PrBadge pullRequests={row.pullRequests} showNumber={plan.prNumber} /> : null}
-            {cues?.milestone && plan.milestoneMark ? (
-              <MilestoneCue cue={cues.milestone} onOpen={onOpenMilestone} chip />
-            ) : null}
+            {milestoneCue && plan.milestoneMark ? <MilestoneCue cue={milestoneCue} onOpen={onOpenMilestone} chip /> : null}
             {columns.labels && plan.labels !== "none" ? (
               <LabelPills labels={deskLabels(issue.labels, columns.priority)} max={labelMax} />
             ) : null}
@@ -716,6 +716,7 @@ export function TaskRowLine({
         </span>
       ) : (
       <span className="staple-row-meta">
+        {milestoneCue?.horizon && plan.horizonChip === "compact" && !desk ? <HorizonCompactChip cue={milestoneCue} onOpen={onOpenMilestone} /> : null}
         {/*
           FIRST in the meta cluster — O6 (STA-138), and therefore the element nearest the
           title. VP's reference puts the warning triangle immediately beside the priority

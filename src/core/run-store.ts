@@ -99,6 +99,7 @@ import { newId } from "./ids.js";
 import type { MilestoneGoal } from "./milestone-store.js";
 import { GOAL_CHILD_CAP_DEFAULT, type GoalCounts, RUN_ORIGIN_KIND } from "./milestone-goal.js";
 import { MILESTONE_KIND, goalRunGateRequester, isGoalRunGate } from "./milestones.js";
+import { RUN_MODES, isRunMode } from "./plan-lifecycle-table.js";
 import { databaseFile, type DriverAttachment, readDriver } from "./run-attachment.js";
 import type { WorkspaceStore } from "./store.js";
 import { normalizeInstant, parseRelativeSeconds } from "./telemetry/formats.js";
@@ -708,7 +709,7 @@ export class RunStore {
    * instruction document on a sibling the run has not reached yet.
    */
   private takeInstructions(row: RunRow, issueId: string, run: Run): { instructions: ResolvedInstruction[]; instructionsChanged: InstructionChange[] } {
-    const instructions = resolveInstructions(this.db, issueId, { runId: row.id });
+    const instructions = resolveInstructions(this.db, issueId, { runId: row.id, planning: this.store.planningOn() });
     const instructionsChanged = this.pendingInstructionChanges(run);
     this.db.prepare("UPDATE runs SET instructions_seq = ? WHERE id = ?").run(latestEventSeq(this.db), row.id);
     return { instructions, instructionsChanged };
@@ -1530,7 +1531,27 @@ export class RunStore {
       );
     }
     const goal = this.parseGoal(input, scope);
+    if (scope.kind === "milestone") this.assertHorizonRunsToGoal(scope.issueId, scope.identifier ?? scope.issueId);
     return { actor, budget, override, scope, key, goal };
+  }
+
+  /**
+   * A goal run over a horizon only when the person set it to run until its goal is met: a goal
+   * run gates the close for a goal check, which a horizon set to stop at its work, or at each
+   * epic, is not to get (design/plan.md, "Lenses"). Its work is taken from the queue instead.
+   */
+  private assertHorizonRunsToGoal(issueId: string, identifier: string): void {
+    const row = this.db.prepare("SELECT plan_run_mode FROM issues WHERE id = ? AND kind = ? AND plan_rank IS NOT NULL").get(issueId, MILESTONE_KIND) as
+      | { plan_run_mode: string | null }
+      | undefined;
+    if (row === undefined) return;
+    this.store.plan().assertEnabled();
+    if (row.plan_run_mode === "goal") return;
+    throw new StapleError(
+      "validation",
+      `${identifier} is a horizon set to run ${isRunMode(row.plan_run_mode) ? RUN_MODES[row.plan_run_mode].label.toLowerCase() : "not set"}, and a goal run would hold it for a goal check it is not set to make. Take its work from the queue (staple queue next); the person changes how far it runs in the Plan view.`,
+      { runMode: row.plan_run_mode },
+    );
   }
 
   private parseGoal(input: Pick<StartRunInput, "gateOwner" | "goalChildCap">, scope: RunScope): { gateOwner: string; childCap: number } | null {

@@ -457,7 +457,7 @@ export class QueueStore {
     // Ideas and horizons are plans above the tracker; nothing queues them (design/plan.md).
     if (this.store.isPlanIssue(issue.kind)) throw planKindRefusal(issue, "queued");
     // A horizon is queued while it holds work; before that there is nothing to queue, and after it shipped nothing is left.
-    if (this.store.planningOn()) this.store.plan().assertQueueable(issue.id);
+    if (this.store.isHorizon(issue.id)) this.store.plan().assertQueueable(issue.id);
     return this.journaled(() => {
       const current = this.entryOf(issue.id);
       if (current !== undefined && !hasPosition(options)) {
@@ -636,6 +636,8 @@ export class QueueStore {
         .map((row, index) => ({ row, position: index + 1 }))
         .filter(({ row }) => this.store.isResolvedStatus(row.status));
       if (resolved.length === 0) return this.plan();
+      // A bulk prune has the same record protections as an explicit dequeue.
+      for (const { row } of resolved) this.requireIssue(row.issue_id);
       for (const { row } of resolved) this.remove(row.issue_id);
       const revision = this.bumpRevision();
       for (const { row, position } of resolved) {
@@ -661,8 +663,7 @@ export class QueueStore {
       .prepare("SELECT id, identifier, title, kind, status, parent_id, checkout_agent, assignee FROM issues")
       .all() as unknown as IssueNode[];
     // The resolver never sees a plan: no idea or horizon is ever an effective row.
-    const planning = this.store.planningOn();
-    return new Map(rows.filter((row) => !(planning && isPlanKind(row.kind))).map((row) => [row.id, row]));
+    return new Map(rows.filter((row) => !isPlanKind(row.kind)).map((row) => [row.id, row]));
   }
 
   /**

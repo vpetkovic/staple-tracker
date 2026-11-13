@@ -61,6 +61,7 @@ const EXCLUDED: Record<string, string> = {
   plan_baseline_start: "as plan_maturity",
   plan_baseline_target: "as plan_maturity",
   plan_rank: "as plan_maturity",
+  plan_run_mode: "null at create; the person's horizon setting journals it (test/cloud-plan-sync.test.ts)",
 };
 
 function armed(): WorkspaceStore {

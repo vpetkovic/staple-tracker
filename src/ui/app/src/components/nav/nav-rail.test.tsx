@@ -38,6 +38,7 @@ const project = (over: Partial<Project> = {}): Project => ({
 
 function session(over: Partial<StapleSession> = {}): StapleSession {
   return {
+    planningEnabled: true,
     mode: "workspace",
     workspaces: [{ slug: "staple", prefix: "STA" }],
     view: "tree",

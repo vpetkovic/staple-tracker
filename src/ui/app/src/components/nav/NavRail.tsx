@@ -325,9 +325,10 @@ function NavGroupSection({
   onNavigate?: () => void;
   className?: string;
 }) {
+  const session = useSession();
   return (
     <RailSection id={group.id} label={label} className={className}>
-      {group.items.map((entry) => (
+      {group.items.filter(entry => entry.view !== "plan" || session.planningEnabled === true).map((entry) => (
         <NavItemRow key={entry.id} entry={entry} view={view} onSelect={onSelect} onNavigate={onNavigate} />
       ))}
     </RailSection>

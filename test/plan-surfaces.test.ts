@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
 import { CONTRACT_AGENT, runCliAsync, startMcpClient, toolPayload, type CliResult, type McpHarness } from "./fixtures/contract-support.js";
+import { READY_PLAN } from "./fixtures/plan-ready.js";
 
 const WS = "planws";
 
@@ -90,19 +91,20 @@ afterAll(async () => {
 
 describe("the plan on every surface", () => {
   it("is off until enabled, and every surface says so the same way", async () => {
-    expect((await cliJson("plan", "show")) as Plan).toMatchObject({ enabled: false });
-    expect(toolPayload(await mcpCall("list_ideas", {}))).toMatchObject({ enabled: false });
-    expect((await http(`/api/plan?ws=${WS}`)).body).toMatchObject({ enabled: false });
+    expect((await cli("plan", "show", "--ws", WS)).status).toBe(2);
+    expect((await mcpCall("list_ideas", {})).isError).toBe(true);
+    expect((await http(`/api/plan?ws=${WS}`)).status).toBe(409);
     const refused = await mcpCall("capture_idea", { title: "too early" });
     expect(refused.isError).toBe(true);
-    expect(JSON.stringify(refused.content)).toContain("staple plan enable");
-    expect((await cliJson("plan", "enable")) as Plan).toMatchObject({ enabled: true });
+    expect(JSON.stringify(refused.content)).toContain("features.planning");
+    expect((await http("/api/settings", { target: "settings", ops: [{ op: "set", key: "features.planning", value: true }] })).status).toBe(200);
+    expect((await cliJson("plan", "show")) as Plan).toMatchObject({ enabled: true });
   });
 
   it("captures on every surface and reads the same plan three ways", async () => {
     await cliJson("idea", "new", "From the CLI");
     expect((await mcpCall("capture_idea", { title: "From MCP", brief: "why" })).isError).toBeFalsy();
-    expect((await http("/api/plan/capture", { title: "From the page", maturity: "shaped" })).status).toBe(200);
+    expect((await http("/api/plan/capture", { title: "From the page", maturity: "shaped", plan: READY_PLAN })).status).toBe(200);
     const fromCli = (await cliJson("plan", "show")) as Plan;
     const fromMcp = toolPayload(await mcpCall("list_ideas", {})) as Plan;
     const fromHttp = (await http(`/api/plan?ws=${WS}`)).body as unknown as Plan;
@@ -113,9 +115,9 @@ describe("the plan on every surface", () => {
       ["From MCP", null, "raw", "raw"],
       ["From the page", null, "shaped", "shaped"],
     ]);
-    // Captures took no ticket number: the next issue is the one after the epic and the three horizons.
+    // Captures took no ticket number: the next issue is the one after the epic and the two horizons.
     const next = (await cliJson("new", "Next ticket")) as { identifier: string };
-    expect(next.identifier).toBe("PLA-5");
+    expect(next.identifier).toBe("PLA-4");
     // And no surface shows the draft identifier an idea is stored under.
     for (const text of [JSON.stringify(fromCli), JSON.stringify(fromMcp), JSON.stringify(fromHttp), (await cli("idea", "list", "--ws", WS)).stdout]) {
       expect(text).not.toMatch(/"?~[0-9a-f]{32}/);
@@ -212,11 +214,11 @@ describe("the plan on every surface", () => {
     };
     expect(started.idea.idea).toMatchObject({ stage: "started", promoted: true, baseline: { start: "2026-10-01", target: "2026-11-30" } });
     // Promoted in place: the same record, now an epic with the next ticket number, in its horizon's milestone.
-    expect(started.promoted).toMatchObject({ id: ref("From the page"), identifier: "PLA-7", kind: "epic" });
+    expect(started.promoted).toMatchObject({ id: ref("From the page"), identifier: "PLA-6", kind: "epic" });
     const epic = (await cliJson("show", started.promoted.identifier)) as { issue: { id: string; kind: string } };
     expect(epic.issue).toMatchObject({ id: ref("From the page"), kind: "epic" });
     const milestone = toolPayload(await mcpCall("get_milestone", { ref: now.identifier })) as { members: Array<{ identifier: string }> };
-    expect(milestone.members.map((member) => member.identifier)).toContain("PLA-7");
+    expect(milestone.members.map((member) => member.identifier)).toContain("PLA-6");
     // A re-plan moves the plan and keeps the baseline; the page's reset moves the baseline.
     await http("/api/plan/update", { ref: ref("From the page"), plannedTarget: "2026-12-20" });
     const replanned = (await http(`/api/plan-idea?ws=${WS}&ref=${ref("From the page")}`)).body as unknown as { idea: Idea };
@@ -235,7 +237,7 @@ describe("the plan on every surface", () => {
     expect(detail.idea.maturity).toBe("exploring");
     const horizons = (await cliJson("horizon", "new", "Q2", "--date", "2027-06-30", "--person")) as Array<{ name: string }>;
     // A dated horizon goes in date order ahead of the undated ones.
-    expect(horizons.map((h) => h.name)).toEqual(["Q2", "Now", "Next", "Later"]);
+    expect(horizons.map((h) => h.name)).toEqual(["Q2", "Now", "Next"]);
   });
 
   it("keeps the baseline reset away from the model: the MCP tool is app-only", async () => {

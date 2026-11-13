@@ -154,6 +154,7 @@ const categories: SettingCategory[] = [
     editor: "fields",
     order: 30,
   },
+  { id: "features", label: "Experimental", description: "Experimental workspace features may change.", scope: "workspace", editor: "fields", order: 40 },
   {
     id: "machine",
     label: "This machine",
@@ -243,6 +244,11 @@ const definitions: SettingDefinition[] = [
       control: "select",
       order: 10
     },
+  },
+  {
+    key: "features.planning", category: "features", scope: "workspace",
+    schema: { type: "boolean" }, default: false, version: 1, sensitivity: "normal",
+    ui: { label: "Planning (experimental)", description: "Ideas, horizons and the Plan view. Only a person can change this; turning it off keeps all planning data.", control: "toggle", order: 10 },
   },
   {
     key: "machine.browser",

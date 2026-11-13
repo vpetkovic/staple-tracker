@@ -19,6 +19,7 @@ const NO_PLAN = {
   plan_baseline_start: null,
   plan_baseline_target: null,
   plan_rank: null,
+  plan_run_mode: null,
 };
 
 /**
@@ -178,14 +179,16 @@ const GOAL_SCHEMA_OBJECTS = ["index:sqlite_autoindex_milestone_criterion_marks_1
 /** Everything migration 017 (derived status) adds besides its column: the triggers that hold it to the status. */
 const DERIVED_STATUS_SCHEMA_OBJECTS = ["trigger:issues_derived_status_cleared", "trigger:issues_derived_status_created"];
 
-/** Migration 020 (the plan layer): the link and derived-membership tables, their keys and index, and the partial index that says planning is on. */
+/** Migration 020 (the plan layer): the link, breakdown-row and derived-membership tables, their keys and index, and the partial index that says planning is on. */
 const PLAN_SCHEMA_OBJECTS = [
   "index:issues_plan_ranked_idx",
   "index:plan_members_milestone_idx",
   "index:sqlite_autoindex_plan_links_1",
   "index:sqlite_autoindex_plan_members_1",
+  "index:sqlite_autoindex_plan_rows_1",
   "table:plan_links",
   "table:plan_members",
+  "table:plan_rows",
 ];
 
 /** Everything migration 018 (attachments) adds: two tables, their primary keys, two indexes, and the blob trigger. */
@@ -622,7 +625,8 @@ describe("a v6 workspace — the last shape before milestones", () => {
         // Re-kind rather than create: the fixture predates the issue-number
         // counter, so a create would mint LEG-1 again. The point is the same —
         // a milestone-kinded row exists BEFORE 007 runs.
-        store.updateIssue("LEG-1", { kind: "milestone" }, "vlad");
+        expect(() => store.updateIssue("LEG-1", { kind: "milestone" }, "vlad")).not.toThrow();
+        expect(store.isHorizon(store.getIssue("LEG-1").id)).toBe(false);
         const kindsBefore = store.getKinds();
         const issuesBefore = db.prepare("SELECT * FROM issues ORDER BY identifier").all();
         expect(kindsBefore.map((k) => k.id)).toContain("milestone");

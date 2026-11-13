@@ -32,7 +32,9 @@ import {
   type IdeaState,
 } from "../src/core/plan-lifecycle.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
-import { CONTRACT_AGENT, runCliAsync, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
+import { READY_PLAN } from "./fixtures/plan-ready.js";
+import { bundledCli, runBundledCli } from "./fixtures/cli-bundle.js";
+import { CONTRACT_AGENT, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
 
 const WS = "cyclews";
 
@@ -85,11 +87,21 @@ async function plan(): Promise<Plan> {
 }
 
 async function cli(person: boolean, ...args: string[]) {
-  return await runCliAsync([...args, "--ws", WS, ...(person ? ["--person"] : [])], { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT });
+  // The CLI as one bundled file: the walk runs it for hundreds of cells, and each run then starts in a fraction of tsx's time.
+  return await runBundledCli([...args, "--ws", WS, ...(person ? ["--person"] : [])], { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT });
 }
 
 async function mcpCall(name: string, args: Record<string, unknown>) {
   return await mcp.call(name, { ws: WS, ...args });
+}
+
+/** Run every job, at most `width` at once, each next one starting as soon as one finishes. */
+async function pool(jobs: ReadonlyArray<() => Promise<void>>, width: number): Promise<void> {
+  let next = 0;
+  const lane = async (): Promise<void> => {
+    while (next < jobs.length) await jobs[next++]!();
+  };
+  await Promise.all(Array.from({ length: width }, lane));
 }
 
 let counter = 0;
@@ -111,7 +123,8 @@ const maturityOf = (state: IdeaState) => (state === "raw" ? "raw" : state === "e
 /** A fresh idea in `state`, made as the person; its id, and the task it links when it has one. */
 async function fixture(state: IdeaState): Promise<{ id: string; linked: string | null }> {
   const maturity = maturityOf(state);
-  const captured = await http("/api/plan/capture", { title: unique(`A ${state} idea`), maturity, brief: "The first brief." });
+  // Every fixture carries a plan that passes the shaped gate, so a shaping cell measures the lifecycle alone.
+  const captured = await http("/api/plan/capture", { title: unique(`A ${state} idea`), maturity, brief: "The first brief.", plan: READY_PLAN });
   expect(captured.status, JSON.stringify(captured.body)).toBe(200);
   const id = (captured.body.idea as { idea: { id: string } }).idea.id;
   let linked: string | null = null;
@@ -195,16 +208,17 @@ function outcomeOf(ok: boolean, message: string, state: string): Outcome | `unex
 beforeAll(async () => {
   home = mkdtempSync(join(tmpdir(), "staple-cycle-home-"));
   emptyDir = mkdtempSync(join(tmpdir(), "staple-cycle-cwd-"));
+  await bundledCli();
   process.env.STAPLE_HOME = home;
   process.env.NODE_NO_WARNINGS = "1";
-  expect((await runCliAsync(["init", "--global", WS], { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT })).status).toBe(0);
-  expect((await runCliAsync(["config", "set", "humanName", "VP"], { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT })).status).toBe(0);
+  expect((await runBundledCli(["init", "--global", WS], { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT })).status).toBe(0);
+  expect((await runBundledCli(["config", "set", "humanName", "VP"], { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT })).status).toBe(0);
   mcp = await startMcpClient({ home, cwd: emptyDir, agent: CONTRACT_AGENT });
   ui = startUiServer({ port: 0, hub: true });
   await once(ui.server, "listening");
   token = ui.token;
   origin = `http://127.0.0.1:${(ui.server.address() as AddressInfo).port}`;
-  expect((await http("/api/plan/enable", {})).status).toBe(200);
+  expect((await http("/api/settings", { target: "settings", ops: [{ op: "set", key: "features.planning", value: true }] })).status).toBe(200);
 }, 60_000);
 
 afterAll(async () => {
@@ -220,7 +234,8 @@ describe("the idea lifecycle on every surface", () => {
       const { id } = await fixture(state);
       const row = (await plan()).ideas.find((idea) => idea.id === id)!;
       expect(row.state).toBe(state);
-      const table = ideaOffered(state, row.promoted).filter((action) => action !== "open_epic" || row.promoted);
+      // The epic opens once promoted; a started record scaffolds again only if it was scaffolded.
+      const table = ideaOffered(state, row.promoted).filter((action) => (action !== "open_epic" || row.promoted) && !(action === "scaffold" && state === "started"));
       expect(row.actions.map((action) => action.id), state).toEqual(table);
       for (const action of row.actions) expect(action.who, `${state}/${action.id}`).toBe(IDEA_ACTIONS[action.id as IdeaAction].who);
     }
@@ -291,8 +306,8 @@ describe("the idea lifecycle on every surface", () => {
         }
       }
     }
-    // Every cell on its own record, so they run side by side, a few at a time.
-    for (let next = 0; next < jobs.length; next += 12) await Promise.all(jobs.slice(next, next + 12).map((job) => job()));
+    // Every cell on its own record, so they run side by side: a steady few at a time, each next one starting as one ends.
+    await pool(jobs, 6);
     expect(failures).toEqual([]);
     expect(cells).toBeGreaterThan(250);
   }, 300_000);
@@ -304,7 +319,8 @@ describe("promoted records and parents with sub-ideas on every surface", () => {
       const { id } = await promotedFixture(state);
       const row = (await plan()).ideas.find((idea) => idea.id === id)!;
       expect(row).toMatchObject({ state, promoted: true });
-      expect(row.actions.map((action) => action.id), state).toEqual([...ideaOffered(state, true)]);
+      // A started record that was not scaffolded does not offer Scaffold.
+      expect(row.actions.map((action) => action.id), state).toEqual(ideaOffered(state, true).filter((action) => !(action === "scaffold" && state === "started")));
     }
   }, 60_000);
 
@@ -318,7 +334,7 @@ describe("promoted records and parents with sub-ideas on every surface", () => {
     ];
     for (const { parent, child } of cases) {
       const { id } = await fixture(parent === "dropped" ? "shaped" : parent);
-      const sub = await http("/api/plan/capture", { title: unique("A sub-idea"), maturity: "shaped", parent: id });
+      const sub = await http("/api/plan/capture", { title: unique("A sub-idea"), maturity: "shaped", parent: id, plan: READY_PLAN });
       const subId = (sub.body.idea as { idea: { id: string } }).idea.id;
       expect((await http("/api/plan/adopt", { ref: subId, issue: await task(child === "shipped") })).status).toBe(200);
       if (parent === "dropped") expect((await http("/api/plan/update", { ref: id, maturity: "dropped" })).status).toBe(200);

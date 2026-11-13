@@ -1,3 +1,4 @@
+import { browserStorage, loadPlanMemory, withPlanLens } from "./views/plan/plan-memory";
 /**
  * The root: bootstrap, session state, and the mount points that sit above the shell.
  *
@@ -109,7 +110,7 @@ import { LoadingState, ProblemState } from "@/components/plain/States";
  * its entry goes too, which is how the inbox and the board left without leaving a
  * dangling route behind them.
  */
-const VIEW_COMPONENTS: Record<ViewName, typeof TreeView> = {
+const VIEW_COMPONENTS: Record<ViewName, typeof TreeView | typeof PlanView> = {
   tree: TreeView,
   graph: GraphView,
   milestones: MilestonesView,
@@ -174,9 +175,9 @@ export function App() {
    * filtered in yet, so nobody opens this build to a filter set they never chose. See
    * `filtersForScope` in lib/view-prefs.ts.
    */
-  const [legacyFilters, setLegacyFilters] = useState<FilterState>(() => loadFilters(window.localStorage));
+  const [legacyFilters, setLegacyFilters] = useState<FilterState>(() => loadFilters(browserStorage() as Storage));
   const [filterPrefs, setFilterPrefs] = useState<Record<string, FilterState>>(() => {
-    const stored = loadViewPrefs(window.localStorage).filters;
+    const stored = loadViewPrefs(browserStorage() as Storage).filters;
     // An address that describes a page decides that page's filters, whatever was stored.
     if (!initialUrl) return stored;
     return withFiltersForScope(stored, sortScopeKey(initialUrl.ws, initialUrl.view), initialUrl.filters);
@@ -187,7 +188,7 @@ export function App() {
    * reason the filters are: an effect would paint one frame of the wrong layout and then
    * correct itself, and a list that re-arranges itself 16ms after it appears reads as a bug.
    */
-  const [groupBy, setGroupBy] = useState<GroupBy>(() => loadViewPrefs(window.localStorage).groupBy);
+  const [groupBy, setGroupBy] = useState<GroupBy>(() => loadViewPrefs(browserStorage() as Storage).groupBy);
 
   /**
    * The sort preference for every scope the user has ever set one in — R4a (STA-186).
@@ -199,7 +200,7 @@ export function App() {
    * the wrong order and then correct itself.
    */
   const [sortPrefs, setSortPrefs] = useState<Record<string, SortPref>>(
-    () => loadViewPrefs(window.localStorage).sort,
+    () => loadViewPrefs(browserStorage() as Storage).sort,
   );
 
   /**
@@ -209,7 +210,7 @@ export function App() {
    */
   useEffect(() => {
     const prefs: ViewPrefs = { groupBy, sort: sortPrefs, filters: filterPrefs };
-    saveViewPrefs(window.localStorage, prefs);
+    saveViewPrefs(browserStorage() as Storage, prefs);
   }, [groupBy, sortPrefs, filterPrefs]);
 
   /**
@@ -237,7 +238,7 @@ export function App() {
    * they had before the upgrade.
    */
   useEffect(() => {
-    saveFilters(window.localStorage, filters);
+    saveFilters(browserStorage() as Storage, filters);
   }, [filters]);
 
   /**
@@ -254,7 +255,10 @@ export function App() {
   }, []);
 
   const { version, bump } = useDataVersion(onAuthError);
-  const bootstrap = useResource(() => getBootstrap(), [], onAuthError);
+  const bootstrap = useResource(() => getBootstrap(), [version], onAuthError);
+  const featureWorkspace = ws || (bootstrap.data?.mode === "workspace" ? bootstrap.data.workspaces[0]?.slug : "");
+  const planningEnabled = bootstrap.data?.features?.[featureWorkspace ?? ""]?.planning === true;
+  const planningResolved = bootstrap.data !== undefined;
 
   /**
    * The page's one issue fetch. Scoped by workspace only — every other dimension is
@@ -525,6 +529,7 @@ export function App() {
     () => ({ ws, view, filters, focus: milestoneFocus }),
     [ws, view, filters, milestoneFocus],
   );
+  const planWorkspace = ws || (bootstrap.data?.workspaces.length === 1 || bootstrap.data?.mode === "workspace" ? bootstrap.data?.workspaces[0]?.slug : "") || "";
   useEffect(() => {
     const navigating = !correcting.current && isNavigation(lastSynced.current, shellState);
     correcting.current = false;
@@ -542,7 +547,8 @@ export function App() {
       // The page being left forgets the ticket too, the way it does for one opened from the
       // page (whose entry was stepped past): Back returns to the page, not to the ticket.
       if (navigating && from !== window.location.href) replaceUrl(from);
-      const href = withShellState(from, shellState);
+      const shellHref = withShellState(from, shellState, { planningEnabled: planningResolved ? planningEnabled : undefined });
+      const href = navigating && shellState.view === "plan" && planningEnabled ? withPlanLens(shellHref, loadPlanMemory(planWorkspace).lens) : shellHref;
       if (href === window.location.href) return;
       if (navigating) pushPage(href);
       else replaceUrl(href);
@@ -551,7 +557,7 @@ export function App() {
     // returns to the old page and not to a stale overlay entry of it.
     if (navigating) leaveOverlays(write);
     else afterHistorySettles(write);
-  }, [shellState]);
+  }, [shellState, planWorkspace, planningResolved, planningEnabled]);
 
   useEffect(() => {
     const onPop = () => {
@@ -570,7 +576,7 @@ export function App() {
         // whose new page is about to be pushed — and with the state as it is then.
         whenHistoryIsFree(() => {
           const keep = lastSynced.current;
-          if (keep) replaceUrl(withShellState(window.location.href, keep));
+          if (keep) replaceUrl(withShellState(window.location.href, keep, { planningEnabled: planningResolved ? planningEnabled : undefined }));
         });
         return;
       }
@@ -584,7 +590,7 @@ export function App() {
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
-  }, []);
+  }, [planningResolved, planningEnabled]);
 
   /**
    * An address naming a workspace this hub does not have (a link from another machine, a
@@ -608,13 +614,19 @@ export function App() {
   const close = useCallback(() => setSelection(null), []);
 
   const settingsSnapshot = settings.settings;
+  const effectiveFilters = useMemo(() => {
+    if (planningEnabled || !filters.dims.horizon) return filters;
+    const { horizon: _horizon, ...dims } = filters.dims;
+    return { ...filters, dims };
+  }, [filters, planningEnabled]);
 
   const session = useMemo<StapleSession | null>(() => {
     if (!bootstrap.data) return null;
     return {
+      planningEnabled,
       mode: bootstrap.data.mode,
       workspaces: bootstrap.data.workspaces,
-      view,
+      view: view === "plan" && !planningEnabled ? "tree" : view,
       setView: goToView,
       milestoneFocus,
       focusMilestone,
@@ -623,10 +635,10 @@ export function App() {
       ws,
       setWs,
       issues,
-      filters,
+      filters: effectiveFilters,
       setFilters,
       filterContext,
-      groupBy,
+      groupBy: groupBy === "horizon" && !planningEnabled ? "none" : groupBy,
       setGroupBy,
       sort,
       setSort,
@@ -642,6 +654,8 @@ export function App() {
       refresh: bump,
     };
   }, [
+    planningEnabled,
+    effectiveFilters,
     bootstrap.data,
     // Not read by the session — held as a dependency so that a vocabulary change
     // rebuilds it and every view re-renders against the new statuses. See above.

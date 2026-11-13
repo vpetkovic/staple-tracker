@@ -35,8 +35,11 @@ describe("scenario 1: cancelling a horizon's only work", () => {
   it("keeps the horizon a column, not cancelled, holding the work", () => {
     const st = workspace("wsa");
     expect(st("config", "set", "humanName", "VP").status).toBe(0);
-    expect(st("plan", "enable").status).toBe(0);
+    expect(st("plan", "enable", "--person").status).toBe(0);
     const id = json(st("idea", "new", "Horizon probe", "--json")).idea.id as string;
+    // Shaping needs a plan that passes the gate: a goal, a task with acceptance, acceptance criteria.
+    expect(st("idea", "plan", id, "--goal", "Probe the horizon", "--acceptance", "It behaves as described").status).toBe(0);
+    expect(st("idea", "task", id, "add", "1", "Probe it", "--acceptance", "Observed").status).toBe(0);
     expect(st("idea", "set", id, "--maturity", "shaped", "--horizon", "WSA-1", "--person").status).toBe(0);
     expect(st("idea", "promote", id, "--person", "--json").status).toBe(0);
     const epic = json(st("idea", "show", id, "--json")).idea.identifier as string;
@@ -57,8 +60,11 @@ describe("scenario 2: removing a horizon that holds work and is queued", () => {
   it("is refused, names what to move, and changes nothing", () => {
     const st = workspace("wsb");
     expect(st("config", "set", "humanName", "VP").status).toBe(0);
-    expect(st("plan", "enable").status).toBe(0);
+    expect(st("plan", "enable", "--person").status).toBe(0);
     const id = json(st("idea", "new", "Promoted on Now", "--json")).idea.id as string;
+    // Shaping needs a plan that passes the gate: a goal, a task with acceptance, acceptance criteria.
+    expect(st("idea", "plan", id, "--goal", "Probe the horizon", "--acceptance", "It behaves as described").status).toBe(0);
+    expect(st("idea", "task", id, "add", "1", "Probe it", "--acceptance", "Observed").status).toBe(0);
     expect(st("idea", "set", id, "--maturity", "shaped", "--horizon", "WSB-1", "--person").status).toBe(0);
     expect(st("idea", "promote", id, "--person").status).toBe(0);
     const epic = json(st("idea", "show", id, "--json")).idea.identifier as string;

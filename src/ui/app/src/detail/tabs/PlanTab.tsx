@@ -5,7 +5,9 @@
  * (`offers`, from the core table through the payload): a raw idea shows no horizon or dates to
  * set, a shipped one shows its plan read-only, and nothing is offered that the store would
  * refuse. Maturity moves and promotion are the header's buttons; this tab holds the editors that
- * need input. What is derived (stage, progress, actual dates, lateness) is shown, never edited.
+ * need input: the plan sections an agent scaffolds from (PlanSections.tsx), and Scaffold's
+ * preview and confirm. What is derived (stage, progress, actual dates, lateness) is shown, never
+ * edited.
  */
 import { Link2, Unlink } from "lucide-react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
@@ -14,17 +16,29 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { getPlan } from "@/lib/api";
-import type { IdeaDetailData, PlanData, Stage } from "@/lib/plan-types";
+import { Markdown } from "@/lib/markdown";
+import type { IdeaDetailData, PlanData } from "@/lib/plan-types";
 import { useSession } from "@/lib/session";
 import { useResource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
 import { Chip, Progress } from "@/views/plan/PlanBoards";
+import { ShippedMark } from "../ShippedMark";
 import { dayLabel, descendantsOf } from "@/views/plan/plan-model";
 import { offers } from "../plain-actions";
-import { STATE_WORDS, planRecordOf, usePlanWrite, type PlanWrite } from "../plan-record";
+import { STATE_WORDS, onScaffoldRequest, planRecordOf, usePlanWrite, type PlanWrite } from "../plan-record";
+import { Completeness, EditButton, PlanSectionsView, ScaffoldSection, Section, useProse } from "./PlanSections";
 import type { TabProps } from "./registry";
 
-const LADDER: readonly Stage[] = ["raw", "exploring", "shaped", "scheduled", "started", "shipped"];
+/**
+ * The lifecycle as phases: thinking until work exists, then started, then shipped. Maturity and
+ * the horizon are separate facts shown below it, so being scheduled never reads as being further
+ * along than exploring.
+ */
+const PHASES = [
+  { id: "thinking", label: "Thinking" },
+  { id: "started", label: "Started" },
+  { id: "shipped", label: "Shipped" },
+] as const;
 
 export function PlanTab({ detail, workspace, onAuthError, refresh }: TabProps) {
   const record = planRecordOf(detail);
@@ -32,13 +46,25 @@ export function PlanTab({ detail, workspace, onAuthError, refresh }: TabProps) {
   const loadPlan = useCallback(() => getPlan({ ws: workspace }), [workspace]);
   const plan = useResource(loadPlan, [workspace, session.version], onAuthError).data ?? null;
   const { write, refusal } = usePlanWrite(workspace, refresh);
+  const [scaffoldOpen, setScaffoldOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  // The header's Scaffold opens the preview here: it is never a one-click write.
+  useEffect(() => onScaffoldRequest(() => setScaffoldOpen(true)), []);
   if (!record) return null;
+  const scaffold = async (fingerprint: string) => {
+    setBusy(true);
+    if (await write("scaffold", { ref: record.idea.id, fingerprint })) setScaffoldOpen(false);
+    setBusy(false);
+  };
   return (
     <div className="space-y-6" data-plan-tab={record.idea.id} data-plan-state={record.idea.state}>
       {refusal ? <GuardRefusal refusal={refusal} /> : null}
       <Stage record={record} />
+      <Completeness record={record} />
+      {record.scaffold ? <ScaffoldSection preview={record.scaffold} open={scaffoldOpen} onToggle={() => setScaffoldOpen((open) => !open)} onConfirm={(fingerprint) => void scaffold(fingerprint)} busy={busy} /> : null}
       <Fields record={record} plan={plan} write={write} />
       <Brief record={record} write={write} />
+      <PlanSectionsView record={record} write={write} />
       <Questions record={record} write={write} />
       <Decisions record={record} write={write} />
       <SubIdeas record={record} workspace={workspace} />
@@ -47,40 +73,37 @@ export function PlanTab({ detail, workspace, onAuthError, refresh }: TabProps) {
   );
 }
 
-function Section({ label, children, testId }: { label: string; children: ReactNode; testId?: string }) {
-  return (
-    <section data-plan-section={testId}>
-      <h3 className="mb-2 text-caption font-semibold tracking-wide text-text-tertiary uppercase">{label}</h3>
-      {children}
-    </section>
-  );
-}
-
 function Stage({ record }: { record: IdeaDetailData }) {
   const { idea } = record;
-  const at = LADDER.indexOf(idea.stage);
+  // Its own state, as every lens reads it: the rollup and the horizon never move the phase.
+  const phase = idea.state === "shipped" ? "shipped" : idea.state === "started" ? "started" : "thinking";
+  const at = PHASES.findIndex((entry) => entry.id === phase);
   return (
     <Section label="Stage" testId="stage">
-      <ol className="flex flex-wrap gap-1 text-caption" data-plan-ladder>
-        {LADDER.map((stage, index) => (
-          <li
-            key={stage}
-            className={cn(
-              "rounded-full border px-2 py-0.5",
-              index < at && "border-transparent bg-muted text-text-secondary",
-              index === at && "border-primary bg-primary text-primary-foreground",
-              index > at && "text-text-tertiary",
-            )}
-          >
-            {stage}
-          </li>
-        ))}
-        {idea.stage === "dropped" ? <li className="rounded-full border border-destructive/60 px-2 py-0.5 text-destructive">dropped</li> : null}
+      <ol className="flex flex-wrap gap-1 text-caption" data-plan-phases={phase}>
+        {idea.state === "dropped" ? (
+          <li className="rounded-full border border-destructive/60 px-2 py-0.5 text-destructive">dropped</li>
+        ) : (
+          PHASES.map((entry, index) => (
+            <li
+              key={entry.id}
+              className={cn(
+                "rounded-full border px-2 py-0.5",
+                index < at && "border-transparent bg-muted text-text-secondary",
+                index === at && "border-primary bg-primary text-primary-foreground",
+                index > at && "text-text-tertiary",
+              )}
+            >
+              {entry.label}
+              {entry.id === "thinking" && index === at ? ` · ${STATE_WORDS[idea.maturity]?.toLowerCase() ?? idea.maturity}` : ""}
+            </li>
+          ))
+        )}
       </ol>
       <div className="mt-2 flex flex-wrap gap-1.5 text-caption">
         {idea.late ? <Chip tone="red">late</Chip> : null}
         {idea.notStarted ? <Chip tone="amber">not started</Chip> : null}
-        {idea.state === "shipped" ? <Chip tone="blue">✓ shipped</Chip> : null}
+        {idea.state === "shipped" ? <ShippedMark on={idea.actual.end} withYear /> : null}
       </div>
     </Section>
   );
@@ -162,22 +185,29 @@ function Fields({ record, plan, write }: { record: IdeaDetailData; plan: PlanDat
 }
 
 function Brief({ record, write }: { record: IdeaDetailData; write: PlanWrite }) {
-  const [brief, setBrief] = useState(record.brief ?? "");
-  useEffect(() => setBrief(record.brief ?? ""), [record.brief]);
   const editable = offers(record.idea, "edit");
+  const prose = useProse({ value: record.brief ?? "", editable, onSave: (brief) => void write("update", { ref: record.idea.id, brief }) });
   return (
-    <Section label="Brief" testId="brief">
-      {editable ? (
+    <Section label="Brief" testId="brief" action={editable && !prose.editing && record.brief ? <EditButton label="Brief" testId="brief" onClick={prose.start} /> : null}>
+      {prose.editing ? (
         <Textarea
-          value={brief}
-          onChange={(event) => setBrief(event.target.value)}
-          onBlur={() => brief !== (record.brief ?? "") && void write("update", { ref: record.idea.id, brief })}
+          autoFocus
+          value={prose.draft}
+          onChange={(event) => prose.setDraft(event.target.value)}
+          onBlur={prose.finish}
+          onKeyDown={(event) => event.key === "Escape" && (event.preventDefault(), prose.cancel())}
           placeholder="What is it, who is it for, what does done look like?"
           className="min-h-24"
           data-plan-detail-brief
         />
+      ) : record.brief ? (
+        <Markdown text={record.brief} className="staple-detail-prose text-body" />
+      ) : editable ? (
+        <button type="button" className="w-full rounded-md border border-dashed px-3 py-2 text-left text-body text-text-tertiary hover:bg-surface-hover" onClick={prose.start} data-plan-section-empty="brief">
+          What is it, who is it for, what does done look like?
+        </button>
       ) : (
-        <p className="m-0 text-body whitespace-pre-wrap text-text-secondary">{record.brief || "No brief."}</p>
+        <p className="m-0 text-body text-text-secondary">No brief.</p>
       )}
     </Section>
   );
@@ -192,10 +222,20 @@ function Questions({ record, write }: { record: IdeaDetailData; write: PlanWrite
       <ul className="space-y-1">
         {record.questions.map((question, index) => (
           <li key={`${index}-${question.text}`}>
-            <label className={cn("flex min-h-8 items-start gap-2 text-label", question.resolved && "text-text-tertiary line-through")}>
-              <input type="checkbox" className="mt-1" disabled={!asks} checked={question.resolved} onChange={(event) => void write("resolve", { ref, position: index + 1, resolved: event.target.checked })} />
-              <span>{question.text}</span>
-            </label>
+            <div className="flex min-h-8 items-start gap-2">
+              <label className={cn("flex flex-1 items-start gap-2 text-label", question.resolved && "text-text-tertiary line-through")}>
+                <input type="checkbox" className="mt-1" disabled={!asks} checked={question.resolved} onChange={(event) => void write("resolve", { ref, position: index + 1, resolved: event.target.checked })} />
+                <span>
+                  {question.text}
+                  {question.deferred ? <span className="ml-1.5 text-caption text-text-tertiary">(deferred)</span> : null}
+                </span>
+              </label>
+              {asks && !question.resolved ? (
+                <Button variant="ghost" size="sm" className="h-8 shrink-0 text-caption" onClick={() => void write("resolve", { ref, position: index + 1, deferred: !question.deferred })} data-plan-defer={index + 1}>
+                  {question.deferred ? "Undefer" : "Defer"}
+                </Button>
+              ) : null}
+            </div>
           </li>
         ))}
       </ul>

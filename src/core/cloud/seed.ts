@@ -52,6 +52,7 @@ import type { SnapshotEntity } from "./wire.js";
 import { criterionMarkPosition } from "../milestone-goal.js";
 import { criterionMarkFields } from "../milestone-marks.js";
 import { planLinkFields, planLinkIssue } from "../plan-links.js";
+import { planRowFields, planRowId } from "../plan-rows.js";
 
 /** The plan's singleton entity id. Mirrors `queue-store.ts`. */
 const QUEUE_PLAN_ID = "@plan";
@@ -735,14 +736,15 @@ function inventory(db: DatabaseSync, now: string, skipped: SeedSkipped[]): Local
           UNION SELECT milestone_id AS id FROM milestone_members
           UNION SELECT milestone_id AS id FROM milestone_criterion_marks
           UNION SELECT idea_id AS id FROM plan_links
+          UNION SELECT idea_id AS id FROM plan_rows
           ORDER BY id`,
       )
       .all() as Array<{ id: string }>
   ).map((row) => row.id);
   for (const milestoneId of milestoneIds) {
     /**
-     * An idea holds links and nothing else of this entity: it is seeded as its link fields
-     * alone, so a receiver writes no membership or metadata row for it.
+     * An idea holds links and breakdown rows and nothing else of this entity: it is seeded as
+     * those fields alone, so a receiver writes no membership or metadata row for it.
      */
     const holdsMilestoneRows =
       db
@@ -756,7 +758,7 @@ function inventory(db: DatabaseSync, now: string, skipped: SeedSkipped[]): Local
         entity: "milestone",
         entityId: milestoneId,
         label: identifierOf(db, milestoneId),
-        payload: links,
+        payload: { ...links, ...planRowFields(db, milestoneId) },
         actor: Object.values(links).at(-1)?.linkedBy ?? null,
         at: latest(Object.values(links).map((link) => link.linkedAt), now),
       });
@@ -781,6 +783,7 @@ function inventory(db: DatabaseSync, now: string, skipped: SeedSkipped[]): Local
     // Its criterion marks, one field each (`criterion<n>`), as a mark is journaled.
     Object.assign(payload, criterionMarkFields(db, milestoneId));
     Object.assign(payload, planLinkFields(db, milestoneId));
+    Object.assign(payload, planRowFields(db, milestoneId));
     out.push({
       entity: "milestone",
       entityId: milestoneId,
@@ -1217,6 +1220,12 @@ function replacedValues(db: DatabaseSync, index: SurveyIndex): SeedReplaced[] {
         const links = planLinkFields(db, entity.entityId);
         for (const field of Object.keys(entity.state).filter((key) => planLinkIssue(key) !== null)) {
           const local = links[field] ?? null;
+          if (canonical(local) === canonical(entity.state[field])) continue;
+          out.push({ entity: "milestone", entityId: entity.entityId, label: identifierOf(db, entity.entityId), field, local, repository: entity.state[field] });
+        }
+        const rows = planRowFields(db, entity.entityId);
+        for (const field of Object.keys(entity.state).filter((key) => planRowId(key) !== null)) {
+          const local = rows[field] ?? null;
           if (canonical(local) === canonical(entity.state[field])) continue;
           out.push({ entity: "milestone", entityId: entity.entityId, label: identifierOf(db, entity.entityId), field, local, repository: entity.state[field] });
         }

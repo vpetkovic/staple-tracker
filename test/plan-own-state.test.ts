@@ -13,6 +13,7 @@ import type { PlanStore } from "../src/core/plan-store.js";
 import { migrateWorkspace } from "../src/core/schema.js";
 import { WorkspaceStore } from "../src/core/store.js";
 import { StapleError } from "../src/core/types.js";
+import { READY_PLAN } from "./fixtures/plan-ready.js";
 
 const PERSON = { person: { via: "plan_view" } } as const;
 
@@ -24,7 +25,7 @@ beforeEach(() => {
   store = new WorkspaceStore(db, "test", "TST");
   plan = store.plan();
   plan.clock = () => new Date("2026-11-07T12:00:00.000Z");
-  plan.enable("vp");
+  plan.enable("vp", { person: { via: "settings" } });
 });
 
 function refused(fn: () => unknown): StapleError {
@@ -37,7 +38,8 @@ function refused(fn: () => unknown): StapleError {
   throw new Error("expected a refusal");
 }
 
-const idea = (title: string, maturity = "shaped", parent?: string) => plan.capture({ title, maturity, ...(parent ? { parent } : {}) }, "vp", PERSON).id;
+// Every record carries a plan that passes the shaped gate, so shaping measures the lifecycle alone.
+const idea = (title: string, maturity = "shaped", parent?: string) => plan.capture({ title, maturity, plan: READY_PLAN, ...(parent ? { parent } : {}) }, "vp", PERSON).id;
 const horizon = (name: string) => plan.view().horizons.find((h) => h.name === name)!.id;
 const actionsOf = (id: string) => plan.ideaView(id).actions.map((action) => action.id);
 const finish = (identifier: string) => {
@@ -55,7 +57,7 @@ function childWithWork(parent: string, done: boolean): { child: string; work: st
 
 const RAW = ["edit", "ask", "decide", "explore", "shape", "drop", "reparent", "reorder"];
 const EXPLORING = ["edit", "ask", "decide", "shape", "drop", "schedule", "plan_dates", "reparent", "reorder"];
-const SHAPED = ["edit", "ask", "decide", "unshape", "drop", "schedule", "plan_dates", "reparent", "reorder", "promote", "adopt"];
+const SHAPED = ["edit", "ask", "decide", "unshape", "drop", "schedule", "plan_dates", "reparent", "reorder", "promote", "scaffold", "adopt"];
 
 describe("a parent's own state is its own; its sub-ideas' work is a rollup", () => {
   it("keeps a raw parent raw while a sub-idea's work is underway: never schedulable, still refinable", () => {

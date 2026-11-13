@@ -21,7 +21,8 @@
  */
 
 import type { DatabaseSync } from "node:sqlite";
-import { MILESTONE_MEMBERSHIP, nearestMilestone } from "./milestones.js";
+import { MILESTONE_KIND, MILESTONE_MEMBERSHIP, nearestMilestone } from "./milestones.js";
+import { RUN_MODES, isRunMode } from "./plan-lifecycle-table.js";
 import { MAX_TREE_DEPTH, StapleError } from "./types.js";
 
 export const INSTRUCTION_SOURCE_KINDS = ["self", "parent", "milestone", "run"] as const;
@@ -167,6 +168,29 @@ function instructionDocumentsOf(
     .all(issueId) as Array<{ key: string; revision: number; title: string | null; body: string; author: string | null; createdAt: string }>;
 }
 
+/** The key a horizon's run setting reaches its work under. */
+export const HORIZON_RUN_KEY = "horizon-run";
+
+/**
+ * A horizon's run setting as an instruction (design/plan.md, "Lenses"): how far agents take it,
+ * and its goal, both the person's. Null for an issue that is not a horizon, or a horizon with
+ * neither set. A document the person keyed `horizon-run` on a nearer issue shadows it.
+ */
+function horizonRunOf(db: DatabaseSync, issueId: string): string | null {
+  const row = db
+    .prepare("SELECT identifier, title, plan_run_mode, acceptance_criteria FROM issues WHERE id = ? AND kind = ? AND plan_rank IS NOT NULL")
+    .get(issueId, MILESTONE_KIND) as { identifier: string; title: string; plan_run_mode: string | null; acceptance_criteria: string | null } | undefined;
+  if (row === undefined) return null;
+  const mode = isRunMode(row.plan_run_mode) ? row.plan_run_mode : null;
+  const goal = row.acceptance_criteria ? (JSON.parse(row.acceptance_criteria) as string[]) : [];
+  if (mode === null && goal.length === 0) return null;
+  const lines = [`${row.title} (${row.identifier}) is a horizon of the plan.`];
+  lines.push(mode === null ? "How far to take it: not set; work it as any milestone." : `How far to take it: ${RUN_MODES[mode].label}. ${RUN_MODES[mode].asks}`);
+  if (goal.length > 0) lines.push("", "Its goal:", ...goal.map((criterion) => `- ${criterion}`));
+  lines.push("", "The person sets both in the Plan view; read them, do not change them.");
+  return lines.join("\n");
+}
+
 /** A run's own instructions and when it started, or null when there is no such run. */
 function runInstructionsOf(db: DatabaseSync, runId: string): { instructions: RunInstruction[]; startedAt: string; actor: string } | null {
   const row = db.prepare("SELECT instructions, started_at, actor FROM runs WHERE id = ?").get(runId) as
@@ -180,7 +204,7 @@ function runInstructionsOf(db: DatabaseSync, runId: string): { instructions: Run
  * Every instruction that applies to `issueId`, nearest first, with the source of each and
  * whether it is the one in effect for its key. With `runId`, the run's own come last.
  */
-export function resolveInstructions(db: DatabaseSync, issueId: string, options: { runId?: string | null } = {}): ResolvedInstruction[] {
+export function resolveInstructions(db: DatabaseSync, issueId: string, options: { runId?: string | null; planning?: boolean } = {}): ResolvedInstruction[] {
   const out: ResolvedInstruction[] = [];
   const winners = new Map<string, InstructionSource>();
   const add = (entry: Omit<ResolvedInstruction, "effective" | "shadowedBy">): void => {
@@ -193,6 +217,8 @@ export function resolveInstructions(db: DatabaseSync, issueId: string, options: 
     for (const doc of instructionDocumentsOf(db, row.id)) {
       add({ key: doc.key, revision: doc.revision, title: doc.title, body: doc.body, author: doc.author, updatedAt: doc.createdAt, source });
     }
+    const run = options.planning === true ? horizonRunOf(db, row.id) : null;
+    if (run !== null) add({ key: HORIZON_RUN_KEY, revision: null, title: `How far to take ${row.title}`, body: run, author: null, updatedAt: null, source });
   }
   const runId = options.runId ?? null;
   if (runId !== null) {

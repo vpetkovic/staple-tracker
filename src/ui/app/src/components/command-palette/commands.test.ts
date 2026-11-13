@@ -65,6 +65,7 @@ function row(identifier: string, title: string, overrides: Partial<Issue> = {}):
 }
 
 const context = (overrides: Partial<PaletteContext> = {}): PaletteContext => ({
+  planningEnabled: true,
   selection: null,
   selectionStatus: null,
   view: "tree",
@@ -467,6 +468,13 @@ describe("a plan record's commands come from its lifecycle", () => {
     expect(actionsOf(buildCommands(context({ selection: { workspace: "staple", ref: IDEA_ID }, planRecord: shipped })))).toEqual([]);
     const held = { ...shaped, actions: [{ id: "promote", label: "Promote to epic", who: "anyone" as const, disabledReason: "Not yet." }] };
     expect(actionsOf(buildCommands(context({ selection: { workspace: "staple", ref: IDEA_ID }, planRecord: held })))).toEqual([]);
+  });
+
+  it("never runs Scaffold in one click: it is a preview first, in the drawer", () => {
+    const scaffoldable = { ...shaped, actions: [...shaped.actions, { id: "scaffold", label: "Scaffold epic and tasks", who: "anyone" as const }] };
+    const commands = actionsOf(buildCommands(context({ selection: { workspace: "staple", ref: IDEA_ID }, planRecord: scaffoldable })));
+    expect(commands.map((command) => command.label)).toEqual(["Back to exploring", "Drop", "Promote to epic"]);
+    expect(commands.some((command) => command.action.type === "plan" && command.action.verb === "scaffold")).toBe(false);
   });
 
   it("keeps a promoted record's epic commands, and adds the plan actions its state offers", () => {

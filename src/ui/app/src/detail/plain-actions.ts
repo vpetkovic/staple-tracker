@@ -611,8 +611,8 @@ export interface PlanItem {
   label: string;
   disabledReason?: string;
   call?: WriteCall;
-  /** Not a write: opens the epic this record became. */
-  opens?: "epic";
+  /** Not a write: opens the epic this record became, Scaffold's preview, or how to start a goal run (never one click). */
+  opens?: "epic" | "scaffold" | "run";
 }
 
 /**
@@ -640,12 +640,18 @@ export function offers(record: { actions: readonly OfferedPlanAction[] }, id: st
   return record.actions.some((action) => action.id === id);
 }
 
+/** The offered actions that open something instead of writing: the epic, Scaffold's preview, a goal run's start. */
+const OPENS: Record<string, PlanItem["opens"]> = { open_epic: "epic", scaffold: "scaffold", run: "run" };
+
 function itemsOf(ws: string, ref: string, actions: readonly OfferedPlanAction[], oneClick: typeof ONE_CLICK): PlanItem[] {
   const items: PlanItem[] = [];
   for (const action of actions) {
     const write = oneClick[action.id];
-    if (action.id === "open_epic") {
-      items.push({ id: action.id, label: action.label, opens: "epic" });
+    if (OPENS[action.id]) {
+      const opens = OPENS[action.id]!;
+      const item: PlanItem = { id: action.id, label: opens === "epic" ? action.label : `${action.label}…`, opens };
+      if (action.disabledReason) item.disabledReason = action.disabledReason;
+      items.push(item);
       continue;
     }
     if (!write) continue;
@@ -668,7 +674,7 @@ export function horizonActionItems(ws: string, horizon: { id: string; actions: r
 }
 
 /** The order the drawer picks its one primary plan action in: the step forward the state offers. */
-const PRIMARY_ORDER = ["promote", "explore", "shape", "restore", "open_epic"] as const;
+const PRIMARY_ORDER = ["scaffold", "promote", "explore", "shape", "restore", "open_epic"] as const;
 
 /** The primary plan action, or null; every other item goes in ⋯. */
 export function planPrimary(items: readonly PlanItem[]): PlanItem | null {

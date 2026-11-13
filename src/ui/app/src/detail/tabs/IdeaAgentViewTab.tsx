@@ -31,6 +31,11 @@ export function IdeaAgentViewTab({ detail, workspace, onAuthError }: TabProps) {
         What an agent receives from <span className="font-mono">get_idea</span>: about {thousands(stats.tokens)} tokens ({thousands(stats.chars)} characters). Its{" "}
         <span className="font-mono">actions</span> are what this idea's state lets it do.
       </p>
+      {record && record.idea.planIncomplete.length > 0 ? (
+        <p className="m-0 text-body text-[color:var(--status-task-todo)]" data-idea-agent-incomplete>
+          Shaped · plan incomplete: {record.idea.planIncomplete.join("; ")}. Scaffold is held back until the plan passes again.
+        </p>
+      ) : null}
       <pre className="m-0 max-h-[60vh] overflow-auto rounded-md border bg-surface-raised p-3 text-caption leading-relaxed" data-idea-agent-payload>
         {stats.pretty}
       </pre>

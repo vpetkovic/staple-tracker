@@ -20,7 +20,7 @@ import { horizonActionItems, moveActionOf, moveOffered, planActionItems, type Of
 const offered = (state: (typeof IDEA_STATES)[number]): OfferedPlanAction[] =>
   IDEA_LIFECYCLE[state].map((id) => ({ id, label: IDEA_ACTIONS[id].label, who: IDEA_ACTIONS[id].who }));
 
-const ONE_CLICK = new Set(["explore", "shape", "unshape", "drop", "restore", "promote", "reset_baseline", "open_epic"]);
+const ONE_CLICK = new Set(["explore", "shape", "unshape", "drop", "restore", "promote", "reset_baseline", "open_epic", "scaffold"]);
 
 describe("the page builds every plan control from the offered actions", () => {
   for (const state of IDEA_STATES) {
@@ -47,9 +47,9 @@ describe("the page builds every plan control from the offered actions", () => {
   });
 
   for (const state of HORIZON_STATES) {
-    it(`a ${state} horizon: its buttons are exactly its one-click actions`, () => {
+    it(`a ${state} horizon: its buttons are exactly its one-click actions, and Run opens how to start a goal run`, () => {
       const horizon = { id: "h", actions: HORIZON_LIFECYCLE[state].map((id) => ({ id, label: HORIZON_ACTIONS[id].label, who: HORIZON_ACTIONS[id].who })) };
-      expect(horizonActionItems("ws", horizon).map((item) => item.id)).toEqual(HORIZON_LIFECYCLE[state].filter((id) => id === "queue" || id === "remove"));
+      expect(horizonActionItems("ws", horizon).map((item) => item.id)).toEqual(HORIZON_LIFECYCLE[state].filter((id) => id === "queue" || id === "remove" || id === "run"));
     });
   }
 });

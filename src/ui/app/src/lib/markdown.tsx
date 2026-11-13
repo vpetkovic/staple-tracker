@@ -1,20 +1,19 @@
 /**
- * A deliberately small markdown renderer for descriptions, comments, and documents.
+ * A deliberately small markdown renderer for descriptions, comments, documents and plans.
  *
- * Handles what staple's own content actually uses: fenced code, headings, unordered
- * lists, inline code, bold, and links. No HTML passthrough — everything renders as
- * React elements, so there is no dangerouslySetInnerHTML anywhere in this app and no
- * sanitizer to get wrong.
+ * Handles what staple's own content actually uses: fenced code, headings, bulleted,
+ * numbered and checklist items, quotes, pipe tables, inline code, bold, italics and links.
+ * No HTML passthrough — everything renders as React elements, so there is no
+ * dangerouslySetInnerHTML anywhere in this app and no sanitizer to get wrong.
  *
- * WAVE 2 (U2): if the document viewer needs tables or diffs, extend this rather than
- * adding a markdown dependency — the runtime bundle is a devDependency-built artifact
- * and every kilobyte here is a kilobyte the server has to hand out.
+ * Extend this rather than adding a markdown dependency — the runtime bundle is a
+ * devDependency-built artifact and every kilobyte here is a kilobyte the server has to hand out.
  */
 import { Fragment, type ReactNode } from "react";
 
-/** `code`, **bold**, and [text](https://…) — applied in that order, left to right. */
+/** `code`, **bold**, *italic*, and [text](https://…) — applied left to right. */
 function inline(text: string, keyPrefix: string): ReactNode[] {
-  const pattern = /`([^`]+)`|\*\*([^*]+)\*\*|\[([^\]]+)\]\((https?:[^)\s]+)\)/g;
+  const pattern = /`([^`]+)`|\*\*([^*]+)\*\*|(?<![\w*])\*([^*\s](?:[^*]*[^*\s])?)\*(?![\w*])|\[([^\]]+)\]\((https?:[^)\s]+)\)/g;
   const out: ReactNode[] = [];
   let last = 0;
   let match: RegExpExecArray | null;
@@ -31,16 +30,18 @@ function inline(text: string, keyPrefix: string): ReactNode[] {
       );
     } else if (match[2] !== undefined) {
       out.push(<strong key={key}>{match[2]}</strong>);
-    } else if (match[3] !== undefined && match[4] !== undefined) {
+    } else if (match[3] !== undefined) {
+      out.push(<em key={key}>{match[3]}</em>);
+    } else if (match[4] !== undefined && match[5] !== undefined) {
       out.push(
         <a
           key={key}
-          href={match[4]}
+          href={match[5]}
           target="_blank"
           rel="noreferrer noopener"
           className="text-primary underline underline-offset-2"
         >
-          {match[3]}
+          {match[4]}
         </a>,
       );
     }
@@ -50,30 +51,84 @@ function inline(text: string, keyPrefix: string): ReactNode[] {
   return out;
 }
 
+/** One list item: its text, and its check when it is a checklist line (`[ ]`, `[x]`, `[~]`). */
+interface Item {
+  text: string;
+  check: "open" | "done" | "deferred" | null;
+}
+
+const CHECK_GLYPH = { open: "☐", done: "☑", deferred: "◌" } as const;
+const CHECK_WORDS = { open: "open", done: "done", deferred: "deferred" } as const;
+
+function item(raw: string): Item {
+  const checked = /^\[( |x|X|~)\]\s+(.*)$/.exec(raw);
+  if (!checked) return { text: raw, check: null };
+  const mark = checked[1]!;
+  return { text: checked[2]!, check: mark === " " ? "open" : mark === "~" ? "deferred" : "done" };
+}
+
+/** A table row's cells, the outer pipes dropped. */
+function cells(line: string): string[] {
+  return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
+}
+
+const TABLE_RULE = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
+
 export function Markdown({ text, className }: { text: string; className?: string }): ReactNode {
   const lines = String(text ?? "").split("\n");
   const blocks: ReactNode[] = [];
-  let list: string[] = [];
+  let list: { ordered: boolean; items: Item[] } | null = null;
+  let quote: string[] = [];
   let code: string[] | null = null;
   let key = 0;
 
   const flushList = () => {
-    if (list.length === 0) return;
-    const items = list;
-    list = [];
+    if (list === null) return;
+    const { ordered, items } = list;
+    list = null;
+    const checklist = items.every((entry) => entry.check !== null);
+    const body = items.map((entry, i) => (
+      <li key={i} className={checklist ? "flex gap-1.5" : undefined} data-md-check={entry.check ?? undefined}>
+        {entry.check ? (
+          <span aria-label={CHECK_WORDS[entry.check]} className="shrink-0 text-text-tertiary">
+            {CHECK_GLYPH[entry.check]}
+          </span>
+        ) : null}
+        <span className={entry.check === "done" ? "text-text-secondary" : undefined}>{inline(entry.text, `li-${key}-${i}`)}</span>
+      </li>
+    ));
     blocks.push(
-      <ul key={`ul-${key++}`} className="my-2 list-disc space-y-1 pl-5">
-        {items.map((item, i) => (
-          <li key={i}>{inline(item, `li-${key}-${i}`)}</li>
-        ))}
-      </ul>,
+      ordered ? (
+        <ol key={`ol-${key++}`} className="my-2 list-decimal space-y-1 pl-5">
+          {body}
+        </ol>
+      ) : (
+        <ul key={`ul-${key++}`} className={checklist ? "my-2 space-y-1 pl-0" : "my-2 list-disc space-y-1 pl-5"}>
+          {body}
+        </ul>
+      ),
     );
   };
+  const flushQuote = () => {
+    if (quote.length === 0) return;
+    const body = quote.join(" ");
+    quote = [];
+    blocks.push(
+      <blockquote key={`q-${key++}`} className="my-2 border-l-2 pl-3 text-text-secondary">
+        {inline(body, `q-${key}`)}
+      </blockquote>,
+    );
+  };
+  const flush = () => {
+    flushList();
+    flushQuote();
+  };
 
-  for (const line of lines) {
+  for (let at = 0; at < lines.length; at += 1) {
+    const line = lines[at]!;
     if (line.startsWith("```")) {
       if (code === null) {
-        flushList();
+        flush();
         code = [];
       } else {
         blocks.push(
@@ -93,12 +148,61 @@ export function Markdown({ text, className }: { text: string; className?: string
       continue;
     }
 
+    const quoted = /^\s*>\s?(.*)$/.exec(line);
+    if (quoted?.[1] !== undefined) {
+      flushList();
+      quote.push(quoted[1]);
+      continue;
+    }
+    flushQuote();
+
     const bullet = /^\s*[-*]\s+(.*)$/.exec(line);
-    if (bullet?.[1] !== undefined) {
-      list.push(bullet[1]);
+    const numbered = /^\s*\d+[.)]\s+(.*)$/.exec(line);
+    if (bullet?.[1] !== undefined || numbered?.[1] !== undefined) {
+      const ordered = numbered?.[1] !== undefined;
+      if (list !== null && list.ordered !== ordered) flushList();
+      list ??= { ordered, items: [] };
+      list.items.push(item((bullet?.[1] ?? numbered?.[1])!));
       continue;
     }
     flushList();
+
+    // A pipe table: a header row, its rule, then rows until a line that is not one.
+    if (line.trim().startsWith("|") && TABLE_RULE.test(lines[at + 1] ?? "")) {
+      const head = cells(line);
+      const rows: string[][] = [];
+      at += 2;
+      while (at < lines.length && lines[at]!.trim().startsWith("|")) rows.push(cells(lines[at++]!));
+      at -= 1;
+      const tableKey = key++;
+      blocks.push(
+        <div key={`t-${tableKey}`} className="my-2 overflow-x-auto">
+          <table className="w-full border-collapse text-left text-[0.95em]">
+            <thead>
+              <tr>
+                {head.map((cell, i) => (
+                  <th key={i} className="border-b px-2 py-1 font-semibold">
+                    {inline(cell, `th-${tableKey}-${i}`)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, r) => (
+                <tr key={r} className="border-b last:border-b-0">
+                  {head.map((_, c) => (
+                    <td key={c} className="px-2 py-1 align-top">
+                      {inline(row[c] ?? "", `td-${tableKey}-${r}-${c}`)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>,
+      );
+      continue;
+    }
 
     const heading = /^(#{1,4})\s+(.*)$/.exec(line);
     if (heading?.[1] !== undefined && heading[2] !== undefined) {
@@ -122,7 +226,7 @@ export function Markdown({ text, className }: { text: string; className?: string
       </p>,
     );
   }
-  flushList();
+  flush();
   if (code !== null) {
     blocks.push(
       <pre key={`pre-${key++}`} className="my-2 overflow-x-auto rounded-md border bg-muted/60 p-3 font-mono text-xs">

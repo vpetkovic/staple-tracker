@@ -673,6 +673,8 @@ function flatten(
        * rows is not a row an agent could take.
        */
       cues: r.cues ?? null,
+      // Carried like `cues`: the ◇ horizon chip reads it, under every grouping.
+      horizon: r.horizon ?? null,
       depth: line.depth,
       hasChildren: line.hasChildren,
       isExpanded: line.isExpanded,
@@ -1207,6 +1209,72 @@ export function buildKindGroups(rows: IssueRow[], options: BuildOptions): Status
   return out;
 }
 
+/** The key of the bucket for work on no horizon. */
+export const NO_HORIZON_GROUP_KEY = "__no_horizon__";
+
+/**
+ * Group by Horizon: one section per horizon of the plan, in the plan's order, headed by its
+ * name and date, then "No horizon". A row sits in the section of the horizon its own work
+ * belongs to (`row.horizon`: its membership, derived included, else its nearest ancestor's),
+ * so an epic and its tasks share one; the parent rules and ghosts are the Kind axis's.
+ */
+export function buildHorizonGroups(rows: IssueRow[], options: BuildOptions): StatusGroup[] {
+  const { showResolved = false, ghostParents = true, statusOrder = configuredGroupOrder() } = options;
+  const visible = showResolved ? rows : rows.filter((r) => !isResolvedStatus(r.issue.status));
+  const presentAnywhere = new Map(rows.map((r) => [r.issue.id, r.issue]));
+  const rollups = parentRollups(options.rollupSource ?? rows);
+
+  const buckets = new Map<string, IssueRow[]>();
+  const horizons = new Map<string, NonNullable<IssueRow["horizon"]>>();
+  for (const r of visible) {
+    const key = r.horizon?.id ?? NO_HORIZON_GROUP_KEY;
+    if (r.horizon) horizons.set(r.horizon.id, r.horizon);
+    const bucket = buckets.get(key);
+    if (bucket) bucket.push(r);
+    else buckets.set(key, [r]);
+  }
+  const order = [...horizons.values()].sort((a, b) => a.rank - b.rank || a.name.localeCompare(b.name)).map((h) => h.id);
+  order.push(NO_HORIZON_GROUP_KEY);
+
+  const subtree = subtreeActivityTiers(visible, statusOrder);
+  const byRow = rowComparator(visible, options, statusOrder, (row) => activityRank(row, subtree, statusOrder));
+  const holdsActiveWork = subtreesHoldingActiveWork(visible);
+
+  const out: StatusGroup[] = [];
+  for (const key of order) {
+    const bucket = buckets.get(key);
+    if (!bucket || bucket.length === 0) continue;
+    const horizon = horizons.get(key) ?? null;
+    out.push({
+      status: key,
+      rows: flatten(
+        bucket,
+        presentAnywhere,
+        options,
+        (issue) => DEFAULT_EXPANDED_GROUPS.has(issue.status) || holdsActiveWork.has(issue.id),
+        byRow,
+        rollups,
+        ghostParents,
+      ),
+      count: bucket.length,
+      heading: {
+        issue: null,
+        label: horizon ? `${horizon.name}${horizon.date ? ` · ${horizonDay(horizon.date)}` : ""}` : "No horizon",
+        identifier: horizon?.identifier ?? null,
+        // A horizon is a milestone: its header wears the milestone glyph; the catch-all wears none.
+        kind: horizon ? "milestone" : null,
+        rollup: null,
+      },
+    });
+  }
+  return out;
+}
+
+/** `Dec 31`: a horizon's line, read in UTC as the store writes it. */
+function horizonDay(day: string): string {
+  return new Date(`${day}T00:00:00.000Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
+}
+
 /**
  * The SAME list with the bucketing step skipped — R1 (STA-100)'s default view.
  *
@@ -1364,6 +1432,9 @@ export function buildList(
      */
     case "kind":
       return { kind: "grouped", groups: buildKindGroups(rows, options) };
+    // The same `"grouped"` shape: only what a header names differs.
+    case "horizon":
+      return { kind: "grouped", groups: buildHorizonGroups(rows, options) };
     case "pickup":
       return {
         kind: "pickup",

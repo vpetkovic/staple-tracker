@@ -109,7 +109,7 @@ try {
   await pinned.handshake();
 
   const tools = await rpc("tools/list", {});
-  assert(tools.tools.length >= 20, `tools/list exposes ${tools.tools.length} tools`);
+  assert(tools.tools.length === 84, `tools/list exposes ${tools.tools.length} tools`);
 
   const byName = new Map<string, any>(tools.tools.map((t: any) => [t.name, t]));
   assert(
@@ -644,6 +644,17 @@ try {
     "list_kinds returns the seeded kind vocabulary",
   );
 
+  // Planning is readable but person-controlled, and absent until enabled.
+  const planningFlag = JSON.parse(toolText(await rpc("tools/call", { name: "get_setting", arguments: { key: "features.planning" } })));
+  assert(planningFlag.value === false && planningFlag.source === "default", "experimental planning defaults off");
+  const flagRefused = await rpc("tools/call", { name: "set_setting", arguments: { key: "features.planning", value: true, actor: "smoke-agent" } });
+  assert(flagRefused.isError === true && toolText(flagRefused).includes("Only a person"), "an agent cannot change the planning flag");
+  for (const name of ["list_ideas", "list_horizons"]) {
+    assert(byName.get(name).description.startsWith("Experimental, only when features.planning is on."), `${name} describes the feature gate`);
+    const refused = await rpc("tools/call", { name, arguments: {} });
+    assert(refused.isError === true && toolText(refused).includes("Planning is off in this workspace"), `${name} refuses when planning is off`);
+  }
+
   // ── registered workspace settings (R6d, STA-179) ──────────────────────────
   const policyBefore = JSON.parse(
     toolText(await rpc("tools/call", { name: "get_setting", arguments: { key: "queue.policy" } })),
@@ -963,7 +974,7 @@ try {
 
   const coldTools = await cold.rpc("tools/list", {});
   assert(
-    coldTools.tools.length === tools.tools.length && coldTools.tools.length >= 20,
+    coldTools.tools.length === tools.tools.length && coldTools.tools.length === 84,
     `server connects and lists ${coldTools.tools.length} tools with no workspace anywhere above cwd`,
   );
 
@@ -997,8 +1008,8 @@ try {
   // The app-only approve_gate_from_view and request_changes_from_view the views' buttons call
   // decide a gate in the view's workspace, 65. The plan tools list_ideas, get_idea,
   // list_horizons, capture_idea, update_idea, start_idea, unlink_idea and the app-only
-  // reset_idea_baseline read and write one workspace's ideas, 73.
-  assert(wsTargetable.length === 73, `73 workspace tools accept ws targeting (${wsTargetable.length} found)`);
+  // reset_idea_baseline read and write one workspace's ideas, 73, and scaffold_idea, 74.
+  assert(wsTargetable.length === 74, `74 workspace tools accept ws targeting (${wsTargetable.length} found)`);
   // A person's click in a view is recorded under the person only while hosts keep these two
   // away from the model: both declare MCP Apps visibility ["app"] and take no actor.
   for (const name of ["approve_gate_from_view", "request_changes_from_view"]) {
@@ -1235,6 +1246,8 @@ try {
         "reorder_queue",
         "request_changes",
         "resume_run",
+        // Scaffolding creates an epic's tasks: attributed like any write.
+        "scaffold_idea",
         "set_blocked_by",
         // The explicit estimate write names who changed the plan.
         "set_estimate",

@@ -23,8 +23,8 @@ describe("the idea table", () => {
     expect(IDEA_LIFECYCLE).toEqual({
       raw: ["edit", "ask", "decide", "explore", "shape", "drop", "reparent", "reorder"],
       exploring: ["edit", "ask", "decide", "shape", "drop", "schedule", "plan_dates", "reparent", "reorder"],
-      shaped: ["edit", "ask", "decide", "unshape", "drop", "schedule", "plan_dates", "reparent", "reorder", "promote", "adopt"],
-      started: ["edit", "ask", "decide", "schedule", "plan_dates", "reorder", "adopt", "unlink", "reset_baseline", "open_epic"],
+      shaped: ["edit", "ask", "decide", "unshape", "drop", "schedule", "plan_dates", "reparent", "reorder", "promote", "scaffold", "adopt"],
+      started: ["edit", "ask", "decide", "schedule", "plan_dates", "reorder", "scaffold", "adopt", "unlink", "reset_baseline", "open_epic"],
       shipped: ["adopt", "open_epic"],
       dropped: ["restore"],
     });
@@ -88,10 +88,11 @@ describe("the idea table", () => {
 describe("the horizon table", () => {
   it("offers exactly the agreed actions in each state, all but queueing the person's", () => {
     expect(HORIZON_LIFECYCLE).toEqual({
-      planned: ["rename", "date", "reorder", "remove"],
-      active: ["rename", "date", "reorder", "queue"],
+      planned: ["rename", "date", "reorder", "run", "remove"],
+      active: ["rename", "date", "reorder", "queue", "run"],
       shipped: ["remove"],
     });
+    // Queueing is the queue's own, as a task's is; how agents run a horizon is a setting, the person's.
     expect(Object.entries(HORIZON_ACTIONS).filter(([, rule]) => rule.who === "anyone").map(([id]) => id)).toEqual(["queue"]);
   });
 
