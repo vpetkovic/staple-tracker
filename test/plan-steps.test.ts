@@ -165,8 +165,10 @@ describe("a horizon's steps", () => {
     const parent = capture("Reporting", { maturity: "shaped", horizon: now, plan: READY_PLAN });
     const child = capture("Usage report", { maturity: "exploring", parent });
     const elsewhere = capture("Audit trail", { maturity: "shaped", horizon: later, plan: READY_PLAN });
-    plan.update(first, { before: null }, "vp", PERSON);
-    expect(stepsOn(now).map((step) => step.ideaId)).toEqual([parent, child, first]);
+    // The parent moves to the end of the plan, and its sub-idea, ranked earlier, follows it there.
+    plan.update(parent, { before: null }, "vp", PERSON);
+    expect(plan.ideaView(child).rank).toBeLessThan(plan.ideaView(parent).rank);
+    expect(stepsOn(now).map((step) => step.ideaId)).toEqual([first, parent, child]);
     expect(stepsOn(later).map((step) => step.ideaId)).toEqual([elsewhere]);
     expect(plan.planStepsOf(now)).toEqual(stepsOn(now));
   });
