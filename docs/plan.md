@@ -193,12 +193,18 @@ all show the same numbers and the same percentage. An idea with no work, no rows
 sub-ideas has no size yet: it is counted as **unsized**, never as no work. A parent idea's
 sub-ideas carry its size, so its own breakdown, which usually names them, is not counted again;
 its rows count once they are tickets. Counts of ideas name the sub-ideas, with the parent counted
-apart (`3 ideas (+1 parent)`).
+apart (`3 ideas (+1 parent)`). Every surface prints the same whole percent, rounded down; a
+horizon whose counted work has all landed while an idea on it has no size yet, or is not shipped,
+reads `100% incomplete`, never plain 100%.
 
 **A horizon waits for its ideas.** A horizon is not shipped while an idea scheduled on it is not:
 closing its last ticket leaves it open while another idea on it is still to be built, or still
-being explored. Drop the idea or move it to another horizon and the horizon ships on the work it
-holds. This holds on every device, and whether planning is on or off.
+being explored. A parent idea scheduled on a horizon brings its sub-ideas with it: a sub-idea
+with no horizon of its own counts, and waits, on its parent's horizon, and one you schedule on
+another horizon counts there instead. Drop the idea or move it to another horizon and the horizon
+ships on the work it holds. This holds on every device, and whether planning is on or off: with
+planning off, `staple milestone show` prints `held by plan` with how many ideas hold it, and
+closing it by hand is refused with the same count and a note to turn planning on to see them.
 
 A parent idea's state is its own. Work under its sub-ideas shows on the parent as progress, dates
 and late or not-started counts, but it never starts, ships or reopens the parent.
