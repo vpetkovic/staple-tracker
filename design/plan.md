@@ -298,8 +298,9 @@ rows it depends on, its acceptance, and a `context` document that makes it worka
 the epic is for, done-when, what it waits on inside and outside the plan, the constraints, scope).
 Each shaped sub-idea is scaffolded the same way under it. An umbrella with no rows of its own
 scaffolds to its epic and its shaped sub-ideas' epics and no task of its own; a sub-idea that is
-not shaped is left as it is, and the preview shows exactly that. Scaffold promotes through the
-same `promoteRecord` as Promote.
+not shaped is left as it is. The preview lists only what it builds: the epic, its own rows' tasks
+and, under `children`, each sub-idea that offers Scaffold with its own preview. A sub-idea that is
+not shaped is not in it. Scaffold promotes through the same `promoteRecord` as Promote.
 
 *Preview, then confirm.* `scaffoldPreview` computes exactly what the create path writes, and the
 create path builds from it. The preview carries the problems that hold the confirm back (the gate,
@@ -316,8 +317,19 @@ added, a key renamed since, and a second device scaffolding the same idea offlin
 same task: whatever has a task already is not created again, and two devices that created it
 offline sent two creates of one record, which sync merges as it merges any record written on two
 devices. No scaffold map is kept and no idempotency key is claimed. Scaffold adds the blockers its
-rows' depends-on name to a task that exists, and never removes a blocker someone else set. A
-started record offers Scaffold again only if it was scaffolded (a task of one of its rows exists).
+rows' depends-on name to a task that exists, and never removes a blocker someone else set.
+
+*Scaffolded before.* A started record offers Scaffold again, preview included, only if it was
+scaffolded: it is promoted and a task of one of its rows exists, or it is promoted, has no rows of
+its own and has a sub-idea that is not dropped. The second is an umbrella. Its Scaffold made the
+same epic Promote makes and nothing of its own, so the two are not told apart, and either way a
+Scaffold of it builds only its sub-ideas. Both read facts every device holds after a sync, so no
+marker is stored. A record started by linked work alone, or a promoted record with rows and no
+task of theirs, offers no Scaffold.
+
+*Sub-ideas shaped later.* A retry on the parent builds what is missing below it: a sub-idea shaped
+after the parent's scaffold is in the parent's next preview and its confirm builds it as a child
+epic, once, as its own Scaffold would. Scaffolding the sub-idea on its own does the same.
 
 **A sub-idea promoted or scaffolded before its parent.** The plan's tree is the tracker's:
 promotion never moves a record, so the epic's parent is still the idea above it. The tracker reads
@@ -496,12 +508,15 @@ section, or a depends-on cell naming something outside its own breakdown, that l
 record's ticket number, a key the record's title leads with (capitals with a number: `C2 Checkout
 API` is C2, `R2 · OPS-40 Billing export` is R2 and OPS-40), or the key of a row in exactly one
 other record's breakdown (`42.1`). Everything else is prose, however many words with digits it
-holds (`OAuth2`, `S3`). A key two records share names neither, and a record never waits on
-itself, with one exception: a key that names one record by its title and is otherwise only the
-key of rows of that record's own ancestors names the record. An umbrella keys its rows like its
-sub-ideas (`R5` a row of the parent, `R5 Billing export` a sub-idea), and a sibling's `R5` means
-the sub-idea. A key shared by two records' titles, or by a title and a row of a record that is not
-an ancestor, still names neither.
+holds (`OAuth2`, `S3`). A key two records share names neither, with one exception: a key that
+names one record by its title and is otherwise only the key of rows of that record's own ancestors
+names the record. An umbrella keys its rows like its sub-ideas (`R5` a row of the parent, `R5
+Billing export` a sub-idea), and a sibling's `R5` means the sub-idea. A key shared by two records'
+titles, or by a title and a row of a record that is not an ancestor, still names neither. A record
+never waits on itself, on any of its ancestors or on any of its descendants: a parent's work holds
+its sub-ideas', so either wait would be a cycle. So a parent's own row keys in its own
+Dependencies name its own rows, and a sub-idea naming a key only its ancestors' rows hold waits on
+nothing. The timeline draws no arrow between a record and its ancestor.
 
 **The baseline.** The first planned window a record has once it is started itself is kept as its
 baseline (`plan_baseline_*`). It is written when a record becomes started with a window (promoted,
@@ -703,19 +718,19 @@ What converges, under both folds, on a tail device and a freshly hydrated one:
 | `test/planning-feature*.test.ts(x)` (the base suite, surfaces, sync, protocol, poll, review, UI) | the flag: off by default, person-only on every surface, off hides every surface and keeps the data, on restores it, protection holds in both states, the flag and the Later upgrade sync |
 | `test/store-plan.test.ts` | enabling and its refusal; identity (no counter consumed, never a ref, never shown, numbered at promotion, earlier builds' numbers drafted); every guard; the tracker's own writes, horizon dates included; dependencies; nesting and stage; horizons as milestones; membership (move, unschedule, unlink, plan order, hand-placed members stay, a promoted record counted, a queued horizon expanding); a horizon's own status (its only work cancelled with and without a rebuild between, reopened; shipped on done work only; removal refused while it holds open work or is queued; an edit of a removed horizon refused before any write); Promote in place, under a promoted parent, refused when dropped or already promoted; Adopt on a promoted record; missing links; actual windows on real-shaped data; late vs not started; the baseline; every steering refusal |
 | `test/plan-sections.test.ts` | the importer on fixtures shaped like real plan files: every row kept, sections mapped, nothing dropped, what it cannot place reported; wrapped and nested items, prose under list headings, headings and comments inside code fences, escaped pipes, repeated keys and front matter kept, each said; unknown keys named; sections round-trip through their documents; every estimate form, and why one reads as none; cycles, unknown and repeated keys in the gate; the gate's phrases; completeness |
-| `test/plan-scaffold.test.ts` | sections persist as revisions, an agent writes them, duplicate keys refused; the gate on every path to shaped, deferred questions let through; an umbrella shaped on a sub-idea that is not dropped, refused when every sub-idea is dropped, plan incomplete when its last one is; Scaffold creates exactly its preview, idempotently and for rows added later, nested sub-ideas as child epics, an umbrella with no rows as its epic and its shaped sub-ideas' epics, never where the lifecycle does not offer it; import with its file attached |
-| `test/plan-scaffold-surfaces.test.ts` | the gate on the page, the CLI with `--person` and an agent over MCP, an umbrella's included, and an import into shaped held to it; the `idea defer` help says what the gate asks; the three Scaffold previews agree and write nothing; a confirm creates once whichever surface retries; CLI import |
+| `test/plan-scaffold.test.ts` | sections persist as revisions, an agent writes them, duplicate keys refused; the gate on every path to shaped, deferred questions let through; an umbrella shaped on a sub-idea that is not dropped, refused when every sub-idea is dropped, plan incomplete when its last one is; Scaffold creates exactly its preview, idempotently and for rows added later, nested sub-ideas as child epics, an umbrella with no rows as its epic and its shaped sub-ideas' epics, previewed and retried after its confirm and building a sub-idea shaped since, never where the lifecycle does not offer it; import with its file attached |
+| `test/plan-scaffold-surfaces.test.ts` | the gate on the page, the CLI with `--person` and an agent over MCP, an umbrella's included, and an import into shaped held to it; the `idea defer` help says what the gate asks; the three Scaffold previews agree and write nothing; a confirm creates once whichever surface retries, an umbrella with no rows previewed and retried on the CLI after its confirm; CLI import |
 | `test/plan-scaffold-guards.test.ts` | a shaped plan hollowed by an edit stays shaped, says what it lacks, holds Scaffold and Promote back and refuses both; the breakdown never written as a document; every malformed plan payload refused by name; import into shaped held to the gate; the source file attached byte for byte; a confirm refused without a fingerprint and on a changed plan; no preview where Scaffold is not offered; inherited acceptance, labelled; blockers added and never removed; a renamed key keeps its task; tasks named by idea and row; a stale breakdown save refused; one row edited writes one row |
 | `test/cloud-plan-sync.test.ts` | under both folds: the plan, its membership and its numbers converge on a tail device and a hydrated one; offline adopts and unlinks; offline moves derive the same membership with no conflict; two offline promotions end with two distinct numbers; a third device never shows a numberless epic; a horizon whose only work is cancelled stays listed; an idea an earlier build numbered resolves by its old number |
 | `test/cloud-plan-promotion-identity.test.ts` | under both folds: one idea promoted on two devices offline ends on one number per record on every device and a fresh one, no number on two records, no open conflict |
-| `test/cloud-plan-breakdown-sync.test.ts` | under both folds: different rows edited or added offline both kept with no conflict; one row edited on both is a recorded conflict, and resolving it settles both; two devices scaffolding one idea create the same tasks |
+| `test/cloud-plan-breakdown-sync.test.ts` | under both folds: different rows edited or added offline both kept with no conflict; one row edited on both is a recorded conflict, and resolving it settles both; two devices scaffolding one idea create the same tasks, and one umbrella with no rows the same epics, which either device or a fresh one retries after sync to build a sub-idea shaped since |
 | `test/sync-mutation-convergence.test.ts` | every `PlanStore` mutation, and `promoteInPlace`, converges column for column |
 | `test/plan-surfaces.test.ts` | CLI, MCP and HTTP read one plan with no idea numbers and no draft shown on any surface, consume no number at capture, refuse the same agent writes, promote into the horizon's milestone, and let the person steer |
 | `test/plan-lifecycle.test.ts` | the table itself, pinned: every state's actions, who takes each, the promoted record's epic edits, Mark shaped on a record started while exploring, adopt from exploring on and never raw, back to raw offered nowhere, how a maturity change is named |
 | `test/plan-lifecycle-surfaces.test.ts` | every idea (state, write) cell and every horizon (state, action) cell agrees with the table on HTTP, MCP and the CLI with and without `--person`; every payload carries exactly the table's row; a record started while exploring carries the started row and Mark shaped, and only the person shapes it; every document and file write in every state |
 | `test/plan-own-state.test.ts` | with hand-written expectations: a parent's own state against its rollup; a sub-idea promoted on its own and re-parented by its parent's promotion; a promoted record edited as an epic once shipped; an exploring idea that adopts work reads started, keeps its maturity, offers Mark shaped, joins its horizon, keeps its baseline and stays out of the tracker; every document key, restore and file on a shipped, dropped or raw idea |
-| `test/plan-lenses.test.ts`, `test/plan-lenses-review.test.ts` | what the lenses read: dependencies only from explicit references, a sub-idea's title key over its ancestor's row key; completeness and `dependsOn` on the payload; a horizon's shipped count, progress and server counts; Queue and the run setting offered and held back; each issue's horizon; the run setting is the person's on every path, reaches every ticket as the `horizon-run` instruction, and allows a goal run only when set to `goal` |
-| `test/plan-read-cost.test.ts`, `test/ui-server-keep-alive.test.ts` | a plan read derives once per state of the database; kept-alive sockets outlive SQLite's busy timeout |
-| `views/plan/lenses.test.tsx`, `views/plan/plan-model.test.ts` | the lenses' membership, cards, headers, fold, shipped mark, timeline end-caps and arrows, Markdown reading mode; board columns, nesting, timeline groups, range and dragging |
+| `test/plan-lenses.test.ts`, `test/plan-lenses-review.test.ts` | what the lenses read: dependencies only from explicit references, a sub-idea's title key over its ancestor's row key, never a wait between a record and its ancestor or descendant; completeness and `dependsOn` on the payload; a horizon's shipped count, progress and server counts; Queue and the run setting offered and held back; each issue's horizon; the run setting is the person's on every path, reaches every ticket as the `horizon-run` instruction, and allows a goal run only when set to `goal` |
+| `test/plan-read-cost.test.ts`, `test/ui-server-keep-alive.test.ts` | a plan read derives once per state of the database, and ten more records add no more statements than they did before the umbrella gate; kept-alive sockets outlive SQLite's busy timeout |
+| `views/plan/lenses.test.tsx`, `views/plan/plan-model.test.ts` | the lenses' membership, cards, headers, fold, shipped mark, timeline end-caps and arrows (none between a record and its ancestor), Markdown reading mode; board columns, nesting, timeline groups, range and dragging |
 | `views/tree/horizon-axis.test.tsx`, `test/ui-horizon-chip.test.ts` | the Tasks horizon chip, grouping and filter |
 | `detail/plan-drawer.test.tsx`, `command-palette/commands.test.ts` | an idea's tab strip and the epic's once promoted, no ticket number anywhere, actions exactly as offered, a read-only title where no edit is offered; palette commands from the offered actions only |

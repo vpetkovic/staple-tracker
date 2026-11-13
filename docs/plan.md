@@ -174,8 +174,11 @@ staple idea scaffold <id> --confirm <fingerprint>
 ```
 
 The idea itself becomes the epic and keeps its documents, comments, files and history. Shaped sub-ideas become child epics the same way. A parent with no rows of its own becomes its epic and
-its shaped sub-ideas' epics, and no task of its own; a sub-idea still exploring stays an idea.
-Scaffolding again later creates only rows written since, and a retry never creates a task twice.
+its shaped sub-ideas' epics, and no task of its own; a sub-idea still exploring stays an idea and
+is not in the preview. Scaffolding again later creates only what is missing: rows written since,
+and sub-ideas shaped since, as child epics. A retry never creates anything twice. So when you
+shape a sub-idea after its parent was scaffolded, scaffold the parent again (or the sub-idea on
+its own); this works for a parent with no rows of its own too.
 
 Two alternatives:
 
@@ -213,8 +216,11 @@ Vertical lines mark today and each dated horizon. An arrow runs from an idea to 
 depends on it, red when the dependent one starts first. A dependency counts only when a line of
 the Dependencies section starts with the other idea's ticket number, the key its title starts
 with (C2 in "C2 Checkout API"), or a row key from its breakdown (42.1). A key two ideas share
-counts for neither, except that a sub-idea's title key wins over the same key on a row of its own
-parent: when a parent's rows are keyed R1, R2 like its sub-ideas, "R1" names the sub-idea.
+counts for neither, except that a sub-idea's title key wins over the same key on a row of any of
+its ancestors: when a parent's rows are keyed R1, R2 like its sub-ideas, a sibling's "R1" names
+the sub-idea. An idea never depends on its own parent or sub-ideas, at any depth: the parent's
+own "R1" is its own row, and a sub-idea naming a key only its parent's rows hold depends on
+nothing. No arrow runs between an idea and its parent.
 
 Two flags, never merged into one count:
 
