@@ -268,6 +268,13 @@ describe("dependencies on the timeline", () => {
     expect(dependencyEdges(plan([a, b, c]), new Set(["b", "c"]))).toEqual([]);
   });
 
+  it("never draws an edge between a record and its own ancestor", () => {
+    const parent = idea("p", { dependsOn: ["k"] });
+    const wave = idea("w", { parentId: "p" });
+    const child = idea("k", { parentId: "w", dependsOn: ["p", "a"] });
+    expect(dependencyEdges(plan([a, parent, wave, child]), new Set(["a", "p", "w", "k"]))).toEqual([{ from: "a", to: "k" }]);
+  });
+
   it("draws an arrow from the end of the one waited on to the start of the one waiting, red when it starts first", () => {
     const ideas = new Map([a, b, c].map((entry) => [entry.id, entry]));
     const html = renderToStaticMarkup(

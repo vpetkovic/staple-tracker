@@ -775,9 +775,11 @@ export function recordKeys(record: Pick<DependencyRecord, "identifier" | "title"
  * depends-on cell naming something outside its own breakdown, that LEADS with a record's ticket
  * number, a key its title leads with, or the key of a row in exactly one other record's
  * breakdown. Anything else is prose, whatever words with digits it holds. A key two records share
- * names neither, and a record never waits on itself, with one exception: a key that names one
- * record by its title and otherwise only rows of that record's own ancestors names the record
- * (an umbrella keys its rows like its sub-ideas, and the sub-idea is the one meant).
+ * names neither, with one exception: a key that names one record by its title and otherwise only
+ * rows of that record's own ancestors names the record (an umbrella keys its rows like its
+ * sub-ideas, and the sub-idea is the one meant). A record never waits on itself, its ancestors or
+ * its descendants: a parent's work holds its sub-ideas', so either wait is a cycle, and its own
+ * rows' keys in its own text name its own rows.
  */
 export function resolveDependencies(self: string, sections: Pick<PlanSections, "dependencies" | "breakdown">, records: ReadonlyArray<DependencyRecord>): string[] {
   return dependencyResolver(records)(self, sections);
@@ -813,17 +815,23 @@ export function dependencyResolver(records: ReadonlyArray<DependencyRecord>): (s
     if (all.size === 1) owners.set(key, [...all][0]!);
     else if (byTitle.length === 1 && byRow.every((id) => isAncestor(id, byTitle[0]!))) owners.set(key, byTitle[0]!);
   }
-  return (self, sections) => resolveWith(owners, self, sections);
+  const related = (a: string, b: string) => a === b || isAncestor(a, b) || isAncestor(b, a);
+  return (self, sections) => resolveWith(owners, related, self, sections);
 }
 
-function resolveWith(owners: ReadonlyMap<string, string>, self: string, sections: Pick<PlanSections, "dependencies" | "breakdown">): string[] {
+function resolveWith(
+  owners: ReadonlyMap<string, string>,
+  related: (a: string, b: string) => boolean,
+  self: string,
+  sections: Pick<PlanSections, "dependencies" | "breakdown">,
+): string[] {
   const rowKeys = new Set(sections.breakdown.map((row) => row.key));
   const texts = [...sections.dependencies, ...sections.breakdown.flatMap((row) => row.dependsOn.filter((dep) => !rowKeys.has(dep)))];
   const out: string[] = [];
   for (const text of texts) {
     for (const key of leadingKeys(text, isReference)) {
       const id = owners.get(key);
-      if (id !== undefined && id !== self && !out.includes(id)) out.push(id);
+      if (id !== undefined && !related(id, self) && !out.includes(id)) out.push(id);
     }
   }
   return out;

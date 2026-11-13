@@ -334,10 +334,22 @@ export interface DependencyEdge {
 
 /** Every dependency between two rows the timeline shows, each once. */
 export function dependencyEdges(plan: PlanData, shown: ReadonlySet<string>): DependencyEdge[] {
+  const parentOf = new Map(plan.ideas.map((idea) => [idea.id, idea.parentId]));
+  // A record and its ancestor never wait on each other: the parent's work holds the child's.
+  const isAncestor = (ancestor: string, of: string): boolean => {
+    const seen = new Set<string>();
+    for (let at = parentOf.get(of) ?? null; at !== null && !seen.has(at); at = parentOf.get(at) ?? null) {
+      if (at === ancestor) return true;
+      seen.add(at);
+    }
+    return false;
+  };
   const edges: DependencyEdge[] = [];
   for (const idea of plan.ideas) {
     if (!shown.has(idea.id)) continue;
-    for (const from of idea.dependsOn) if (shown.has(from) && from !== idea.id) edges.push({ from, to: idea.id });
+    for (const from of idea.dependsOn) {
+      if (shown.has(from) && from !== idea.id && !isAncestor(from, idea.id) && !isAncestor(idea.id, from)) edges.push({ from, to: idea.id });
+    }
   }
   return edges;
 }
