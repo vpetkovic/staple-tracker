@@ -1342,7 +1342,6 @@ export class PlanStore {
         (sections.breakdown.length === 0 ? subIdea : planRowsOf(this.db, row.id).some((planRow) => this.issueExists(scaffoldTaskId(row.id, planRow.id))));
       // A shaped plan is held to the gate again before anything is built from it.
       const planIncomplete = maturity === "shaped" && (state === "shaped" || scaffolded) ? this.gateOf(row.id, undefined, subIdea) : [];
-      const parentId = row.parent_id !== null && byId.has(row.parent_id) ? row.parent_id : null;
       return {
         id: row.id,
         identifier: shownIdentifier(row.identifier),
@@ -1352,7 +1351,7 @@ export class PlanStore {
         description: row.description,
         maturity,
         stage,
-        parentId,
+        parentId: row.parent_id !== null && byId.has(row.parent_id) ? row.parent_id : null,
         horizonId,
         planned: { start: row.plan_start, target: row.plan_target },
         baseline: hasBaseline ? { start: row.plan_baseline_start, target: row.plan_baseline_target } : null,
