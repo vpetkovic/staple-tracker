@@ -35,6 +35,7 @@ function idea(id: string, extra: Partial<IdeaData> = {}): IdeaData {
     units: { done: 0, open: 0, planned: 0, total: 0 },
     unsized: false,
     progress: null,
+    percent: null,
     actual: { start: null, end: null, forecastEnd: null },
     late: false,
     notStarted: false,
@@ -67,8 +68,10 @@ function horizon(id: string, extra: Partial<HorizonData> = {}): HorizonData {
     shippedCount: 0,
     units: { done: 0, open: 0, planned: 0, total: 0 },
     unsizedCount: 0,
-    records: { leaves: 0, shipped: 0, started: 0, shaped: 0, exploring: 0, parentCount: 0 },
+    records: { leaves: 0, shipped: 0, started: 0, shaped: 0, exploring: 0, raw: 0, parentCount: 0 },
     progress: 0.5,
+    percent: 50,
+    complete: false,
     runMode: null,
     goal: [],
     awaitingApproval: false,
@@ -85,7 +88,7 @@ function horizon(id: string, extra: Partial<HorizonData> = {}): HorizonData {
 const shaped = idea("shaped", { maturity: "shaped", stage: "scheduled", state: "shaped", horizonId: "now", completeness: { starred: 3, starredTotal: 3, filled: 7, total: 10 } });
 const exploring = idea("exploring", { maturity: "exploring", stage: "exploring", state: "exploring", horizonId: "now", openQuestions: 2 });
 const raw = idea("raw");
-const started = idea("started", { maturity: "shaped", stage: "started", state: "started", horizonId: "now", promoted: true, identifier: "LAR-40", linkCount: 3, progress: 0.4, late: true });
+const started = idea("started", { maturity: "shaped", stage: "started", state: "started", horizonId: "now", promoted: true, identifier: "LAR-40", linkCount: 3, progress: 0.4, percent: 40, late: true });
 const shipped = idea("shipped", {
   maturity: "shaped",
   stage: "shipped",
@@ -95,6 +98,7 @@ const shipped = idea("shipped", {
   identifier: "LAR-41",
   linkCount: 2,
   progress: 1,
+  percent: 100,
   actual: { start: "2026-10-01", end: "2026-10-03", forecastEnd: "2026-10-03" },
   planned: { start: "2026-09-28", target: "2026-10-05" },
 });
@@ -222,7 +226,7 @@ describe("the Horizons lens is delivery", () => {
   it("counts leaf ideas in the header, a parent apart from its children, as the server gives them", () => {
     const html = renderToStaticMarkup(
       <HorizonsBoard
-        plan={plan([], [horizon("now", { ideaCount: 4, memberCount: 2, records: { leaves: 3, shipped: 1, started: 1, shaped: 1, exploring: 0, parentCount: 1 } })])}
+        plan={plan([], [horizon("now", { ideaCount: 4, memberCount: 2, records: { leaves: 3, shipped: 1, started: 1, shaped: 1, exploring: 0, raw: 0, parentCount: 1 } })])}
         write={async () => true}
         onOpen={() => {}}
         selected={null}
@@ -235,18 +239,29 @@ describe("the Horizons lens is delivery", () => {
   it("folds only a horizon the server reads as done, never one whose cards merely all shipped", () => {
     // Every card shipped, but the horizon still holds open work the cards do not show.
     expect(horizonDone(horizon("now", { progress: 0.5 }))).toBe(false);
-    expect(horizonDone(horizon("now", { progress: 1 }))).toBe(true);
+    // Every counted unit landed is not shipped: a reopened member, an idea waiting for review or
+    // work placed on another horizon leave its milestone open. Only the server's flag folds it.
+    expect(horizonDone(horizon("now", { progress: 1, percent: 100, complete: false }))).toBe(false);
     expect(horizonDone(horizon("now", { shipped: true, progress: null }))).toBe(true);
-    // Every counted unit landed, but an idea on it has nothing to count yet: not done.
     expect(horizonDone(horizon("now", { progress: 1, unsizedCount: 1 }))).toBe(false);
     expect(horizonDone(horizon("now", { progress: null }))).toBe(false);
     const open = renderToStaticMarkup(<HorizonsBoard plan={plan([shipped], [horizon("now", { shippedCount: 1, progress: 0.5 })])} write={async () => true} onOpen={() => {}} selected={null} />);
     expect(open).not.toContain("data-plan-horizon-done");
     expect(open).not.toMatch(/data-plan-horizon-risk[^>]*>[^]*?Shipped<\/span>/);
-    const html = renderToStaticMarkup(<HorizonsBoard plan={plan([shipped], [horizon("now", { shippedCount: 1, progress: 1 })])} write={async () => true} onOpen={() => {}} selected={null} />);
+    const html = renderToStaticMarkup(<HorizonsBoard plan={plan([shipped], [horizon("now", { shippedCount: 1, progress: 1, percent: 100, complete: true, shipped: true })])} write={async () => true} onOpen={() => {}} selected={null} />);
     expect(html).toContain('data-plan-horizon-done=""');
     expect(html).toContain('data-plan-done-toggle="LAR-now"');
     expect(text(html)).toContain("All 4 members landed · show");
+  });
+
+  it("prints the server's percent, and says a whole 100 that is not complete is incomplete", () => {
+    const board = (over: Partial<HorizonData>) => renderToStaticMarkup(<HorizonsBoard plan={plan([], [horizon("now", over)])} write={async () => true} onOpen={() => {}} selected={null} />);
+    // Two of three units: the server's 66, never a rounded 67 of the page's own.
+    expect(board({ progress: 2 / 3, percent: 66 })).toContain('aria-label="66% done"');
+    // Every counted unit landed, an idea on it still unsized: not complete, and not folded.
+    const held = board({ progress: 1, percent: 100, complete: false, unsizedCount: 1 });
+    expect(text(held)).toContain("100% incomplete");
+    expect(held).not.toContain("data-plan-horizon-done");
   });
 
   it("edits the horizon's run setting, how far agents take it and its goal, and starts nothing", () => {

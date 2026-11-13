@@ -61,7 +61,7 @@ describe("D review integration", () => {
     const view = plan.view();
     // Deliberately unlike the visible delivery cards, as with manually added open members.
     const horizon = view.horizons.find((h) => h.id === now.id)!;
-    Object.assign(horizon, { ideaCount: 7, records: { leaves: 7, shipped: 0, started: 0, shaped: 7, exploring: 0, parentCount: 0 }, memberCount: 9, shippedCount: 3, lateCount: 4, notStartedCount: 2, progress: 0.25 });
+    Object.assign(horizon, { ideaCount: 7, records: { leaves: 7, shipped: 0, started: 0, shaped: 7, exploring: 0, parentCount: 0 }, memberCount: 9, shippedCount: 3, lateCount: 4, notStartedCount: 2, progress: 0.25, percent: 25 });
     for (const [name, html] of Object.entries(displays(view))) {
       const words = plain(html);
       for (const expected of ["7 ideas", "9 members", "3 shipped", "4 late", "2 not started"]) expect(words, name).toContain(expected);
@@ -72,7 +72,7 @@ describe("D review integration", () => {
   it("uses the same completed and approval-pending horizon state in all three views", () => {
     const view = store.plan().view();
     const now = view.horizons.find((h) => h.name === "Now")!;
-    Object.assign(now, { progress: 1, memberCount: 2, shippedCount: 1, ideaCount: 5, records: { leaves: 5, shipped: 0, started: 0, shaped: 5, exploring: 0, parentCount: 0 } });
+    Object.assign(now, { shipped: true, progress: 1, percent: 100, complete: true, memberCount: 2, shippedCount: 1, ideaCount: 5, records: { leaves: 5, shipped: 0, started: 0, shaped: 5, exploring: 0, parentCount: 0 } });
     for (const [name, html] of Object.entries(displays(view))) expect(plain(html), name).toContain("Shipped");
     expect(plain(displays(view).board)).toContain("All 2 members landed");
     now.awaitingApproval = true;

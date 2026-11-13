@@ -95,6 +95,8 @@ const READS: Record<StoreName, readonly string[]> = {
     // claims through `checkoutIssue`, and a stated failure releases through
     // `releaseIssue`: both are this store's own mutations, covered by their scenarios.
     "runs",
+    // Whether some horizon's status inputs moved since this device last settled them (`rederivePlanHolds`).
+    "owesPlanHolds",
   ],
   // `criteriaCheck`: the goal check's criteria half, read by a goal run's stop rules.
   // `leafProgress`: the ticket leaves a horizon's accounting starts from.
@@ -103,7 +105,7 @@ const READS: Record<StoreName, readonly string[]> = {
   QueueStore: ["revision", "entries", "effectiveQueue", "view", "scopeMembership"],
   ProjectStore: ["list", "get", "issueCounts"],
   // The plan layer's reads, and the lifecycle checks the tracker asks of it: derived on every call, nothing stored.
-  PlanStore: ["assertEnabled", "today", "enabled", "view", "ideaView", "detail", "stateOf", "assertEditable", "assertDocumentWrite", "assertQueueable", "sectionsOf", "scaffoldPreview", "horizonsOf", "horizonIds", "accountingOf", "heldByPlan"],
+  PlanStore: ["assertEnabled", "today", "enabled", "view", "ideaView", "detail", "stateOf", "assertEditable", "assertDocumentWrite", "assertQueueable", "sectionsOf", "scaffoldPreview", "horizonsOf", "horizonIds", "accountingOf", "heldByPlan", "holdOf", "holdsByHorizon"],
 };
 
 interface World {

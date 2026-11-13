@@ -431,6 +431,41 @@ describe("a horizon's status over sync", () => {
       }
     });
 
+    it(`converges with no conflict when one device releases a horizon while another reopens its ticket offline (${fold} fold)`, async () => {
+      const server = new FakeSyncServer({ repositoryId: REPO, ...(fold === "tail" ? { maxSnapshotFoldOps: 3 } : {}) });
+      fleet = new Fleet(server, REPO);
+      const a = fleet.machine("a");
+      a.store.plan().enable("vp", { person: { via: "settings" } });
+      const now = a.store.plan().view().horizons[0]!.id;
+      const ticket = a.store.createIssue({ title: "Ledger" }).identifier;
+      a.store.milestones().addMember(now, ticket, {}, "vp");
+      const q = a.store.plan().capture({ title: "Billing export", maturity: "shaped", plan: READY_PLAN, horizon: now }, "vp", PERSON).id;
+      a.store.checkoutIssue(ticket, "agent");
+      a.store.updateIssue(ticket, { status: "done" }, "agent");
+      expect(category(a, now)).toBe("unstarted");
+      await a.sync();
+      const b = fleet.machine("b");
+      await b.sync();
+
+      // Offline: A takes the idea off the horizon, which releases it and closes it; B reopens the ticket.
+      a.use();
+      a.store.plan().update(q, { horizon: null }, "vp", PERSON);
+      expect(category(a, now)).toBe("done");
+      b.use();
+      b.store.updateIssue(ticket, { status: "in_progress" }, "agent");
+      expect(category(b, now)).toBe("active");
+
+      await both(a, b, 3);
+      const fresh = fleet.machine("fresh");
+      await fresh.sync();
+      for (const machine of [a, b, fresh]) {
+        // Derived again from the merged facts: an open ticket, and no idea holding it.
+        expect(category(machine, now)).toBe("active");
+        expect(machine.store.getIssue(now).status).toBe(a.store.getIssue(now).status);
+        expect(openConflicts(machine)).toEqual([]);
+      }
+    });
+
     it(`re-derives each horizon from the membership two offline moves leave, on every device (${fold} fold)`, async () => {
       const server = new FakeSyncServer({ repositoryId: REPO, ...(fold === "tail" ? { maxSnapshotFoldOps: 3 } : {}) });
       fleet = new Fleet(server, REPO);

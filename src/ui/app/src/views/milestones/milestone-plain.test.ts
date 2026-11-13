@@ -63,6 +63,8 @@ describe("progress and risk sentences", () => {
     expect(progressSentence({ ...horizon, unsized: 2 })).toBe("78 of 86 tasks finished, 69 planned in ideas with no tickets yet (50% of all work). 2 ideas have no size yet.");
     expect(progressSegments(horizon).find((segment) => segment.key === "planned")?.count).toBe(69);
     expect(progressSegments(progress(1, 4)).map((segment) => segment.key)).not.toContain("planned");
+    // Every counted unit landed but an idea is unsized: the server's 100 is not complete, and the sentence says so.
+    expect(progressSentence({ ...progress(3, 3), percent: 100, complete: false, planned: 0, unsized: 1 })).toBe("3 of 3 tasks finished (100% of all work, incomplete). 1 idea has no size yet.");
   });
 
   it("names blocked work in the bar's own number, and stays silent when there is none", () => {

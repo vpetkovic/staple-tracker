@@ -52,6 +52,9 @@ interface Horizon {
   ideaCount: number;
   records: { leaves: number; parentCount: number };
   progress: number | null;
+  percent: number | null;
+  complete: boolean;
+  shipped: boolean;
 }
 interface Progress {
   countable: number;
@@ -125,6 +128,24 @@ describe("a horizon's accounting on every surface", () => {
     expect(shown.stdout).toContain("progress 1/5 20% · 3 planned · 1 unsized · 2 leaves");
   });
 
+  it("says a horizon whose counted work all landed is incomplete while an idea on it has no size, on every surface", async () => {
+    const next = ((await http(`/api/plan?ws=${WS}`)).body as unknown as { horizons: Horizon[] }).horizons[1]!;
+    for (const title of ["Ledger", "Refund webhook"]) {
+      const ticket = (await cliJson("new", title)) as { identifier: string };
+      await cliJson("milestone", "add", next.identifier, ticket.identifier);
+      await cliJson("checkout", ticket.identifier);
+      await cliJson("done", ticket.identifier, "-m", "landed");
+    }
+    expect((await http("/api/plan/capture", { title: "Usage export", maturity: "exploring", horizon: next.id })).status).toBe(200);
+    const expected = { units: { done: 2, open: 0, planned: 0, total: 2 }, percent: 100, complete: false, unsizedCount: 1, shipped: false };
+    const fromCli = ((await cliJson("horizon", "ls")) as Horizon[]).find((h) => h.identifier === next.identifier)!;
+    const fromMcp = (toolPayload(await mcp.call("list_horizons", { ws: WS })) as Horizon[]).find((h) => h.identifier === next.identifier)!;
+    const fromPage = ((await http(`/api/plan?ws=${WS}`)).body as unknown as { horizons: Horizon[] }).horizons.find((h) => h.identifier === next.identifier)!;
+    for (const horizon of [fromCli, fromMcp, fromPage]) expect(horizon).toMatchObject(expected);
+    expect((await cli("horizon", "ls", "--ws", WS)).stdout).toMatch(/2\/2 100% incomplete · 1 unsized/);
+    expect((await cli("milestone", "show", next.identifier, "--ws", WS)).stdout).toContain("progress 2/2 100% incomplete · 0 planned · 1 unsized · 2 leaves");
+  });
+
   it("reads as a plain milestone with planning off: ticket leaves only, no planned work", async () => {
     expect((await http("/api/settings", { target: "settings", ops: [{ op: "set", key: "features.planning", value: false }] })).status).toBe(200);
     const shown = (await cliJson("milestone", "show", horizonRef)) as { progress: Progress };
@@ -135,5 +156,14 @@ describe("a horizon's accounting on every surface", () => {
     expect(got.progress).not.toHaveProperty("planned");
     const text = await cli("milestone", "show", horizonRef, "--ws", WS);
     expect(text.stdout).toContain("progress 1/2 50% · 2 leaves");
+  });
+
+  it("names a horizon's hold with planning off, where its ideas are hidden", async () => {
+    // Off since the test above. Checkout API, Invoice search and Audit trail are not shipped; Reporting is their umbrella.
+    expect((await cli("milestone", "show", horizonRef, "--ws", WS)).stdout).toContain("held by plan · 3 ideas on it not shipped yet");
+    expect(toolPayload(await mcp.call("get_milestone", { ws: WS, ref: horizonRef }))).toMatchObject({ heldByPlan: 3 });
+    const refused = await cli("status", horizonRef, "done", "--ws", WS);
+    expect(refused.status).not.toBe(0);
+    expect(refused.stderr).toContain("is held by 3 scheduled ideas that have not shipped; turn planning on to see them.");
   });
 });
