@@ -91,13 +91,14 @@ afterAll(async () => {
 
 describe("the plan on every surface", () => {
   it("is off until enabled, and every surface says so the same way", async () => {
-    expect((await cliJson("plan", "show")) as Plan).toMatchObject({ enabled: false });
-    expect(toolPayload(await mcpCall("list_ideas", {}))).toMatchObject({ enabled: false });
-    expect((await http(`/api/plan?ws=${WS}`)).body).toMatchObject({ enabled: false });
+    expect((await cli("plan", "show", "--ws", WS)).status).toBe(2);
+    expect((await mcpCall("list_ideas", {})).isError).toBe(true);
+    expect((await http(`/api/plan?ws=${WS}`)).status).toBe(409);
     const refused = await mcpCall("capture_idea", { title: "too early" });
     expect(refused.isError).toBe(true);
-    expect(JSON.stringify(refused.content)).toContain("staple plan enable");
-    expect((await cliJson("plan", "enable")) as Plan).toMatchObject({ enabled: true });
+    expect(JSON.stringify(refused.content)).toContain("features.planning");
+    expect((await http("/api/settings", { target: "settings", ops: [{ op: "set", key: "features.planning", value: true }] })).status).toBe(200);
+    expect((await cliJson("plan", "show")) as Plan).toMatchObject({ enabled: true });
   });
 
   it("captures on every surface and reads the same plan three ways", async () => {

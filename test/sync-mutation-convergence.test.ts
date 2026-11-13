@@ -76,7 +76,7 @@ const READS: Record<StoreName, readonly string[]> = {
     "blockingChildrenOf", "gate", "gateFor", "gateDecision", "queuedByFor", "gateQueueOf", "queuedBy", "claimActivity",
     "claimActivityFor", "worklogSummaryFor", "timingFor", "timing", "detailTiming", "listComments", "latestComments", "listCommentsPage",
     "getDocument", "listDocuments", "listDocumentRevisions", "instructions", "listIssues", "listIssuesPage", "inbox", "context", "tree",
-    "edges", "milestones", "queue", "projects", "plan", "planningOn", "isPlanIssue", "isHorizon", "writeTarget",
+    "edges", "milestones", "queue", "projects", "plan", "planningOn", "planningInitialized", "isPlanIssue", "isHorizon", "writeTarget",
     // The attempt ledger the mutators write through; its own writes are the store's methods below.
     "attempts",
     // The attempt read surfaces: pure reads, which write no stored orphan end either.
@@ -102,7 +102,7 @@ const READS: Record<StoreName, readonly string[]> = {
   QueueStore: ["revision", "entries", "effectiveQueue", "view", "scopeMembership"],
   ProjectStore: ["list", "get", "issueCounts"],
   // The plan layer's reads, and the lifecycle checks the tracker asks of it: derived on every call, nothing stored.
-  PlanStore: ["today", "enabled", "view", "ideaView", "detail", "stateOf", "assertEditable", "assertDocumentWrite", "assertQueueable", "sectionsOf", "scaffoldPreview", "horizonsOf", "horizonIds"],
+  PlanStore: ["assertEnabled", "today", "enabled", "view", "ideaView", "detail", "stateOf", "assertEditable", "assertDocumentWrite", "assertQueueable", "sectionsOf", "scaffoldPreview", "horizonsOf", "horizonIds"],
 };
 
 interface World {
@@ -353,7 +353,8 @@ const SCENARIOS: readonly Scenario[] = [
   { method: "WorkspaceStore.restoreDocumentRevision", name: "restore a revision", run: (w) => void w.a.store.restoreDocumentRevision(w.ids["Everything"]!, "spec", 1, "carol") },
 
   // ---- the plan layer: every write is issue fields, documents or a new issue
-  { method: "PlanStore.enable", name: "turn planning on", run: (w) => void w.a.store.plan().enable("alice") },
+  { method: "PlanStore.initialize", name: "initialize retained planning structure", run: (w) => void w.a.store.plan().initialize("alice") },
+  { method: "PlanStore.enable", name: "turn planning on", run: (w) => void w.a.store.plan().enable("alice", { person: { via: "settings" } }) },
   { method: "PlanStore.migrateLegacyLater", name: "upgrade the undated Later bucket without losing hand membership", run: (w) => {
     const plan = w.a.store.plan();
     const later = plan.createHorizon({ name: "Later" }, "alice", { person: { via: "test" } });

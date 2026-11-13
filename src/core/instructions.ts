@@ -204,7 +204,7 @@ function runInstructionsOf(db: DatabaseSync, runId: string): { instructions: Run
  * Every instruction that applies to `issueId`, nearest first, with the source of each and
  * whether it is the one in effect for its key. With `runId`, the run's own come last.
  */
-export function resolveInstructions(db: DatabaseSync, issueId: string, options: { runId?: string | null } = {}): ResolvedInstruction[] {
+export function resolveInstructions(db: DatabaseSync, issueId: string, options: { runId?: string | null; planning?: boolean } = {}): ResolvedInstruction[] {
   const out: ResolvedInstruction[] = [];
   const winners = new Map<string, InstructionSource>();
   const add = (entry: Omit<ResolvedInstruction, "effective" | "shadowedBy">): void => {
@@ -217,7 +217,7 @@ export function resolveInstructions(db: DatabaseSync, issueId: string, options: 
     for (const doc of instructionDocumentsOf(db, row.id)) {
       add({ key: doc.key, revision: doc.revision, title: doc.title, body: doc.body, author: doc.author, updatedAt: doc.createdAt, source });
     }
-    const run = horizonRunOf(db, row.id);
+    const run = options.planning === true ? horizonRunOf(db, row.id) : null;
     if (run !== null) add({ key: HORIZON_RUN_KEY, revision: null, title: `How far to take ${row.title}`, body: run, author: null, updatedAt: null, source });
   }
   const runId = options.runId ?? null;

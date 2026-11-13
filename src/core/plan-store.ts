@@ -72,6 +72,7 @@ import {
   type OfferedAction,
 } from "./plan-lifecycle.js";
 import { createHash, randomUUID } from "node:crypto";
+import { readStoredRepositoryId } from "./repo-identity.js";
 import { planLinkField, planLinksOf, writePlanLink } from "./plan-links.js";
 import { planRowField, planRowsOf, planRowValue, writePlanRow, type PlanRowValue } from "./plan-rows.js";
 import {
@@ -415,6 +416,13 @@ export function scaffoldTaskId(ideaId: string, rowId: string): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
+/** Stable within a repository, separate from user-created horizons and scaffolded work. */
+function defaultHorizonId(repositoryId: string, name: string): string {
+  const hex = createHash("sha256").update(`staple:default-horizon:${repositoryId}:${name}`).digest("hex");
+  const variant = ((parseInt(hex[16]!, 16) & 0x3) | 0x8).toString(16);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
 /** A short digest of a value, as previews and the breakdown name what they showed. */
 function digest(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
@@ -487,7 +495,7 @@ export class PlanStore {
     return this.store.planningOn();
   }
 
-  private assertEnabled(): void {
+  assertEnabled(): void {
     if (!this.store.planningOn()) throw new StapleError("validation", PLAN_KINDS_MISSING_MESSAGE, { kinds: [IDEA_KIND, MILESTONE_KIND] });
   }
 
@@ -519,6 +527,7 @@ export class PlanStore {
   assertEditable(ref: string): void {
     const row = this.row(ref, false);
     if (row.plan_maturity === null || row.kind !== IDEA_KIND) return;
+    this.assertEnabled();
     this.allowIdea(row, "edit", {});
   }
 
@@ -617,29 +626,41 @@ export class PlanStore {
    * Run again on a workspace where planning is on, it converts what an earlier build left: a
    * numbered idea back to a draft identifier.
    */
-  enable(actor: string | null): PlanView {
-    if (this.store.planningOn()) {
+  enable(actor: string | null, options: PlanWriteOptions = {}): PlanView {
+    this.store.setSetting("features.planning", true, actor, options.person);
+    return this.view();
+  }
+
+  /** Only the feature-setting transaction calls this structural upgrade. */
+  initialize(actor: string | null): void {
+    if (this.store.planningInitialized()) {
       this.store.journaled(() => {
         this.migrateLegacyLater();
         this.draftNumberedIdeas(actor);
         this.settleMembership(actor);
       });
-      return this.view();
+      return;
     }
     const unrelated = this.db.prepare("SELECT identifier FROM issues WHERE kind = ? ORDER BY identifier").all(IDEA_KIND) as Array<{ identifier: string }>;
     if (unrelated.length > 0) {
       const names = unrelated.map((row) => row.identifier);
       throw new StapleError(
         "validation",
-        `Planning uses the kind "idea", and ${names.slice(0, 10).join(", ")}${names.length > 10 ? ` and ${names.length - 10} more` : ""} already use it for other work. Re-kind ${names.length === 1 ? "it" : "them"} first (staple set <ref> --kind <other>), then turn planning on.`,
+        `Planning uses the kind "idea", and ${names.slice(0, 10).join(", ")}${names.length > 10 ? ` and ${names.length - 10} more` : ""} already use it for other work. The idea kind is reserved; these legacy records are kept intact and generic kind migration is refused. A person must resolve the legacy vocabulary before enabling planning.`,
         { issues: names },
       );
     }
-    return this.store.journaled(() => {
+    this.store.journaled(() => {
       const ids = this.store.getKinds().map((kind) => kind.id);
       if (!ids.includes(IDEA_KIND)) this.store.addKind({ id: IDEA_KIND, label: "Idea" }, actor);
       if (!ids.includes(MILESTONE_KIND)) this.store.addKind({ id: MILESTONE_KIND, label: "Milestone" }, actor);
-      DEFAULT_HORIZONS.forEach((name, index) => this.insertHorizon(name, null, (index + 1) * RANK_STEP, actor));
+      const repositoryId = readStoredRepositoryId(this.db);
+      DEFAULT_HORIZONS.forEach((name, index) => {
+        // Concurrent first enables create the same records, including before either syncs.
+        // Isolated in-memory stores without repository identity keep independent random ids.
+        const id = repositoryId === null ? undefined : defaultHorizonId(repositoryId, name);
+        this.insertHorizon(name, null, (index + 1) * RANK_STEP, actor, id);
+      });
       return this.view();
     });
   }
@@ -1723,8 +1744,8 @@ export class PlanStore {
 
   // ---------- horizons: milestones the plan shows as columns (all the person's) ----------
 
-  private insertHorizon(name: string, date: string | null, rank: number, actor: string | null): string {
-    const issue = this.store.createIssue({ title: name, kind: MILESTONE_KIND, createdBy: actor, allowDuplicate: true }, { plan: true });
+  private insertHorizon(name: string, date: string | null, rank: number, actor: string | null, id?: string): string {
+    const issue = this.store.createIssue({ title: name, kind: MILESTONE_KIND, createdBy: actor, allowDuplicate: true }, { plan: true, id });
     this.write(issue.id, { plan_rank: rank }, actor, "horizon_created", { date });
     if (date !== null) this.store.milestones().update(issue.id, { targetDate: date }, actor, { plan: true });
     return issue.id;

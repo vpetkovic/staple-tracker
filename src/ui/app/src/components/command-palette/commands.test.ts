@@ -65,6 +65,7 @@ function row(identifier: string, title: string, overrides: Partial<Issue> = {}):
 }
 
 const context = (overrides: Partial<PaletteContext> = {}): PaletteContext => ({
+  planningEnabled: true,
   selection: null,
   selectionStatus: null,
   view: "tree",

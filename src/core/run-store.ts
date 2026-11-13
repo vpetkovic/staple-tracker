@@ -709,7 +709,7 @@ export class RunStore {
    * instruction document on a sibling the run has not reached yet.
    */
   private takeInstructions(row: RunRow, issueId: string, run: Run): { instructions: ResolvedInstruction[]; instructionsChanged: InstructionChange[] } {
-    const instructions = resolveInstructions(this.db, issueId, { runId: row.id });
+    const instructions = resolveInstructions(this.db, issueId, { runId: row.id, planning: this.store.planningOn() });
     const instructionsChanged = this.pendingInstructionChanges(run);
     this.db.prepare("UPDATE runs SET instructions_seq = ? WHERE id = ?").run(latestEventSeq(this.db), row.id);
     return { instructions, instructionsChanged };
@@ -1544,7 +1544,9 @@ export class RunStore {
     const row = this.db.prepare("SELECT plan_run_mode FROM issues WHERE id = ? AND kind = ? AND plan_rank IS NOT NULL").get(issueId, MILESTONE_KIND) as
       | { plan_run_mode: string | null }
       | undefined;
-    if (row === undefined || row.plan_run_mode === "goal") return;
+    if (row === undefined) return;
+    this.store.plan().assertEnabled();
+    if (row.plan_run_mode === "goal") return;
     throw new StapleError(
       "validation",
       `${identifier} is a horizon set to run ${isRunMode(row.plan_run_mode) ? RUN_MODES[row.plan_run_mode].label.toLowerCase() : "not set"}, and a goal run would hold it for a goal check it is not set to make. Take its work from the queue (staple queue next); the person changes how far it runs in the Plan view.`,

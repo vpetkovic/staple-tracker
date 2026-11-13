@@ -837,8 +837,8 @@ export class MilestoneStore {
     this.assertKindConfigured();
     const rows = this.db
       .prepare(`SELECT id, status FROM issues WHERE kind = ? AND
-        (plan_rank IS NULL OR EXISTS (SELECT 1 FROM milestone_meta m WHERE m.issue_id = issues.id AND m.target_date IS NOT NULL))`)
-      .all(MILESTONE_KIND) as Array<{ id: string; status: string }>;
+        (? = 0 OR plan_rank IS NULL OR EXISTS (SELECT 1 FROM milestone_meta m WHERE m.issue_id = issues.id AND m.target_date IS NOT NULL))`)
+      .all(MILESTONE_KIND, this.store.planningOn() ? 1 : 0) as Array<{ id: string; status: string }>;
     // One resolver read for the whole list, not one per milestone.
     const facts = this.queueFacts();
     const listed = rows.filter((row) => options.all === true || !this.store.isResolvedStatus(row.status));
@@ -1359,7 +1359,7 @@ export class MilestoneStore {
           identifier: member.identifier,
         });
       }
-      const from = this.store.getIssue(current.milestone_id);
+      const from = this.store.writeTarget(current.milestone_id);
       if (target === null || target.id === from.id) {
         if (!hasPosition(options)) return this.view(from.id);
         this.assertBase(from, options.baseRevision);

@@ -53,7 +53,7 @@ beforeAll(async () => {
   await once(ui.server, "listening");
   token = ui.token;
   origin = `http://127.0.0.1:${(ui.server.address() as AddressInfo).port}`;
-  expect((await http("/api/plan/enable", {})).status).toBe(200);
+  expect((await http("/api/settings", { target: "settings", ops: [{ op: "set", key: "features.planning", value: true }] })).status).toBe(200);
 }, 60_000);
 
 afterAll(async () => {

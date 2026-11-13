@@ -21,7 +21,7 @@ beforeEach(() => {
   const db = openDb(":memory:");
   migrateWorkspace(db);
   store = new WorkspaceStore(db, "test", "LAR");
-  store.plan().enable("person");
+  store.plan().enable("person", { person: { via: "settings" } });
 });
 afterEach(() => store.db.close());
 const plain = (html: string) => html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");

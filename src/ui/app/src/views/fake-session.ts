@@ -12,6 +12,7 @@ const noop = () => {};
 
 export function fakeSession(over: Partial<StapleSession> = {}): StapleSession {
   return {
+    planningEnabled: true,
     mode: "workspace",
     workspaces: [{ slug: "staple", prefix: "STA" }],
     view: "tree",

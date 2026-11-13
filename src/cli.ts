@@ -1,3 +1,4 @@
+import { configuredHumanName } from "./mcp-view-actions.js";
 /**
  * staple CLI — the human/CI surface. Mirrors the MCP tools.
  * Ships as the `staple` bin of the `staple-cli` npm package (`npx staple-cli`);
@@ -1115,10 +1116,10 @@ Milestones
               refused (exit 7) and the order stands. Membership never changes an
               issue's parent, blockers, status or claim
 
-The plan (ideas and horizons above the tracker)
-  plan enable                           turn planning on: adds the "idea" and "milestone"
-              kinds and the horizons Now, Next and Later, which are milestones
-  plan show                             the horizons in order with their late and
+The plan (experimental; features.planning defaults off)
+  plan enable --person                 turn planning on: adds the "idea" and "milestone"
+              kinds and the horizons Now and Next, which are milestones
+  plan show                            the horizons in order with their late and
               not-started counts
   idea ls [--maturity M] [--horizon H]  ideas with stage, horizon and progress; ideas are
               never queued, checked out, picked by next or listed by ls. An idea has
@@ -2892,7 +2893,7 @@ function main() {
      * refused with the sentence that names `staple config set`.
      */
     case "settings": {
-      const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: common });
+      const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { ...common, person: { type: "boolean" } } });
       const { store } = getStore(values);
       const sub = positionals[0] ?? "ls";
       // A structured value (kinds.appearance is a map) prints as JSON rather
@@ -2921,7 +2922,9 @@ function main() {
           const raw = positionals[2];
           if (!key || raw === undefined) throw new StapleError("validation", "usage: staple settings set <key> <value>");
           const definition = requireSettingDefinition(key, "workspace");
-          const view = store.setSetting(key, coerceSettingInput(definition, raw, `workspace ${store.slug}`), agentName());
+          const name = values.person ? configuredHumanName() : null;
+          if (values.person && !name) throw new StapleError("validation", '--person needs your name: run `staple config set humanName "Your Name"` first.');
+          const view = store.setSetting(key, coerceSettingInput(definition, raw, `workspace ${store.slug}`), name ?? agentName(), values.person ? { via: "cli" } : null);
           if (values.json) outJson(view);
           else line(view);
           break;

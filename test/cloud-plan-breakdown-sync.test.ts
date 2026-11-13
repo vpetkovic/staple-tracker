@@ -52,7 +52,7 @@ async function twoDevices(fold: "service" | "tail"): Promise<{ a: Machine; b: Ma
   const server = new FakeSyncServer({ repositoryId: REPO, ...(fold === "tail" ? { maxSnapshotFoldOps: 3 } : {}) });
   fleet = new Fleet(server, REPO);
   const a = fleet.machine("a");
-  a.store.plan().enable("vp");
+  a.store.plan().enable("vp", { person: { via: "settings" } });
   const id = a.store.plan().capture({ title: "Idea", maturity: "shaped", plan: PLAN }, "vp", PERSON).id;
   await a.sync();
   const b = fleet.machine("b");

@@ -47,7 +47,7 @@ describe("a restore of an idea's breakdown", () => {
       const server = new FakeSyncServer({ repositoryId: REPO });
       fleet = new Fleet(server, REPO);
       const a = fleet.machine("a");
-      a.store.plan().enable("vp");
+      a.store.plan().enable("vp", { person: { via: "settings" } });
       const idea = a.store.plan().capture({ title: "Idea", maturity: "shaped", plan: PLAN }, "vp", PERSON).id;
       await a.sync();
       const b = fleet.machine("b");

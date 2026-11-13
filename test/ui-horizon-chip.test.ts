@@ -28,7 +28,7 @@ beforeAll(async () => {
   const ws = initWorkspace({ global: true, slug: "larkspur" });
   const plan = ws.store.plan();
   const person = { person: { via: "plan_view" } } as const;
-  plan.enable("Mira");
+  plan.enable("Mira", { person: { via: "settings" } });
   const horizon = plan.view().horizons[0];
   if (!horizon) throw new Error("enabled plan has no default horizon");
   horizonRef = horizon.identifier;

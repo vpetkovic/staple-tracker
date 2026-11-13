@@ -48,8 +48,10 @@ function writer(person: boolean | undefined): { actor: string; options: PlanWrit
   return { actor: name, options: { person: { via: "cli" } } };
 }
 
-function planFor(values: { db?: string; ws?: string }) {
-  return resolveWorkspace({ db: values.db, ws: values.ws }).store.plan();
+function planFor(values: { db?: string; ws?: string }, enabling = false) {
+  const plan = resolveWorkspace({ db: values.db, ws: values.ws }).store.plan();
+  if (!enabling) plan.assertEnabled();
+  return plan;
 }
 
 function ideaLine(idea: IdeaView, plan: PlanView): string {
@@ -127,12 +129,12 @@ function offeredLine(actions: IdeaDetail["idea"]["actions"]): string {
 export function runPlanCommand(rest: string[]): void {
   const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: COMMON });
   const [sub = "show"] = positionals;
-  const plan = planFor(values);
-  const { actor } = writer(values.person);
+  const plan = planFor(values, sub === "enable");
+  const { actor, options } = writer(values.person);
   let view: PlanView;
   switch (sub) {
     case "enable":
-      view = plan.enable(actor);
+      view = plan.enable(actor, options);
       break;
     case "show":
       view = plan.view();
@@ -141,7 +143,6 @@ export function runPlanCommand(rest: string[]): void {
       throw new StapleError("validation", `Unknown plan verb "${sub}". Use: enable, show`);
   }
   if (values.json) return console.log(JSON.stringify(view));
-  if (!view.enabled) return console.log("Planning is not turned on. Run `staple plan enable`.");
   for (const horizon of view.horizons) console.log(horizonLine(horizon));
   console.log(`${view.ideas.length} ${view.ideas.length === 1 ? "idea" : "ideas"} · today ${view.today}`);
 }
@@ -199,7 +200,6 @@ export function runIdeaCommand(rest: string[]): void {
         ideas = ideas.filter((idea) => idea.horizonId === (horizon?.id ?? null));
       }
       if (values.json) return console.log(JSON.stringify(ideas));
-      if (!view.enabled) return console.log("Planning is not turned on. Run `staple plan enable`.");
       if (ideas.length === 0) return console.log("no ideas");
       for (const idea of ideas) console.log(ideaLine(idea, view));
       return;
@@ -367,7 +367,6 @@ export function runHorizonCommand(rest: string[]): void {
   const list = () => {
     const view = plan.view();
     if (values.json) return console.log(JSON.stringify(view.horizons));
-    if (!view.enabled) return console.log("Planning is not turned on. Run `staple plan enable`.");
     for (const horizon of view.horizons) console.log(horizonLine(horizon));
   };
   switch (sub) {

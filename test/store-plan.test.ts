@@ -30,7 +30,7 @@ beforeEach(() => {
   store = memStore();
   plan = store.plan();
   plan.clock = () => new Date("2026-11-07T12:00:00.000Z");
-  plan.enable("vp");
+  plan.enable("vp", { person: { via: "settings" } });
 });
 
 function refused(fn: () => unknown, code = "validation"): StapleError {
@@ -77,7 +77,7 @@ describe("enabling", () => {
     expect(horizons.map((h) => h.name)).toEqual(["Now", "Next"]);
     for (const h of horizons) expect(store.getIssue(h.id).kind).toBe(MILESTONE_KIND);
     expect(store.milestones().list()).toEqual([]);
-    plan.enable("vp");
+    plan.enable("vp", { person: { via: "settings" } });
     expect(plan.view().horizons).toHaveLength(2);
   });
 
@@ -140,7 +140,7 @@ describe("identity: an idea holds no ticket number until it is promoted", () => 
     const id = idea("Numbered by v1");
     // What an earlier build left: the idea took a ticket number at capture.
     store.db.prepare("UPDATE issues SET identifier = 'TST-77' WHERE id = ?").run(id);
-    plan.enable("vp");
+    plan.enable("vp", { person: { via: "settings" } });
     expect(isDraftIdentifier(store.getIssue(id).identifier)).toBe(true);
     expect(store.db.prepare("SELECT 1 FROM issues WHERE identifier = 'TST-77'").get()).toBeUndefined();
     const event = store.db.prepare("SELECT payload FROM events WHERE kind = 'idea_drafted' AND issue_id = ?").get(id) as { payload: string } | undefined;
@@ -173,7 +173,7 @@ describe("guards: an idea never enters the tracker", () => {
     expect(rows.map((r) => r.identifier)).toContain(task);
     expect(rows.map((r) => r.issueId)).not.toContain(ref);
     const ideaOnly = memStore();
-    ideaOnly.plan().enable("vp");
+    ideaOnly.plan().enable("vp", { person: { via: "settings" } });
     ideaOnly.plan().capture({ title: "Alone" }, "vp", PERSON);
     expect(ideaOnly.queue().effectiveQueue({ actor: "agent" }).rows).toHaveLength(0);
   });
@@ -223,7 +223,7 @@ describe("guards: an idea never enters the tracker", () => {
     expect(refused(() => store.updateIssue(task, { kind: IDEA_KIND }, "vp")).message).toContain("cannot change kind");
     const milestone = store.createIssue({ title: "M", kind: MILESTONE_KIND }).identifier;
     expect(refused(() => store.milestones().addMember(milestone, ref, {}, "vp")).message).toContain("cannot be added to a milestone");
-    expect(refused(() => store.removeKind(IDEA_KIND, { migrateTo: "task" }, "vp")).message).toContain("still use it");
+    expect(refused(() => store.removeKind(IDEA_KIND, { migrateTo: "task" }, "vp")).message).toContain("Parent idea");
   });
 });
 
@@ -288,34 +288,40 @@ describe("dependencies are tracker work", () => {
 });
 
 describe("a workspace that already had its own idea kind", () => {
-  function custom(): WorkspaceStore {
+  function legacy() {
     const own = memStore();
     own.addKind({ id: IDEA_KIND, label: "Idea" }, "vp");
-    return own;
+    const mine = own.createIssue({ title: "My idea ticket" });
+    // A pre-planning row imported from an older database, not a newly permitted idea write.
+    own.db.prepare("UPDATE issues SET kind = ? WHERE id = ?").run(IDEA_KIND, mine.id);
+    return { own, mine };
   }
 
-  it("keeps every issue of that kind a numbered tracker issue while planning is off", () => {
-    const own = custom();
-    const mine = own.createIssue({ title: "My idea ticket", kind: IDEA_KIND });
-    expect(mine.identifier).toMatch(/^TST-\d+$/);
-    expect(own.planningOn()).toBe(false);
-    expect(own.listIssues({}).map((i) => i.identifier)).toContain(mine.identifier);
-    expect(own.tree().map((n) => n.issue.identifier)).toContain(mine.identifier);
-    own.queue().enqueue(mine.identifier, {}, "vp");
-    expect(own.queue().effectiveQueue({ actor: "agent" }).rows.map((r) => r.identifier)).toContain(mine.identifier);
-    expect(own.checkoutIssue(mine.identifier, "agent").checkoutAgent).toBe("agent");
+  it("keeps preexisting numbered idea data intact and guarded while planning is off", () => {
+    const { own, mine } = legacy();
+    try {
+      expect(own.getIssue(mine.id).identifier).toBe(mine.identifier);
+      expect(own.planningOn()).toBe(false);
+      expect(own.listIssues({}).map(i => i.id)).not.toContain(mine.id);
+      expect(own.tree().map(n => n.issue.id)).not.toContain(mine.id);
+      expect(() => own.createIssue({ title: "Another idea", kind: IDEA_KIND })).toThrow(/Planning is off/);
+      expect(() => own.queue().enqueue(mine.id, {}, "agent")).toThrow(/Planning is off/);
+      expect(() => own.checkoutIssue(mine.id, "agent")).toThrow(/Planning is off/);
+      expect(own.getIssue(mine.id).kind).toBe(IDEA_KIND);
+    } finally { own.db.close(); }
   });
 
-  it("refuses to turn planning on while such issues exist, naming them, and turns on once they are re-kinded", () => {
-    const own = custom();
-    const mine = own.createIssue({ title: "My idea ticket", kind: IDEA_KIND });
-    const error = refused(() => own.plan().enable("vp"));
-    expect(error.message).toContain(mine.identifier);
-    expect(own.planningOn()).toBe(false);
-    own.updateIssue(mine.identifier, { kind: "task" }, "vp");
-    expect(own.plan().enable("vp").enabled).toBe(true);
-    expect(own.planningOn()).toBe(true);
-    expect(own.getIssue(mine.identifier).kind).toBe("task");
+  it("refuses unsafe initialization and generic vocabulary escapes without changing legacy ideas", () => {
+    const { own, mine } = legacy();
+    try {
+      const before = own.db.prepare("SELECT * FROM issues").all();
+      const error = refused(() => own.plan().enable("vp", { person: { via: "settings" } }));
+      expect(error.message).toContain(mine.identifier);
+      expect(own.planningOn()).toBe(false);
+      expect(() => own.updateIssue(mine.id, { kind: "task" }, "agent")).toThrow();
+      expect(() => own.removeKind(IDEA_KIND, { migrateTo: "task" }, "agent")).toThrow(/My idea ticket/);
+      expect(own.db.prepare("SELECT * FROM issues").all()).toEqual(before);
+    } finally { own.db.close(); }
   });
 });
 
