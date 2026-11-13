@@ -256,6 +256,31 @@ describe("Scaffold", () => {
     expect(plan.ideaView(thinking)).toMatchObject({ promoted: false, state: "exploring" });
   });
 
+  it("scaffolds an umbrella with no rows again: a retry creates nothing, and a sub-idea shaped since is all it adds", () => {
+    const ROW = { ...PLAN, breakdown: [{ key: "1", title: "Endpoints", estimate: "4h", dependsOn: [], acceptance: "Served", owner: null, notes: null }] };
+    const parent = plan.capture({ title: "Platform GA", maturity: "exploring", plan: { goal: "Release the platform.", acceptance: ["Every rung landed"] } }, "vp", PERSON).id;
+    const child = shaped("R1 Billing export", ROW, { parent });
+    const later = plan.capture({ title: "R2 Checkout API", parent, maturity: "exploring", plan: ROW }, "vp", PERSON).id;
+    plan.update(parent, { maturity: "shaped" }, "vp", PERSON);
+    confirm(parent, "agent");
+    const count = () => store.listIssues({}).length;
+    const made = count();
+    expect(plan.ideaView(parent)).toMatchObject({ state: "started", promoted: true });
+    expect(plan.ideaView(parent).actions.map((action) => action.id)).toContain("scaffold");
+    // The preview is still there, and a retry makes nothing.
+    expect(plan.scaffoldPreview(parent).children.map((c) => c.idea.id)).toEqual([child]);
+    confirm(parent, "agent");
+    expect(count()).toBe(made);
+    // A sub-idea shaped after the parent's scaffold is built by the parent's retry, once.
+    plan.update(later, { maturity: "shaped" }, "vp", PERSON);
+    expect(plan.scaffoldPreview(parent).children.map((c) => c.idea.id)).toEqual([child, later]);
+    confirm(parent, "agent");
+    expect(store.getIssue(later)).toMatchObject({ kind: "epic", parentId: parent });
+    expect(store.listIssues({}).filter((issue) => issue.parentId === later).map((issue) => issue.title)).toEqual(["1 Endpoints"]);
+    // Its epic and its one task.
+    expect(count()).toBe(made + 2);
+  });
+
   it("is offered only where the lifecycle offers it: never to an idea that is not shaped", () => {
     const raw = plan.capture({ title: "Not shaped", plan: PLAN }, "agent").id;
     expect(refused(() => plan.scaffold(raw, null, "agent"))).toContain("is raw; it cannot be scaffolded");

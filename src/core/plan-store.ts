@@ -968,8 +968,15 @@ export class PlanStore {
       const started = workIds.length > 0;
       const hasBaseline = ownWork.length > 0 && (row.plan_baseline_start !== null || row.plan_baseline_target !== null);
       const state = ideaState({ stage, maturity });
-      // Scaffolded before: a started record scaffolds again only then, to add new rows.
-      const scaffolded = state === "started" && promoted && planRowsOf(this.db, row.id).some((planRow) => this.issueExists(scaffoldTaskId(row.id, planRow.id)));
+      // An umbrella: a sub-idea that is not dropped stands in for its own rows.
+      const subIdea = (childIds.get(row.id) ?? []).some((child) => readMaturity(byId.get(child)!.plan_maturity) !== "dropped");
+      // Scaffolded before: a started record scaffolds again only then, to add new rows and sub-ideas
+      // shaped since. A task of one of its rows exists, or it is a promoted umbrella with no rows,
+      // whose Scaffold made the same epic Promote makes and builds nothing but its sub-ideas.
+      const scaffolded =
+        state === "started" &&
+        promoted &&
+        (sections.breakdown.length === 0 ? subIdea : planRowsOf(this.db, row.id).some((planRow) => this.issueExists(scaffoldTaskId(row.id, planRow.id))));
       // A shaped plan is held to the gate again before anything is built from it.
       const planIncomplete = maturity === "shaped" && (state === "shaped" || scaffolded) ? this.gateOf(row.id) : [];
       return {

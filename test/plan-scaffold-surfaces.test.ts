@@ -158,6 +158,25 @@ describe("Scaffold on every surface", () => {
     expect(second.documents.map((d) => d.key)).toContain("context");
   });
 
+  it("previews and retries an umbrella with no rows on the CLI after its confirm, making nothing twice", async () => {
+    const parent = await capture("Storefront GA", { maturity: "exploring", plan: { goal: "Release the storefront.", acceptance: ["Every rung landed"] } });
+    const rung = { goal: "Export.", acceptance: ["Exports"], breakdown: [{ key: "1", title: "Endpoints", estimate: "4h", dependsOn: [], acceptance: "Served", owner: null, notes: null }] };
+    const child = await capture("R1 Billing export", { parent, maturity: "shaped", plan: rung });
+    expect((await http("/api/plan/update", { ref: parent, maturity: "shaped" })).status).toBe(200);
+    const first = JSON.parse((await cli("idea", "scaffold", parent, "--json")).stdout) as { fingerprint: string };
+    const made = await cli("idea", "scaffold", parent, "--confirm", first.fingerprint, "--json");
+    expect(made.status, made.stderr).toBe(0);
+    const before = (toolPayload(await mcp.call("list_tasks", { ws: WS })) as { items: unknown[] }).items.length;
+    const again = await cli("idea", "scaffold", parent, "--json");
+    expect(again.status, again.stderr).toBe(0);
+    const preview = JSON.parse(again.stdout) as { fingerprint: string; tasks: unknown[]; children: Array<{ idea: { id: string } }> };
+    expect(preview.tasks).toEqual([]);
+    expect(preview.children.map((c) => c.idea.id)).toEqual([child]);
+    const retried = await cli("idea", "scaffold", parent, "--confirm", preview.fingerprint, "--json");
+    expect(retried.status, retried.stderr).toBe(0);
+    expect((toolPayload(await mcp.call("list_tasks", { ws: WS })) as { items: unknown[] }).items.length).toBe(before);
+  });
+
   it("imports a plan file from the CLI, saying what it read", async () => {
     const file = join(emptyDir, "PLAN-7-checkout.md");
     writeFileSync(file, "# PLAN-7 — Checkout\n\n## Goal\n\nShip it.\n\n## Task breakdown\n\n| # | Task | Est. |\n|---|---|---|\n| 7.1 | Spike | 3h |\n\n## Acceptance criteria\n\n- Works\n");
