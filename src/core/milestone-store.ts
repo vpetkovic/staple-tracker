@@ -66,6 +66,7 @@ import {
 } from "./milestone-goal.js";
 import { COMPARE_MAX_REFS } from "./plan-rollup.js";
 import { writeCriterionMark } from "./milestone-marks.js";
+import { withPlannedUnits } from "./plan-accounting.js";
 import type { WorkspaceStore } from "./store.js";
 import { type Issue, MAX_TREE_DEPTH, StapleError, type StatusCategory, nowIso } from "./types.js";
 
@@ -129,6 +130,11 @@ export interface MilestoneView {
   goal: MilestoneGoal;
   /** The work still open in it, from its estimates: what a projected finish date reads. */
   remaining: MilestoneRemaining;
+  /**
+   * A horizon's only, present only while records on its plan keep it from shipping (they are
+   * not dropped, not shipped and not an umbrella): how many. In both flag states.
+   */
+  heldByPlan?: number;
 }
 
 /**
@@ -717,7 +723,9 @@ export class MilestoneStore {
   private view(id: string, facts: QueueFacts = this.queueFacts()): MilestoneView {
     const { base, openIds } = this.baseView(id, facts);
     const view = { ...base, remaining: this.remainingOf(openIds, this.store.remainingForecasts(openIds)) };
-    return { ...view, goal: this.goalOf(id, view) };
+    // A horizon its plan holds open says so in both flag states: protection, never hidden (design/plan.md, "Feature flag").
+    const held = this.store.isHorizon(id) ? this.store.plan().holdOf(id) : 0;
+    return { ...view, goal: this.goalOf(id, view), ...(held > 0 ? { heldByPlan: held } : {}) };
   }
 
   /** `remaining` from the open leaves and each one's remaining work as `forecast` weighs it. */
@@ -783,16 +791,10 @@ export class MilestoneStore {
       };
     });
 
-    const nodes: ProgressNode[] = rows.map((row) => ({
-      id: row.issue_id,
-      parentId: row.parent_id,
-      category: this.category(row.status),
-    }));
-    const descendantsByMember = new Map(rows.map((row) => [row.issue_id, this.descendants(row.issue_id)]));
-    const progress = milestoneProgress(nodes, descendantsByMember);
-    const openIds = milestoneLeaves(nodes, descendantsByMember)
-      .filter((node) => node.category !== "done" && node.category !== "cancelled")
-      .map((node) => node.id);
+    const leaves = this.leavesOf(rows);
+    // A horizon's progress, with planning on, counts its plan's planned work too (design/plan.md, "Accounting").
+    const progress = this.store.planningOn() && this.store.isHorizon(id) ? withPlannedUnits(leaves.progress, this.store.plan().accountingOf(id, leaves.progress)) : leaves.progress;
+    const openIds = leaves.openIds;
 
     const targetDate = meta?.target_date ?? null;
     const startDate = meta?.start_date ?? null;
@@ -820,6 +822,25 @@ export class MilestoneStore {
       next: facts.nextOf.get(issue.identifier) ?? null,
     };
     return { base, openIds };
+  }
+
+  /** The leaves under a milestone's members, each once, and the open ones among them. */
+  private leavesOf(rows: readonly MemberRow[]): { progress: MilestoneProgress; openIds: string[] } {
+    const nodes: ProgressNode[] = rows.map((row) => ({
+      id: row.issue_id,
+      parentId: row.parent_id,
+      category: this.category(row.status),
+    }));
+    const descendantsByMember = new Map(rows.map((row) => [row.issue_id, this.descendants(row.issue_id)]));
+    const openIds = milestoneLeaves(nodes, descendantsByMember)
+      .filter((node) => node.category !== "done" && node.category !== "cancelled")
+      .map((node) => node.id);
+    return { progress: milestoneProgress(nodes, descendantsByMember), openIds };
+  }
+
+  /** The ticket leaves a milestone counts, without the plan's planned work: what a horizon's accounting starts from. */
+  leafProgress(id: string): MilestoneProgress {
+    return this.leavesOf(this.viewRows(id)).progress;
   }
 
   /** One milestone, one shape. `validation` for a non-milestone, `not_found` for nothing. */

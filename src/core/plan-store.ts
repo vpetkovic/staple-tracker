@@ -73,8 +73,8 @@ import {
 } from "./plan-lifecycle.js";
 import { createHash, randomUUID } from "node:crypto";
 import { readStoredRepositoryId } from "./repo-identity.js";
-import { planLinkField, planLinksOf, writePlanLink } from "./plan-links.js";
-import { planRowField, planRowsOf, planRowValue, writePlanRow, type PlanRowValue } from "./plan-rows.js";
+import { allPlanLinks, planLinkField, planLinksOf, writePlanLink } from "./plan-links.js";
+import { planRowCounts, planRowField, planRowsOf, planRowValue, writePlanRow, type PlanRowValue } from "./plan-rows.js";
 import {
   BREAKDOWN_KEY,
   DOCUMENT_SECTIONS,
@@ -101,8 +101,10 @@ import {
   type PlanSections,
 } from "./plan-sections.js";
 import { LISTED_HORIZON, rebuildPlanMembers } from "./plan-members.js";
+import { holdsHorizon, horizonAccounting, ownUnits, unitPercent, unitProgress, units, type HorizonAccounting, type OwnUnits, type RecordCounts, type RecordSize, type ScheduledRecord, type Units } from "./plan-accounting.js";
+import type { MilestoneProgress } from "./milestones.js";
 import type { WorkspaceStore } from "./store.js";
-import { StapleError, type PersonDecision } from "./types.js";
+import { RESOLVED_CATEGORIES, StapleError, type PersonDecision, type StatusCategory } from "./types.js";
 
 /** Who is writing. A `person` is the distinction; without one the write is an agent's. */
 export interface PlanWriteOptions {
@@ -119,7 +121,7 @@ export interface HorizonView {
   rank: number;
   /** The milestone's own status, derived from its members like any milestone's. */
   status: string;
-  /** Its derived done: every member landed. */
+  /** Its milestone is done: every member landed and nothing on its plan holds it (`heldByPlan`). */
   shipped: boolean;
   /** Members it holds, put there or derived from its plan records. */
   memberCount: number;
@@ -130,8 +132,21 @@ export interface HorizonView {
   notStartedCount: number;
   /** Plan records on it whose work has all landed. */
   shippedCount: number;
-  /** Members landed over members it holds, 0..1; null while it holds none. */
+  /**
+   * Its work items (design/plan.md, "Accounting"): the ticket leaves under its members, done and
+   * open, and the breakdown rows of the ideas it carries that have no tickets yet, planned.
+   */
+  units: Units;
+  /** Ideas it carries with nothing to count yet: no work, no rows, no sub-ideas. */
+  unsizedCount: number;
+  /** The non-dropped leaf records it carries by state, and the parents among its records. */
+  records: RecordCounts;
+  /** Done units over all its units, 0..1; null while it has none. */
   progress: number | null;
+  /** `progress` as every surface prints it: whole percent, rounded down; null while it has none. */
+  percent: number | null;
+  /** All its units are done and nothing on its plan holds it: what derives its milestone done. */
+  complete: boolean;
   /** How far agents take it when they pick its work up; null until the person sets it. */
   runMode: RunMode | null;
   /** Its goal: the milestone's acceptance criteria, set by the person. */
@@ -183,8 +198,17 @@ export interface IdeaView {
   /** Work it stands for, rolled up from sub-ideas: itself once promoted, and every link. */
   linkCount: number;
   resolvedLinks: number;
-  /** Done leaves over counted leaves of that work, 0..1; null before it is started. */
+  /**
+   * Its rollup's work items: the ticket leaves of that work, done and open, and the breakdown rows
+   * of itself and every non-dropped sub-record that has no work yet, planned.
+   */
+  units: Units;
+  /** Its own size is unknown: no work, no breakdown rows and no live sub-records. */
+  unsized: boolean;
+  /** Done units over its rollup's units, 0..1; null before any of that work is started. */
   progress: number | null;
+  /** `progress` as every surface prints it: whole percent, rounded down; null with it. */
+  percent: number | null;
   actual: ActualWindow;
   /** Its work landed, or is forecast to land, past the planned end or the horizon line. */
   late: boolean;
@@ -210,6 +234,53 @@ export interface IdeaView {
   updatedAt: string;
 }
 
+/** A record's size and its own units: what a horizon's accounting and its hold read. */
+interface RecordSizeView {
+  size: RecordSize;
+  own: OwnUnits;
+}
+
+/**
+ * A record's own facts, derived once: its own work, maturity, horizon and stage. The one stage
+ * derivation the record's view, its size and a horizon's hold all read, so a link whose issue
+ * this device lacks is treated the same way by each (`deriveStage`'s missing links).
+ */
+interface RecordFacts {
+  promoted: boolean;
+  ownLinks: string[];
+  ownWork: string[];
+  ownPresent: string[];
+  own: ReturnType<PlanStore["measure"]>;
+  maturity: Maturity;
+  /** The listed horizon it is scheduled on, or null. */
+  horizonId: string | null;
+  stage: Stage;
+  state: IdeaState;
+}
+
+/**
+ * The plan's facts, derived once per state of the database from a constant number of reads:
+ * the records, the horizons, the work, every link and every breakdown row count. The records'
+ * views, each horizon's accounting and each horizon's hold are read from it.
+ */
+interface PlanFacts {
+  rows: PlanRow[];
+  byId: Map<string, PlanRow>;
+  childIds: Map<string, string[]>;
+  horizons: HorizonRow[];
+  horizonDates: Map<string, string | null>;
+  work: ReturnType<PlanStore["work"]>;
+  links: Map<string, string[]>;
+  /** The workspace's status categories, read once for the build. */
+  categoryOf: (status: string) => StatusCategory | null;
+  records: Map<string, RecordFacts>;
+  sizes: Map<string, RecordSizeView>;
+  /** Each horizon's carried records: those scheduled on it, and their descendants scheduled on none. */
+  carried: Map<string, ScheduledRecord[]>;
+  /** Each horizon's accounting, filled on first read in this state (its tickets cost a read). */
+  accounting: Map<string, HorizonAccounting>;
+}
+
 export interface PlanView {
   enabled: boolean;
   today: string;
@@ -229,6 +300,8 @@ export interface LinkView {
   leaves: number;
   doneLeaves: number;
   progress: number;
+  /** `progress` as every surface prints it: whole percent, rounded down. */
+  percent: number;
   startedAt: string | null;
   completedAt: string | null;
   milestone: { identifier: string; title: string; state: string; run: { state: string; actor: string } | null } | null;
@@ -612,10 +685,12 @@ export class PlanStore {
   /**
    * After a plan write, the horizons' derived members are rebuilt (`plan-members.ts`), and every
    * milestone whose membership moved re-derives its status as one that gained or lost a member does.
+   * Then every horizon whose plan hold the write changed re-derives (`rederivePlanHolds`).
    */
   private settleMembership(actor: string | null): void {
     const changed = rebuildPlanMembers(this.db);
     if (changed.length > 0) this.store.rederiveMilestones(changed, "plan", actor);
+    this.store.rederivePlanHolds("plan", actor);
   }
 
   // ---------- enabling ----------
@@ -755,8 +830,7 @@ export class PlanStore {
   }
 
   /** Every plan record: unpromoted ideas while open, promoted ones whatever their status. */
-  private recordRows(): PlanRow[] {
-    const resolved = this.resolvedStatuses();
+  private recordRows(resolved: ReadonlySet<string> = this.resolvedStatuses()): PlanRow[] {
     return (this.db.prepare(`SELECT ${PLAN_COLUMNS} FROM issues WHERE plan_maturity IS NOT NULL`).all() as unknown as PlanRow[])
       .filter((row) => row.kind !== IDEA_KIND || !resolved.has(row.status))
       .sort((a, b) => (a.plan_rank ?? Number.MAX_SAFE_INTEGER) - (b.plan_rank ?? Number.MAX_SAFE_INTEGER) || a.created_at.localeCompare(b.created_at));
@@ -770,12 +844,13 @@ export class PlanStore {
   view(): PlanView {
     const today = this.today();
     if (!this.enabled()) return { enabled: false, today, horizons: [], ideas: [] };
-    const ideas = this.ideaViews(today);
-    const horizons = this.horizonRows().map((row) => this.horizonView(row, ideas));
+    const facts = this.facts();
+    const ideas = this.viewsOf(facts, today);
+    const horizons = facts.horizons.map((row) => this.horizonView(row, ideas, facts));
     return { enabled: true, today, horizons, ideas };
   }
 
-  private horizonView(row: HorizonRow, ideas: readonly IdeaView[]): HorizonView {
+  private horizonView(row: HorizonRow, ideas: readonly IdeaView[], facts: PlanFacts): HorizonView {
     const on = ideas.filter((idea) => idea.horizonId === row.id && idea.stage !== "dropped");
     const lateCount = on.filter((idea) => idea.late).length;
     const memberCount = (
@@ -783,6 +858,9 @@ export class PlanStore {
     ).n + (this.db.prepare("SELECT COUNT(*) AS n FROM plan_members WHERE milestone_id = ? AND issue_id NOT IN (SELECT issue_id FROM milestone_members)").get(row.id) as { n: number }).n;
     const open = this.openWorkOf(row.id);
     const own = this.db.prepare("SELECT gate_state, acceptance_criteria FROM issues WHERE id = ?").get(row.id) as { gate_state: string | null; acceptance_criteria: string | null };
+    const accounting = this.accountingIn(facts, row.id);
+    // Its status never derives done while a record it carries holds it (`heldByPlan`).
+    const shipped = this.store.categoryOf(row.status) === "done";
     return {
       id: row.id,
       identifier: row.identifier,
@@ -790,19 +868,65 @@ export class PlanStore {
       date: row.target_date,
       rank: row.plan_rank ?? 0,
       status: row.status,
-      shipped: this.store.categoryOf(row.status) === "done",
+      shipped,
       memberCount,
       ideaCount: on.length,
       lateCount,
       notStartedCount: on.filter((idea) => idea.notStarted).length,
       shippedCount: on.filter((idea) => idea.stage === "shipped").length,
-      progress: memberCount > 0 ? (memberCount - open) / memberCount : null,
+      units: accounting.units,
+      unsizedCount: accounting.unsizedCount,
+      records: accounting.records,
+      progress: accounting.progress,
+      percent: accounting.percent,
+      complete: accounting.complete,
       runMode: isRunMode(row.plan_run_mode) ? row.plan_run_mode : null,
       goal: own.acceptance_criteria ? (JSON.parse(own.acceptance_criteria) as string[]) : [],
       awaitingApproval: own.gate_state === "pending",
       late: lateCount > 0,
-      ...horizonLifecycle(this.store.categoryOf(row.status) === "done", open, this.isQueued(row.id)),
+      ...horizonLifecycle(shipped, open, this.isQueued(row.id)),
     };
+  }
+
+  /**
+   * A horizon's units (design/plan.md, "Accounting"): the ticket leaves its milestone counts, and
+   * the planned units of every non-dropped record it carries. What the plan's horizon, the
+   * milestone view of it and every surface over either read. `tickets` is the caller's own count
+   * of those leaves, when it has one; derived once per state of the database either way.
+   */
+  accountingOf(horizonId: string, tickets?: MilestoneProgress): HorizonAccounting {
+    return this.accountingIn(this.facts(), horizonId, tickets);
+  }
+
+  private accountingIn(facts: PlanFacts, horizonId: string, tickets?: MilestoneProgress): HorizonAccounting {
+    const known = facts.accounting.get(horizonId);
+    if (known) return known;
+    const counted = horizonAccounting(tickets ?? this.store.milestones().leafProgress(horizonId), facts.carried.get(horizonId) ?? []);
+    facts.accounting.set(horizonId, counted);
+    return counted;
+  }
+
+  /**
+   * How many records keep this horizon from shipping (design/plan.md, "Accounting"): those it
+   * carries that are not dropped, not shipped and not an umbrella (`holdsHorizon`). Read by the
+   * horizon's status derivation in both flag states, from the plan's facts.
+   */
+  holdOf(horizonId: string): number {
+    return (this.facts().carried.get(horizonId) ?? []).filter((record) => record.holds).length;
+  }
+
+  heldByPlan(horizonId: string): boolean {
+    return this.holdOf(horizonId) > 0;
+  }
+
+  /**
+   * What a listed horizon's status is derived from beside its members: each one's hold. The
+   * store compares it, with the horizons' statuses and members, against what it last settled,
+   * so a write or a pull that changed none of it re-derives nothing (`rederivePlanHolds`).
+   */
+  holdsByHorizon(): Map<string, number> {
+    const facts = this.facts();
+    return new Map(facts.horizons.map((row) => [row.id, (facts.carried.get(row.id) ?? []).filter((record) => record.holds).length]));
   }
 
   /** Members of a horizon, put there or derived, that are not resolved: the work removing it would strand. */
@@ -856,6 +980,7 @@ export class PlanStore {
   private measure(
     roots: readonly string[],
     work: ReturnType<PlanStore["work"]>,
+    categoryOf: (status: string) => StatusCategory | null = (status) => this.store.categoryOf(status),
   ): { leaves: number; done: number; resolved: number; start: string | null; end: string | null; progress: number | null } {
     const live = roots.filter((id) => work.rows.has(id));
     if (live.length === 0) return { leaves: 0, done: 0, resolved: 0, start: null, end: null, progress: null };
@@ -871,12 +996,12 @@ export class PlanStore {
       const finished = row.completed_at ?? row.cancelled_at;
       if (finished && (end === null || finished > end)) end = finished;
       if ((work.children.get(id) ?? []).length > 0) continue;
-      const category = this.store.categoryOf(row.status);
+      const category = categoryOf(row.status);
       if (category === "cancelled") continue;
       leaves += 1;
       if (category === "done") done += 1;
     }
-    const resolved = live.filter((id) => this.store.isResolvedStatus(work.rows.get(id)!.status)).length;
+    const resolved = live.filter((id) => isResolvedCategory(categoryOf(work.rows.get(id)!.status))).length;
     const allResolved = resolved === live.length;
     const progress = leaves > 0 ? done / leaves : allResolved ? 1 : 0;
     return {
@@ -890,25 +1015,41 @@ export class PlanStore {
   }
 
   /**
-   * Every record's view, derived once per state of the database: a request that checks a state,
-   * writes, and answers the plan and a record's detail rebuilds it only when something changed.
-   * The key moves with any change this connection makes (`total_changes()`), any commit another
-   * connection makes (`data_version`), and the day the dates are read against.
+   * The plan's facts and every record's view, derived once per state of the database: a request
+   * that checks a state, writes, and answers the plan and a record's detail rebuilds them only
+   * when something changed. The key moves with any change this connection makes
+   * (`total_changes()`) and any commit another connection makes (`data_version`); the views are
+   * rebuilt too when the day they read dates against moves.
    */
-  private ideaViews(today: string): IdeaView[] {
+  private facts(): PlanFacts {
     const { changes } = this.db.prepare("SELECT total_changes() AS changes").get() as { changes: number };
     const { data_version: version } = this.db.prepare("PRAGMA data_version").get() as { data_version: number };
-    const key = `${changes}:${version}:${today}`;
-    if (this.viewMemo?.key === key) return this.viewMemo.views;
-    const views = this.buildIdeaViews(today);
-    this.viewMemo = { key, views };
-    return views;
+    const key = `${changes}:${version}`;
+    if (this.viewMemo?.key === key) return this.viewMemo.facts;
+    const facts = this.buildPlanFacts();
+    this.viewMemo = { key, facts, views: null };
+    return facts;
   }
 
-  private viewMemo: { key: string; views: IdeaView[] } | null = null;
+  private ideaViews(today: string): IdeaView[] {
+    return this.viewsOf(this.facts(), today);
+  }
 
-  private buildIdeaViews(today: string): IdeaView[] {
-    const rows = this.recordRows();
+  /** The views of the facts the memo holds (`facts()` was just read). */
+  private viewsOf(facts: PlanFacts, today: string): IdeaView[] {
+    const memo = this.viewMemo!;
+    if (memo.views?.today === today) return memo.views.list;
+    const list = this.buildIdeaViews(today, facts);
+    memo.views = { today, list };
+    return list;
+  }
+
+  private viewMemo: { key: string; facts: PlanFacts; views: { today: string; list: IdeaView[] } | null } | null = null;
+
+  private buildPlanFacts(): PlanFacts {
+    const categories = new Map(this.store.getStatuses().map((status) => [status.id, status.category]));
+    const categoryOf = (status: string): StatusCategory | null => categories.get(status) ?? null;
+    const rows = this.recordRows(new Set([...categories.keys()].filter((status) => isResolvedCategory(categoryOf(status)))));
     const byId = new Map(rows.map((row) => [row.id, row]));
     const childIds = new Map<string, string[]>();
     for (const row of rows) {
@@ -917,35 +1058,21 @@ export class PlanStore {
       list.push(row.id);
       childIds.set(row.parent_id, list);
     }
-    const horizonDates = new Map(this.horizonRows().map((row) => [row.id, row.target_date]));
+    const horizons = this.horizonRows();
+    const horizonDates = new Map(horizons.map((row) => [row.id, row.target_date]));
     const work = this.work();
-    /** The work a record stands for: itself once promoted, its links, and its sub-records' work. */
-    const rolledWork = (id: string, seen = new Set<string>()): Set<string> => {
-      const out = new Set<string>();
-      if (seen.has(id)) return out;
-      seen.add(id);
-      const row = byId.get(id);
-      if (!row) return out;
-      if (row.kind !== IDEA_KIND) out.add(row.id);
-      for (const link of planLinksOf(this.db, row.id)) out.add(link);
-      for (const child of childIds.get(id) ?? []) for (const item of rolledWork(child, seen)) out.add(item);
-      return out;
-    };
-    // Every record's sections first: a depends-on cell may name a row of another record's breakdown.
-    const sectionsOf = new Map(rows.map((row) => [row.id, this.sectionsOf(row.id)]));
-    const dependsOn = dependencyResolver(
-      rows.map((row) => ({ id: row.id, identifier: shownIdentifier(row.identifier), title: row.title, rowKeys: sectionsOf.get(row.id)!.breakdown.map((entry) => entry.key) })),
-    );
-    return rows.map((row) => {
+    const links = allPlanLinks(this.db);
+    const rowCounts = planRowCounts(this.db);
+    // Its own facts first: a record's size reads whether its sub-records are dropped.
+    const records = new Map<string, RecordFacts>();
+    for (const row of rows) {
       const promoted = row.kind !== IDEA_KIND;
-      const sections = sectionsOf.get(row.id)!;
-      const questions = parseQuestions(this.documentBody(row.id, QUESTIONS_KEY));
-      const ownLinks = planLinksOf(this.db, row.id);
+      const ownLinks = links.get(row.id) ?? [];
       // Its own state reads its own work only: itself once promoted, and its own links. Linked
       // work whose issue is gone (a rewind, say) still counts, so the state does not slip back.
       const ownWork = [...(promoted ? [row.id] : []), ...ownLinks];
       const ownPresent = ownWork.filter((id) => work.rows.has(id));
-      const own = this.measure(ownPresent, work);
+      const own = this.measure(ownPresent, work, categoryOf);
       const maturity = readMaturity(row.plan_maturity);
       const horizonId = row.plan_horizon_id !== null && horizonDates.has(row.plan_horizon_id) ? row.plan_horizon_id : null;
       const stage = deriveStage({
@@ -955,10 +1082,83 @@ export class PlanStore {
         resolvedLinks: own.resolved,
         missingLinks: ownWork.length - ownPresent.length,
       });
+      records.set(row.id, { promoted, ownLinks, ownWork, ownPresent, own, maturity, horizonId, stage, state: ideaState({ stage, maturity }) });
+    }
+    const sizes = new Map<string, RecordSizeView>();
+    for (const row of rows) {
+      const facts = records.get(row.id)!;
+      const liveSubRecords = (childIds.get(row.id) ?? []).some((child) => records.get(child)!.stage !== "dropped");
+      const size: RecordSize = {
+        work: facts.ownPresent.length > 0 ? { done: facts.own.done, open: facts.own.leaves - facts.own.done } : null,
+        rows: rowCounts.get(row.id) ?? 0,
+        liveSubRecords,
+      };
+      sizes.set(row.id, { size, own: ownUnits(size) });
+    }
+    /**
+     * The horizon that carries a record: the one it is scheduled on, else its nearest scheduled
+     * ancestor's, unless that ancestor is dropped. A sub-idea scheduled on another horizon is
+     * carried there, and so is everything beneath it that is scheduled on none.
+     */
+    const carrierOf = (id: string): string | null => {
+      const seen = new Set<string>();
+      for (let cursor: string | null = id; cursor !== null && !seen.has(cursor); cursor = byId.get(cursor)?.parent_id ?? null) {
+        seen.add(cursor);
+        const facts = records.get(cursor);
+        if (facts === undefined) return null;
+        if (facts.horizonId !== null) return facts.stage === "dropped" ? null : facts.horizonId;
+      }
+      return null;
+    };
+    const carried = new Map<string, ScheduledRecord[]>();
+    for (const row of rows) {
+      const facts = records.get(row.id)!;
+      if (facts.stage === "dropped") continue;
+      const horizonId = carrierOf(row.id);
+      if (horizonId === null) continue;
+      const { size, own } = sizes.get(row.id)!;
+      const list = carried.get(horizonId) ?? [];
+      list.push({ state: facts.state, own, liveSubRecords: size.liveSubRecords, holds: holdsHorizon(facts.stage, size) });
+      carried.set(horizonId, list);
+    }
+    return { rows, byId, childIds, horizons, horizonDates, work, links, categoryOf, records, sizes, carried, accounting: new Map() };
+  }
+
+  private buildIdeaViews(today: string, facts: PlanFacts): IdeaView[] {
+    const { rows, byId, childIds, horizonDates, work, links, categoryOf, records, sizes } = facts;
+    /** The work a record stands for: itself once promoted, its links, and its sub-records' work. */
+    const rolledWork = (id: string, seen = new Set<string>()): Set<string> => {
+      const out = new Set<string>();
+      if (seen.has(id)) return out;
+      seen.add(id);
+      const row = byId.get(id);
+      if (!row) return out;
+      if (row.kind !== IDEA_KIND) out.add(row.id);
+      for (const link of links.get(row.id) ?? []) out.add(link);
+      for (const child of childIds.get(id) ?? []) for (const item of rolledWork(child, seen)) out.add(item);
+      return out;
+    };
+    // Every record's sections first: a depends-on cell may name a row of another record's breakdown.
+    const sectionsOf = new Map(rows.map((row) => [row.id, this.sectionsOf(row.id)]));
+    const dependsOn = dependencyResolver(
+      rows.map((row) => ({ id: row.id, identifier: shownIdentifier(row.identifier), title: row.title, rowKeys: sectionsOf.get(row.id)!.breakdown.map((entry) => entry.key) })),
+    );
+    /** Planned units of a record and every non-dropped record beneath it. */
+    const rolledPlanned = (id: string, seen = new Set<string>()): number => {
+      if (seen.has(id)) return 0;
+      seen.add(id);
+      const own = records.get(id)!.stage === "dropped" ? 0 : sizes.get(id)!.own.planned;
+      return own + (childIds.get(id) ?? []).reduce((sum, child) => sum + rolledPlanned(child, seen), 0);
+    };
+    return rows.map((row) => {
+      const { promoted, ownLinks, ownWork, maturity, horizonId, stage, state } = records.get(row.id)!;
+      const sections = sectionsOf.get(row.id)!;
+      const questions = parseQuestions(this.documentBody(row.id, QUESTIONS_KEY));
       // The rollup adds its sub-records' work: what the record displays, never its state.
       const workIds = [...rolledWork(row.id)];
       const present = workIds.filter((id) => work.rows.has(id));
-      const measured = this.measure(present, work);
+      const measured = this.measure(present, work, categoryOf);
+      const rolled = units(measured.done, measured.leaves - measured.done, rolledPlanned(row.id));
       const rolledShipped = present.length > 0 && measured.resolved >= present.length;
       const actual: ActualWindow = {
         start: measured.start,
@@ -967,7 +1167,6 @@ export class PlanStore {
       };
       const started = workIds.length > 0;
       const hasBaseline = ownWork.length > 0 && (row.plan_baseline_start !== null || row.plan_baseline_target !== null);
-      const state = ideaState({ stage, maturity });
       // Scaffolded before: a started record scaffolds again only then, to add new rows.
       const scaffolded = state === "started" && promoted && planRowsOf(this.db, row.id).some((planRow) => this.issueExists(scaffoldTaskId(row.id, planRow.id)));
       // A shaped plan is held to the gate again before anything is built from it.
@@ -990,7 +1189,10 @@ export class PlanStore {
         missingLinks: ownLinks.filter((id) => !work.rows.has(id)),
         linkCount: workIds.length,
         resolvedLinks: measured.resolved,
-        progress: started ? measured.progress : null,
+        units: rolled,
+        unsized: sizes.get(row.id)!.own.unsized,
+        progress: started ? (unitProgress(rolled) ?? measured.progress) : null,
+        percent: started ? unitPercent(rolled) : null,
         actual,
         late: isLate({
           plannedTarget: row.plan_target,
@@ -1032,17 +1234,18 @@ export class PlanStore {
     this.assertEnabled();
     const row = this.recordRow(ref, false);
     const today = this.today();
-    const ideas = this.ideaViews(today);
+    const facts = this.facts();
+    const ideas = this.viewsOf(facts, today);
     const idea = ideas.find((view) => view.id === row.id);
     if (!idea) throw new StapleError("not_found", `${displayRef(row)} is not an open idea.`);
-    const horizonRow = this.horizonRows().find((h) => h.id === idea.horizonId);
+    const horizonRow = facts.horizons.find((h) => h.id === idea.horizonId);
     const parentRow = idea.parentId === null ? undefined : ideas.find((view) => view.id === idea.parentId);
     const work = this.work();
     return {
       idea,
       parent: parentRow ? { id: parentRow.id, identifier: parentRow.identifier, title: parentRow.title } : null,
       children: ideas.filter((view) => view.parentId === idea.id),
-      horizon: horizonRow ? this.horizonView(horizonRow, ideas) : null,
+      horizon: horizonRow ? this.horizonView(horizonRow, ideas, facts) : null,
       brief: this.documentBody(row.id, BRIEF_KEY),
       questions: parseQuestions(this.documentBody(row.id, QUESTIONS_KEY)),
       decisions: parseDecisions(this.documentBody(row.id, DECISIONS_KEY)),
@@ -1103,6 +1306,7 @@ export class PlanStore {
         leaves: 0,
         doneLeaves: 0,
         progress: 0,
+        percent: 0,
         startedAt: null,
         completedAt: null,
         milestone: null,
@@ -1120,6 +1324,8 @@ export class PlanStore {
       leaves: measured.leaves,
       doneLeaves: measured.done,
       progress: measured.progress ?? 0,
+      // Its leaves when it has any, else whether it landed: whole percent, as every surface prints it.
+      percent: measured.leaves > 0 ? unitPercent({ done: measured.done, total: measured.leaves }) ?? 0 : measured.progress === 1 ? 100 : 0,
       startedAt: measured.start,
       completedAt: measured.end,
       milestone: this.milestoneOf(id),
@@ -2036,4 +2242,8 @@ function taskContextDocument(epicTitle: string, sections: PlanSections, row: Bre
   }
   if (sections.outOfScope) parts.push(`## Out of scope\n\n${sections.outOfScope}`);
   return parts.join("\n\n") + "\n";
+}
+
+function isResolvedCategory(category: StatusCategory | null): boolean {
+  return category !== null && RESOLVED_CATEGORIES.includes(category);
 }

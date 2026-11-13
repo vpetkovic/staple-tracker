@@ -20,7 +20,8 @@ Maturity and horizon are independent. "Shaped, no horizon" is a feature whose ti
 Where it lives: the pure rules in `src/core/plan.ts`, the lifecycle table in
 `src/core/plan-lifecycle-table.ts` and its refusals in `src/core/plan-lifecycle.ts`, plan sections
 in `plan-sections.ts`, breakdown rows in `plan-rows.ts`, links in `plan-links.ts`, derived
-membership in `plan-members.ts`, rollups in `plan-rollup.ts`, and the store half in
+membership in `plan-members.ts`, rollups in `plan-rollup.ts`, what a horizon and a record count
+in `plan-accounting.ts`, and the store half in
 `plan-store.ts` (`store.plan()`). The surfaces are `src/commands/plan.ts` (CLI), the plan tools in
 `src/mcp.ts`, the `/api/plan` routes in `src/ui/server.ts` and `src/ui/app/src/views/plan/`.
 
@@ -62,6 +63,13 @@ the structure is ready. Hidden horizons refuse generic writes, goal runs include
 pruning cannot remove a retained horizon while the flag is off. Re-enabling restores ideas,
 horizons, sections, links and run settings without deleting or rewriting their data.
 
+A horizon its plan holds open ([Accounting](#accounting)) stays open with the flag off too, where
+its ideas are hidden. So it says why: its milestone view carries `heldByPlan` (how many records
+hold it) and `milestone show` prints `held by plan · 3 ideas on it not shipped yet`, and a write
+to it is refused with the planning-off sentence followed by `… is held by 3 scheduled ideas that
+have not shipped; turn planning on to see them.` A plain milestone, and a horizon nothing holds,
+read and refuse exactly as before.
+
 ## Identity: ideas are issues, horizons are milestones
 
 An idea **is an issue** of the reserved kind `idea`. Title, description, parent, documents,
@@ -80,10 +88,12 @@ milestone and unschedules its unstarted ideas. It is refused while the horizon h
 removed horizon is refused before anything is written. A horizon is listed by its flag
 (`LISTED_HORIZON`): a milestone with a plan rank, unless a person cancelled it. Its derived status
 never hides it, and derivation never cancels it: a horizon derives from its open and done work
-only (`deriveHorizonStatus`), so cancelling all its work leaves it planned, it ships only on work
-that was done, and reopening the work derives it again. Membership is rebuilt over the same
-listed horizons, so no rebuild drops a horizon's rows for its status, and the outcome does not
-depend on when rebuilds run.
+(`deriveHorizonStatus`), so cancelling all its work leaves it planned, it ships only on work
+that was done, and reopening the work derives it again. **It is not shipped while a record it
+carries is not** (`PlanStore.heldByPlan`, [Accounting](#accounting)): work that has all landed,
+or no work at all, leaves it in the unstarted band while a record on it is still to be built.
+Membership is rebuilt over the same listed horizons, so no rebuild drops a horizon's rows for its
+status, and the outcome does not depend on when rebuilds run.
 
 ### Unscheduled and optional dates
 
@@ -447,18 +457,102 @@ well as on (`test/planning-feature*.test.ts`).
 | fact | rule |
 |---|---|
 | stage | from its own facts only: `started` when it is promoted or links work itself, `shipped` when every issue of its own work that is present is resolved, `dropped`, `scheduled` when it has a horizon, otherwise its maturity (`deriveStage`) |
-| progress | done leaves over counted leaves of the record's work (itself once promoted, its links, its sub-records'), each leaf once, cancelled leaves not counted |
+| progress | done units over all units of the record's rollup ([Accounting](#accounting)): the ticket leaves of its work (itself once promoted, its links, its sub-records'), each leaf once, cancelled leaves not counted, and the planned units of itself and every non-dropped sub-record (rows of a record with no work that is not an umbrella); null before any of that work is started |
 | actual window | the first `started_at` anywhere under that work (an epic whose own start is null reads its children's) to the last `completed_at`/`cancelled_at` once all are resolved; work nobody started draws no actual window |
 | forecast end | a straight line from the days spent and the share done, while open and partly done |
 | late | the work landed, or is forecast to land, after the earlier of the planned end and the horizon's date, or that day has passed while it is open (`isLate`) |
 | not started | nothing linked or promoted and the planned start has passed (`isNotStarted`) |
-| rollups | a parent record reads its sub-records' work for progress, dates, the forecast and late / not started, which it displays; never for its stage, state or actions |
-| horizon shipped | its milestone's derived status is done, derived from its open and done work only (cancelled work is not counted, so a horizon never derives to cancelled) |
+| rollups | a parent record reads its sub-records' work and planned rows for progress, and their work for dates, the forecast and late / not started, which it displays; never for its stage, state or actions |
+| units | a record's own, and a horizon's: [Accounting](#accounting) |
+| horizon shipped | its milestone's derived status is done, derived from its open and done work (cancelled work is not counted, so a horizon never derives to cancelled), and never while a record it carries that is not dropped and not an umbrella is not shipped (`heldByPlan`); the page folds a horizon on this flag alone, never on its progress |
 | membership | `plan_members`, above |
 | dependencies | `dependsOn`: explicit references only (`resolveDependencies`), below |
 
 Late and not started are separate facts with separate counts, on cards, horizon headers and the
-timeline, and never one number. Dates are calendar days in UTC, inclusive, as for milestones
+timeline, and never one number.
+
+### Accounting
+
+What the plan counts is **work items** (`plan-accounting.ts`): one function per fact, read by
+every surface, so the Horizons lens, the horizon drawer, the Milestones view, `horizon ls`,
+`milestone show` and `milestone ls`, `list_horizons`, `get_milestone`, `list_ideas` and
+`/api/plan` report the same numbers. The page computes none. Every percentage is one formula,
+`unitPercent`: the whole percent of the counts, rounded down (`floor(done · 100 / total)`), never
+of a fraction, so 29 of 50 reads 58 everywhere. A horizon, a record and a link carry it as
+`percent`; a horizon at 100 that is not `complete` prints `100% incomplete`.
+
+**A record's own units** (`ownUnits`), the first that applies:
+
+1. it has own work (it is promoted, or links issues present on this device): the ticket leaves
+   under that work, each leaf once, cancelled leaves not counted, done and open;
+2. it is an **umbrella** (`isUmbrella`): no own work, over at least one sub-record that is not
+   dropped. Its sub-records carry its size, so it has no units of its own. A parent's breakdown
+   usually names its sub-ideas, and counting both would count that work twice; its rows count
+   once they are tickets (rule 1);
+3. it has breakdown rows: one **planned** unit per row, none done;
+4. otherwise it is **unsized**: zero units, flagged, never read as zero work.
+
+**A parent's rollup** is its rolled ticket leaves (each once, as before) plus the planned units of
+itself and every non-dropped descendant. Its `progress` is done over that total while any of its
+work is started (null before, as before). It displays progress; it never changes state or actions.
+
+**The records a horizon carries** are those scheduled on it and, under each, every descendant
+that is scheduled on no horizon: a record is carried by the horizon it is scheduled on, else by its
+nearest scheduled ancestor's, unless that ancestor is dropped. A sub-idea scheduled on another
+horizon is carried there alone, with everything beneath it that is scheduled on none. Dropped
+records are carried nowhere. A carried sub-idea's tickets count where they are members, like
+anyone's; its planned rows and its hold count on the horizon that carries it.
+
+**A horizon's units** (`horizonAccounting`) are the ticket leaves under its members
+(`MILESTONE_MEMBERSHIP`, hand-placed included, each leaf once: exactly what its milestone's
+progress counts, `MilestoneStore.leafProgress`) plus the planned units of every non-dropped record
+it carries. `progress = done / (done + open + planned)`, null when the total is 0. The horizon
+carries `units: { done, open, planned, total }`, `percent`, `complete` (all its units are done and
+nothing holds it: what derives its milestone done), `unsizedCount`, and `records`: the non-dropped
+**leaf** records it carries (no live sub-record) by state, `shipped`, `started`, `shaped`,
+`exploring`, `raw` (a carried sub-idea not developed yet), their sum `leaves`, and `parentCount`
+beside them. `ideaCount` keeps its meaning (every non-dropped record scheduled on it, parents
+included), but every surface prints `records`: `3 ideas (+1 parent)`, never the parent as one of
+its children.
+
+**The milestone view of a horizon** reads the same derivation (`PlanStore.accountingOf`), with
+planning on only: its `progress` adds `planned` and `unsized`, `percent` is over
+`countable + planned`, and it is `complete` only when its milestone would derive done: nothing
+open, planned or unsized, and no record holding it (`withPlannedUnits`). `milestone show` prints `progress 78/155 50% · 69 planned · 87 leaves`.
+Plain milestones, and every horizon with planning off, carry exactly the fields they always did.
+
+**A horizon is not shipped while a record it carries is not.** A carried record that is not
+dropped, not shipped and not an umbrella holds its horizon (`holdsHorizon`; `holdOf` counts
+them). It reads the record's stage from the same derivation as the record's own view, so a link
+whose issue this device lacks is treated alike by both: it is neither landed nor open, a record
+whose only links are missing reads started and holds, and one whose present links have all
+landed reads shipped and does not. `deriveHorizonStatus` answers the unstarted band where it would
+answer done while held, and while held with no members at all.
+
+The hold and its release are **one derivation** from synchronized facts. After every plan write
+and every pull (`rederivePlanHolds`, `rederivePlanMilestonesAfterPull`), each horizon whose inputs
+moved re-derives its status as a parent does when a child moves, closing included: its status, its
+members' statuses and its hold are compared with what this device last settled them from (a
+device-local cache in `meta`, never sent), and a horizon whose inputs did not move is not touched.
+`deriveOneAncestor` writes only where the status differs, never over a gate, and outside the
+pre-work band only over a status derivation wrote. So a held horizon that reads done reopens (on a
+device that pulled an idea another device scheduled while this one closed the last ticket), and a
+horizon no record holds any more whose work has all landed closes, whether or not derivation ever
+wrote its status before: its last holding record was dropped, unscheduled, moved or shipped. A
+status a person set outside the pre-work band, or a gate, is left alone. Every device that holds
+the same facts writes the same status, and two devices' derived writes of one horizon are never a
+conflict: the pull applies the other device's and re-derives from the merged facts
+(`cloud/conflicts.ts`, `derivedHorizonWrite`). Derivation owns the status and the timestamps it
+writes with it (when the horizon started, completed or was cancelled, and its blocked cycle).
+Those timestamps are applied in the log's order, so every device holds the last one written, as
+the service's fold does, and a horizon derivation leaves open has its completion time cleared
+after the pull (`clearDerivedCompletion`). An open horizon has none; a closed one has one, the
+same on every device. A status a person set on either side is still a conflict, and the horizon
+keeps its timestamps while it is.
+
+The hold is protection, not presentation: it keys on what the records are, so it holds with the
+flag off too, where the horizon reads as a plain milestone that says it is held by its plan
+([the flag](#the-flag-experimental-off-by-default)). Dates are calendar days in UTC, inclusive, as for milestones
 ([milestones.md](milestones.md#dates-calendar-days-utc-inclusive)).
 
 **Dependencies between records.** Only an explicit reference counts: a line of the Dependencies
@@ -480,8 +574,13 @@ and moving the window just moves it.
 plan grows: the page's server answers every plan write with the whole plan and the record's
 detail, on one event loop shared by every request. A record's documents are read by its id in one
 statement each, never by resolving a reference, and the records' views are derived once per state
-of the database (keyed on the connection's `total_changes()`, SQLite's `data_version` and the day):
-a request that checks a state, writes and answers rebuilds them once for its write. The server
+of the database (keyed on the connection's `total_changes()` and SQLite's `data_version`; the views
+also on the day): a request that checks a state, writes and answers rebuilds them once for its
+write. The facts every view, every horizon's accounting and every hold read (`PlanFacts`: the
+records, horizons, work, links, breakdown row counts and status categories) are read in a constant
+number of statements, whatever the plan holds; each horizon's accounting is computed once per
+state. So a warm plan read, a horizon's milestone view and a pull that changed nothing cost what
+they cost before the plan counted anything, plus a constant (`test/plan-read-cost.test.ts`). The server
 holds an idle kept-alive connection for 65 seconds (`KEEP_ALIVE_MS`), well past SQLite's
 five-second busy timeout, so a request a client sent on a reused socket while the loop was busy is
 read and answered, never reset.
@@ -499,7 +598,7 @@ far is `plan_run_mode`, one of three, because they are the three places a run ca
 
 | setting | what agents do | how it ends |
 |---|---|---|
-| `work`: until its work is done | take its work from the queue until every member has landed; nothing beyond it, no goal run | ships itself when its last member lands, as any milestone does |
+| `work`: until its work is done | take its work from the queue until every member has landed; nothing beyond it, no goal run | ships itself when its last member lands and no scheduled idea on it is unshipped |
 | `goal`: until its goal is met | a goal run over it works its members, judges each criterion with evidence, and may file the tickets the goal still needs | the run gates the close to the person: the header reads *Waiting for your approval* until they approve it |
 | `epic`: stop for review after each epic | work one epic at a time and stop when it lands, leaving the next for the person | each epic is reviewed before the next starts; the horizon ships with its last member |
 
@@ -533,12 +632,17 @@ holding shaped, started and shipped records (`inHorizonsLens`). A card shows whe
 stands, its progress and late or not started; a shaped record whose plan no longer passes the gate
 is flagged *plan incomplete*. A horizon's header takes every number from the server, which sees
 what the cards do not (a member added by hand, a record still being explored past its planned
-start): its date, a progress bar (members landed over members held, `progress`), `✓ n shipped`
+start): its date, its leaf ideas and members (`records`, `memberCount`), a progress bar (done
+units over all its units, the server's `percent`, `100% incomplete` while not `complete`,
+[Accounting](#accounting)), `✓ n shipped`
 (`shippedCount`), late (`lateCount`) and not started (`notStartedCount`), *Waiting for your
 approval* while its close is gated (`awaitingApproval`), and two buttons from its offered actions:
 **Queue**, held back as *Queued* once it is in the queue, and its **run setting**. The drawer's
-horizon section and the timeline's group headers read the same fields. A horizon is done only
-when the server says so (`horizonDone`); then its column folds to a ✓ summary.
+horizon section and the timeline's group headers read the same fields, and the Milestones view
+reads the same percentage from the milestone's `progress`, with its planned units as a segment of
+its bar. A horizon is done only when the server says so (`horizonDone`: its milestone is done, `shipped`;
+never its progress, since every counted unit can land while a reopened member, a gated epic or an
+idea whose work sits on another horizon keeps it open); then its column folds to a ✓ summary.
 
 **Timeline is time.** Planned, baseline and actual windows on a month axis, today and dated
 horizon lines, a ✓ end-cap where a record shipped, and an arrow from each record to every record
@@ -621,6 +725,16 @@ What converges, under both folds, on a tail device and a freshly hydrated one:
 - **One idea scaffolded on two devices** creates the same task ids, merged into one set.
 - **A horizon whose only work is cancelled** stays listed on every device and derives again when
   another device reopens the work.
+- **A horizon held by a scheduled idea** stays open on every device when its last ticket lands,
+  and one that a device derived shipped while another scheduled an unshipped idea onto it
+  offline reopens on every device after the pull. One device releasing a horizon (its last
+  holding idea taken off) while another reopens a ticket on it offline ends with the status the
+  merged facts derive on both, and no conflict.
+- **A horizon two devices derive offline** ends with one start time and one completion time on
+  every device, a fresh one included, and no conflict. Closed on two devices and reopened by a
+  third, or closed before a device joined and reopened by an offline write, it ends open with no
+  completion time anywhere. A person's cancel still conflicts with a derived close or reopen, and
+  keeps its own timestamps while it does.
 
 ## Known limits
 
@@ -647,8 +761,9 @@ What converges, under both folds, on a tail device and a freshly hydrated one:
   `adopt` link an existing issue; answers the promoted `{ id, identifier, kind }` or `null`),
   `unlink_idea`, `scaffold_idea` (preview without `confirm`; with it and the preview's
   `fingerprint`, create); `reset_idea_baseline` (a view button).
-- **HTTP** `GET /api/plan` (each record with `state`, `actions`, `completeness` and `dependsOn`,
-  each horizon with `shippedCount`, `progress`, `runMode`, `goal` and `awaitingApproval`),
+- **HTTP** `GET /api/plan` (each record with `state`, `actions`, `completeness`, `dependsOn`,
+  `units` and `unsized`, each horizon with `shippedCount`, `units`, `unsizedCount`, `records`,
+  `progress`, `runMode`, `goal` and `awaitingApproval`),
   `GET /api/plan-idea?ref=`, `GET /api/issues` (each row with its `horizon`, horizons themselves
   left out); `POST /api/plan/{enable, capture, update, question, resolve, decision, promote,
   scaffold, adopt, unlink, reset-baseline, horizon-create, horizon-update, horizon-remove,
@@ -672,7 +787,7 @@ What converges, under both folds, on a tail device and a freshly hydrated one:
 | `test/plan-scaffold.test.ts` | sections persist as revisions, an agent writes them, duplicate keys refused; the gate on every path to shaped, deferred questions let through; Scaffold creates exactly its preview, idempotently and for rows added later, nested sub-ideas as child epics, never where the lifecycle does not offer it; import with its file attached |
 | `test/plan-scaffold-surfaces.test.ts` | the gate on the page, the CLI with `--person` and an agent over MCP; the three Scaffold previews agree and write nothing; a confirm creates once whichever surface retries; CLI import |
 | `test/plan-scaffold-guards.test.ts` | a shaped plan hollowed by an edit stays shaped, says what it lacks, holds Scaffold and Promote back and refuses both; the breakdown never written as a document; every malformed plan payload refused by name; import into shaped held to the gate; the source file attached byte for byte; a confirm refused without a fingerprint and on a changed plan; no preview where Scaffold is not offered; inherited acceptance, labelled; blockers added and never removed; a renamed key keeps its task; tasks named by idea and row; a stale breakdown save refused; one row edited writes one row |
-| `test/cloud-plan-sync.test.ts` | under both folds: the plan, its membership and its numbers converge on a tail device and a hydrated one; offline adopts and unlinks; offline moves derive the same membership with no conflict; two offline promotions end with two distinct numbers; a third device never shows a numberless epic; a horizon whose only work is cancelled stays listed; an idea an earlier build numbered resolves by its old number |
+| `test/cloud-plan-sync.test.ts` | under both folds: the plan, its membership and its numbers converge on a tail device and a hydrated one; offline adopts and unlinks; offline moves derive the same membership with no conflict; two offline promotions end with two distinct numbers; a third device never shows a numberless epic; a horizon whose only work is cancelled stays listed; a horizon a scheduled idea holds stays open, reopens after a concurrent close, and converges with no conflict when one device releases it while another reopens its ticket; a horizon's start and completion times converge with no conflict when devices derive it offline, a person's cancel still conflicts, and a plain milestone is unchanged; an idea an earlier build numbered resolves by its old number |
 | `test/cloud-plan-promotion-identity.test.ts` | under both folds: one idea promoted on two devices offline ends on one number per record on every device and a fresh one, no number on two records, no open conflict |
 | `test/cloud-plan-breakdown-sync.test.ts` | under both folds: different rows edited or added offline both kept with no conflict; one row edited on both is a recorded conflict, and resolving it settles both; two devices scaffolding one idea create the same tasks |
 | `test/sync-mutation-convergence.test.ts` | every `PlanStore` mutation, and `promoteInPlace`, converges column for column |
@@ -681,7 +796,8 @@ What converges, under both folds, on a tail device and a freshly hydrated one:
 | `test/plan-lifecycle-surfaces.test.ts` | every idea (state, write) cell and every horizon (state, action) cell agrees with the table on HTTP, MCP and the CLI with and without `--person`; every payload carries exactly the table's row; every document and file write in every state |
 | `test/plan-own-state.test.ts` | with hand-written expectations: a parent's own state against its rollup; a sub-idea promoted on its own and re-parented by its parent's promotion; a promoted record edited as an epic once shipped; every document key, restore and file on a shipped, dropped or raw idea |
 | `test/plan-lenses.test.ts`, `test/plan-lenses-review.test.ts` | what the lenses read: dependencies only from explicit references; completeness and `dependsOn` on the payload; a horizon's shipped count, progress and server counts; Queue and the run setting offered and held back; each issue's horizon; the run setting is the person's on every path, reaches every ticket as the `horizon-run` instruction, and allows a goal run only when set to `goal` |
-| `test/plan-read-cost.test.ts`, `test/ui-server-keep-alive.test.ts` | a plan read derives once per state of the database; kept-alive sockets outlive SQLite's busy timeout |
+| `test/plan-accounting.test.ts`, `test/plan-accounting-surfaces.test.ts` | a horizon's done, open and planned units and its percentage, the same on the plan, the milestone view and every CLI, MCP and HTTP surface; unsized ideas never zero work; leaf ideas counted with the parent apart; a parent's rollup counting its sub-ideas' rows once; plain milestones and planning off unchanged; a horizon held open by a scheduled idea when its last ticket closes, in both flag states, released when the idea is dropped or moved (closing whether or not derivation wrote its status before), reopened when one is scheduled onto it, with or without members; a scheduled parent carrying its sub-ideas scheduled on no horizon, a sub-idea scheduled elsewhere counted there alone; `complete` and the page's fold false while every counted unit landed but an idea holds it; one whole percent rounded down from the counts; the hold reading the record's own stage, missing links included; with planning off, the hold named in the refusal and on the milestone view |
+| `test/plan-read-cost.test.ts`, `test/ui-server-keep-alive.test.ts` | a plan read derives once per state of the database; a warm plan read costs nothing more per record or per horizon, a pull that changed nothing a constant and no mutation, a horizon's milestone view what a plain milestone's costs plus a constant; kept-alive sockets outlive SQLite's busy timeout |
 | `views/plan/lenses.test.tsx`, `views/plan/plan-model.test.ts` | the lenses' membership, cards, headers, fold, shipped mark, timeline end-caps and arrows, Markdown reading mode; board columns, nesting, timeline groups, range and dragging |
 | `views/tree/horizon-axis.test.tsx`, `test/ui-horizon-chip.test.ts` | the Tasks horizon chip, grouping and filter |
 | `detail/plan-drawer.test.tsx`, `command-palette/commands.test.ts` | an idea's tab strip and the epic's once promoted, no ticket number anywhere, actions exactly as offered, a read-only title where no edit is offered; palette commands from the offered actions only |

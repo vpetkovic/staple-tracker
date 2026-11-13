@@ -183,10 +183,10 @@ export function PlanTimeline({ plan, write, onOpen, selected }: { plan: PlanData
                   </div>
                   <div className="sticky z-10 flex items-center gap-1.5 px-2 text-caption" style={{ left: nameWidth }}>
                     {group.horizon ? <>
-                      <span>{planCounts(group.horizon.ideaCount, group.horizon.memberCount)}</span>
+                      <span>{planCounts(group.horizon)}</span>
                       {group.horizon.awaitingApproval ? <Chip tone="amber">Waiting for your approval</Chip> : null}
                       {horizonDone(group.horizon) ? <ShippedMark /> : group.horizon.shippedCount > 0 ? <ShippedMark count={group.horizon.shippedCount} /> : null}
-                      {group.horizon.progress !== null && !horizonDone(group.horizon) ? <Progress value={group.horizon.progress} /> : null}
+                      {group.horizon.percent !== null && !horizonDone(group.horizon) ? <Progress percent={group.horizon.percent} complete={group.horizon.complete} /> : null}
                     </> : null}
                     {risk.late > 0 ? <Chip tone="red">{risk.late} late</Chip> : null}
                     {risk.notStarted > 0 ? <Chip tone="amber">{risk.notStarted} not started</Chip> : null}

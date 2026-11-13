@@ -95,14 +95,17 @@ const READS: Record<StoreName, readonly string[]> = {
     // claims through `checkoutIssue`, and a stated failure releases through
     // `releaseIssue`: both are this store's own mutations, covered by their scenarios.
     "runs",
+    // Whether some horizon's status inputs moved since this device last settled them (`rederivePlanHolds`).
+    "owesPlanHolds",
   ],
   // `criteriaCheck`: the goal check's criteria half, read by a goal run's stop rules.
-  MilestoneStore: ["queueSeam", "get", "list", "milestoneOf", "effectiveMilestone", "criteriaCheck"],
+  // `leafProgress`: the ticket leaves a horizon's accounting starts from.
+  MilestoneStore: ["queueSeam", "get", "list", "milestoneOf", "effectiveMilestone", "criteriaCheck", "leafProgress"],
   // `scopeMembership`: which issues a scope holds, the same resolution a scoped `effectiveQueue` reads.
   QueueStore: ["revision", "entries", "effectiveQueue", "view", "scopeMembership"],
   ProjectStore: ["list", "get", "issueCounts"],
   // The plan layer's reads, and the lifecycle checks the tracker asks of it: derived on every call, nothing stored.
-  PlanStore: ["assertEnabled", "today", "enabled", "view", "ideaView", "detail", "stateOf", "assertEditable", "assertDocumentWrite", "assertQueueable", "sectionsOf", "scaffoldPreview", "horizonsOf", "horizonIds"],
+  PlanStore: ["assertEnabled", "today", "enabled", "view", "ideaView", "detail", "stateOf", "assertEditable", "assertDocumentWrite", "assertQueueable", "sectionsOf", "scaffoldPreview", "horizonsOf", "horizonIds", "accountingOf", "heldByPlan", "holdOf", "holdsByHorizon"],
 };
 
 interface World {
@@ -452,6 +455,26 @@ const SCENARIOS: readonly Scenario[] = [
     name: "remove a horizon an idea sat on",
     prep: (w) => void w.a.store.plan().update(w.ids["Child idea"]!, { horizon: w.ids["Q2"]! }, "alice", { person: { via: "test" } }),
     run: (w) => void w.a.store.plan().removeHorizon(w.ids["Q2"]!, "alice", { person: { via: "test" } }),
+  },
+  {
+    // A horizon that reads done while an idea scheduled on it is unshipped (an older build's
+    // derivation, say) reopens, and the derived move travels like any other.
+    method: "WorkspaceStore.rederivePlanHolds",
+    name: "a horizon an unshipped idea holds reopens",
+    prep: (w) => {
+      const plan = w.a.store.plan();
+      const now = plan.view().horizons[0]!.id;
+      w.ids["Now"] = now;
+      plan.capture({ title: "Holds Now", maturity: "shaped", plan: READY_PLAN, horizon: now }, "alice", { person: { via: "test" } });
+      w.a.store.journaled(() => {
+        w.a.db.prepare("UPDATE issues SET status = 'done', derived_status = 'done' WHERE id = ?").run(now);
+        w.a.store.journal.record({ entity: "issue", entityId: now, verb: "update", payload: { status: "done", derivedStatus: "done" }, actor: null });
+      });
+    },
+    run: (w) => {
+      w.a.store.rederivePlanHolds("plan", "alice");
+      if (w.a.store.categoryOf(w.a.store.getIssue(w.ids["Now"]!).status) === "done") throw new Error("the held horizon did not reopen");
+    },
   },
 
   // ---- milestones

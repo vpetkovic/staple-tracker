@@ -14,7 +14,7 @@ it("uses server counts and late warnings in the phone's horizon switcher", () =>
   const store = new WorkspaceStore(db, "test", "LAR");
   store.plan().enable("person", { person: { via: "settings" } });
   const plan = store.plan().view();
-  Object.assign(plan.horizons[0], { ideaCount: 7, memberCount: 9, lateCount: 4 });
+  Object.assign(plan.horizons[0], { ideaCount: 7, records: { leaves: 7, shipped: 0, started: 0, shaped: 7, exploring: 0, parentCount: 0 }, memberCount: 9, lateCount: 4 });
   const html = renderToStaticMarkup(<HorizonsBoard plan={plan} write={async () => true} onOpen={() => {}} selected={null} />);
   expect(html).toContain("7 ideas · 9 members");
   expect(html).toContain('aria-label="4 late"');
@@ -27,7 +27,7 @@ it("uses singular idea and member wording in the phone switcher", () => {
   const store = new WorkspaceStore(db, "test", "LAR");
   store.plan().enable("person", { person: { via: "settings" } });
   const plan = store.plan().view();
-  Object.assign(plan.horizons[0], { ideaCount: 1, memberCount: 1 });
+  Object.assign(plan.horizons[0], { ideaCount: 1, records: { leaves: 1, shipped: 0, started: 0, shaped: 1, exploring: 0, parentCount: 0 }, memberCount: 1 });
   const html = renderToStaticMarkup(<HorizonsBoard plan={plan} write={async () => true} onOpen={() => {}} selected={null} />);
   expect(html).toContain("1 idea · 1 member");
   expect(html).not.toContain("1 ideas");
