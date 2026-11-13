@@ -100,8 +100,10 @@ describe("the owner's plan tweaks", () => {
     expect(html).not.toContain("LAR-9");
   });
   it("uses singular and plural idea/member counts", () => {
-    expect(planCounts(1, 1)).toBe("1 idea · 1 member");
-    expect(planCounts(0, 2)).toBe("0 ideas · 2 members");
-    expect(planCounts(2, 0)).toBe("2 ideas · 0 members");
+    const counts = (leaves: number, memberCount: number, parentCount = 0) => planCounts({ memberCount, records: { leaves, shipped: 0, started: 0, shaped: leaves, exploring: 0, parentCount } });
+    expect(counts(1, 1)).toBe("1 idea · 1 member");
+    expect(counts(0, 2)).toBe("0 ideas · 2 members");
+    expect(counts(2, 0)).toBe("2 ideas · 0 members");
+    expect(counts(2, 0, 1)).toBe("2 ideas (+1 parent) · 0 members");
   });
 });

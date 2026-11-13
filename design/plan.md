@@ -508,10 +508,11 @@ not an umbrella holds its horizon (an umbrella holds through its sub-records whe
 scheduled). `deriveHorizonStatus` answers the unstarted band where it would answer done while
 held. Two moments re-derive the hold (`rederivePlanHolds`): every plan write, and every pull
 (`rederivePlanMilestonesAfterPull`). A held horizon that reads done reopens, as on a device that
-pulled an idea another device scheduled while this one closed the last ticket. A horizon the plan
-released (its last holding record dropped, unscheduled or moved) closes on its landed work when
-derivation owns its status, as a milestone closes when a member lands; a status a person set, or
-a gate, is left alone. The hold is protection, not presentation: it keys on what the records are,
+pulled an idea another device scheduled while this one closed the last ticket. A horizon no record
+holds whose work has all landed (its last holding record was dropped, unscheduled, moved or
+shipped) closes on that work when derivation owns its status, as a milestone closes when a member
+lands; a status a person set, or a gate, is left alone. The hold is a function of synchronized
+facts, so every device that re-derives it writes the same status. The hold is protection, not presentation: it keys on what the records are,
 so it holds with the flag off too, where the horizon reads as a plain milestone that has work
 still to come. Dates are calendar days in UTC, inclusive, as for milestones
 ([milestones.md](milestones.md#dates-calendar-days-utc-inclusive)).
