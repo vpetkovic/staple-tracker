@@ -8,7 +8,8 @@
  * tickets); else one planned unit per breakdown row; else nothing, and it is *unsized*. A
  * parent's rollup adds every non-dropped descendant's units.
  * A horizon's units are the ticket leaves under its members, counted as its milestone counts them,
- * plus the planned units of every scheduled, non-dropped record with no own work.
+ * plus the planned units of every non-dropped record it carries with no own work: those scheduled
+ * on it, and the descendants of those that are not scheduled on a horizon themselves.
  *
  * Pure functions of their arguments: `PlanStore` gathers the facts once per state of the database
  * and every surface reads what it derives.
@@ -55,8 +56,9 @@ export function isUmbrella(size: Pick<RecordSize, "work" | "liveSubRecords">): b
 }
 
 /**
- * Whether a record scheduled on a horizon keeps it from shipping: it is not dropped, not shipped,
- * and not an umbrella (an umbrella holds a horizon through its sub-records, where they are scheduled).
+ * Whether a record a horizon carries keeps it from shipping: it is not dropped, not shipped, and
+ * not an umbrella (an umbrella holds a horizon through its sub-records, which the horizon carries
+ * too unless they are scheduled on another one).
  */
 export function holdsHorizon(stage: Stage, size: Pick<RecordSize, "work" | "liveSubRecords">): boolean {
   return stage !== "shipped" && stage !== "dropped" && !isUmbrella(size);
@@ -71,23 +73,41 @@ export function unitProgress(counted: Units): number | null {
   return counted.total === 0 ? null : counted.done / counted.total;
 }
 
-/** Scheduled, non-dropped leaf records by their own state, and the parents beside them. */
+/**
+ * The one percentage every surface prints: whole percent, rounded down, from the counts (never
+ * from a fraction, so 29 of 50 reads 58 everywhere); null when there is nothing to count.
+ */
+export function unitPercent(counted: Pick<Units, "done" | "total">): number | null {
+  return counted.total === 0 ? null : Math.floor((counted.done * 100) / counted.total);
+}
+
+/** A percentage as the CLI prints it: a whole 100 that is not complete says so beside it. */
+export function percentText(percent: number | null, complete: boolean): string {
+  if (percent === null) return "—";
+  return `${percent}%${percent === 100 && !complete ? " incomplete" : ""}`;
+}
+
+/** Non-dropped leaf records a horizon carries, by their own state, and the parents beside them. */
 export interface RecordCounts {
-  /** Every scheduled, non-dropped leaf record: the four states below summed, what surfaces print. */
+  /** Every leaf record it carries: the five states below summed, what surfaces print. */
   leaves: number;
   shipped: number;
   started: number;
   shaped: number;
   exploring: number;
+  /** A sub-idea not developed yet, carried through a scheduled parent. */
+  raw: number;
   parentCount: number;
 }
 
-/** One scheduled, non-dropped record on a horizon, as the horizon's accounting reads it. */
+/** One non-dropped record a horizon carries, as the horizon's accounting reads it. */
 export interface ScheduledRecord {
   state: IdeaState;
   /** Its own units; own work counts among the members' ticket leaves, so only its planned units add here. */
   own: OwnUnits;
   liveSubRecords: boolean;
+  /** It keeps the horizon from shipping (`holdsHorizon`). */
+  holds: boolean;
 }
 
 export interface HorizonAccounting {
@@ -95,42 +115,57 @@ export interface HorizonAccounting {
   unsizedCount: number;
   records: RecordCounts;
   progress: number | null;
+  /** `unitPercent` of the units. */
+  percent: number | null;
+  /** How many of its records keep it from shipping. */
+  held: number;
+  /** Something is counted, all of it is done and nothing holds it: what derives its milestone done. */
+  complete: boolean;
 }
 
 /**
  * A horizon's units: `tickets` are the leaves under its members exactly as its milestone counts
- * them (each once, cancelled not counted), and each scheduled record without own work adds its
+ * them (each once, cancelled not counted), and each record it carries without own work adds its
  * planned rows. Records print as leaves; a parent is counted apart, never as one of its children.
  */
 export function horizonAccounting(tickets: Pick<MilestoneProgress, "countable" | "counts">, records: readonly ScheduledRecord[]): HorizonAccounting {
   let planned = 0;
   let unsizedCount = 0;
-  const counts: RecordCounts = { leaves: 0, shipped: 0, started: 0, shaped: 0, exploring: 0, parentCount: 0 };
+  let held = 0;
+  const counts: RecordCounts = { leaves: 0, shipped: 0, started: 0, shaped: 0, exploring: 0, raw: 0, parentCount: 0 };
   for (const record of records) {
     planned += record.own.planned;
     if (record.own.unsized) unsizedCount += 1;
+    if (record.holds) held += 1;
     if (record.liveSubRecords) counts.parentCount += 1;
-    else if (record.state === "shipped" || record.state === "started" || record.state === "shaped" || record.state === "exploring") {
+    else if (record.state !== "dropped") {
       counts[record.state] += 1;
       counts.leaves += 1;
     }
   }
   const done = tickets.counts.done;
   const counted = units(done, tickets.countable - done, planned);
-  return { units: counted, unsizedCount, records: counts, progress: unitProgress(counted) };
+  return {
+    units: counted,
+    unsizedCount,
+    records: counts,
+    progress: unitProgress(counted),
+    percent: unitPercent(counted),
+    held,
+    complete: counted.total > 0 && counted.done === counted.total && held === 0,
+  };
 }
 
 /**
  * The milestone view's progress for a horizon: the same units, with the planned ones in the
- * denominator and the unsized records named. Complete only when nothing is open, planned or unsized.
+ * denominator and the unsized records named. Complete only when its milestone would derive done.
  */
-export function withPlannedUnits(progress: MilestoneProgress, accounting: Pick<HorizonAccounting, "units" | "unsizedCount">): MilestoneProgress {
-  const { done, total, planned } = accounting.units;
+export function withPlannedUnits(progress: MilestoneProgress, accounting: Pick<HorizonAccounting, "units" | "unsizedCount" | "percent" | "complete">): MilestoneProgress {
   return {
     ...progress,
-    planned,
+    planned: accounting.units.planned,
     unsized: accounting.unsizedCount,
-    percent: total === 0 ? null : Math.floor((done * 100) / total),
-    complete: total > 0 && done === total && accounting.unsizedCount === 0,
+    percent: accounting.percent,
+    complete: accounting.complete,
   };
 }
