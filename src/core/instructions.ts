@@ -210,7 +210,7 @@ function horizonPlanOf(db: DatabaseSync, issueId: string): string | null {
     "",
     "1. Tickets first: while one is eligible, take it.",
     "2. With no ticket left, take the first step whose who is agent and do what its instruction says.",
-    "3. Stop for the person on the rest. An answer_questions step is yours to carry: bring its questions to the person and record each answer; a mark_shaped step means telling the person the idea is ready. Never mark an idea shaped, schedule it or move its dates yourself.",
+    "3. The rest are the person's (who is person) or nobody's yet (who is nobody): stop on them. Before you stop, carry an answer_questions step's questions to the person and record each answer, and tell the person when a mark_shaped idea is ready. Never mark an idea shaped, schedule it or move its dates yourself.",
     "4. A wait step is nobody's yet. Never scaffold a waiting idea; the person releases it by moving its planned start.",
     "",
     "An idea is never claimed, queued or checked out, and neither is a step.",

@@ -127,6 +127,40 @@ describe("a waiting idea's turn", () => {
     plan.update(parent, { plannedStart: null }, "vp", PERSON);
     expect(stepOf(child)!.need).toBe("scaffold");
   });
+
+  it("inherits no start from a dropped or shipped ancestor: their dates hold nothing, as a dropped dependency holds nothing", () => {
+    const grand = capture("Platform", { maturity: "shaped", horizon: now, plan: READY_PLAN, plannedStart: "2027-02-01" });
+    const parent = capture("Reporting", { maturity: "shaped", parent: grand, plan: READY_PLAN });
+    const child = capture("Usage report", { maturity: "shaped", parent, horizon: now, plan: READY_PLAN });
+    expect(stepOf(child)).toMatchObject({ need: "wait", waitingOn: { start: "2027-02-01" } });
+    plan.update(parent, { maturity: "dropped" }, "vp", PERSON);
+    // The dropped parent is skipped, not stopped at: the grandparent's start still reaches the child.
+    expect(stepOf(child)).toMatchObject({ need: "wait", waitingOn: { start: "2027-02-01" } });
+    plan.update(grand, { maturity: "dropped" }, "vp", PERSON);
+    expect(stepOf(child)).toMatchObject({ need: "scaffold", who: "agent" });
+    // A shipped ancestor's future start holds nothing either.
+    const shippedParent = capture("Billing", { maturity: "shaped", horizon: now, plan: READY_PLAN, plannedStart: "2027-03-01" });
+    const under = capture("Invoices", { maturity: "shaped", parent: shippedParent, plan: READY_PLAN });
+    expect(stepOf(under)).toMatchObject({ need: "wait" });
+    const epic = plan.promote(shippedParent, "vp", PERSON).identifier!;
+    store.checkoutIssue(epic, "agent");
+    store.updateIssue(epic, { status: "done" }, "agent");
+    expect(plan.ideaView(shippedParent).stage).toBe("shipped");
+    expect(stepOf(under)).toMatchObject({ need: "scaffold" });
+  });
+});
+
+describe("an unscheduled sub-idea that adopted work", () => {
+  it("is not brainstormed: it asks its questions while it has any, then needs nothing", () => {
+    const parent = capture("Reporting", { maturity: "shaped", horizon: now, plan: READY_PLAN });
+    const child = capture("Usage report", { maturity: "exploring", parent });
+    expect(stepOf(child)).toMatchObject({ need: "brainstorm" });
+    plan.addQuestion(child, "Daily or weekly?", "agent");
+    plan.adopt(child, store.createIssue({ title: "Report job" }).identifier, "agent");
+    expect(stepOf(child)).toMatchObject({ need: "answer_questions", state: "started", questions: ["Daily or weekly?"] });
+    plan.resolveQuestion(child, 1, "agent");
+    expect(stepOf(child)).toBeNull();
+  });
 });
 
 describe("a parent whose Scaffold would build a waiting sub-idea", () => {
@@ -141,6 +175,17 @@ describe("a parent whose Scaffold would build a waiting sub-idea", () => {
     // Its turn comes with its last waiting sub-idea's.
     plan.update(later, { plannedStart: "2026-11-01" }, "vp", PERSON);
     expect(stepOf(parent)).toMatchObject({ need: "scaffold", who: "agent" });
+  });
+
+  it("looks below its children too: a waiting grandchild holds the parent and the grandparent", () => {
+    const grand = capture("Platform", { maturity: "shaped", horizon: now, plan: READY_PLAN });
+    const parent = capture("Reporting", { maturity: "shaped", parent: grand, plan: READY_PLAN });
+    const leaf = capture("Audit trail", { maturity: "shaped", parent, plan: READY_PLAN, plannedStart: "2026-12-01" });
+    expect(stepOf(leaf)).toMatchObject({ need: "wait" });
+    expect(stepOf(parent)).toMatchObject({ need: "wait", waitingOn: { records: [{ id: leaf }] } });
+    expect(stepOf(grand)).toMatchObject({ need: "wait", waitingOn: { records: [{ id: leaf }] } });
+    plan.update(leaf, { plannedStart: null }, "vp", PERSON);
+    expect([stepOf(grand)!.need, stepOf(parent)!.need, stepOf(leaf)!.need]).toEqual(["scaffold", "scaffold", "scaffold"]);
   });
 });
 
@@ -186,5 +231,14 @@ describe("a horizon's steps", () => {
     expect(stepsOn(now).map((step) => step.ideaId)).toEqual([first, parent, child]);
     expect(stepsOn(later).map((step) => step.ideaId)).toEqual([elsewhere]);
     expect(plan.planStepsOf(now)).toEqual(stepsOn(now));
+  });
+
+  it("breaks a rank tie by id, so two records with one rank list the same way on every device", () => {
+    const a = capture("Checkout API", { maturity: "exploring", horizon: now });
+    const b = capture("Billing export", { maturity: "exploring", horizon: now });
+    // Two devices can rank offline onto one number; the fixture writes that state directly.
+    store.db.prepare("UPDATE issues SET plan_rank = 4096 WHERE id IN (?, ?)").run(a, b);
+    const [first, second] = [a, b].sort();
+    expect(stepsOn(now).map((step) => step.ideaId)).toEqual([first, second]);
   });
 });

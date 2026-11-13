@@ -85,7 +85,9 @@ touched_main_line (run drive saw a session move master or main), budget
 a row), scope_gone (the scope issue was deleted or holds nothing any more),
 vp_blocked (a ticket the run took is blocked on a person, or nothing is
 workable and something in scope is), gate_pending (the scope issue awaits
-approval, or nothing is workable and something in scope does), goal_met (a
+approval, or nothing is workable and something in scope does), planning_needed
+(with planning on: nothing left to take but a horizon in scope still lists plan
+steps; detail.planSteps, and detail.earliestWait when every one waits), goal_met (a
 goal run: nothing unresolved left and every criterion met; ends completed),
 scope_empty (nothing unresolved left in scope; the run ends completed). A gate or a
 person-owned block elsewhere in scope does not stop a run that still has work to

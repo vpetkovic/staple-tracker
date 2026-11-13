@@ -130,6 +130,13 @@ describe("plan steps on every surface, planning on", () => {
     expect(unscopedCli.next.identifier).toBe(ticket);
     expect(needs(unscopedCli.planSteps)).toEqual(order());
     expect(unscopedMcp).toEqual(unscopedCli);
+    // The UI server's route answers the same shape, steps included.
+    const scopedHttp = (await http(`/api/queue/next?ws=${WS}&scope=${horizon.identifier}`)).body as unknown as typeof scopedCli;
+    const unscopedHttp = (await http(`/api/queue/next?ws=${WS}`)).body as unknown as typeof scopedCli;
+    expect(Object.keys(scopedHttp).sort()).toEqual(Object.keys(scopedCli).sort());
+    expect(needs(scopedHttp.planSteps)).toEqual(order());
+    expect(Object.keys(unscopedHttp).sort()).toEqual(Object.keys(unscopedCli).sort());
+    expect(needs(unscopedHttp.planSteps)).toEqual(order());
   });
 
   it("with no ticket left, next is null and the steps remain", async () => {

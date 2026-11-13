@@ -305,8 +305,9 @@ parent's, when it has none) or until the ideas it depends on ship, and agents ne
 before then. A parent whose sub-ideas are not all due waits too, since scaffolding it would build
 them; agents scaffold its due sub-ideas one by one instead. To release one early, move its planned
 start. When a horizon has no ticket left and
-its remaining steps are yours or are waiting, a run over it stops with `planning_needed`, lists the
-steps and, when they all wait, says when the earliest one starts. The horizon itself stays
+still lists steps, a run over it stops with `planning_needed`, lists the steps (the agent takes
+the first one that is its own, and stops for you on the rest) and, when they all wait, says when
+the earliest one starts. The horizon itself stays
 *planned* (nothing to queue) until its ideas become tickets.
 
 ## 11. Turn it off

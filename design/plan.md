@@ -666,7 +666,7 @@ an idea's turn comes. A shaped record with no own work **waits** while its plann
 than today, or while a record it depends on (`dependsOn`, explicit references only) is neither
 shipped nor dropped; a dropped dependency holds nothing. A record with no planned start of its own
 waits on its nearest ancestor's, so a parent whose start lies ahead keeps its sub-ideas waiting
-with it. A record whose Scaffold would also build a sub-idea that waits (Scaffold builds every
+with it; a dropped or shipped ancestor is skipped on that walk, since its dates hold nothing. A record whose Scaffold would also build a sub-idea that waits (Scaffold builds every
 shaped sub-idea beneath it) waits too, `waitingOn.records` naming those sub-ideas: scaffolding the
 parent would scaffold them early. Its sub-ideas whose turn has come keep their own `scaffold`
 steps and are scaffolded one by one. `waitingOn` is `{ start?, records?: [{ id, title, state }] }`. The person releases an idea

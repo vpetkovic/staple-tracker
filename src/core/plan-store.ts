@@ -1226,6 +1226,9 @@ export class PlanStore {
       const seen = new Set<string>();
       for (let cursor = byId.get(id); cursor !== undefined && !seen.has(cursor.id); cursor = cursor.parent_id === null ? undefined : byId.get(cursor.parent_id)) {
         seen.add(cursor.id);
+        // A dropped or shipped ancestor's start holds nothing, as a dropped dependency holds nothing.
+        const stage = cursor.id === id ? null : records.get(cursor.id)?.stage;
+        if (stage === "dropped" || stage === "shipped") continue;
         if (cursor.plan_start !== null) return cursor.plan_start;
       }
       return null;
