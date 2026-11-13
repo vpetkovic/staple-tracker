@@ -10,6 +10,7 @@ import { FakeSyncServer } from "./fixtures/fake-sync-server.js";
 import { Fleet, type Machine } from "./fixtures/sync-machines.js";
 import { formerHolders } from "../src/core/identifier-moves.js";
 import { READY_PLAN } from "./fixtures/plan-ready.js";
+import type { MilestoneCreateResult } from "../src/core/milestone-store.js";
 
 const REPO = "5eed0000-0000-4000-8000-0000000001a2";
 const PERSON = { person: { via: "plan_view" } } as const;
@@ -500,6 +501,200 @@ describe("a horizon's status over sync", () => {
         expect(category(machine, next!)).toBe("active");
         expect(openConflicts(machine)).toEqual([]);
       }
+    });
+  }
+});
+
+describe("the timestamps derivation writes on a horizon, over sync", () => {
+  const category = (machine: Machine, id: string) => machine.store.categoryOf(machine.store.getIssue(id).status);
+  const completedAt = (machine: Machine, id: string) =>
+    (machine.db.prepare("SELECT completed_at FROM issues WHERE id = ?").get(id) as { completed_at: string | null }).completed_at;
+  const statusConflicts = (machine: Machine) =>
+    machine.db.prepare("SELECT field FROM sync_conflicts WHERE resolved_at IS NULL AND field = 'status'").all();
+
+  async function rounds(machines: readonly Machine[], count = 3): Promise<void> {
+    for (let round = 0; round < count; round += 1) {
+      for (const machine of machines) {
+        machine.use();
+        await machine.sync();
+      }
+    }
+  }
+
+  /** Now holds one landed ticket and one scheduled idea, so the idea is all that keeps it open. */
+  async function heldHorizon(fold: "service" | "tail") {
+    const server = new FakeSyncServer({ repositoryId: REPO, ...(fold === "tail" ? { maxSnapshotFoldOps: 3 } : {}) });
+    fleet = new Fleet(server, REPO);
+    const a = fleet.machine("a");
+    a.store.plan().enable("vp", { person: { via: "settings" } });
+    const [now, next] = a.store.plan().view().horizons.map((h) => h.id);
+    const ticket = a.store.createIssue({ title: "Ledger" }).identifier;
+    a.store.milestones().addMember(now!, ticket, {}, "vp");
+    const q = a.store.plan().capture({ title: "Billing export", maturity: "shaped", plan: READY_PLAN, horizon: now }, "vp", PERSON).id;
+    a.store.checkoutIssue(ticket, "agent");
+    a.store.updateIssue(ticket, { status: "done" }, "agent");
+    expect(category(a, now!)).toBe("unstarted");
+    await a.sync();
+    const b = fleet.machine("b");
+    await b.sync();
+    return { a, b, now: now!, next: next!, ticket, q };
+  }
+
+  for (const fold of ["service", "tail"] as const) {
+    it(`keeps one completion time on every device when two devices each close a horizon offline (${fold} fold)`, async () => {
+      const { a, b, now, next, q } = await heldHorizon(fold);
+
+      // Offline: A drops the idea and B moves it to Next; each releases Now and stamps its own close.
+      a.use();
+      a.store.plan().update(q, { maturity: "dropped" }, "vp", PERSON);
+      b.use();
+      b.store.plan().update(q, { horizon: next }, "vp", PERSON);
+      expect(completedAt(a, now)).not.toBeNull();
+      expect(completedAt(b, now)).not.toBeNull();
+      expect(completedAt(a, now)).not.toBe(completedAt(b, now));
+
+      await rounds([a, b]);
+      const fresh = fleet!.machine("fresh");
+      await fresh.sync();
+      for (const machine of [a, b, fresh]) {
+        expect(category(machine, now)).toBe("done");
+        expect(completedAt(machine, now)).not.toBeNull();
+        expect(completedAt(machine, now)).toBe(completedAt(fresh, now));
+        expect(openConflicts(machine)).toEqual([]);
+      }
+    });
+
+    it(`keeps one start time on every device when two devices each start work on a horizon offline (${fold} fold)`, async () => {
+      const server = new FakeSyncServer({ repositoryId: REPO, ...(fold === "tail" ? { maxSnapshotFoldOps: 3 } : {}) });
+      fleet = new Fleet(server, REPO);
+      const a = fleet.machine("a");
+      a.store.plan().enable("vp", { person: { via: "settings" } });
+      const now = a.store.plan().view().horizons[0]!.id;
+      const first = a.store.createIssue({ title: "Ledger" }).identifier;
+      const second = a.store.createIssue({ title: "Invoices" }).identifier;
+      a.store.milestones().addMember(now, first, {}, "vp");
+      a.store.milestones().addMember(now, second, {}, "vp");
+      await a.sync();
+      const b = fleet.machine("b");
+      await b.sync();
+
+      a.use();
+      a.store.checkoutIssue(first, "agent-a");
+      b.use();
+      b.store.checkoutIssue(second, "agent-b");
+      const startedAt = (machine: Machine) => (machine.db.prepare("SELECT started_at FROM issues WHERE id = ?").get(now) as { started_at: string | null }).started_at;
+      expect(startedAt(a)).not.toBe(startedAt(b));
+
+      await rounds([a, b]);
+      const fresh = fleet.machine("fresh");
+      await fresh.sync();
+      for (const machine of [a, b, fresh]) {
+        expect(category(machine, now)).toBe("active");
+        expect(startedAt(machine)).toBe(startedAt(fresh));
+        expect(openConflicts(machine)).toEqual([]);
+      }
+    });
+
+    it(`clears the completion time everywhere when a third device reopens a horizon two devices closed offline (${fold} fold)`, async () => {
+      const { a, b, now, next, ticket, q } = await heldHorizon(fold);
+      const c = fleet!.machine("c");
+      await c.sync();
+
+      // Offline: A drops the idea, C moves it to Next (both close Now), B reopens the ticket.
+      a.use();
+      a.store.plan().update(q, { maturity: "dropped" }, "vp", PERSON);
+      c.use();
+      c.store.plan().update(q, { horizon: next }, "vp", PERSON);
+      b.use();
+      b.store.updateIssue(ticket, { status: "in_progress" }, "agent");
+
+      await rounds([a, c, b]);
+      const fresh = fleet!.machine("fresh");
+      await fresh.sync();
+      for (const machine of [a, b, c, fresh]) {
+        expect(category(machine, now)).toBe("active");
+        expect(completedAt(machine, now)).toBeNull();
+        expect(openConflicts(machine)).toEqual([]);
+      }
+    });
+
+    it(`clears the completion time on a device that joined after the close when an offline reopen arrives (${fold} fold)`, async () => {
+      const { a, b, now, ticket, q } = await heldHorizon(fold);
+      const c = fleet!.machine("c");
+      await c.sync();
+
+      a.use();
+      a.store.plan().update(q, { horizon: null }, "vp", PERSON);
+      await a.sync();
+      b.use();
+      b.store.updateIssue(ticket, { status: "in_progress" }, "agent");
+      // D hydrates the closed horizon, then schedules the idea back onto it.
+      const d = fleet!.machine("d");
+      await d.sync();
+      expect(category(d, now)).toBe("done");
+      d.store.plan().update(q, { horizon: now }, "vp", PERSON);
+
+      await rounds([d, b, a, c]);
+      for (const machine of [a, b, c, d]) {
+        expect(category(machine, now)).toBe("active");
+        expect(completedAt(machine, now)).toBeNull();
+        expect(openConflicts(machine)).toEqual([]);
+      }
+    });
+
+    it(`still records a conflict when a person cancels a horizon another device's derivation closed (${fold} fold)`, async () => {
+      const { a, b, now, q } = await heldHorizon(fold);
+
+      a.use();
+      a.store.plan().update(q, { maturity: "dropped" }, "vp", PERSON);
+      b.use();
+      b.store.plan().removeHorizon(now, "vp", PERSON);
+      expect(category(b, now)).toBe("cancelled");
+
+      await rounds([a, b]);
+      expect(category(a, now)).toBe("done");
+      expect(category(b, now)).toBe("cancelled");
+      for (const machine of [a, b]) expect(statusConflicts(machine)).toHaveLength(1);
+    });
+
+    it(`leaves a person's cancel as it is while a device that derived the horizon open contests it (${fold} fold)`, async () => {
+      const { a, b, now, ticket } = await heldHorizon(fold);
+
+      a.use();
+      a.store.updateIssue(ticket, { status: "in_progress" }, "agent");
+      expect(category(a, now)).toBe("active");
+      b.use();
+      b.store.plan().removeHorizon(now, "vp", PERSON);
+      const cancelled = b.db.prepare("SELECT status, completed_at, cancelled_at FROM issues WHERE id = ?").get(now);
+
+      await rounds([a, b]);
+      expect(category(a, now)).toBe("active");
+      expect(b.db.prepare("SELECT status, completed_at, cancelled_at FROM issues WHERE id = ?").get(now)).toEqual(cancelled);
+      for (const machine of [a, b]) expect(statusConflicts(machine)).toHaveLength(1);
+    });
+
+    it(`records no conflict on a plain milestone one device closes while another adds open work offline (${fold} fold)`, async () => {
+      const server = new FakeSyncServer({ repositoryId: REPO, ...(fold === "tail" ? { maxSnapshotFoldOps: 3 } : {}) });
+      fleet = new Fleet(server, REPO);
+      const a = fleet.machine("a");
+      a.store.addKind({ id: "milestone", label: "Milestone" }, "vp");
+      const created = a.store.milestones().create({ title: "Launch" }, "vp") as MilestoneCreateResult;
+      const id = a.store.getIssue(created.milestone.identifier).id;
+      const first = a.store.createIssue({ title: "First" }).identifier;
+      a.store.milestones().addMember(id, first, {}, "vp");
+      a.store.checkoutIssue(first, "agent");
+      await a.sync();
+      const b = fleet.machine("b");
+      await b.sync();
+
+      a.use();
+      a.store.updateIssue(first, { status: "done" }, "agent");
+      b.use();
+      const second = b.store.createIssue({ title: "Second" }).identifier;
+      b.store.milestones().addMember(id, second, {}, "vp");
+
+      await rounds([a, b]);
+      for (const machine of [a, b]) expect(openConflicts(machine)).toEqual([]);
     });
   }
 });
