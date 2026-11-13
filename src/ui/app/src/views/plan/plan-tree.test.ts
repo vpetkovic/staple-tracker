@@ -144,6 +144,15 @@ describe("the Unscheduled column's tree", () => {
     const thinking = idea("thinking", "Webhooks", { maturity: "exploring", stage: "exploring", state: "exploring" });
     expect(shape(planTree({ horizonId: null, ideas: [ready, sub, thinking], horizons: HORIZONS }))).toEqual(["ready", "  sub (on Now)"]);
   });
+
+  it("lists a shaped sub-idea of an unscheduled parent still being explored as a top row: the column never shows the parent", () => {
+    const parent = idea("parent", "Webhooks", { maturity: "exploring", stage: "exploring", state: "exploring", childIds: ["child", "raw"] });
+    const child = idea("child", "Webhook retries", { parentId: "parent" });
+    const raw = idea("raw", "Webhook signing", { parentId: "parent", maturity: "raw", stage: "raw", state: "raw" });
+    const rows = planTree({ horizonId: null, ideas: [parent, child, raw], horizons: HORIZONS });
+    expect(shape(rows)).toEqual(["child ↳ Webhooks"]);
+    expect(rows[0]!.parentTitle).toBe("Webhooks");
+  });
 });
 
 describe("a step's short label", () => {

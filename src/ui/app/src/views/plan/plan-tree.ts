@@ -44,11 +44,15 @@ const DELIVERY = new Set(["shaped", "started", "shipped"]);
 export function planTree(input: { horizonId: string | null; ideas: readonly IdeaData[]; horizons: ReadonlyArray<{ id: string; name: string }> }): TreeRow[] {
   const { horizonId, ideas } = input;
   const live = ideas.filter((idea) => idea.state !== "dropped");
-  const here = new Set(live.filter((idea) => idea.carriedBy === horizonId).map((idea) => idea.id));
+  // Carried here: where a record is. A member of this column: a carried record the column lists
+  // (Unscheduled lists only what delivery tracks, so a shaped sub-idea of an unscheduled raw or
+  // exploring parent is a top row there, not hidden under a parent the column never shows).
+  const carriedHere = new Set(live.filter((idea) => idea.carriedBy === horizonId).map((idea) => idea.id));
+  const here = new Set(live.filter((idea) => carriedHere.has(idea.id) && (horizonId !== null || DELIVERY.has(idea.state))).map((idea) => idea.id));
   const titleOf = new Map(ideas.map((idea) => [idea.id, idea.title]));
   const nameOf = new Map(input.horizons.map((horizon) => [horizon.id, horizon.name]));
   const where = (idea: IdeaData): string | null => {
-    if (here.has(idea.id)) return null;
+    if (carriedHere.has(idea.id)) return null;
     return idea.carriedBy === null ? "unscheduled" : `on ${nameOf.get(idea.carriedBy) ?? "another horizon"}`;
   };
   const row = (idea: IdeaData, seen: ReadonlySet<string>): TreeRow => {
@@ -66,7 +70,6 @@ export function planTree(input: { horizonId: string | null; ideas: readonly Idea
   };
   return live
     .filter((idea) => here.has(idea.id) && (idea.parentId === null || !here.has(idea.parentId)))
-    .filter((idea) => horizonId !== null || DELIVERY.has(idea.state))
     .map((idea) => ({ ...row(idea, new Set()), parentTitle: idea.parentId === null ? null : (titleOf.get(idea.parentId) ?? null) }));
 }
 

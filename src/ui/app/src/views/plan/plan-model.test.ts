@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { HorizonData, IdeaData, PlanData } from "@/lib/plan-types";
 import {
+  dropChanges,
   columnEntries,
   dragWindow,
   horizonsColumns,
@@ -122,5 +123,20 @@ describe("timeline", () => {
     expect(dragWindow(window, "move", 3)).toEqual({ start: window.start + 3, end: window.end + 3 });
     expect(dragWindow(window, "start", 20)).toEqual({ start: window.end, end: window.end });
     expect(dragWindow(window, "end", -20)).toEqual({ start: window.start, end: window.start });
+  });
+});
+
+describe("a drop on the column a record already sits in", () => {
+  it("writes nothing: a sub-idea following its parent stays following it, and a pinned record stays pinned", () => {
+    const carried = idea("sub", { parentId: "parent", horizonId: null, carriedBy: "now" });
+    expect(dropChanges(carried, { horizon: "now" })).toBe(false);
+    expect(dropChanges(carried, { horizon: "later" })).toBe(true);
+    expect(dropChanges(carried, { horizon: null })).toBe(true);
+    const pinned = idea("top", { horizonId: "now", carriedBy: "now" });
+    expect(dropChanges(pinned, { horizon: "now" })).toBe(false);
+    expect(dropChanges(pinned, { horizon: null })).toBe(true);
+    const loose = idea("loose", { horizonId: null, carriedBy: null });
+    expect(dropChanges(loose, { horizon: null })).toBe(false);
+    expect(dropChanges(loose, { maturity: "exploring" })).toBe(true);
   });
 });

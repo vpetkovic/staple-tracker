@@ -198,9 +198,13 @@ export function columnEntries(plan: PlanData, column: BoardColumn): BoardEntry[]
   });
 }
 
-/** Is the drop a change at all? A drop on the column the idea already sits in writes nothing. */
+/**
+ * Is the drop a change at all? A drop on the column the idea already sits in writes nothing.
+ * Columns place a record where it is carried (`carriedBy`), so a sub-idea that follows its parent
+ * dropped back on that column stays following it rather than being pinned there.
+ */
 export function dropChanges(idea: IdeaData, target: DropTarget): boolean {
-  return "maturity" in target ? idea.maturity !== target.maturity : idea.horizonId !== target.horizon;
+  return "maturity" in target ? idea.maturity !== target.maturity : idea.carriedBy !== target.horizon;
 }
 
 export function dropBody(target: DropTarget): Record<string, unknown> {
