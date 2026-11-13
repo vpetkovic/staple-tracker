@@ -83,12 +83,12 @@ export default function IdeaToShipped(options: SceneOptions): ReactNode {
                   on={step >= 1}
                   before={
                     <>
-                      Plan <strong>★ 2/3</strong> required · <Wide>acceptance criteria missing</Wide>
+                      Plan <strong>★ 2/3</strong> required<Wide>&nbsp;· acceptance criteria missing</Wide>
                     </>
                   }
                   after={
                     <>
-                      Plan <strong>★ 3/3</strong> required · <Wide>3 breakdown rows</Wide>
+                      Plan <strong>★ 3/3</strong> required<Wide>&nbsp;· 3 breakdown rows</Wide>
                     </>
                   }
                 />
