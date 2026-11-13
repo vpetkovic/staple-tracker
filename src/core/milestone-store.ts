@@ -65,6 +65,7 @@ import {
   parseEvidence,
 } from "./milestone-goal.js";
 import { COMPARE_MAX_REFS } from "./plan-rollup.js";
+import type { PlanStep } from "./plan-steps.js";
 import { writeCriterionMark } from "./milestone-marks.js";
 import { withPlannedUnits } from "./plan-accounting.js";
 import type { WorkspaceStore } from "./store.js";
@@ -135,6 +136,11 @@ export interface MilestoneView {
    * not dropped, not shipped and not an umbrella): how many. In both flag states.
    */
   heldByPlan?: number;
+  /**
+   * A horizon's only, with planning on only: what its planned work still needs, in plan order
+   * (design/plan.md, "Plan steps"); [] when nothing does.
+   */
+  planSteps?: PlanStep[];
 }
 
 /**
@@ -724,8 +730,10 @@ export class MilestoneStore {
     const { base, openIds } = this.baseView(id, facts);
     const view = { ...base, remaining: this.remainingOf(openIds, this.store.remainingForecasts(openIds)) };
     // A horizon its plan holds open says so in both flag states: protection, never hidden (design/plan.md, "Feature flag").
-    const held = this.store.isHorizon(id) ? this.store.plan().holdOf(id) : 0;
-    return { ...view, goal: this.goalOf(id, view), ...(held > 0 ? { heldByPlan: held } : {}) };
+    const horizon = this.store.isHorizon(id);
+    const held = horizon ? this.store.plan().holdOf(id) : 0;
+    const steps = horizon && this.store.planningOn() ? { planSteps: this.store.plan().planStepsOf(id) } : {};
+    return { ...view, goal: this.goalOf(id, view), ...(held > 0 ? { heldByPlan: held } : {}), ...steps };
   }
 
   /** `remaining` from the open leaves and each one's remaining work as `forecast` weighs it. */

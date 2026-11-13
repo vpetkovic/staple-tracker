@@ -191,6 +191,32 @@ function horizonRunOf(db: DatabaseSync, issueId: string): string | null {
   return lines.join("\n");
 }
 
+/** The key under which a horizon tells its work how plan steps are worked. */
+export const HORIZON_PLAN_KEY = "horizon-plan";
+
+/**
+ * How an agent works a horizon's plan steps (design/plan.md, "Plan steps"), as an instruction on
+ * every ticket of the horizon and on the horizon itself, with planning on. Static text: the steps
+ * themselves are derived and arrive beside the tickets, so this changes only with the flag. Null
+ * for an issue that is not a horizon. A document keyed `horizon-plan` on a nearer issue shadows it.
+ */
+function horizonPlanOf(db: DatabaseSync, issueId: string): string | null {
+  const row = db.prepare("SELECT identifier, title FROM issues WHERE id = ? AND kind = ? AND plan_rank IS NOT NULL").get(issueId, MILESTONE_KIND) as
+    | { identifier: string; title: string }
+    | undefined;
+  if (row === undefined) return null;
+  return [
+    `${row.title} (${row.identifier}) is a horizon of the plan. Its planned work that is not tickets yet comes as plan steps beside its tickets: planSteps on queue next, next_task, continue_run, get_milestone and list_horizons, in plan order, each with who acts next (agent, person or nobody) and what to do.`,
+    "",
+    "1. Tickets first: while one is eligible, take it.",
+    "2. With no ticket left, take the first step whose who is agent and do what its instruction says.",
+    "3. Stop for the person on the rest. An answer_questions step is yours to carry: bring its questions to the person and record each answer; a mark_shaped step means telling the person the idea is ready. Never mark an idea shaped, schedule it or move its dates yourself.",
+    "4. A wait step is nobody's yet. Never scaffold a waiting idea; the person releases it by moving its planned start.",
+    "",
+    "An idea is never claimed, queued or checked out, and neither is a step.",
+  ].join("\n");
+}
+
 /** A run's own instructions and when it started, or null when there is no such run. */
 function runInstructionsOf(db: DatabaseSync, runId: string): { instructions: RunInstruction[]; startedAt: string; actor: string } | null {
   const row = db.prepare("SELECT instructions, started_at, actor FROM runs WHERE id = ?").get(runId) as
@@ -219,6 +245,8 @@ export function resolveInstructions(db: DatabaseSync, issueId: string, options: 
     }
     const run = options.planning === true ? horizonRunOf(db, row.id) : null;
     if (run !== null) add({ key: HORIZON_RUN_KEY, revision: null, title: `How far to take ${row.title}`, body: run, author: null, updatedAt: null, source });
+    const steps = options.planning === true ? horizonPlanOf(db, row.id) : null;
+    if (steps !== null) add({ key: HORIZON_PLAN_KEY, revision: null, title: `How to work the plan steps of ${row.title}`, body: steps, author: null, updatedAt: null, source });
   }
   const runId = options.runId ?? null;
   if (runId !== null) {

@@ -1,4 +1,4 @@
-import type { HorizonData, IdeaData, IdeaDetailData } from "./plan-types.js";
+import type { HorizonData, IdeaData, IdeaDetailData, PlanStepData } from "./plan-types.js";
 /**
  * The wire vocabulary — one mirror of src/core/types.ts plus the envelopes
  * src/ui/server.ts actually returns.
@@ -3084,6 +3084,7 @@ export const RUN_STOP_REASONS = [
   "scope_gone",
   "vp_blocked",
   "gate_pending",
+  "planning_needed",
   "goal_met",
   "scope_empty",
 ] as const;
@@ -3178,6 +3179,7 @@ export interface RunFacts {
   ceiling: { usedPercent: number | null; accountRef: string | null; limitKey: string | null; missing: string | null } | null;
   scopeGone?: string | null;
   goal?: RunGoalFacts | null;
+  planSteps?: PlanStepData[];
 }
 
 /** What the goal check reads: the criteria counts and the room left under the cap. */

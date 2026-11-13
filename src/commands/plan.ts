@@ -124,6 +124,7 @@ function printDetail(detail: IdeaDetail): void {
   for (const warning of detail.planWarnings) console.log(`  warning ${warning}`);
   for (const item of detail.plan.acceptance) console.log(`  accept ${item}`);
   console.log(`offers   ${offeredLine(idea.actions)}`);
+  if (idea.nextStep) console.log(`step     ${idea.nextStep.need} · ${idea.nextStep.who}: ${idea.nextStep.instruction}`);
 }
 
 /** What the record's state offers, from the lifecycle table; a person-only action says so. */

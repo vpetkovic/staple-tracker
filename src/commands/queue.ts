@@ -232,7 +232,10 @@ export function runQueueCommand(rest: string[]): void {
       const { revision, scope, next, skipped } = result;
       // What `next` is worked under, as MCP next_task answers it (core/instructions.ts).
       const instructions = next ? store.instructions(next.issueId) : [];
-      return console.log(JSON.stringify(scope ? { revision, scope, next, skipped, instructions } : { revision, next, skipped, instructions }));
+      // The plan steps beside it, with planning on only (design/plan.md, "Plan steps"), as next_task answers them.
+      const planSteps = store.plan().pickupPlanSteps({ scope: scope?.issueId ?? null, next: next?.issueId ?? null });
+      const steps = planSteps === undefined ? {} : { planSteps };
+      return console.log(JSON.stringify(scope ? { revision, scope, next, skipped, instructions, ...steps } : { revision, next, skipped, instructions, ...steps }));
     }
     if (result.scope) console.log(`scope    ${result.scope.identifier} (${result.scope.kind}) ${result.scope.title}`);
     for (const row of result.skipped) {

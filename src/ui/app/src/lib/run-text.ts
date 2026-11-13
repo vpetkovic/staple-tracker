@@ -35,6 +35,7 @@ export const STOP_REASON_WORDS: Readonly<Record<RunStopReason, string>> = {
   scope_gone: "Its work no longer exists",
   vp_blocked: "Waiting on a person",
   gate_pending: "Waiting for approval",
+  planning_needed: "Stopped: the plan needs work before more tickets",
   goal_met: "Goal met: waiting for approval",
   scope_empty: "Finished: nothing left to do",
 };
@@ -110,6 +111,10 @@ export function stopReasonText(stop: Pick<RunStop, "reason" | "detail"> & Partia
       return typeof detail.milestone === "string" && detail.milestone
         ? `Goal met: ${detail.milestone} is waiting for approval`
         : STOP_REASON_WORDS.goal_met;
+    case "planning_needed": {
+      const steps = Array.isArray(detail.planSteps) ? detail.planSteps.length : 0;
+      return steps > 0 ? `Stopped: ${steps} plan step${steps === 1 ? "" : "s"} before more tickets` : STOP_REASON_WORDS.planning_needed;
+    }
     case "scope_empty":
       return STOP_REASON_WORDS.scope_empty;
   }
