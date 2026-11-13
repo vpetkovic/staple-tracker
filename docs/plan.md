@@ -28,12 +28,36 @@ The four things and their jobs:
 One idea moves through these states. Each state offers only the actions that fit it, on every
 surface (the page, the CLI and the agent tools):
 
-```text
-raw → exploring → shaped → Scaffold or Adopt → started → shipped
-                     ↘ dropped (restore brings it back)
-
-horizon:  planned → active → shipped
+```mermaid
+stateDiagram-v2
+    state "An idea" as idea {
+        [*] --> raw: capture
+        raw --> exploring: start exploring (person)
+        raw --> shaped: mark shaped (person)
+        exploring --> shaped: mark shaped (person)
+        shaped --> exploring: back to exploring (person)
+        shaped --> started: Scaffold or Adopt
+        started --> shipped: all its work done
+        raw --> dropped: drop (person)
+        exploring --> dropped: drop (person)
+        shaped --> dropped: drop (person)
+        dropped --> raw: restore (person)
+    }
+    state "A horizon" as horizon {
+        state "planned" as h_planned
+        state "active" as h_active
+        state "shipped" as h_shipped
+        [*] --> h_planned: created (person)
+        h_planned --> h_active: holds open work
+        h_active --> h_shipped: all its work done
+    }
+    note right of horizon
+        Shaping, scheduling and planned dates are the person's call
+    end note
 ```
+
+Steps marked (person) are the person's. Restoring a dropped idea can return it to raw,
+exploring or shaped. A horizon's state follows the work on it.
 
 ## 1. Turn it on
 
