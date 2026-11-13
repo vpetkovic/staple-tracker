@@ -94,6 +94,10 @@ export interface HorizonData {
   late: boolean;
   state: HorizonState;
   actions: OfferedAction[];
+  /** What its planned work still needs, in plan order; [] when nothing does. */
+  planSteps: PlanStepData[];
+  /** How many of those steps wait on the person: the "Needs you" its header prints. */
+  needsYou: number;
 }
 
 export interface IdeaData {
@@ -120,6 +124,12 @@ export interface IdeaData {
   units: PlanUnits;
   /** Its own size is unknown: no work, no rows, no sub-ideas. */
   unsized: boolean;
+  /** Its own work items, without its sub-ideas': what a leaf's row in the tree draws. */
+  own: PlanUnits;
+  /** No own work, over sub-ideas that carry its size. */
+  umbrella: boolean;
+  /** The horizon that carries it: the one it is scheduled on, else its nearest scheduled parent's; null for none. */
+  carriedBy: string | null;
   /** Done units over its rollup's units; null before any of its work is started. */
   progress: number | null;
   /** The server's whole percent of its rollup's units, rounded down; null with `progress`. */
@@ -138,6 +148,8 @@ export interface IdeaData {
   dependsOn: string[];
   state: IdeaState;
   actions: OfferedAction[];
+  /** What it needs next from planning while a horizon carries it; else null. */
+  nextStep: PlanStepData | null;
   createdAt: string;
   updatedAt: string;
 }

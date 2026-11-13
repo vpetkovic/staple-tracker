@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { HorizonData, IdeaData, PlanData } from "@/lib/plan-types";
 import {
+  dropChanges,
   columnEntries,
   dragWindow,
   horizonsColumns,
@@ -33,6 +34,11 @@ function idea(id: string, extra: Partial<IdeaData> = {}): IdeaData {
     resolvedLinks: 0,
     units: { done: 0, open: 0, planned: 0, total: 0 },
     unsized: false,
+    own: { done: 0, open: 0, planned: 0, total: 0 },
+    umbrella: false,
+    // Carried where it is scheduled, unless a fixture says otherwise.
+    carriedBy: extra.horizonId ?? null,
+    nextStep: null,
     progress: null,
     percent: null,
     actual: { start: null, end: null, forecastEnd: null },
@@ -53,8 +59,8 @@ function idea(id: string, extra: Partial<IdeaData> = {}): IdeaData {
   };
 }
 
-const now: HorizonData = { id: "now", identifier: "T-now", name: "Now", date: "2026-12-31", rank: 1, status: "backlog", shipped: false, memberCount: 0, ideaCount: 0, lateCount: 0, notStartedCount: 0, shippedCount: 0, units: { done: 0, open: 0, planned: 0, total: 0 }, unsizedCount: 0, records: { leaves: 0, shipped: 0, started: 0, shaped: 0, exploring: 0, raw: 0, parentCount: 0 }, progress: null, percent: null, complete: false, runMode: null, goal: [], awaitingApproval: false, late: false, state: "planned", actions: [] };
-const next: HorizonData = { id: "next", identifier: "T-next", name: "Next", date: null, rank: 2, status: "backlog", shipped: false, memberCount: 0, ideaCount: 0, lateCount: 0, notStartedCount: 0, shippedCount: 0, units: { done: 0, open: 0, planned: 0, total: 0 }, unsizedCount: 0, records: { leaves: 0, shipped: 0, started: 0, shaped: 0, exploring: 0, raw: 0, parentCount: 0 }, progress: null, percent: null, complete: false, runMode: null, goal: [], awaitingApproval: false, late: false, state: "planned", actions: [] };
+const now: HorizonData = { id: "now", identifier: "T-now", name: "Now", date: "2026-12-31", rank: 1, status: "backlog", shipped: false, memberCount: 0, ideaCount: 0, lateCount: 0, notStartedCount: 0, shippedCount: 0, units: { done: 0, open: 0, planned: 0, total: 0 }, unsizedCount: 0, records: { leaves: 0, shipped: 0, started: 0, shaped: 0, exploring: 0, raw: 0, parentCount: 0 }, progress: null, percent: null, complete: false, runMode: null, goal: [], awaitingApproval: false, late: false, state: "planned", actions: [], planSteps: [], needsYou: 0 };
+const next: HorizonData = { id: "next", identifier: "T-next", name: "Next", date: null, rank: 2, status: "backlog", shipped: false, memberCount: 0, ideaCount: 0, lateCount: 0, notStartedCount: 0, shippedCount: 0, units: { done: 0, open: 0, planned: 0, total: 0 }, unsizedCount: 0, records: { leaves: 0, shipped: 0, started: 0, shaped: 0, exploring: 0, raw: 0, parentCount: 0 }, progress: null, percent: null, complete: false, runMode: null, goal: [], awaitingApproval: false, late: false, state: "planned", actions: [], planSteps: [], needsYou: 0 };
 
 function plan(ideas: IdeaData[]): PlanData {
   return { enabled: true, today: "2026-11-07", horizons: [now, next], ideas };
@@ -117,5 +123,20 @@ describe("timeline", () => {
     expect(dragWindow(window, "move", 3)).toEqual({ start: window.start + 3, end: window.end + 3 });
     expect(dragWindow(window, "start", 20)).toEqual({ start: window.end, end: window.end });
     expect(dragWindow(window, "end", -20)).toEqual({ start: window.start, end: window.start });
+  });
+});
+
+describe("a drop on the column a record already sits in", () => {
+  it("writes nothing: a sub-idea following its parent stays following it, and a pinned record stays pinned", () => {
+    const carried = idea("sub", { parentId: "parent", horizonId: null, carriedBy: "now" });
+    expect(dropChanges(carried, { horizon: "now" })).toBe(false);
+    expect(dropChanges(carried, { horizon: "later" })).toBe(true);
+    expect(dropChanges(carried, { horizon: null })).toBe(true);
+    const pinned = idea("top", { horizonId: "now", carriedBy: "now" });
+    expect(dropChanges(pinned, { horizon: "now" })).toBe(false);
+    expect(dropChanges(pinned, { horizon: null })).toBe(true);
+    const loose = idea("loose", { horizonId: null, carriedBy: null });
+    expect(dropChanges(loose, { horizon: null })).toBe(false);
+    expect(dropChanges(loose, { maturity: "exploring" })).toBe(true);
   });
 });

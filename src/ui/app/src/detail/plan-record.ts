@@ -9,7 +9,7 @@
  */
 import { useCallback, useState } from "react";
 import { planWrite } from "@/lib/api";
-import type { HorizonData, IdeaData, IdeaDetailData } from "@/lib/plan-types";
+import type { IdeaDetailData } from "@/lib/plan-types";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
 import type { IssueDetail } from "@/lib/types";
 import { personActor } from "./parts/person";
@@ -41,7 +41,7 @@ export function recordNoun(detail: IssueDetail): "idea" | "ticket" {
 }
 
 /** A horizon's plan side: the horizon and the records on it; null for any other issue. */
-export function horizonPlanOf(detail: IssueDetail): { horizon: HorizonData; ideas: IdeaData[] } | null {
+export function horizonPlanOf(detail: IssueDetail): NonNullable<IssueDetail["horizonPlan"]> | null {
   return detail.horizonPlan ?? null;
 }
 

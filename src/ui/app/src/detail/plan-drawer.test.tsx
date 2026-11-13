@@ -72,6 +72,11 @@ function idea(state: keyof typeof OFFERED, patch: Partial<IdeaData> = {}): IdeaD
     resolvedLinks: 0,
     units: { done: 0, open: 0, planned: 0, total: 0 },
     unsized: false,
+    own: { done: 0, open: 0, planned: 0, total: 0 },
+    umbrella: false,
+    // Carried where it is scheduled, unless a fixture says otherwise.
+    carriedBy: patch.horizonId ?? null,
+    nextStep: null,
     progress: null,
     percent: null,
     actual: { start: null, end: null, forecastEnd: null },
@@ -235,11 +240,13 @@ describe("a horizon in the shared drawer", () => {
     late: false,
     state,
     actions,
+    planSteps: [],
+    needsYou: 0,
   });
 
   it("shows its state, the actions it offers and its ideas, on the milestone it is", () => {
     const active = horizon("active", [{ id: "queue", label: "Queue the horizon", who: "anyone" }]);
-    const d = detail({ issue: issue({ id: "h1", identifier: "LAR-3", kind: "milestone", title: "Now · Beta" }), horizonPlan: { horizon: active, ideas: [idea("shaped", { horizonId: "h1" })] } });
+    const d = detail({ issue: issue({ id: "h1", identifier: "LAR-3", kind: "milestone", title: "Now · Beta" }), horizonPlan: { horizon: active, ideas: [idea("shaped", { horizonId: "h1" })], horizons: [] } });
     const html = render(d);
     expect(html).toContain('data-horizon-state="active"');
     expect(html).toContain('data-horizon-action="queue"');
@@ -250,7 +257,7 @@ describe("a horizon in the shared drawer", () => {
 
   it("says why an offered action is held back, in words on the page", () => {
     const queued = horizon("planned", [{ id: "remove", label: "Remove", who: "person", disabledReason: "It is in the queue; take it off first." }]);
-    const d = detail({ issue: issue({ id: "h1", identifier: "LAR-3", kind: "milestone", title: "Now · Beta" }), horizonPlan: { horizon: queued, ideas: [] } });
+    const d = detail({ issue: issue({ id: "h1", identifier: "LAR-3", kind: "milestone", title: "Now · Beta" }), horizonPlan: { horizon: queued, ideas: [], horizons: [] } });
     const read = render(d).replace(/<[^>]*>/g, " ");
     expect(read).toContain("It is in the queue; take it off first.");
   });

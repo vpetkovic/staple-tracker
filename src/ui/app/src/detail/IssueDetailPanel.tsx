@@ -557,7 +557,7 @@ export function DetailContent({
         </div>
 
         {planRecordOf(detail)?.idea.promoted ? <a data-original-idea href={ideaPlanHref(detail.workspace, issue.id)} className="focus-ring mt-3 inline-flex min-h-11 items-center text-label text-text-secondary hover:underline">Open original idea in Plan ↗</a> : null}
-        {horizon ? <HorizonSection detail={detail} horizon={horizon.horizon} ideas={horizon.ideas} controller={controller} className="mt-5" /> : null}
+        {horizon ? <HorizonSection detail={detail} horizon={horizon.horizon} ideas={horizon.ideas} horizons={horizon.horizons} controller={controller} className="mt-5" /> : null}
 
         {!sheet && !expanded ? (
           <section aria-label="Properties" className="mt-6 border-t pt-4">

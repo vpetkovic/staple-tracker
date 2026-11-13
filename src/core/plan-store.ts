@@ -105,7 +105,7 @@ import {
 } from "./plan-sections.js";
 import { LISTED_HORIZON, rebuildPlanMembers } from "./plan-members.js";
 import { heldBySubIdeas, orderPlanSteps, planStepOf, type PlanStep, type PlanStepInput } from "./plan-steps.js";
-import { holdsHorizon, horizonAccounting, ownUnits, unitPercent, unitProgress, units, type HorizonAccounting, type OwnUnits, type RecordCounts, type RecordSize, type ScheduledRecord, type Units } from "./plan-accounting.js";
+import { holdsHorizon, horizonAccounting, isUmbrella, ownUnits, unitPercent, unitProgress, units, type HorizonAccounting, type OwnUnits, type RecordCounts, type RecordSize, type ScheduledRecord, type Units } from "./plan-accounting.js";
 import type { MilestoneProgress } from "./milestones.js";
 import type { WorkspaceStore } from "./store.js";
 import { RESOLVED_CATEGORIES, StapleError, type PersonDecision, type StatusCategory } from "./types.js";
@@ -163,6 +163,25 @@ export interface HorizonView {
   actions: OfferedAction[];
   /** What its planned work still needs, in plan order (`plan-steps.ts`); [] when nothing does. */
   planSteps: PlanStep[];
+  /** How many of those steps wait on the person (`who` is person): the "Needs you" its header prints. */
+  needsYou: number;
+}
+
+/**
+ * The records a horizon's tree draws (design/plan.md, "Presentation"): every non-dropped record it
+ * carries, the ancestors of those (a sub-idea's parent names its group), and each carried record's
+ * non-dropped sub-records wherever they are (shown dimmed, with where). In plan order.
+ */
+export function horizonTreeRecords(ideas: readonly IdeaView[], horizonId: string): IdeaView[] {
+  const byId = new Map(ideas.map((idea) => [idea.id, idea]));
+  const live = (idea: IdeaView) => idea.stage !== "dropped";
+  const carried = ideas.filter((idea) => idea.carriedBy === horizonId && live(idea));
+  const wanted = new Set(carried.map((idea) => idea.id));
+  for (const idea of carried) {
+    for (let parent = idea.parentId === null ? undefined : byId.get(idea.parentId); parent && !wanted.has(parent.id); parent = parent.parentId === null ? undefined : byId.get(parent.parentId)) wanted.add(parent.id);
+    for (const child of idea.childIds) if (byId.has(child) && live(byId.get(child)!)) wanted.add(child);
+  }
+  return ideas.filter((idea) => wanted.has(idea.id));
 }
 
 /** The horizon a task's work belongs to, as the task list shows it. */
@@ -211,6 +230,15 @@ export interface IdeaView {
   units: Units;
   /** Its own size is unknown: no work, no breakdown rows and no live sub-records. */
   unsized: boolean;
+  /**
+   * Its own work items, without its sub-records': its own tickets' leaves, else none for an
+   * umbrella, else its breakdown rows as planned (`ownUnits`). What a leaf's row in the tree draws.
+   */
+  own: Units;
+  /** An umbrella: no own work, over live sub-records that carry its size. */
+  umbrella: boolean;
+  /** The horizon that carries it: the one it is scheduled on, else its nearest scheduled ancestor's; null for none. */
+  carriedBy: string | null;
   /** Done units over its rollup's units, 0..1; null before any of that work is started. */
   progress: number | null;
   /** `progress` as every surface prints it: whole percent, rounded down; null with it. */
@@ -905,6 +933,7 @@ export class PlanStore {
     const accounting = this.accountingIn(facts, row.id);
     // Its status never derives done while a record it carries holds it (`heldByPlan`).
     const shipped = this.store.categoryOf(row.status) === "done";
+    const planSteps = this.stepsIn(facts, row.id);
     return {
       id: row.id,
       identifier: row.identifier,
@@ -929,7 +958,8 @@ export class PlanStore {
       awaitingApproval: own.gate_state === "pending",
       late: lateCount > 0,
       ...horizonLifecycle(shipped, open, this.isQueued(row.id)),
-      planSteps: this.stepsIn(facts, row.id),
+      planSteps,
+      needsYou: planSteps.filter((step) => step.who === "person").length,
     };
   }
 
@@ -1355,6 +1385,7 @@ export class PlanStore {
     const steps = this.stepsOn(facts, today);
     return rows.map((row) => {
       const { promoted, ownLinks, ownWork, maturity, horizonId, stage, state } = records.get(row.id)!;
+      const sized = sizes.get(row.id)!;
       const sections = sectionsOf.get(row.id)!;
       const questions = parseQuestions(this.documentBody(row.id, QUESTIONS_KEY));
       const delivered = isDelivered(row.plan_delivered_on) ? { on: row.plan_delivered_on, note: this.documentBody(row.id, DELIVERED_NOTE_KEY) || null } : null;
@@ -1407,7 +1438,10 @@ export class PlanStore {
         linkCount: workIds.length,
         resolvedLinks: measured.resolved,
         units: rolled,
-        unsized: sizes.get(row.id)!.own.unsized,
+        unsized: sized.own.unsized,
+        own: units(sized.own.done, sized.own.open, sized.own.planned),
+        umbrella: isUmbrella(sized.size),
+        carriedBy: facts.carrier.get(row.id) ?? null,
         progress: started || deliveredAlone ? (unitProgress(rolled) ?? measured.progress) : null,
         percent: started || deliveredAlone ? unitPercent(rolled) : null,
         actual,

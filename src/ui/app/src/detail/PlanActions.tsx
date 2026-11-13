@@ -1,5 +1,3 @@
-import { PlannedIdeaLinks } from "./PlannedIdeaLinks";
-import { planCounts } from "@/views/plan/plan-counts";
 /**
  * The plan's controls in the shared drawer: an idea's status line and actions, and a horizon's
  * section. Every button and menu item is an item from `plain-actions.ts` (`planActionItems`,
@@ -14,7 +12,9 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import type { HorizonData, IdeaData, IdeaDetailData } from "@/lib/plan-types";
 import { useSession } from "@/lib/session";
 import type { IssueDetail } from "@/lib/types";
-import { Chip, Progress } from "@/views/plan/PlanBoards";
+import { Chip } from "@/views/plan/PlanBoards";
+import { PlanTree, TreeHeader } from "@/views/plan/PlanTree";
+import { planTree } from "@/views/plan/plan-tree";
 import { dayLabel, horizonDone } from "@/views/plan/plan-model";
 import type { IssueActionsController } from "./IssueActions";
 import { cn } from "./parts/cn";
@@ -128,13 +128,42 @@ export function PlanOverflow({ workspace, idea, controller, triggerClassName }: 
 }
 
 /**
+ * A horizon's plan as the drawer and the Milestones view draw it: the header the Horizons lens
+ * column prints (records, states, the bar, the percent, "Needs you") and the same tree, each
+ * record linking to its own drawer in Plan.
+ */
+export function HorizonPlanTree({ workspace, horizon, ideas, horizons, className }: { workspace: string; horizon: HorizonData; ideas: IdeaData[]; horizons: Array<{ id: string; name: string }>; className?: string }) {
+  const rows = planTree({ horizonId: horizon.id, ideas, horizons });
+  return (
+    <section aria-label="Planned ideas" className={className} data-horizon-plan-tree={horizon.id}>
+      <TreeHeader horizon={horizon} />
+      <div className="mt-3">{rows.length === 0 ? <p className="m-0 text-label text-text-secondary">No ideas are scheduled on it yet.</p> : <PlanTree rows={rows} opener={{ workspace }} />}</div>
+    </section>
+  );
+}
+
+/**
  * A horizon's plan side, on its milestone detail: its state, the actions that state offers
  * (queue it while it holds work, remove it while it holds none), and the ideas on it.
  */
-export function HorizonSection({ detail, horizon, ideas, controller, className }: { detail: IssueDetail; horizon: HorizonData; ideas: IdeaData[]; controller: IssueActionsController; className?: string }) {
+export function HorizonSection({
+  detail,
+  horizon,
+  ideas,
+  horizons = [],
+  controller,
+  className,
+}: {
+  detail: IssueDetail;
+  horizon: HorizonData;
+  ideas: IdeaData[];
+  /** Every horizon's name, so a sub-idea carried elsewhere says where. */
+  horizons?: Array<{ id: string; name: string }>;
+  controller: IssueActionsController;
+  className?: string;
+}) {
   const [running, setRunning] = useState(false);
   const items = horizonActionItems(detail.workspace, horizon);
-  const percent = horizon.percent;
   return (
     <section aria-label="Horizon" className={cn("rounded-lg border p-4", className)} data-horizon-section={horizon.id} data-horizon-state={horizon.state}>
       <div className="flex flex-wrap items-center gap-2">
@@ -190,18 +219,7 @@ export function HorizonSection({ detail, horizon, ideas, controller, className }
           <p className="m-0 mt-1 text-text-secondary">No goal yet. Set it with how agents run it.</p>
         )}
       </div>
-      {percent !== null ? (
-        <div className="mt-3">
-          <Progress percent={percent} complete={horizon.complete} />
-        </div>
-      ) : null}
-      <p className="mt-3 text-caption text-text-tertiary">{planCounts(horizon)}</p>
-      <h3 className="mt-4 mb-1.5 text-caption font-semibold tracking-wide text-text-tertiary uppercase">Ideas on it ({horizon.ideaCount})</h3>
-      {ideas.length === 0 ? (
-        <p className="m-0 text-label text-text-secondary">No ideas are scheduled on it yet.</p>
-      ) : (
-        <PlannedIdeaLinks workspace={detail.workspace} ideas={ideas} />
-      )}
+      <HorizonPlanTree workspace={detail.workspace} horizon={horizon} ideas={ideas} horizons={horizons} className="mt-3" />
     </section>
   );
 }

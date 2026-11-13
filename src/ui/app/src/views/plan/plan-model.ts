@@ -76,7 +76,8 @@ const DELIVERY = new Set(["shaped", "started", "shipped"]);
 /**
  * The Ideas lens is thinking only: a record in its own raw or exploring state. Shaped, it is
  * ready and moves to Horizons, whatever its parent is doing; under a started parent, a sub-idea
- * still being explored is still thinking. No record is ever in both lenses.
+ * still being explored is still thinking. No record is a card in both lenses; one being explored
+ * on a horizon also holds a reserved row there, which is not a card.
  */
 export function inIdeasLens(_plan: PlanData, idea: IdeaData): boolean {
   return THINKING.has(idea.state);
@@ -106,12 +107,18 @@ export function droppedIdeas(plan: PlanData): IdeaData[] {
   return plan.ideas.filter((idea) => idea.state === "dropped");
 }
 
+/**
+ * The Horizons lens's columns: Unscheduled, then each horizon. A column's delivery records are
+ * those its horizon carries (`carriedBy`): a sub-idea scheduled on none sits with the parent whose
+ * horizon carries it, as the horizon's counts read it; what each column draws is its tree
+ * (`plan-tree.ts`), which adds its reserved rows and dimmed sub-ideas.
+ */
 export function horizonsColumns(plan: PlanData): BoardColumn[] {
   const unscheduled: BoardColumn = {
     key: "h:",
     title: "Unscheduled",
     hint: "Ready, no horizon yet",
-    ideas: plan.ideas.filter((idea) => idea.horizonId === null && inHorizonsLens(idea)),
+    ideas: plan.ideas.filter((idea) => idea.carriedBy === null && inHorizonsLens(idea)),
     drop: { horizon: null },
   };
   return [
@@ -120,7 +127,7 @@ export function horizonsColumns(plan: PlanData): BoardColumn[] {
       key: `h:${horizon.id}`,
       title: horizon.name,
       hint: horizon.date ? "" : "no date",
-      ideas: plan.ideas.filter((idea) => idea.horizonId === horizon.id && inHorizonsLens(idea)),
+      ideas: plan.ideas.filter((idea) => idea.carriedBy === horizon.id && inHorizonsLens(idea)),
       drop: { horizon: horizon.id },
       horizon,
     })),
@@ -191,9 +198,13 @@ export function columnEntries(plan: PlanData, column: BoardColumn): BoardEntry[]
   });
 }
 
-/** Is the drop a change at all? A drop on the column the idea already sits in writes nothing. */
+/**
+ * Is the drop a change at all? A drop on the column the idea already sits in writes nothing.
+ * Columns place a record where it is carried (`carriedBy`), so a sub-idea that follows its parent
+ * dropped back on that column stays following it rather than being pinned there.
+ */
 export function dropChanges(idea: IdeaData, target: DropTarget): boolean {
-  return "maturity" in target ? idea.maturity !== target.maturity : idea.horizonId !== target.horizon;
+  return "maturity" in target ? idea.maturity !== target.maturity : idea.carriedBy !== target.horizon;
 }
 
 export function dropBody(target: DropTarget): Record<string, unknown> {

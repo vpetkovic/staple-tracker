@@ -28,6 +28,8 @@ import { cn } from "@/lib/utils";
 import { horizonActionItems, moveActionOf, moveOffered, offers, planActionItems, type PlanItem } from "@/detail/plain-actions";
 import { ShippedMark } from "@/detail/ShippedMark";
 import { RunSettingDialog, runSettingLabel } from "./RunSetting";
+import { PlanTree, TreeHeader } from "./PlanTree";
+import { planTree, type TreeRow } from "./plan-tree";
 import {
   columnEntries,
   dayLabel,
@@ -142,7 +144,9 @@ function Column({ plan, column, columns, write, desk, onOpen, selected }: BoardP
     // Only a move the idea's lifecycle state offers is sent (plain-actions, from the core table).
     if (idea && dropChanges(idea, column.drop) && moveOffered(idea, column.drop)) void write("update", { ref: idea.id, ...dropBody(column.drop) });
   };
-  const entries = columnEntries(plan, column);
+  // The Horizons lens draws each column as its horizon's tree; the Ideas lens as cards.
+  const tree = column.key.startsWith("h:") ? planTree({ horizonId: column.horizon?.id ?? null, ideas: plan.ideas, horizons: plan.horizons }) : null;
+  const entries = tree ? [] : columnEntries(plan, column);
   const done = column.horizon ? horizonDone(column.horizon) : false;
   const [showDone, setShowDone] = useState(false);
   const folded = done && !showDone;
@@ -188,10 +192,18 @@ function Column({ plan, column, columns, write, desk, onOpen, selected }: BoardP
         </button>
       ) : null}
       <div data-plan-scroll-key={column.key} className={cn("flex flex-col gap-2 p-2", desk && "min-h-0 overflow-y-auto", folded && "hidden")}>
-        {entries.map((entry) => (
-          <IdeaCard key={entry.idea.id} plan={plan} entry={entry} column={column} columns={columns} write={write} onOpen={onOpen} selected={selected} />
-        ))}
-        {entries.length === 0 ? (
+        {tree ? (
+          <PlanTree
+            rows={tree}
+            opener={{ onOpen }}
+            drag
+            selected={selected}
+            wrap={(row, node) => (row.reserved ? node : <DeliveryCard row={row} column={column} columns={columns} write={write} onOpen={onOpen} selected={selected}>{node}</DeliveryCard>)}
+          />
+        ) : (
+          entries.map((entry) => <IdeaCard key={entry.idea.id} plan={plan} entry={entry} column={column} columns={columns} write={write} onOpen={onOpen} selected={selected} />)
+        )}
+        {(tree ? tree.length === 0 : entries.length === 0) ? (
           <div className="rounded-md border border-dashed px-3 py-4 text-center text-caption text-text-tertiary">
             {column.horizon || column.key === "h:" ? "Drop an idea here" : "Nothing here yet"}
           </div>
@@ -268,13 +280,11 @@ function openOnKey(event: KeyboardEvent, open: () => void): void {
   }
 }
 
+/** A card on the Ideas lens: a record still being thought, its sub-ideas folded under it. */
 function IdeaCard({ plan, entry, column, columns, write, onOpen, selected }: BoardProps & { entry: BoardEntry; column: BoardColumn; columns: BoardColumn[] }) {
   const { idea, nested, descendants, parentTitle } = entry;
   const [expanded, setExpanded] = useState(false);
   const horizon = horizonOf(plan, idea);
-  const started = isStarted(idea);
-  const shipped = isShipped(idea);
-  const onHorizons = column.key.startsWith("h:");
   const rollup = riskWords(riskOf(descendants), true);
   const elsewhere = descendants.length - nested.length;
   return (
@@ -290,27 +300,20 @@ function IdeaCard({ plan, entry, column, columns, write, onOpen, selected }: Boa
         event.dataTransfer.effectAllowed = "move";
       }}
       data-plan-card={idea.id}
-      data-plan-card-shipped={onHorizons && shipped ? "" : undefined}
       className={cn(
-        "cursor-pointer rounded-md border px-3 py-2 text-left shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        onHorizons && shipped ? "bg-surface-sunken shadow-none" : "bg-card",
+        "cursor-pointer rounded-md border bg-card px-3 py-2 text-left shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring",
         selected === idea.id && "border-ring",
-        idea.late && !shipped && "border-l-2 border-l-destructive",
+        idea.late && "border-l-2 border-l-destructive",
       )}
     >
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           {parentTitle ? <div className="truncate text-caption text-text-tertiary">↳ {parentTitle}</div> : null}
-          <div className={cn("text-body leading-snug", onHorizons && shipped ? "text-text-secondary" : "text-foreground")}>{idea.title}</div>
+          <div className="text-body leading-snug text-foreground">{idea.title}</div>
         </div>
         <MoveMenu idea={idea} column={column} columns={columns} write={write} />
       </div>
-      {onHorizons ? (
-        <DeliveryChips idea={idea} />
-      ) : (
-        <ThinkingChips idea={idea} horizonLabel={horizon ? `${horizon.name}${horizon.date ? ` · ${dayLabel(horizon.date, false)}` : ""}` : null} />
-      )}
-      {onHorizons && started && !shipped && idea.percent !== null ? <Progress percent={idea.percent} /> : null}
+      <ThinkingChips idea={idea} horizonLabel={horizon ? `${horizon.name}${horizon.date ? ` · ${dayLabel(horizon.date, false)}` : ""}` : null} />
       {descendants.length > 0 ? (
         <div className="mt-2 border-t pt-1.5">
           <button
@@ -360,6 +363,35 @@ function IdeaCard({ plan, entry, column, columns, write, onOpen, selected }: Boa
   );
 }
 
+/**
+ * A top row of a Horizons column framed as its delivery card: dragged by its row (on the desk),
+ * opened by a click, moved by its menu, marked when selected, late or shipped.
+ */
+function DeliveryCard({ row, column, columns, write, onOpen, selected, children }: { row: TreeRow; column: BoardColumn; columns: BoardColumn[]; write: Write; onOpen: (id: string) => void; selected: string | null; children: ReactNode }) {
+  const { idea } = row;
+  const shipped = isShipped(idea);
+  return (
+    <article
+      tabIndex={0}
+      role="button"
+      aria-label={`Open ${idea.title}`}
+      onClick={() => onOpen(idea.id)}
+      onKeyDown={(event) => openOnKey(event, () => onOpen(idea.id))}
+      data-plan-card={idea.id}
+      data-plan-card-shipped={shipped ? "" : undefined}
+      className={cn(
+        "flex cursor-pointer items-start gap-2 rounded-md border px-3 py-2 text-left shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        shipped ? "bg-surface-sunken shadow-none" : "bg-card",
+        selected === idea.id && "border-ring",
+        idea.late && !shipped && "border-l-2 border-l-destructive",
+      )}
+    >
+      <div className="min-w-0 flex-1">{children}</div>
+      <MoveMenu idea={idea} column={column} columns={columns} write={write} />
+    </article>
+  );
+}
+
 /** A thinking card: how much of the plan is written, open questions, and the horizon it is aimed at. Nothing about delivery. */
 export function ThinkingChips({ idea, horizonLabel }: { idea: IdeaData; horizonLabel: string | null }) {
   const c = idea.completeness;
@@ -375,13 +407,14 @@ export function ThinkingChips({ idea, horizonLabel }: { idea: IdeaData; horizonL
   return <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-caption">{chips}</div>;
 }
 
-/** A delivery card: where it stands, its work, and the shipped mark once all of it landed. */
-export function DeliveryChips({ idea }: { idea: IdeaData }) {
+/** A delivery card: where it stands, its work, and the shipped mark once all of it landed; `children` follow its chips. */
+export function DeliveryChips({ idea, children }: { idea: IdeaData; children?: ReactNode }) {
   if (isShipped(idea)) {
     return (
       <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-caption">
         <ShippedMark on={idea.actual.end} outside={idea.delivered !== null} />
         {idea.linkCount > 0 ? <span className="text-text-tertiary">{idea.linkCount} linked</span> : null}
+        {children}
       </div>
     );
   }
@@ -397,7 +430,12 @@ export function DeliveryChips({ idea }: { idea: IdeaData }) {
   if (idea.linkCount > 0) chips.push(<Chip key="l" tone="blue">{idea.linkCount} linked</Chip>);
   if (idea.late) chips.push(<Chip key="late" tone="red">late</Chip>);
   if (idea.notStarted) chips.push(<Chip key="ns" tone="amber">not started</Chip>);
-  return <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-caption">{chips}</div>;
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-caption">
+      {chips}
+      {children}
+    </div>
+  );
 }
 
 /** The server names what an incomplete plan lacks; display that payload directly. */
@@ -510,7 +548,7 @@ function HorizonHeader({ column, write, onOpen, done }: { column: BoardColumn; w
           </form>
         ) : (
           <button type="button" className="min-w-0 flex-1 truncate text-left text-body font-semibold" onClick={() => (offers(horizon, "rename") ? setRenaming(true) : undefined)} title={offers(horizon, "rename") ? "Rename" : horizon.name}>
-            {horizon.name} <span className="text-label font-normal text-text-tertiary">{planCounts(horizon)}</span>
+            {horizon.name}
           </button>
         )}
         <DropdownMenu>
@@ -561,7 +599,7 @@ function HorizonHeader({ column, write, onOpen, done }: { column: BoardColumn; w
           </button>
         )}
       </div>
-      {horizon.percent !== null && !done ? <Progress percent={horizon.percent} complete={horizon.complete} /> : null}
+      <TreeHeader horizon={horizon} className="mt-1" />
       {done || horizon.shippedCount > 0 || risk.late > 0 || risk.notStarted > 0 || horizon.awaitingApproval ? (
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-caption" data-plan-horizon-risk={horizon.identifier}>
           {horizon.awaitingApproval ? (
