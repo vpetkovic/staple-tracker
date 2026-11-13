@@ -5402,9 +5402,12 @@ export function startUiServer(options: UiOptions): UiHandle {
           // The member rule, as `queue next` applies it; `anyAssignee=1` turns it off.
           pickup: url.searchParams.get("anyAssignee") === "1" ? null : handle.store.members(),
         });
-        // What `next` is worked under, as MCP next_task and `queue next --json` answer it.
+        // What `next` is worked under, as MCP next_task and `queue next --json` answer it, and
+        // with planning on the plan steps of the horizons it concerns.
         const instructions = next ? handle.store.instructions(next.issueId) : [];
-        json(res, 200, scope ? { revision, scope, next, skipped, instructions } : { revision, next, skipped, instructions });
+        const planSteps = handle.store.plan().pickupPlanSteps({ scope: scope?.issueId ?? null, next: next?.issueId ?? null });
+        const steps = planSteps === undefined ? {} : { planSteps };
+        json(res, 200, scope ? { revision, scope, next, skipped, instructions, ...steps } : { revision, next, skipped, instructions, ...steps });
         return;
       }
 

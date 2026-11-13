@@ -40,10 +40,32 @@ Experimental, or `staple settings set features.planning true --person` under the
 configured humanName. Agents may read it; `set_setting` refuses to change it.
 
 When off, use ordinary tasks, milestones and the pickup queue. Planning commands and
-tools refuse; no horizon-run instructions are supplied. Ideas remain unnumbered drafts,
-never tasks or pickup work. When on, the experimental plan/idea/horizon tools are
-available; read their lifecycle actions and respect person-only steering. Turning it
-off keeps all data, and turning it on restores the plan. The feature may change.
+tools refuse; no horizon-run or horizon-plan instructions and no plan steps are
+supplied. Ideas remain unnumbered drafts, never tasks or pickup work. When on, the
+experimental plan/idea/horizon tools are available; read their lifecycle actions and
+respect person-only steering. Turning it off keeps all data, and turning it on
+restores the plan. The feature may change.
+
+### Working a horizon
+
+With planning on, a pickup answer on a horizon (`queue next`, `next_task`,
+`run continue`) carries `planSteps` beside the ticket: what the horizon's ideas
+still need, in plan order, each with a `need`, a `who` (agent, person or nobody)
+and an instruction. The `horizon-plan` instruction on its tickets says the same:
+
+1. Tickets first. While `next` names a ticket, take it.
+2. With no ticket left, take the first step whose `who` is `agent`
+   (`brainstorm`, `write_plan`, `fix_plan` or `scaffold`) and do what it says.
+3. Stop for the person on the rest: carry an `answer_questions` step's questions
+   to them and record each answer; tell them when a `mark_shaped` idea is ready.
+   Maturity, schedules and dates stay theirs.
+4. A `wait` step is nobody's yet. Never scaffold a waiting idea, and never
+   scaffold every shaped idea you see: scaffold only a `scaffold` step, after
+   re-checking its breakdown against what has landed.
+
+A step is never claimed, and an idea is never checked out or queued. A run with
+nothing left to take but steps pending stops with `planning_needed` and lists
+them in `detail.planSteps`.
 
 ## The loop
 
@@ -225,7 +247,7 @@ staple run continue --json      # MCP: continue_run
   others). Take nothing: end your session, or ask again after
   `retryAfterSeconds`.
 - `stop` — the run is over and `reason` says why (`scope_empty`, `goal_met`,
-  `budget`, `failure_streak`, `gate_pending`, `vp_blocked`,
+  `planning_needed`, `budget`, `failure_streak`, `gate_pending`, `vp_blocked`,
   `stopped_by_human`, …). Stop, and tell the person the reason.
 
 It exits 0 for all three: read `action`, not the exit code.

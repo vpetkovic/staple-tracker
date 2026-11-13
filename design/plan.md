@@ -509,6 +509,7 @@ well as on (`test/planning-feature*.test.ts`).
 | horizon shipped | its milestone's derived status is done, derived from its open and done work (cancelled work is not counted, so a horizon never derives to cancelled), and never while a record it carries that is not dropped and not an umbrella is not shipped (`heldByPlan`); the page folds a horizon on this flag alone, never on its progress |
 | membership | `plan_members`, above |
 | dependencies | `dependsOn`: explicit references only (`resolveDependencies`), below |
+| plan steps | a carried record's `nextStep` and a horizon's `planSteps`: [Plan steps](#plan-steps), below |
 
 Late and not started are separate facts with separate counts, on cards, horizon headers and the
 timeline, and never one number.
@@ -626,13 +627,96 @@ statement each, never by resolving a reference, and the records' views are deriv
 of the database (keyed on the connection's `total_changes()` and SQLite's `data_version`; the views
 also on the day): a request that checks a state, writes and answers rebuilds them once for its
 write. The facts every view, every horizon's accounting and every hold read (`PlanFacts`: the
-records, horizons, work, links, breakdown row counts and status categories) are read in a constant
+records, horizons, work, links, breakdown rows, the plan documents plan steps read, and status categories) are read in a constant
 number of statements, whatever the plan holds; each horizon's accounting is computed once per
 state. So a warm plan read, a horizon's milestone view and a pull that changed nothing cost what
 they cost before the plan counted anything, plus a constant (`test/plan-read-cost.test.ts`). The server
 holds an idle kept-alive connection for 65 seconds (`KEEP_ALIVE_MS`), well past SQLite's
 five-second busy timeout, so a request a client sent on a reused socket while the loop was busy is
 read and answered, never reset.
+
+## Plan steps
+
+A horizon's planned work that is not tickets yet reaches agents as **plan steps** beside its
+tickets (`plan-steps.ts`). A step is derived from the plan's facts on every read, never stored,
+never claimed and never queued: an idea stays unclaimable, and the resolver never sees a step. Two
+functions, and every surface reads them: `planStepOf` says what one record a horizon carries needs
+next (or nothing), and `orderPlanSteps` lists a horizon's steps in plan order.
+
+**Which records.** One step at most per record a horizon carries (the one it is scheduled on, or
+its nearest scheduled ancestor's; [Accounting](#accounting)) that is not shipped and not dropped:
+
+| record | `need` | `who` | its instruction says, and it lists |
+|---|---|---|---|
+| raw, or exploring and scheduled on no horizon itself (a descendant the horizon carries) | `brainstorm` | agent | develop it and capture the result on the idea; scheduling and maturity stay the person's |
+| exploring, with questions neither resolved nor deferred | `answer_questions` | person | bring these questions to the person and record each answer with resolve; never mark it shaped yourself. Lists `questions` |
+| exploring, no open question, the shaped gate not met | `write_plan` | agent | write what the gate names, then tell the person. Lists `missing` |
+| exploring, the gate met | `mark_shaped` | person | tell the person it is ready to be marked shaped |
+| shaped, its plan edited since so the gate fails (`planIncomplete`) | `fix_plan` | agent | fix what the gate names. Lists `missing` |
+| shaped, no own work, waiting | `wait` | nobody | nothing to do yet; never scaffold it. Carries `waitingOn` |
+| shaped, no own work, its turn has come | `scaffold` | agent | re-check the breakdown against what has landed since it was written and bring the person any change; then preview and confirm Scaffold, or Adopt existing tickets where its decisions say they come from elsewhere |
+
+A shaped record with its own work (promoted, or linking tickets) needs nothing: its work is
+tickets. An exploring record that adopted work (it reads `started`) still yields
+`answer_questions` while it has open questions, and nothing after. `who` is who must act next; an
+`answer_questions` step is still an agent's to carry, since it takes the questions to the person.
+
+**Waiting.** Shaped with no tickets is a normal resting state, not a to-do: scaffolding waits until
+an idea's turn comes. A shaped record with no own work **waits** while its planned start is later
+than today, or while a record it depends on (`dependsOn`, explicit references only) is neither
+shipped nor dropped; a dropped dependency holds nothing. A record with no planned start of its own
+waits on its nearest ancestor's, so a parent whose start lies ahead keeps its sub-ideas waiting
+with it; a dropped or shipped ancestor is skipped on that walk, since its dates hold nothing. A record whose Scaffold would also build a sub-idea that waits (Scaffold builds every
+shaped sub-idea beneath it) waits too, `waitingOn.records` naming those sub-ideas: scaffolding the
+parent would scaffold them early. Its sub-ideas whose turn has come keep their own `scaffold`
+steps and are scaffolded one by one. `waitingOn` is `{ start?, records?: [{ id, title, state }] }`. The person releases an idea
+early by moving its planned start (or its parent's), which is already theirs; nothing new is
+stored. A `fix_plan` step comes before waiting: a plan that fails the gate is worth fixing whenever.
+
+**Order.** Plan order of the records the horizon carries: rank, then id, each parent before the
+records beneath it whatever their own ranks, so a `brainstorm` step follows its parent.
+
+**Shape.** `{ ideaId, title, parentId, parentTitle, horizonId, state, need, who, instruction,
+questions?, missing?, waitingOn? }`; `horizonId` is the horizon that carries the record, so an
+answer that lists several horizons' steps says whose each is.
+
+**Where they arrive, planning on only:**
+
+- each record: `nextStep` on `get_idea`, `list_ideas`, `idea show` and `/api/plan` (null while no
+  horizon carries it, or it needs nothing);
+- each horizon: `planSteps` on `list_horizons`, `horizon ls --json`, `get_milestone`,
+  `milestone show` (and its text: one line per step), `/api/plan` and `/api/issue`'s `horizonPlan`;
+- pickup: `queue next` and `next_task` carry `planSteps`: those of the horizon they are scoped to,
+  of the horizon of the ticket they answer, and, unscoped, of every queued horizon, each horizon
+  once in the plan's horizon order (`PlanStore.pickupPlanSteps`). `next` is still a ticket when one
+  is eligible, and null otherwise; never an idea;
+- runs: `continue_run`'s take carries the same `planSteps` for the run's scope and the ticket it
+  takes, and the run brief lists them as information, never as the session's work;
+- an instruction, `horizon-plan`, beside `horizon-run` on every ticket of every horizon and on the
+  horizon itself (`instructions.ts`): tickets first; with no ticket left take the first step whose
+  `who` is agent; stop for the person on the rest; never scaffold a waiting idea. Its body is fixed
+  text, so it changes only with the flag and raises no `instructions_changed` event; a document
+  keyed `horizon-plan` on a nearer issue shadows it.
+
+**A run with nothing to take.** A run over a horizon (or over the queue, for its queued horizons)
+with no eligible ticket and steps pending answers `stop` with reason `planning_needed` and ends
+`stopped`, never `completed`: the horizon's planned work is not done. It comes after
+`waiting_on_others` (somebody else is moving a ticket) and before the goal check, `goal_met` and
+`scope_empty`. `detail.planSteps` lists the steps; when every one of them is `wait`,
+`detail.earliestWait` is the earliest planned start among them, or null when they wait only on
+records. No new `action`.
+
+**The horizon's label.** A horizon whose tickets are all done but which still has steps pending
+keeps lifecycle state `planned` and does not offer Queue: queueing reaches tickets, and it has
+none to reach. Its steps are what its pickup answers and its `continue_run` carry instead
+(`queue next --scope` answers `next: null` with non-empty `planSteps`), and its `records` counts and
+units say what is left. It is not shipped while a record it carries is unshipped (`heldByPlan`).
+
+**Cost.** The steps read the plan's facts: the records, every record's plan documents in one
+statement, and the breakdown rows in the one statement that already counted them. So a horizon's
+steps on its milestone view or a pickup answer cost a constant, whatever it carries
+(`test/plan-read-cost.test.ts`, unchanged). They are derived once per state of the database and
+day, like the views.
 
 ## A horizon's run setting
 
@@ -799,7 +883,11 @@ What converges, under both folds, on a tail device and a freshly hydrated one:
   planning until a person resolves those issues; generic kind migration is refused.
 - **Dependencies are explicit references only.** A dependency written as prose draws no arrow.
 - **Membership is derived per device.** It is rebuilt from synchronized facts and never sent, so a
-  device that lacks an issue a link names leaves it out until the issue arrives.
+  device that lacks an issue a link names leaves it out until the issue arrives. Plan steps are
+  derived the same way, and read the same on every device once the facts have synced.
+- **A step is advice, not a claim.** Two agents reading the same steps can both act on the first
+  one whose `who` is agent; Scaffold's fingerprint and its idempotent retry keep a double scaffold
+  from creating anything twice, but nothing reserves a step.
 
 ## Surfaces
 
@@ -846,6 +934,10 @@ What converges, under both folds, on a tail device and a freshly hydrated one:
 | `test/plan-own-state.test.ts` | with hand-written expectations: a parent's own state against its rollup; a sub-idea promoted on its own and re-parented by its parent's promotion; a promoted record edited as an epic once shipped; an exploring idea that adopts work reads started, keeps its maturity, offers Mark shaped, joins its horizon, keeps its baseline and stays out of the tracker; every document key, restore and file on a shipped, dropped or raw idea |
 | `test/plan-lenses.test.ts`, `test/plan-lenses-review.test.ts` | what the lenses read: dependencies only from explicit references, a sub-idea's title key over its ancestor's row key, never a wait between a record and its ancestor or descendant; completeness and `dependsOn` on the payload; a horizon's shipped count, progress and server counts; Queue and the run setting offered and held back; each issue's horizon; the run setting is the person's on every path, reaches every ticket as the `horizon-run` instruction, and allows a goal run only when set to `goal` |
 | `test/plan-accounting.test.ts`, `test/plan-accounting-surfaces.test.ts` | a horizon's done, open and planned units and its percentage, the same on the plan, the milestone view and every CLI, MCP and HTTP surface; unsized ideas never zero work; leaf ideas counted with the parent apart; a parent's rollup counting its sub-ideas' rows once; plain milestones and planning off unchanged; a horizon held open by a scheduled idea when its last ticket closes, in both flag states, released when the idea is dropped or moved (closing whether or not derivation wrote its status before), reopened when one is scheduled onto it, with or without members; a scheduled parent carrying its sub-ideas scheduled on no horizon, a sub-idea scheduled elsewhere counted there alone; `complete` and the page's fold false while every counted unit landed but an idea holds it; one whole percent rounded down from the counts; the hold reading the record's own stage, missing links included; with planning off, the hold named in the refusal and on the milestone view |
+| `test/plan-steps.test.ts` | one test per row of the step table with hand-written expectations (need, who, the questions, the gate's missing sections, `waitingOn`), deferred questions left out, a dropped dependency holding nothing; the person releasing a waiting idea by moving its planned start, a sub-idea waiting on its parent's, and a parent waiting while its Scaffold would build a waiting sub-idea; an exploring idea that adopted work asking its questions and then needing nothing; shaped with work, shipped, dropped and unscheduled records needing nothing; plan order, a parent before a sub-idea that ranks earlier |
+| `test/plan-steps-pickup.test.ts` | a pickup answer scoped and unscoped carries the steps in plan order beside its ticket, the ticket's horizon's and every queued horizon's; with no ticket `next` is null and the steps stay; no idea ever named; a goal run over a horizon and a run over the queue stop `planning_needed` (not `goal_met`, not `scope_empty`) and end `stopped`, with `earliestWait` when every step waits; the stop rules' order; the take and the brief carry the steps; `horizon-plan` reaches every ticket wherever `horizon-run` does, and the horizon; with planning off, a run takes and ends as before |
+| `test/plan-steps-surfaces.test.ts` | `planSteps` and `nextStep` the same on the CLI, MCP and HTTP; `queue next` and `next_task` agree scoped and unscoped, with `horizon-plan` among the instructions; a horizon with only steps left reads `planned` with no Queue; with planning off, every pickup, milestone, task and issue surface answers byte for byte the same while the steps underneath change, with no step, field or instruction |
+| `test/cloud-plan-steps-sync.test.ts` | under both folds: two devices that change the facts under the steps offline, and a freshly hydrated one, read the same steps; reading them adds nothing to the outbox and no column stores them |
 | `test/plan-read-cost.test.ts`, `test/ui-server-keep-alive.test.ts` | a plan read derives once per state of the database, and ten more records add no more statements than they did before the umbrella gate; a warm plan read costs nothing more per record or per horizon, a pull that changed nothing a constant and no mutation, a horizon's milestone view what a plain milestone's costs plus a constant; kept-alive sockets outlive SQLite's busy timeout |
 | `views/plan/lenses.test.tsx`, `views/plan/plan-model.test.ts` | the lenses' membership, cards, headers, fold, shipped mark, timeline end-caps and arrows (none between a record and its ancestor), Markdown reading mode; board columns, nesting, timeline groups, range and dragging |
 | `views/tree/horizon-axis.test.tsx`, `test/ui-horizon-chip.test.ts` | the Tasks horizon chip, grouping and filter |

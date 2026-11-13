@@ -10,6 +10,7 @@
  */
 
 import { type InstructionChange, type ResolvedInstruction, renderInstructions } from "./instructions.js";
+import type { PlanStep } from "./plan-steps.js";
 import type { RunGoalReport } from "./run-store.js";
 
 /** Where a finished session moves its ticket. */
@@ -43,6 +44,24 @@ export interface BriefInput {
   goal?: RunGoalReport | null;
   /** This ticket is the run's own goal check, not work toward the goal. */
   goalCheck?: boolean;
+  /** The take's `planSteps`, with planning on: its horizon's planned work that is not tickets yet. */
+  planSteps?: readonly PlanStep[];
+}
+
+/**
+ * The plan steps beside the ticket (design/plan.md, "Plan steps"): listed so the session knows
+ * the horizon's plan, never as its work. The run stops with `planning_needed` for them once no
+ * ticket is left.
+ */
+function planStepSection(input: BriefInput): string {
+  const steps = input.planSteps ?? [];
+  if (steps.length === 0) return "";
+  return `
+## The plan steps beside this ticket
+
+Its horizon also lists planned work that is not tickets yet (the horizon-plan instruction says how it is worked). None of it is this session's work: finish ${input.ref} and end the session. The run stops for these with planning_needed once no ticket is left.
+${steps.map((step) => `- ${step.need} · ${step.who} · ${step.title}`).join("\n")}
+`;
 }
 
 /**
@@ -159,5 +178,5 @@ Run:       ${input.runId} (actor ${input.actor})
    NEVER merge anything into master or main, never push to master or main, and never run \`git merge\`, \`gh pr merge\` or anything else that lands work on them. Merging is a person's decision; leave the branch (and its pull request) for them.
 7. Finish. Comment the evidence (what you ran and what it showed, the branch and commit), then move the ticket: ${finishStep}.
    If you cannot finish, comment exactly why and what is left, leave the ticket where it is, and end the session: the run records it failed and a person looks.
-${goalSection(input)}${instructionSection(input)}${extra}`;
+${goalSection(input)}${instructionSection(input)}${planStepSection(input)}${extra}`;
 }

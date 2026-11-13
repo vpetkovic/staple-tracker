@@ -178,6 +178,7 @@ Stable: never renamed. Stop reasons, first match wins:
 | `scope_gone` | the scope no longer resolves: its issue was deleted (a restore can remove it) or it holds nothing any more (a parent left with no children). `detail.why` says which | `stopped` |
 | `vp_blocked` | a ticket the run took is blocked on a named person, or nothing is workable and something in scope is | `stopped` |
 | `gate_pending` | the scope issue holds a person's open gate, or nothing is workable and something in scope does. Open is `pending`, or a person's `changes_requested`, which still holds the work beneath it (`detail.gates[].state` says which; without it the run would wait on that work for ever). A goal run's gate on its milestone is not one | `stopped` |
+| `planning_needed` | planning on: nothing is left to take and nobody else is moving a ticket, but a horizon in scope (the run's horizon, or a queued one for a run over the queue) still lists plan steps; `detail.planSteps`, and `detail.earliestWait` when every step waits ([design/plan.md](plan.md#plan-steps)). Before the goal check | `stopped` |
 | `goal_met` | a goal run: nothing unresolved is left in scope and every criterion of the milestone is met; the milestone stays gated to its owner | `completed` |
 | `scope_empty` | nothing unresolved is left in scope | `completed` |
 | `no_run` | the actor has no live run (`continue` only; `run` is null) | — |
