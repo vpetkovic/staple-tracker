@@ -11,9 +11,9 @@
  *   <worktree>/.git                     file: `gitdir: <common>/worktrees/<name>`
  *   <common>/worktrees/<name>/commondir  file: path from that directory to <common>
  *   <common>                            `<main>/.git`, or a module directory (a submodule's
- *                                       repository, or a `--separate-git-dir`) whose `config`
- *                                       (or `config.worktree`) names the checkout in
- *                                       `core.worktree`; a bare repository has no main checkout
+ *                                       repository) whose `config` (or `config.worktree`) names
+ *                                       the checkout in `core.worktree`; a bare repository has
+ *                                       no main checkout
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
@@ -87,7 +87,8 @@ export function linkedWorktreeMainCheckout(dir: string): string | null {
   const common = resolve(gitdir, commondir);
 
   // A bare repository has no main checkout, so its worktrees resolve by position like any directory.
-  if (coreValue(join(common, "config"), "bare") === "true") return null;
+  const bare = coreValue(join(common, "config.worktree"), "bare") ?? coreValue(join(common, "config"), "bare");
+  if (bare === "true") return null;
   const main = mainCheckoutOf(common);
   if (main === null) {
     throw refuse(dir, `its repository at ${common} does not say where the main checkout is (no core.worktree)`);
