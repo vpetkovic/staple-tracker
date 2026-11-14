@@ -21,6 +21,7 @@ import {
   type LayoutReport,
   type WorkspaceLayout,
 } from "./path-migration.js";
+import { linkedWorktreeMainCheckout } from "./git-worktree.js";
 import { StapleError } from "./types.js";
 
 export type { OpenedWorkspace } from "./open.js";
@@ -81,6 +82,10 @@ export interface FoundWorkspace {
  * shadow a migrated one in the child. The nearest directory that has either
  * layout is the answer, and only that directory's contents decide which.
  *
+ * A linked git worktree resolves as its main checkout, unless the worktree holds a
+ * workspace of its own; one whose main checkout cannot be found throws `not_found`
+ * instead of continuing upward (see `git-worktree.ts`).
+ *
  * Throws `conflict` when the answering directory holds two canonical databases
  * (plan §3: "never pick one by modification time"). That refusal is the whole
  * safety property — a resolver that silently chose one would fork the workspace
@@ -99,6 +104,11 @@ export function findWorkspace(startDir: string): FoundWorkspace | null {
         root: dir,
         report,
       };
+    }
+    const main = linkedWorktreeMainCheckout(dir);
+    if (main !== null) {
+      dir = main;
+      continue;
     }
     const parent = dirname(dir);
     if (parent === dir) return null;

@@ -63,6 +63,7 @@ import { migrateWorkspace, workspaceSchemaState } from "./schema.js";
 import { WorkspaceStore } from "./store.js";
 import { openWorkspace, readMeta } from "./open.js";
 import { Hub } from "./hub.js";
+import { linkedWorktreeMainCheckout } from "./git-worktree.js";
 import { StapleError, nowIso } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -315,6 +316,8 @@ export function describeLayout(root: string): LayoutReport {
  * journal — a migration crashed after installing the target and before anything
  * else would be the one case where recovery matters most, and refusing to find
  * it because the layout looks tidy would strand the operator.
+ *
+ * Follows a linked git worktree to its main checkout, as `findWorkspace` does.
  */
 export function findMigrationRoot(startDir: string): string | null {
   let dir = resolve(startDir);
@@ -325,6 +328,11 @@ export function findMigrationRoot(startDir: string): string | null {
       existsSync(journalPathFor(dir))
     ) {
       return dir;
+    }
+    const main = linkedWorktreeMainCheckout(dir);
+    if (main !== null) {
+      dir = main;
+      continue;
     }
     const parent = dirname(dir);
     if (parent === dir) return null;
