@@ -202,11 +202,15 @@ function resetWorkspaceCache(): void {
   byAlias.clear();
 }
 
+/** Replaced at build time by scripts/build-package.ts. Absent when run from source. */
+declare const __STAPLE_VERSION__: string;
+const STAPLE_VERSION = typeof __STAPLE_VERSION__ === "string" ? __STAPLE_VERSION__ : "0.0.0-dev";
+
 const featureInstructions = (() => {
   try { return `This workspace has features.planning ${storeFor().planningOn() ? "on" : "off"}.`; }
   catch { return "Resolve the workspace and read get_setting features.planning first."; }
 })();
-const server = new McpServer({ name: "staple", version: "0.1.0" }, {
+const server = new McpServer({ name: "staple", version: STAPLE_VERSION }, {
   instructions: `${featureInstructions} Planning is experimental, defaults off, and only a person changes it in Settings → Experimental or with staple settings set features.planning true --person. Read get_setting or show_about for the current workspace state; explicit ws may differ from this handshake. When off, use ordinary tasks and milestones; plan tools refuse. Ideas remain drafts and are never pickup work.`,
 });
 const PLANNING_TOOLS = new Set(["list_ideas", "get_idea", "list_horizons", "capture_idea", "update_idea", "scaffold_idea", "start_idea", "unlink_idea", "reset_idea_baseline"]);
@@ -4275,10 +4279,6 @@ for (const view of VIEWS) {
     () => ({ contents: [{ uri, mimeType: RESOURCE_MIME_TYPE, text: readViewHtml(view.name) }] }),
   );
 }
-
-/** Replaced at build time by scripts/build-package.ts. Absent when run from source. */
-declare const __STAPLE_VERSION__: string;
-const STAPLE_VERSION = typeof __STAPLE_VERSION__ === "string" ? __STAPLE_VERSION__ : "0.0.0-dev";
 
 const aboutStatusShape = {
   id: z.string(),

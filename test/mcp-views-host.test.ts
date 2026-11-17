@@ -129,6 +129,11 @@ afterAll(async () => {
 });
 
 describe("the views over MCP", () => {
+  it("reports the packaged version in the MCP handshake", async () => {
+    const client = await connect({ apps: false });
+    expect(client.getServerVersion()).toEqual({ name: "staple", version });
+  });
+
   it("lists every view over resources/list as a single-file MCP Apps resource", async () => {
     const client = await connect({ apps: true });
     const { resources } = await client.listResources();

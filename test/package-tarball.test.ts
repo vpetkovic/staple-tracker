@@ -161,7 +161,15 @@ describe("the packed artifact", () => {
     expect(Object.keys(installedPackages.dependencies ?? {})).toEqual(["staple-cli"]);
   });
 
-  it("ships runtime output only — no sources, no tests, no lockfile", () => {
+  it("ships the installable agent skill from the same source as this release", () => {
+    const skill = "skills/staple/SKILL.md";
+    expect(tarballEntries).toContain(skill);
+    expect(readFileSync(join(prefix, "node_modules", "staple-cli", skill), "utf8")).toBe(
+      readFileSync(join(REPO_ROOT, skill), "utf8"),
+    );
+  });
+
+  it("ships runtime output and agent guidance only — no sources, no tests, no lockfile", () => {
     // Vite's asset filenames carry a content hash that moves whenever anyone touches
     // src/ui/app, so they are matched by shape. Everything else is pinned exactly:
     // adding a file to the published payload has to change this list.
@@ -172,6 +180,7 @@ describe("the packed artifact", () => {
       "THIRD-PARTY-NOTICES.md",
       "assets/index.html",
       "package.json",
+      "skills/staple/SKILL.md",
       "staple.mjs",
       // The MCP Apps views `staple mcp` serves, one self-contained file each.
       "views/about.html",

@@ -554,7 +554,7 @@ describe("the packed runtime against every workspace schema on disk (STA-165)", 
       renameSync(stagePayload({ home, from: newer }).path, versionDir(home, "0.1.1-next"));
       stagePayload({ home, from: newer });
       expect(readdirSync(stagingDir(home))).toHaveLength(1);
-      expect(listInstalledVersions(home)).toEqual([packageVersion, "0.1.1-next"]);
+      expect(listInstalledVersions(home)).toEqual([packageVersion, "0.1.1-next"].sort());
 
       expectOneUsableRuntime(packageVersion);
       const status = launcher(["install", "status"]);
