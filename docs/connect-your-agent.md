@@ -67,14 +67,43 @@ This repository tracks its work in staple. Read .staple/AGENTS.md before you sta
 
 [How an agent works a ticket](working-a-ticket.md) explains what the protocol asks.
 
+### Install the reusable Staple skill
+
+The public skill lives at
+[`skills/staple/SKILL.md`](https://github.com/vpetkovic/staple-tracker/blob/master/skills/staple/SKILL.md).
+Give that repository path to your harness's skill installer, or copy the
+`skills/staple` directory from a checkout into its skills directory:
+
+```bash
+# From a staple-tracker checkout, choose the harness you use.
+mkdir -p ~/.codex/skills
+cp -R -n skills/staple ~/.codex/skills/
+
+mkdir -p ~/.claude/skills
+cp -R -n skills/staple ~/.claude/skills/
+```
+
+These commands preserve an existing skill. If you already maintain a custom Staple
+skill, compare it before replacing it. Start a new agent session after installation.
+
+Releases from 0.2.0 also include `skills/staple/SKILL.md` inside the `staple-cli`
+npm package, so you can copy the skill from the same package version as your runtime.
+Install the skill once per harness and update it when updating Staple.
+
+The skill teaches workspace discovery, tool selection, claims, checkpointing and
+refusals across repositories. `.staple/AGENTS.md` carries each repository's protocol
+and stays authoritative. Keep the root instruction above even with a skill installed;
+the skill is optional, and MCP alone does not load its instructions. The public skill
+contains no Workshop paths or machine-specific configuration.
+
 ## 4. Check it works
 
 Start a new session in the repository and ask:
 
 > What is in the staple inbox?
 
-The agent calls the `inbox` tool and answers with the same READY and BLOCKED lists
-that `staple inbox` prints. Then give it real work:
+The agent calls `show_queue` to show the pickup queue. Clients without MCP Apps
+rendering receive the same information as text. Then give it real work:
 
 > Take the next staple ticket and work it.
 

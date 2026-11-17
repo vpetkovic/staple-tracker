@@ -5,10 +5,15 @@ laptop; `.github/workflows/release.yml` publishes `dist-package/` to npm with
 provenance via trusted publishing (OIDC). There is no npm token in this repo's
 secrets, and none should ever be added.
 
+Merging to `master` only runs CI. It does not update npm, and rebuilding an
+installed runtime does not change what `npx` downloads. A release is complete
+only when the new version is published and npm's `latest` tag names it. Use
+`npx -y staple-cli@latest --version` to avoid reusing an older npx resolution.
+
 ## Schema contract — read before tagging
 
-- **This repository is canonical.** It carries workspace migrations 001-006
-  (schema 6), which is what the live workspace is stamped with. The Workshop
+- **This repository is canonical.** It carries workspace migrations 001-021
+  (schema 21) and hub migrations 001-008 (schema 8). The Workshop
   prototype checkout it was extracted from stopped at schema 3 and is retired:
   it refuses the live database (`error(conflict)`, exit 4) and must stay that
   way — never run it against the live workspace, and never re-sync from it.
@@ -92,9 +97,12 @@ manifest's `repository.url` to match this repository, which
 1. **Bump the version in the source `package.json`** (repo root). This is the
    single source of truth — `npm run build:package` generates
    `dist-package/package.json` from it, so do not edit the artifact manifest
-   by hand.
-2. Commit the bump on `master` and make sure CI is green (CI runs the same
-   gates plus the clean-machine drill).
+   by hand. Update the root and root-package versions in `package-lock.json`
+   too, and describe the release and upgrade guidance in `CHANGELOG.md`.
+   Review `skills/staple/SKILL.md` against the current tools. The tarball test
+   verifies that the installed npm package carries that exact skill.
+2. Get the release changes reviewed and merged into `master`, then make sure
+   CI is green. Tag the approved merged commit, never an unmerged worktree.
 3. Tag and push the tag (version must match the bump exactly):
 
    ```bash
@@ -103,7 +111,8 @@ manifest's `repository.url` to match this repository, which
    ```
 
 4. The `Release` workflow runs automatically:
-   - gates: `npm test`, `npm run typecheck`, `npm run smoke:mcp`,
+   - gates: `npm run build:package`, `npm run typecheck`, Worker typecheck and
+     tests, isolated `npm test`, `npm run smoke:mcp`,
      `npm run drill:npx` (`npm test` includes the schema matrix above);
    - guard: the tag must equal the version in BOTH `package.json` and the
      freshly built `dist-package/package.json`, or the job fails before
@@ -114,7 +123,13 @@ manifest's `repository.url` to match this repository, which
 
    ```bash
    npx -y staple-cli@X.Y.Z --version
+   npx -y staple-cli@latest --version
+   npm view staple-cli dist-tags --json
    ```
+
+   Both commands must report the released version, and `latest` must name it.
+   A running MCP server keeps its loaded version until restarted. A managed
+   installation updates separately with `npx -y staple-cli@latest install --yes`.
 
 ## What can go wrong
 

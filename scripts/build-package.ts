@@ -11,6 +11,7 @@
  *     assets/index.html       the Vite UI bundle, copied beside staple.mjs
  *     assets/assets/*         its hashed js/css
  *     views/<name>.html       the MCP Apps views `staple mcp` serves, one file each
+ *     skills/staple/SKILL.md   portable agent workflow, copied from the same release
  *     README.md
  *     LICENSE
  *     THIRD-PARTY-NOTICES.md  the repository's notices + the bundled dependency graph
@@ -201,7 +202,7 @@ function writeArtifactManifest(dir: string, bundledPackages: string[], viewPacka
         staple: { workspaceSchema: WORKSPACE_LATEST_VERSION, hubSchema: HUB_LATEST_VERSION },
         // Nothing is left to install: the bundle carries its dependencies inside it.
         dependencies: {},
-        files: ["staple.mjs", "assets/", "views/", "README.md", "LICENSE", "THIRD-PARTY-NOTICES.md"],
+        files: ["staple.mjs", "assets/", "views/", "skills/", "README.md", "LICENSE", "THIRD-PARTY-NOTICES.md"],
       },
       null,
       2,
@@ -248,10 +249,13 @@ function writeArtifactManifest(dir: string, bundledPackages: string[], viewPacka
 
   cpSync(join(repoRoot, "README.md"), join(dir, "README.md"));
   cpSync(join(repoRoot, "LICENSE"), join(dir, "LICENSE"));
+  // Copy only the public skill, never machine-local skills or tracker instructions.
+  mkdirSync(join(dir, "skills", "staple"), { recursive: true });
+  cpSync(join(repoRoot, "skills", "staple", "SKILL.md"), join(dir, "skills", "staple", "SKILL.md"));
 }
 
 /**
- * The published tree must contain runtime output and metadata only — no sources, no
+ * The published tree must contain runtime output, agent guidance and metadata only — no sources, no
  * tests, no lockfile, nothing private. Checked here rather than trusted to `files`,
  * because dist-package/ is built fresh and an accidental stray copy would ship.
  */
@@ -261,6 +265,7 @@ function verifyNoSourceLeaks(dir: string): void {
     "staple.mjs",
     "assets",
     "views",
+    "skills",
     "README.md",
     "LICENSE",
     "THIRD-PARTY-NOTICES.md",

@@ -35,6 +35,11 @@ first workspace, [Connect your agent](https://github.com/vpetkovic/staple-tracke
 MCP clients, and [How an agent works a ticket](https://github.com/vpetkovic/staple-tracker/blob/master/docs/working-a-ticket.md) is the
 loop your agents follow.
 
+An optional [Staple skill](https://github.com/vpetkovic/staple-tracker/tree/master/skills/staple)
+teaches agents how to find work, claim it and keep resumable context across repositories.
+[Skill installation](https://github.com/vpetkovic/staple-tracker/blob/master/docs/connect-your-agent.md#install-the-reusable-staple-skill)
+works with Claude Code and Codex. Keep `.staple/AGENTS.md` as the repository's protocol.
+
 ## What you get
 
 - **Plans become tickets.** An epic per feature, a ticket per step, dependencies

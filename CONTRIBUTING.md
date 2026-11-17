@@ -48,10 +48,10 @@ To point a harness at your checkout instead of the published package:
 claude mcp add staple-dev -e STAPLE_AGENT=claude -- npx tsx <checkout>/src/mcp.ts
 ```
 
-Note: until the first release tag is published, `npx staple-cli` does not
-resolve on npm — the checkout (or a locally built package, below) is the only
-way to run staple. Releases are cut by CI from version tags; see
-[RELEASING.md](RELEASING.md).
+Pushing or merging source changes does not update npm. Releases are cut by CI
+from version tags; see [RELEASING.md](RELEASING.md). When preparing a release,
+bump both root package manifests, update the changelog and verify the packaged
+skill alongside the runtime before tagging the approved commit.
 
 ## Seeded demo
 
