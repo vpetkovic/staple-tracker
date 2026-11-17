@@ -303,6 +303,8 @@ describe("an entity edited in thousands of steps", () => {
 });
 
 describe("a request's budget", () => {
+  // These multi-megabyte D1 fixtures need the same wall-clock allowance as the
+  // other large fixtures above. Work budgets are asserted below, not timed.
   it("cuts a pull page by its work, and folds beside it only what the page leaves", async () => {
     // An edit larger than a request's budget, a hundred 30 KB quote-heavy ones, then 600 small ones.
     const ops: GeneratedOp[] = [op(1, "issue", "issue-big", "create", { title: "big", description: quoted(500_000, "a") })];
@@ -326,7 +328,7 @@ describe("a request's budget", () => {
     const small = await send(`/ops?limit=1&cursor=${encodeURIComponent(encodeCursor({ v: 1, r: REPO, e: 1, s: 650 }))}`, env.DB);
     expect(small.status).toBe(200);
     expect((await foldProgress(env, REPO, 1)).seq).toBeGreaterThan(101);
-  });
+  }, 120_000);
 
   it("is shared by a snapshot page: after folding, a page with no room is deferred, and served when asked again", async () => {
     const ops: GeneratedOp[] = [];
@@ -344,7 +346,7 @@ describe("a request's budget", () => {
     // Cut by work long before its 500 entities or its bytes: 60 KB of quotes each.
     expect(again.json.entities.length).toBeGreaterThan(0);
     expect(again.json.entities.length).toBeLessThan(8);
-  });
+  }, 120_000);
 });
 
 describe("a restore turn", () => {
