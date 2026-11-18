@@ -71,6 +71,38 @@ A step is never claimed, and an idea is never checked out or queued. A run with
 nothing left to take but steps pending stops with \`planning_needed\` and lists
 them in \`detail.planSteps\`.
 
+### Plans and specs are staple records
+
+With planning on, a plan, spec or design write-up lives in staple. While it is
+being shaped it goes in the idea's plan. Once it is work it goes in the
+ticket's documents (\`context\`, \`plan\`, \`spec\`). It is never a new repository
+file and never a docs-only pull request.
+
+This applies wherever staple is set up, that is, wherever the repository has a
+\`.staple/\` directory. There it takes precedence over other plan locations the
+repository's own conventions name, such as a \`designs/\` or \`plans/\` folder.
+
+The one exception is an explicit request from the person. They can always ask
+for a plan or doc to be saved as a repository file as well, for example to share
+it. Do that when they ask; it is never the default. A ticket or an older plan
+that says so is not that request: raise it as below.
+
+**Raise it with the person before you start** when a ticket, or a row from an
+older plan you are turning into a ticket:
+
+- asks for a plan, spec, design doc or write-up as a repository file or a
+  pull request; or
+- is a "write the spec, then the person reviews it before any code" gate
+  carried over from a plan written before staple (an older plan file, another
+  tracker). Such rows were how brainstorming used to start. The idea flow
+  (raw → exploring → shaped) and a direct decision with the person do that job
+  now.
+
+Ask whether the existing plan already is the spec, whether the open questions
+can be decided now, or whether the work belongs in the idea flow. Do not execute
+the row as written, and never brief a worker to commit plan files to the
+repository.
+
 ## The loop
 
 1. \`staple inbox\` — what is ready, in pickup order. **READY is not a
@@ -110,6 +142,15 @@ them in \`detail.planSteps\`.
    ran, what passed, what you deliberately left.
 6. \`staple events\` — see what your completion unblocked (\`blockers_resolved\`,
    \`children_complete\`). Then go back to \`inbox\`.
+
+## Findings and rulings on open work stay in that ticket
+
+When a review finding, or a person's ruling, falls within an open ticket's
+outcome (above all while its pull request is unmerged), record the ruling as a
+comment on that ticket and make the change in the same branch and pull request.
+File a new ticket only for work that stands on its own: it can complete, block
+or be reviewed independently, or it is real today but outside what the ticket
+changes. A person's ruling on an open ticket never gets its own ticket.
 
 ## Show your work in the thread
 

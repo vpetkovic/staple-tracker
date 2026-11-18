@@ -21,6 +21,8 @@ import { initWorkspace, stapleHome } from "../src/core/workspace.js";
 import { CLI_ENTRY, TSX_CLI, cleanEnv, startMcpClient, toolPayload } from "./fixtures/contract-support.js";
 
 let home: string;
+const PLANS_HEADING = "### Plans and specs are staple records";
+const FINDINGS_HEADING = "## Findings and rulings on open work stay in that ticket";
 const tempRoots: string[] = [];
 
 function scratch(label: string): string {
@@ -357,6 +359,63 @@ describe("the guide teaches the whole protocol", () => {
 
   it("tells the reader their edits are safe", () => {
     expect(guide).toMatch(/will not\s+overwrite your changes/i);
+  });
+
+  /**
+   * A row carried over from a plan written before staple ("write the spec, the person reviews it
+   * before any code") reads like ordinary work, so an agent executes it and opens a repository
+   * file as a docs-only pull request. The guide has to say where plans live and that such a row
+   * goes back to the person instead.
+   */
+  it("teaches that plans and specs are staple records, and that a plan-as-file row goes to the person", () => {
+    const section = sectionOf(guide, PLANS_HEADING);
+    expect(section).toMatch(/With planning on/);
+    for (const key of ["context", "plan", "spec"]) expect(section, key).toContain(`\`${key}\``);
+    expect(section).toMatch(/never a new\s+repository\s+file and never a docs-only pull request/i);
+    expect(section).toMatch(/raise it with the person before you start/i);
+    expect(section).toMatch(/carried over from a plan written before staple/i);
+    expect(section).toMatch(/do not execute\s+the row as written/i);
+    expect(section).toMatch(/never brief a worker\s+to commit plan files to the\s+repository/i);
+  });
+
+  it("puts staple's plan rule ahead of the repository's own plan folders, wherever .staple/ exists", () => {
+    const section = sectionOf(guide, PLANS_HEADING);
+    expect(section).toContain("`.staple/`");
+    expect(section).toMatch(/takes precedence over\s+other plan locations/i);
+    expect(section).toContain("`designs/`");
+    expect(section).toContain("`plans/`");
+  });
+
+  it("lets the person ask for a repository copy as well, as the exception and never the default", () => {
+    const section = sectionOf(guide, PLANS_HEADING);
+    expect(section).toMatch(/explicit\s+request/i);
+    expect(section).toMatch(/as a repository file\s+as well/i);
+    expect(section).toMatch(/never\s+the default/i);
+  });
+
+  it("keeps findings and rulings on open work in that ticket, and files only work that stands on its own", () => {
+    const section = sectionOf(guide, FINDINGS_HEADING);
+    expect(section).toMatch(/comment\s+on\s+that\s+ticket/i);
+    expect(section).toMatch(/same\s+branch\s+and\s+pull\s+request/i);
+    expect(section).toMatch(/only\s+for\s+work\s+that\s+stands\s+on\s+its\s+own/i);
+    expect(section).toMatch(/ruling\s+on\s+an\s+open\s+ticket\s+never\s+gets\s+its\s+own\s+ticket/i);
+  });
+});
+
+/** The text from `heading` up to the next heading. */
+function sectionOf(text: string, heading: string): string {
+  const start = text.indexOf(`${heading}\n`);
+  expect(start, heading).toBeGreaterThanOrEqual(0);
+  const end = text.indexOf("\n#", start + heading.length);
+  return text.slice(start, end < 0 ? undefined : end);
+}
+
+// This repository keeps its own guide, edited by hand alongside the template. A rule the template
+// gains has to reach it too, or the repo that ships the rule is the one place agents never read it.
+describe("this repository's own guide", () => {
+  it.each([PLANS_HEADING, FINDINGS_HEADING])("carries the template's %s section word for word", (heading) => {
+    const own = readFileSync(join(import.meta.dirname, "..", ".staple", "AGENTS.md"), "utf8");
+    expect(sectionOf(own, heading)).toBe(sectionOf(renderAgentsGuide({ slug: "staple", prefix: "STA" }), heading));
   });
 });
 
