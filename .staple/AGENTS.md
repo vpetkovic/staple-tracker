@@ -119,6 +119,15 @@ repository.
 6. `staple events --json` — see what your completion unblocked
    (`blockers_resolved`, `children_complete`). Then go back to `queue next`.
 
+## Findings and rulings on open work stay in that ticket
+
+When a review finding, or a person's ruling, falls within an open ticket's
+outcome (above all while its pull request is unmerged), record the ruling as a
+comment on that ticket and make the change in the same branch and pull request.
+File a new ticket only for work that stands on its own: it can complete, block
+or be reviewed independently, or it is real today but outside what the ticket
+changes. A person's ruling on an open ticket never gets its own ticket.
+
 ## Act under one identity, all session
 
 Set `STAPLE_AGENT` (or MCP `actor`) and **use the

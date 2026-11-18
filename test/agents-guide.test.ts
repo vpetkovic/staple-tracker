@@ -22,6 +22,7 @@ import { CLI_ENTRY, TSX_CLI, cleanEnv, startMcpClient, toolPayload } from "./fix
 
 let home: string;
 const PLANS_HEADING = "### Plans and specs are staple records";
+const FINDINGS_HEADING = "## Findings and rulings on open work stay in that ticket";
 const tempRoots: string[] = [];
 
 function scratch(label: string): string {
@@ -391,6 +392,18 @@ describe("the guide teaches the whole protocol", () => {
     expect(section).toMatch(/as a repository file\s+as well/i);
     expect(section).toMatch(/never\s+the default/i);
   });
+
+  it("keeps findings and rulings on open work in that ticket, and files only work that stands on its own", () => {
+    const section = sectionOf(guide, FINDINGS_HEADING);
+    expect(section).toMatch(/review finding, or a person's ruling/i);
+    expect(section).toMatch(/pull request is\s+unmerged/i);
+    expect(section).toMatch(/comment on that ticket/i);
+    expect(section).toMatch(/same branch and pull request/i);
+    expect(section).toMatch(/only for work that stands on its own/i);
+    expect(section).toMatch(/complete, block\s+or be reviewed independently/i);
+    expect(section).toMatch(/real today but outside what the ticket\s+changes/i);
+    expect(section).toMatch(/ruling on an open ticket never gets its own ticket/i);
+  });
 });
 
 /** The text from `heading` up to the next heading. */
@@ -404,9 +417,9 @@ function sectionOf(text: string, heading: string): string {
 // This repository keeps its own guide, edited by hand alongside the template. A rule the template
 // gains has to reach it too, or the repo that ships the rule is the one place agents never read it.
 describe("this repository's own guide", () => {
-  it("carries the template's plans-and-specs section word for word", () => {
+  it.each([PLANS_HEADING, FINDINGS_HEADING])("carries the template's %s section word for word", (heading) => {
     const own = readFileSync(join(import.meta.dirname, "..", ".staple", "AGENTS.md"), "utf8");
-    expect(sectionOf(own, PLANS_HEADING)).toBe(sectionOf(renderAgentsGuide({ slug: "staple", prefix: "STA" }), PLANS_HEADING));
+    expect(sectionOf(own, heading)).toBe(sectionOf(renderAgentsGuide({ slug: "staple", prefix: "STA" }), heading));
   });
 });
 
