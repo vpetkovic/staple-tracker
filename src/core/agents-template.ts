@@ -71,6 +71,28 @@ A step is never claimed, and an idea is never checked out or queued. A run with
 nothing left to take but steps pending stops with \`planning_needed\` and lists
 them in \`detail.planSteps\`.
 
+### Plans and specs are staple records
+
+With planning on, a plan, spec or design write-up lives in staple. While it is
+being shaped it goes in the idea's plan. Once it is work it goes in the
+ticket's documents (\`context\`, \`plan\`, \`spec\`). It is never a new repository
+file and never a docs-only pull request.
+
+**Raise it with the person before you start** when a ticket, or a plan row you
+are turning into a ticket:
+
+- asks for a plan, spec, design doc or write-up as a repository file or a
+  pull request; or
+- is a "write the spec, then the person reviews it before any code" gate
+  carried over from a plan written before staple (an older plan file, another
+  tracker). Such rows were how brainstorming used to start. The idea flow
+  (raw → exploring → shaped) and a direct decision with the person do that job
+  now.
+
+Ask whether the existing plan already is the spec, whether the open questions
+can be decided now, or whether the work belongs in the idea flow. Do not execute
+the row as written, and never brief a worker to write plan files.
+
 ## The loop
 
 1. \`staple inbox\` — what is ready, in pickup order. **READY is not a

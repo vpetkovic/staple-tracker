@@ -358,6 +358,53 @@ describe("the guide teaches the whole protocol", () => {
   it("tells the reader their edits are safe", () => {
     expect(guide).toMatch(/will not\s+overwrite your changes/i);
   });
+
+  /**
+   * A row carried over from a plan written before staple ("write the spec, the person reviews it
+   * before any code") reads like ordinary work, so an agent executes it and opens a repository
+   * file as a docs-only pull request. The guide has to say where plans live and that such a row
+   * goes back to the person instead.
+   */
+  it("teaches that plans and specs are staple records, and that a plan-as-file row goes to the person", () => {
+    const section = sectionOf(guide, "### Plans and specs are staple records");
+    // Conditioned on planning, like the rest of the planning section.
+    expect(section).toMatch(/With planning on/);
+    // Where a plan lives: the idea while shaping, the ticket's documents once it is work.
+    expect(section).toMatch(/idea's plan/);
+    for (const key of ["context", "plan", "spec"]) expect(section, key).toContain(`\`${key}\``);
+    expect(section).toMatch(/never a new\s+repository\s+file and never a docs-only pull request/i);
+    // The two triggers, and that the move is to ask before starting.
+    expect(section).toMatch(/raise it with the person before you start/i);
+    expect(section).toMatch(/repository file or a\s+pull request/i);
+    expect(section).toMatch(/carried over from a plan written before staple/i);
+    expect(section).toMatch(/raw → exploring → shaped/);
+    // What to ask, and what not to do.
+    expect(section).toMatch(/already is the spec/i);
+    expect(section).toMatch(/decided now/i);
+    expect(section).toMatch(/belongs in the idea flow/i);
+    expect(section).toMatch(/do not execute\s+the row as written/i);
+    expect(section).toMatch(/never brief a worker\s+to write plan files/i);
+  });
+});
+
+/** The text from `heading` up to the next heading of the same or a higher level. */
+function sectionOf(text: string, heading: string): string {
+  const start = text.indexOf(`\n${heading}\n`);
+  expect(start, heading).toBeGreaterThanOrEqual(0);
+  const level = heading.indexOf(" ");
+  const rest = text.slice(start + heading.length + 2);
+  const end = rest.search(new RegExp(`\\n#{1,${level}} `));
+  return `${heading}\n${end < 0 ? rest : rest.slice(0, end)}`;
+}
+
+// This repository keeps its own guide, edited by hand alongside the template. A rule the template
+// gains has to reach it too, or the repo that ships the rule is the one place agents never read it.
+describe("this repository's own guide", () => {
+  it("carries the template's plans-and-specs section word for word", () => {
+    const heading = "### Plans and specs are staple records";
+    const own = readFileSync(join(import.meta.dirname, "..", ".staple", "AGENTS.md"), "utf8");
+    expect(sectionOf(own, heading)).toBe(sectionOf(renderAgentsGuide({ slug: "staple", prefix: "STA" }), heading));
+  });
 });
 
 // The guide's claims about the views are claims about the server: the tools it names exist,
