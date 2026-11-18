@@ -373,7 +373,8 @@ describe("the guide teaches the whole protocol", () => {
     expect(section).toMatch(/never a new\s+repository\s+file and never a docs-only pull request/i);
     expect(section).toMatch(/raise it with the person before you start/i);
     expect(section).toMatch(/carried over from a plan written before staple/i);
-    expect(section).toMatch(/never brief a worker\s+to write plan files/i);
+    expect(section).toMatch(/do not execute\s+the row as written/i);
+    expect(section).toMatch(/never brief a worker\s+to commit plan files to the\s+repository/i);
   });
 });
 
@@ -381,7 +382,8 @@ describe("the guide teaches the whole protocol", () => {
 function sectionOf(text: string, heading: string): string {
   const start = text.indexOf(`${heading}\n`);
   expect(start, heading).toBeGreaterThanOrEqual(0);
-  return text.slice(start, text.indexOf("\n#", start + heading.length));
+  const end = text.indexOf("\n#", start + heading.length);
+  return text.slice(start, end < 0 ? undefined : end);
 }
 
 // This repository keeps its own guide, edited by hand alongside the template. A rule the template

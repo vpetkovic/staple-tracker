@@ -76,8 +76,8 @@ being shaped it goes in the idea's plan. Once it is work it goes in the
 ticket's documents (`context`, `plan`, `spec`). It is never a new repository
 file and never a docs-only pull request.
 
-**Raise it with the person before you start** when a ticket, or a plan row you
-are turning into a ticket:
+**Raise it with the person before you start** when a ticket, or a row from an
+older plan you are turning into a ticket:
 
 - asks for a plan, spec, design doc or write-up as a repository file or a
   pull request; or
@@ -89,7 +89,8 @@ are turning into a ticket:
 
 Ask whether the existing plan already is the spec, whether the open questions
 can be decided now, or whether the work belongs in the idea flow. Do not execute
-the row as written, and never brief a worker to write plan files.
+the row as written, and never brief a worker to commit plan files to the
+repository.
 
 ## The loop
 
