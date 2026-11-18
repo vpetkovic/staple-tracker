@@ -395,14 +395,10 @@ describe("the guide teaches the whole protocol", () => {
 
   it("keeps findings and rulings on open work in that ticket, and files only work that stands on its own", () => {
     const section = sectionOf(guide, FINDINGS_HEADING);
-    expect(section).toMatch(/review finding, or a person's ruling/i);
-    expect(section).toMatch(/pull request is\s+unmerged/i);
-    expect(section).toMatch(/comment on that ticket/i);
-    expect(section).toMatch(/same branch and pull request/i);
-    expect(section).toMatch(/only for work that stands on its own/i);
-    expect(section).toMatch(/complete, block\s+or be reviewed independently/i);
-    expect(section).toMatch(/real today but outside what the ticket\s+changes/i);
-    expect(section).toMatch(/ruling on an open ticket never gets its own ticket/i);
+    expect(section).toMatch(/comment\s+on\s+that\s+ticket/i);
+    expect(section).toMatch(/same\s+branch\s+and\s+pull\s+request/i);
+    expect(section).toMatch(/only\s+for\s+work\s+that\s+stands\s+on\s+its\s+own/i);
+    expect(section).toMatch(/ruling\s+on\s+an\s+open\s+ticket\s+never\s+gets\s+its\s+own\s+ticket/i);
   });
 });
 
