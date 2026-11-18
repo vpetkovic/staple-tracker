@@ -78,6 +78,15 @@ being shaped it goes in the idea's plan. Once it is work it goes in the
 ticket's documents (\`context\`, \`plan\`, \`spec\`). It is never a new repository
 file and never a docs-only pull request.
 
+This applies wherever staple is set up, that is, wherever the repository has a
+\`.staple/\` directory. There it takes precedence over other plan locations the
+repository's own conventions name, such as a \`designs/\` or \`plans/\` folder.
+
+The one exception is an explicit request from the person. They can always ask
+for a plan or doc to be saved as a repository file as well, for example to share
+it. Do that when they ask; it is never the default. A ticket or an older plan
+that says so is not that request: raise it as below.
+
 **Raise it with the person before you start** when a ticket, or a row from an
 older plan you are turning into a ticket:
 

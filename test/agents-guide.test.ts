@@ -376,6 +376,21 @@ describe("the guide teaches the whole protocol", () => {
     expect(section).toMatch(/do not execute\s+the row as written/i);
     expect(section).toMatch(/never brief a worker\s+to commit plan files to the\s+repository/i);
   });
+
+  it("puts staple's plan rule ahead of the repository's own plan folders, wherever .staple/ exists", () => {
+    const section = sectionOf(guide, PLANS_HEADING);
+    expect(section).toContain("`.staple/`");
+    expect(section).toMatch(/takes precedence over\s+other plan locations/i);
+    expect(section).toContain("`designs/`");
+    expect(section).toContain("`plans/`");
+  });
+
+  it("lets the person ask for a repository copy as well, as the exception and never the default", () => {
+    const section = sectionOf(guide, PLANS_HEADING);
+    expect(section).toMatch(/explicit\s+request/i);
+    expect(section).toMatch(/as a repository file\s+as well/i);
+    expect(section).toMatch(/never\s+the default/i);
+  });
 });
 
 /** The text from `heading` up to the next heading. */
