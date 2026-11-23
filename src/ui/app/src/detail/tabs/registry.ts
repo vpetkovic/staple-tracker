@@ -38,6 +38,7 @@ export interface TabDefinition {
   available?: (detail: IssueDetail) => boolean;
 }
 
+import { ExternalLinksTab } from "./ExternalLinksTab";
 import { OverviewTab } from "./OverviewTab";
 import { DocumentsTab } from "./DocumentsTab";
 import { FilesTab } from "./FilesTab";
@@ -76,6 +77,7 @@ export const TABS: readonly TabDefinition[] = [
    * that vanishes teaches nobody that the feature exists. The tab renders "no relations"
    * rather than an empty canvas, which is the honest version of the same answer.
    */
+  { id: "external-links", label: "External links", component: ExternalLinksTab, available: task },
   { id: "relations", label: "Connections", component: RelationsTab, available: task },
   { id: "idea-connections", label: "Connections", component: IdeaConnectionsTab, available: isIdeaDetail },
   /**

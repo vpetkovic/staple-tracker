@@ -1063,6 +1063,7 @@ export function startUiServer(options: UiOptions): UiHandle {
       ...context,
       crossBlockers,
       claim: handle.store.claimActivity(context.issue.id),
+      externalLinks: handle.store.externalLinks().list(context.issue.id),
       gate: handle.store.gate(context.issue.id),
       queuedBy: handle.store.queuedBy(context.issue.id),
       childrenQueued,
@@ -4216,6 +4217,7 @@ export function startUiServer(options: UiOptions): UiHandle {
           ...context,
           crossBlockers,
           claim: handle.store.claimActivity(context.issue.id),
+      externalLinks: handle.store.externalLinks().list(context.issue.id),
           // Added here and in the get_task handler in src/mcp.ts in the same
           // change, deliberately: ui-agent-context.test.ts asserts deep equality
           // between the two, so one without the other is a red test, which is

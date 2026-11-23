@@ -248,6 +248,7 @@ describe("read shapes", () => {
     const body = normalize(await (await get("/api/issue?ref=CON-1")).json(), [home]);
     expect(body).toEqual({
       workspace: WS,
+      externalLinks: [],
       issue: issueGolden({
         identifier: "CON-1",
         title: "Contract root task",
@@ -781,6 +782,7 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/hub/sync",
       "/api/hub/unregister",
       "/api/inbox",
+      "/api/integrations",
       "/api/issue",
       "/api/issues",
       // This machine's copy of a shared workspace's member list, or null. GET-only, local,

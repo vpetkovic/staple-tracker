@@ -1,3 +1,4 @@
+import { ExternalPropertySummary } from "@/integrations/ExternalPropertySummary";
 import { ideaPlanHref } from "./PlannedIdeaLinks";
 /**
  * The detail panel's contents: the bar, the header (breadcrumb, title, status line, actions),
@@ -752,6 +753,10 @@ function Properties({
         <PropertyRow label="Created">
           <RelativeTime iso={issue.createdAt} inSentence />
         </PropertyRow>
+        {!phone ? <>
+          <PropertyRow label="Linked issues" right={layout === "grid"}><ExternalPropertySummary detail={detail} kind="issue" /></PropertyRow>
+          <PropertyRow label="Pull requests" right={layout === "grid"}><ExternalPropertySummary detail={detail} kind="pull_request" /></PropertyRow>
+        </> : null}
         <PropertyRow label="Labels" span>
           <InlineLabels {...editor} />
         </PropertyRow>
@@ -786,6 +791,8 @@ function SummaryChips({
   const members = useMembersCache(workspace, session.version, ignoreMembersAuthError);
   return (
     <div className={cn("flex flex-wrap items-center gap-2", className)} data-summary-chips="">
+      <ExternalPropertySummary detail={detail} kind="issue" compact />
+      <ExternalPropertySummary detail={detail} kind="pull_request" compact />
       <StatusMenu detail={detail} controller={controller} onRequestApproval={onRequestApproval} className="h-9 px-3" />
       <InlinePriority {...editor} />
       <InlineKind {...editor} />
