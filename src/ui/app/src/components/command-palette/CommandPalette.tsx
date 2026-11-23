@@ -398,7 +398,21 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           />
 
           <CommandList data-palette-list>
-            {!page ? <CommandGroup heading="Providers"><CommandItem value="search-provider-issues-prs" onSelect={()=>{onOpenChange(false); requestAnimationFrame(()=>openLinkExternal({workspace:session.ws || undefined}));}}>Link issue or PR · search providers</CommandItem></CommandGroup> : null}
+            {!page && query.trim().toLowerCase().split(/\s+/).every((word) =>
+              "link issue or pr search providers github".includes(word),
+            ) ? (
+              <CommandGroup heading="Providers">
+                <CommandItem
+                  value="search-provider-issues-prs"
+                  onSelect={() => {
+                    onOpenChange(false);
+                    requestAnimationFrame(() => openLinkExternal({ workspace: session.ws || undefined }));
+                  }}
+                >
+                  Link issue or PR · search providers
+                </CommandItem>
+              </CommandGroup>
+            ) : null}
             {page ? (
               <div className="px-3 py-4 text-reading">
                 <div className="text-muted-foreground">

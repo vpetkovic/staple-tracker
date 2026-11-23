@@ -68,7 +68,7 @@ const EVIDENCE_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQV
 /** Public methods that write nothing: reads, and the scope helper every mutation runs in. */
 const READS: Record<StoreName, readonly string[]> = {
   WorkspaceStore: [
-    "journaled", "getStatuses", "getKinds", "kindAppearance", "getKindsWithAppearance", "kindOrder", "defaultKind",
+    "externalLinks", "journaled", "getStatuses", "getKinds", "kindAppearance", "getKindsWithAppearance", "kindOrder", "defaultKind",
     "statusOrder", "openStatusOrder", "inboxPickupOrder", "checkoutExpectedStatuses", "categoryOf", "isResolvedStatus",
     "isActiveStatus", "primaryStatusFor", "assertConfiguredStatus", "assertConfiguredKind", "statusUsageCount",
     "kindUsageCount", "getSetting", "settingValue", "settingValues", "unknownSettingKeys", "movedOff", "removedByRestore", "getIssue",

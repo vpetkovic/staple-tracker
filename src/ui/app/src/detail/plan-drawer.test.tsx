@@ -157,7 +157,7 @@ describe("an idea in the shared drawer", () => {
 
   it("is the epic's strip once promoted, with the Plan tab kept for its plan actions", () => {
     const promoted = idea("started", { promoted: true, identifier: "LAR-90", kind: "epic" });
-    expect(visibleTabs(ideaDetail(promoted)).map((tab) => tab.id)).toEqual(["overview", "plan", "relations", "documents", "files", "activity", "agent", "analytics"]);
+    expect(visibleTabs(ideaDetail(promoted)).map((tab) => tab.id)).toEqual(["overview", "plan", "external-links", "relations", "documents", "files", "activity", "agent", "analytics"]);
   });
 
   it("never shows a ticket number or the record's id, in any presentation", () => {

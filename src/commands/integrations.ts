@@ -5,8 +5,8 @@ import { IntegrationOperations } from "../core/integrations/operations.js";
 
 /** Human and script entry point. Workspace resolution is the same as every other command. */
 export async function runIntegrationsCommand(args:string[]):Promise<void> {
-  if(!args[0] || args[0]==="--help") {
-    console.log("integrations <connections|configure|remove|health|containers|search|resolve|preview|list|counts|link|create|unlink|refresh|stack|share> --ws <workspace> [--connection <id>] [--url <url>] [--ref <ticket>] [--resource <id>] [--confirmed] [--request-key <key>] [--additional-work] [--enabled true|false]");
+  if(!args[0] || args.slice(0, args.indexOf("--") < 0 ? args.length : args.indexOf("--")).some(arg => arg === "--help" || arg === "-h")) {
+    console.log("staple integrations <connections|configure|remove|health|containers|search|resolve|preview|list|counts|link|create|unlink|refresh|stack|share> --ws <workspace> [--connection <id>] [--url <url>] [--ref <ticket>] [--resource <id>] [--confirmed] [--request-key <key>] [--additional-work] [--enabled true|false]");
     return;
   }
   const {values,positionals}=parseArgs({args,allowPositionals:true,options:{
