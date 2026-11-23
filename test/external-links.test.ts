@@ -87,3 +87,21 @@ describe("external resource persistence", () => {
     expect(() => links.setStack(first.id, pr.resource.id, { parentResourceId: null, position: -1 }, "ada")).toThrow();
   });
 });
+
+describe("row integration summaries",()=>{
+  it("counts every association while bounding context-free previews per kind and omitting unlinked rows",()=>{
+    const {store,links,first,second}=setup();
+    for(let n=1;n<=8;n++) links.link(first.id,source(String(n)),"ada");
+    const pr=links.link(first.id,source("9","pull_request"),"ada");
+    let summaries=links.summaries();
+    expect(summaries[first.id]?.issues.count).toBe(8);
+    expect(summaries[first.id]?.issues.items).toHaveLength(5);
+    expect(summaries[first.id]?.issues.items[0]?.title).toBe("Remote 1");
+    expect(summaries[first.id]?.pullRequests).toMatchObject({count:1,items:[{id:pr.resource.id}]});
+    expect(JSON.stringify(summaries)).not.toContain("Remote context");
+    expect(summaries[second.id]).toBeUndefined();
+    links.unlink(first.id,pr.resource.id,"ada");
+    summaries=links.summaries();expect(summaries[first.id]?.pullRequests).toEqual({count:0,items:[]});
+    store.db.close();
+  });
+});
