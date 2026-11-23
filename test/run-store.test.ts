@@ -1049,4 +1049,3 @@ describe("run stop settles the run's held ticket", () => {
     expect(touched.stop).toMatchObject({ reason: "touched_main_line", detail: { ticket: a } });
   });
 });
-
