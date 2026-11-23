@@ -168,10 +168,10 @@ describe("a fresh repo-local `staple init`", () => {
       // 014-attempt-role, to "15" by 015-autopilot-runs, to "16" by
       // 016-milestone-goals, to "17" by 017-derived-status, to "18" by
       // 018-attachments, to "19" by 019-instruction-documents, to "20" by 020-plan-fields and to
-      // "21" by 021-plan-delivered; the TEXT
+      // "21" by 021-plan-delivered, then "22" by 022-external-links; the TEXT
       // typing is the characterization, the number
       // just tracks the migration list.
-      { key: "schema_version", value: "21" },
+      { key: "schema_version", value: "22" },
       { key: "slug", value: "metarepo" },
     ]);
   }, 30_000);
@@ -198,6 +198,7 @@ describe("a fresh repo-local `staple init`", () => {
       "index:comments_issue_idx",
       "index:events_dedup_uq",
       "index:events_issue_idx",
+      "index:external_links_resource_idx",
       "index:issues_assignee_status_idx",
       // STA-143: the partial index 006 creates over active gates — the "what
       // needs a human" query, indexed only over the handful of rows that ever
@@ -233,6 +234,10 @@ describe("a fresh repo-local `staple init`", () => {
       "index:sqlite_autoindex_comments_1",
       "index:sqlite_autoindex_document_revisions_1",
       "index:sqlite_autoindex_documents_1",
+      "index:sqlite_autoindex_external_links_1",
+      "index:sqlite_autoindex_external_links_2",
+      "index:sqlite_autoindex_external_resources_1",
+      "index:sqlite_autoindex_external_resources_2",
       "index:sqlite_autoindex_issues_1",
       "index:sqlite_autoindex_issues_2",
       "index:sqlite_autoindex_meta_1",
@@ -291,6 +296,8 @@ describe("a fresh repo-local `staple init`", () => {
       "table:document_revisions",
       "table:documents",
       "table:events",
+      "table:external_links",
+      "table:external_resources",
       "table:issues",
       "table:meta",
       // 016-milestone-goals: machine-local, never synchronized.
@@ -504,7 +511,7 @@ describe("global workspaces", () => {
       { key: "prefix", value: "SOL" },
       // WORKSPACE_SCHEMA_VERSION — 21 since 021-plan-delivered. The hub beside it
       // is still 8; the two databases version independently.
-      { key: "schema_version", value: "21" },
+      { key: "schema_version", value: "22" },
       { key: "slug", value: "solo" },
     ]);
   }, 30_000);
