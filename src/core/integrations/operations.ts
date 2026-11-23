@@ -46,7 +46,7 @@ export class IntegrationOperations {
     return choices[0]!.id;
   }
   private async source(c:IntegrationCommand):Promise<ExternalResource|ExternalItem|ResolvedExternalItem> {
-    if (c.resourceId) return this.store.externalLinks().resource(c.resourceId);
+    if (c.resourceId) return storedSource(this.store.externalLinks().resource(c.resourceId));
     const url=need(c.url,"source URL");
     let parsed:URL;
     try { parsed=new URL(url); } catch { throw new StapleError("validation","Use an exact HTTPS issue or PR URL"); }
@@ -55,7 +55,7 @@ export class IntegrationOperations {
     const cached=this.store.db.prepare("SELECT id FROM external_resources WHERE url=? LIMIT 2").all(parsed.href) as Array<{id:string}>;
     // A pasted cached URL remains usable without a machine connection.
     if(cached.length>1 && !c.connectionId) throw new StapleError("conflict","Several scoped resources use this URL. Choose a resource or connection explicitly.");
-    if (cached.length===1 && !c.connectionId) return this.store.externalLinks().resource(cached[0]!.id);
+    if (cached.length===1 && !c.connectionId) return storedSource(this.store.externalLinks().resource(cached[0]!.id));
     const reader=this.reader(this.select(c,parsed.host));
     const resolved=await reader.resolve({url:parsed.href});
     if (!resolved) throw new StapleError("not_found","No accessible issue or PR was found at this URL");
@@ -90,7 +90,7 @@ export class IntegrationOperations {
         const text=c.text?.trim() ?? "";
         const local=this.store.listIssues({includeResolved:true}).filter(i=>`${i.identifier} ${i.title}`.toLowerCase().includes(text.toLowerCase())).slice(0,50);
         const rows=this.store.db.prepare(`SELECT r.id FROM external_resources r LEFT JOIN external_private_cache p ON p.resource_id=r.id WHERE r.kind=? AND
-          (instr(lower(COALESCE(p.title,r.title,'')),lower(?))>0 OR instr(lower(r.display_key),lower(?))>0) LIMIT 50`).all(c.kind ?? "issue",text,text) as Array<{id:string}>;
+          (instr(lower(COALESCE(CASE WHEN p.fetched_at IS NOT NULL AND (r.fetched_at IS NULL OR p.fetched_at>=r.fetched_at) THEN p.title ELSE r.title END,'')),lower(?))>0 OR instr(lower(r.display_key),lower(?))>0) LIMIT 50`).all(c.kind ?? "issue",text,text) as Array<{id:string}>;
         const cached=rows.map(r=>this.decorate(this.store.externalLinks().resource(r.id)));
         if (!c.connectionId) return {local,counts:this.counts(),cached,remote:[],nextCursor:null,execution:"cached_only"};
         const page=await this.reader(c.connectionId).search(c.kind ?? "issue",{text,containerId:c.containerId,cursor:c.cursor});
@@ -125,4 +125,11 @@ export class IntegrationOperations {
 function need(value:string|undefined,label:string):string {
   if(!value?.trim()) throw new StapleError("validation",`This integration operation needs a ${label}`);
   return value;
+}
+
+/** Replicated references may have no consented context on this machine. */
+function storedSource(resource: ExternalResource): ExternalResource | (ResolvedExternalItem & Pick<ExternalResource, "id">) {
+  return resource.fetchedAt === null || resource.title === null
+    ? { id: resource.id, ref: resource.ref, key: resource.key, url: resource.url }
+    : resource;
 }
