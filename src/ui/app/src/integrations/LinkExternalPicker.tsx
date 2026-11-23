@@ -501,12 +501,12 @@ function PickerBody({
               name="integration-local-target"
               disabled={busy}
               options={rows.map((r) => ({
-                value: r.issue.id,
+                value: r.issue.identifier,
                 label: r.issue.identifier,
                 hint: r.issue.title,
                 status: r.issue.status,
               }))}
-              selected={target ? [target] : []}
+              selected={target ? [rows.find((r) => r.issue.id === target)?.issue.identifier ?? target] : []}
               onChange={(next) => setTarget(next[0] ?? "")}
               placeholder="Choose ticket"
               actionLabel="Change ticket"
