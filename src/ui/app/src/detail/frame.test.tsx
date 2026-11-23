@@ -159,6 +159,7 @@ describe("the tab strip", () => {
     expect(TABS.map((tab) => [tab.id, tab.label])).toEqual([
       ["overview", "Details"],
       ["plan", "Plan"],
+      ["external-links", "External links"],
       ["relations", "Connections"],
       ["idea-connections", "Connections"],
       ["documents", "Documents"],

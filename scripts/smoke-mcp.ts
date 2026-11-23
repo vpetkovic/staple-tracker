@@ -109,7 +109,7 @@ try {
   await pinned.handshake();
 
   const tools = await rpc("tools/list", {});
-  assert(tools.tools.length === 84, `tools/list exposes ${tools.tools.length} tools`);
+  assert(tools.tools.length === 87, `tools/list exposes ${tools.tools.length} tools`);
 
   const byName = new Map<string, any>(tools.tools.map((t: any) => [t.name, t]));
   assert(
@@ -118,8 +118,9 @@ try {
   );
   const readOnly = tools.tools.filter((t: any) => t.annotations?.readOnlyHint === true).map((t: any) => t.name);
   assert(
-    readOnly.length === 33 &&
+    readOnly.length === 34 &&
       [
+        "integration_read",
         "inbox",
         "list_tasks",
         "get_task",
@@ -173,7 +174,7 @@ try {
         "get_idea",
         "list_horizons",
       ].every((n) => readOnly.includes(n)),
-    `exactly the 33 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
+    `exactly the 34 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
   );
   // A host decides from these hints whether to ask a person first, including for a tool a
   // view's button calls through it.
@@ -974,7 +975,7 @@ try {
 
   const coldTools = await cold.rpc("tools/list", {});
   assert(
-    coldTools.tools.length === tools.tools.length && coldTools.tools.length === 84,
+    coldTools.tools.length === tools.tools.length && coldTools.tools.length === 87,
     `server connects and lists ${coldTools.tools.length} tools with no workspace anywhere above cwd`,
   );
 
@@ -1009,7 +1010,8 @@ try {
   // decide a gate in the view's workspace, 65. The plan tools list_ideas, get_idea,
   // list_horizons, capture_idea, update_idea, start_idea, unlink_idea and the app-only
   // reset_idea_baseline read and write one workspace's ideas, 73, and scaffold_idea, 74.
-  assert(wsTargetable.length === 74, `74 workspace tools accept ws targeting (${wsTargetable.length} found)`);
+  // Integration read/write/configure add three workspace-targetable tools, 77.
+  assert(wsTargetable.length === 77, `77 workspace tools accept ws targeting (${wsTargetable.length} found)`);
   // A person's click in a view is recorded under the person only while hosts keep these two
   // away from the model: both declare MCP Apps visibility ["app"] and take no actor.
   for (const name of ["approve_gate_from_view", "request_changes_from_view"]) {
@@ -1218,6 +1220,7 @@ try {
         "checkout_task",
         // S7 (STA-73): settling a conflict emits a NEW operation carrying the
         // choice, so it is a write and is attributed like one.
+        "configure_integration",
         "conflict_resolve",
         // Autopilot runs: continue records an outcome and claims as the run's actor.
         "continue_run",
@@ -1228,6 +1231,9 @@ try {
         "dequeue_task",
         "enqueue_task",
         "gate_task",
+        // Shared operations expose the optional actor on their common command schema.
+        "integration_read",
+        "integration_write",
         // Goal mode: a criterion's verdict names who judged it.
         "mark_milestone_criterion",
         "move_milestone_member",
