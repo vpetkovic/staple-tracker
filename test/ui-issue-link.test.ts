@@ -109,6 +109,58 @@ const detail = (p: Page) => p.locator("[data-detail-overlay]");
 const heading = (p: Page) => detail(p).locator('aside[aria-label="Issue detail"]');
 
 describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
+  it("keeps first-connection defaults consistent and applies saved defaults with explicit type overrides", async () => {
+    const { page, context, errors } = await open(single, "/?view=tasks");
+    const connection = { id: "test-gh", providerId: "github", host: "github.com", account: "tester", transport: "cli" };
+    let configured = false;
+    await page.route("**/api/integrations/read", route => {
+      const command = route.request().postDataJSON();
+      if (command.action === "connections") return route.fulfill({ json: { connections: configured ? [connection] : [] } });
+      return route.continue();
+    });
+    await page.route("**/api/integrations/configure", route => {
+      configured = true;
+      return route.fulfill({ json: connection });
+    });
+    await page.goto(`${at(single)}/?settings=integrations&settings-ws=alpha&token=${single.token}`, { waitUntil: "networkidle" });
+    await expect.poll(() => page.getByLabel("Default connection", { exact: true }).inputValue()).toBe("");
+    await page.getByLabel("Expected GitHub account", { exact: true }).fill("tester");
+    await page.getByRole("button", { name: "Add connection", exact: true }).click();
+    await expect.poll(() => page.getByLabel("Default connection", { exact: true }).inputValue()).toBe("test-gh");
+    await page.getByLabel("Default connection", { exact: true }).selectOption("");
+    await expect.poll(() => page.getByRole("button", { name: "Save defaults", exact: true }).isEnabled()).toBe(true);
+    await page.getByRole("button", { name: "Save defaults", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("staple:link-defaults:v1:alpha") ?? "null")?.connectionId)).toBe("");
+    await page.getByLabel("Default connection", { exact: true }).selectOption("test-gh");
+    await page.getByLabel("Default resource type", { exact: true }).selectOption("pull_request");
+    await page.getByRole("button", { name: "Save defaults", exact: true }).click();
+    await page.goto(`${at(single)}/?issue=ALP-1&token=${single.token}`, { waitUntil: "networkidle" });
+    await page.getByRole("button", { name: "Link issue", exact: true }).click();
+    await expect.poll(() => page.getByLabel("Provider connection", { exact: true }).inputValue()).toBe("test-gh");
+    expect(await page.getByLabel("Resource type", { exact: true }).inputValue()).toBe("issue");
+    await page.keyboard.press("Escape");
+    await page.getByRole("tab", { name: "External links", exact: true }).click();
+    await page.getByRole("button", { name: "Link issue or PR", exact: true }).click();
+    await expect.poll(() => page.getByLabel("Provider connection", { exact: true }).inputValue()).toBe("test-gh");
+    expect(await page.getByLabel("Resource type", { exact: true }).inputValue()).toBe("pull_request");
+    await page.keyboard.press("Escape");
+    await page.goto(`${at(single)}/?settings=integrations&settings-ws=alpha&token=${single.token}`, { waitUntil: "networkidle" });
+    await page.getByRole("checkbox", { name: /Remember last-used selections/ }).check();
+    await page.getByRole("button", { name: "Save defaults", exact: true }).click();
+    await page.goto(`${at(single)}/?issue=ALP-1&token=${single.token}`, { waitUntil: "networkidle" });
+    await page.getByRole("button", { name: "Link PR", exact: true }).click();
+    await expect.poll(() => page.getByLabel("Provider connection", { exact: true }).inputValue()).toBe("test-gh");
+    await page.getByLabel("Resource type", { exact: true }).selectOption("issue");
+    await page.getByLabel("Provider connection", { exact: true }).selectOption("");
+    await page.keyboard.press("Escape");
+    await page.getByRole("tab", { name: "External links", exact: true }).click();
+    await page.getByRole("button", { name: "Link issue or PR", exact: true }).click();
+    await expect.poll(() => page.getByLabel("Resource type", { exact: true }).inputValue()).toBe("issue");
+    expect(await page.getByLabel("Provider connection", { exact: true }).inputValue()).toBe("");
+    expect(errors).toEqual([]);
+    await context.close();
+  }, 30_000);
+
   it("loading an address with issue opens that ticket, and a reload keeps it open", async () => {
     const { page, context, errors } = await open(single, "/?issue=ALP-2");
     await expect.poll(() => detail(page).count()).toBe(1);

@@ -77,3 +77,19 @@ export function parentChoices(link: ExternalLink, group: ExternalLink[]): Extern
     (row) => row.resource.ref.kind === "pull_request" && !descendants.has(row.resource.id),
   );
 }
+
+/** Bounded file-tree guides, including sibling continuation across expanded nodes. */
+export function prTreeRows(rows: PrStackRow[]): (PrStackRow & { guides: boolean[] })[] {
+  const lastChild = new Map<string, string>();
+  for (const row of rows)
+    if (row.parent) lastChild.set(row.parent.resource.id, row.link.resource.id);
+  const ancestors: boolean[] = [];
+  return rows.map(row => {
+    ancestors.length = row.depth;
+    const guides = ancestors.slice(1, 3);
+    const continues = !!row.parent && lastChild.get(row.parent.resource.id) !== row.link.resource.id;
+    if (row.depth > 0) guides.push(continues);
+    ancestors[row.depth] = continues;
+    return { ...row, guides: guides.slice(0, 3) };
+  });
+}

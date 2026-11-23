@@ -113,7 +113,7 @@ export function onOpenRunHistory(handler: (request: RunHistoryRequest) => void):
   return () => window.removeEventListener(RUN_HISTORY, listener);
 }
 
-export interface LinkExternalRequest { workspace?: string; ref?: string }
+export interface LinkExternalRequest { workspace?: string; ref?: string; kind?: "issue" | "pull_request" }
 const LINK_EXTERNAL = "staple:link-external";
 export function openLinkExternal(request: LinkExternalRequest = {}): void {
   window.dispatchEvent(new CustomEvent<LinkExternalRequest>(LINK_EXTERNAL, {detail:request}));

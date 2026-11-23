@@ -4,7 +4,7 @@ import {
   type ExternalSection,
 } from "@/integrations/external-section";
 import { useEffect, useState } from "react";
-import { CircleDot, GitPullRequest, Link2, RefreshCw } from "lucide-react";
+import { CircleDot, GitPullRequest, Link2, RefreshCw, ExternalLink as ExternalLinkIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { integrationRead, integrationWrite } from "@/lib/api";
 import { openLinkExternal, openSettings } from "@/lib/shell-events";
@@ -238,12 +238,13 @@ export function ExternalLinkCard({
   const Icon = r.ref.kind === "issue" ? CircleDot : GitPullRequest;
   return (
     <article
-      className="min-w-0 rounded-lg border bg-surface-raised p-3 space-y-2"
+      className="min-w-0 overflow-hidden rounded-lg border bg-surface-raised p-3 space-y-3"
       data-external-resource={r.id}
     >
       <div className="flex items-start gap-2">
         <Icon className="size-4 shrink-0 mt-0.5 text-muted-foreground" aria-hidden />
         <div className="min-w-0 flex-1">
+          <p className="mb-1 text-xs text-muted-foreground wrap-anywhere">{r.ref.providerId} · {r.key}</p>
           <a
             href={r.url}
             target="_blank"
@@ -251,12 +252,17 @@ export function ExternalLinkCard({
             className="text-sm font-medium wrap-anywhere hover:underline"
           >
             {r.title ?? r.key}
+            <ExternalLinkIcon aria-hidden className="ml-1 inline size-3 text-muted-foreground" />
           </a>
-          <p className="text-xs text-muted-foreground wrap-anywhere">
-            {r.ref.kind === "issue" ? "Issue" : "PR reference"} · {r.key}
-            {r.status ? ` · ${r.status.name}` : " · state unknown"}
-          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <span className="rounded-full border px-2 py-0.5 text-foreground">{r.status?.name ?? "State unknown"}</span>
+            <span>{r.ref.kind === "issue" ? "Issue" : "Pull request"}</span>
+          </div>
         </div>
+        <Button size="icon" variant="ghost" className="size-8 shrink-0" disabled={busy || !canRefresh}
+          aria-label={`Refresh context for ${r.key}`} onClick={onRefresh}>
+          <RefreshCw aria-hidden className="size-3.5" />
+        </Button>
       </div>
       <p className="text-xs text-muted-foreground wrap-anywhere">
         {freshness(r)}
@@ -273,33 +279,32 @@ export function ExternalLinkCard({
         </details>
       ) : null}
       {children}
-      <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" variant="ghost" disabled={busy || !canRefresh} onClick={onRefresh}>
-          <RefreshCw className="size-3" />
-          Refresh context
-        </Button>
-        <Button size="sm" variant="ghost" disabled={busy} onClick={onUnlink}>
-          Unlink from this ticket
-        </Button>
-      </div>
-      <details className="text-xs text-muted-foreground">
-        <summary className="cursor-pointer">
-          Context sharing · {r.contextShared ? "shared with workspace" : "only on this machine"}
-        </summary>
-        <p className="mt-2">
-          Links sync with the workspace. Sharing also sends the cached source title, body and
-          status. Turning sharing off clears the current shared copy; it cannot erase retained
-          history or backups. This choice applies to this source across linked tickets.
-        </p>
-        <label className="mt-2 flex gap-2 items-start">
-          <input
-            type="checkbox"
-            disabled={busy}
-            checked={r.contextShared}
-            onChange={(e) => onShare(e.target.checked)}
-          />
-          <span>Share cached source context with workspace</span>
-        </label>
+      <details className="border-t pt-2 text-xs text-muted-foreground">
+        <summary className="focus-ring cursor-pointer hover:text-foreground">Link options</summary>
+        <div className="mt-3 space-y-3">
+          <details className="text-xs text-muted-foreground">
+            <summary className="cursor-pointer">
+              Context sharing · {r.contextShared ? "shared with workspace" : "only on this machine"}
+            </summary>
+            <p className="mt-2">
+              Links sync with the workspace. Sharing also sends the cached source title, body and
+              status. Turning sharing off clears the current shared copy; it cannot erase retained
+              history or backups. This choice applies to this source across linked tickets.
+            </p>
+            <label className="mt-2 flex gap-2 items-start">
+              <input
+                type="checkbox"
+                disabled={busy}
+                checked={r.contextShared}
+                onChange={(e) => onShare(e.target.checked)}
+              />
+              <span>Share cached source context with workspace</span>
+            </label>
+          </details>
+          <Button size="sm" variant="ghost" disabled={busy} onClick={onUnlink}>
+            Unlink from this ticket
+          </Button>
+        </div>
       </details>
     </article>
   );

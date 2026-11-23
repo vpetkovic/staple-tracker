@@ -633,8 +633,6 @@ export function TaskRowLine({
             {/* A live autopilot run holds this row, works through it, or (folded) works inside it (lib/runs.ts); a ghost row shows no claim. */}
             {columns.claim && !ghost ? <AutopilotBadge workspace={row.workspace} issueId={issue.id} folded={collapsedParent} /> : null}
             {columns.deps ? <DependencyBadges row={row} merged={plan.deps === "merged"} words /> : null}
-            <ExternalLinkBadges summary={row.externalLinks} workspace={row.workspace} issueId={issue.id} issueRef={issue.identifier} />
-            {columns.pr && plan.prBadge ? <PrBadge pullRequests={row.pullRequests} showNumber={plan.prNumber} /> : null}
             {milestoneCue && plan.milestoneMark ? <MilestoneCue cue={milestoneCue} onOpen={onOpenMilestone} chip /> : null}
             {columns.labels && plan.labels !== "none" ? (
               <LabelPills labels={deskLabels(issue.labels, columns.priority)} max={labelMax} />
@@ -651,6 +649,8 @@ export function TaskRowLine({
               showWord={plan.workingLabel}
             />
           ) : null}
+          <ExternalLinkBadges summary={row.externalLinks} workspace={row.workspace} issueId={issue.id} issueRef={issue.identifier} />
+          {columns.pr && plan.prBadge ? <PrBadge pullRequests={row.pullRequests} showNumber={plan.prNumber} /> : null}
           {/*
             THE TRAILING SLOT. The date, and in the same fixed box the quick actions, which
             fade in over it on hover, keyboard focus, and on the open and selected rows.
@@ -728,8 +728,6 @@ export function TaskRowLine({
           the edge that gets clipped first.
         */}
         {columns.deps ? <DependencyBadges row={row} merged={plan.deps === "merged"} /> : null}
-        <ExternalLinkBadges summary={row.externalLinks} workspace={row.workspace} issueId={issue.id} issueRef={issue.identifier} />
-            {columns.pr && plan.prBadge ? <PrBadge pullRequests={row.pullRequests} showNumber={plan.prNumber} /> : null}
         {columns.labels && plan.labels !== "none" ? <LabelPills labels={issue.labels} max={labelMax} /> : null}
         {/*
           W4 (STA-116). Immediately LEFT of the claim slot, which is where §3C's mockup
@@ -764,6 +762,8 @@ export function TaskRowLine({
         {columns.assignee && issue.assignee && !(plan.claim === "avatar" && claimHolder === issue.assignee) ? (
           <Avatar name={issue.assignee} kind="human" size={20} className="staple-row-assignee" />
         ) : null}
+        <ExternalLinkBadges summary={row.externalLinks} workspace={row.workspace} issueId={issue.id} issueRef={issue.identifier} />
+        {columns.pr && plan.prBadge ? <PrBadge pullRequests={row.pullRequests} showNumber={plan.prNumber} /> : null}
         {columns.date && plan.date ? (
           <time className="staple-row-date" dateTime={issue.updatedAt} title={issue.updatedAt}>
             {formatRowDate(issue.updatedAt, now)}

@@ -1,3 +1,4 @@
+import { LinkDefaultsSection } from "./LinkDefaultsSection";
 import { useEffect, useState } from "react";
 import { Plug, RefreshCw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -26,7 +27,8 @@ export function IntegrationsSection({ ws, settings, applyTo, onDirtyChange }: {
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
-  const dirty = selected !== stored || account !== "" || host !== "github.com";
+  const [defaultsDirty, setDefaultsDirty] = useState(false);
+  const dirty = defaultsDirty || selected !== stored || account !== "" || host !== "github.com";
   useEffect(() => { onDirtyChange(dirty); }, [dirty, onDirtyChange]);
   useEffect(() => { setSelected(stored); }, [stored]);
   useEffect(() => {
@@ -82,6 +84,8 @@ export function IntegrationsSection({ ws, settings, applyTo, onDirtyChange }: {
         if(refusal) throw new Error(refusal.message); setNotice("Workspace repository preferences saved.");
       })}>Save repositories</Button><Button size="sm" variant="ghost" disabled={busy || selected===stored} onClick={()=>setSelected(stored)}>Cancel</Button></div>
     </Section>
+    {ws && loaded ? <LinkDefaultsSection key={ws} ws={ws} connections={connections}
+      repositories={stored.split(",").filter(Boolean)} onDirtyChange={setDefaultsDirty} /> : null}
     {notice ? <p role="status" className="text-sm">{notice}</p> : null}
     <p className="text-xs text-muted-foreground">Cloud-only sessions show synced links and shared cached context. They cannot run gh on your laptop. Direct API connections and additional providers will follow.</p>
   </div>;

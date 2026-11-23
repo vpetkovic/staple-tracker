@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { prStacks, parentChoices } from "./pr-stacks";
+import { prStacks, prTreeRows, parentChoices } from "./pr-stacks";
 import type { ExternalLink } from "./model";
 function pr(id: string, parent: string | null = null, position = 0): ExternalLink {
   return {
@@ -57,6 +57,14 @@ describe("explicit PR stacks", () => {
     const links = Array.from({ length: 1200 }, (_, i) => pr(String(i + 1), i ? String(i) : null));
     expect(prStacks(links)[0]?.rows.at(-1)?.depth).toBe(1199);
     expect(prStacks([pr("1", "2"), pr("2", "1")])[0]?.rows).toHaveLength(2);
+  });
+  it("keeps sibling guide lines through descendants without unbounded indentation", () => {
+    const rows = prStacks([pr("1"), pr("2", "1"), pr("3", "2"), pr("4", "1")])[0]!.rows;
+    expect(prTreeRows(rows).map(r => [r.link.id, r.guides])).toEqual([
+      ["1", []], ["2", [true]], ["3", [true, false]], ["4", [false]],
+    ]);
+    const deep = Array.from({ length: 1200 }, (_, i) => pr(String(i + 1), i ? String(i) : null));
+    expect(prTreeRows(prStacks(deep)[0]!.rows).every(r => r.guides.length <= 3)).toBe(true);
   });
   it("does not offer self or any descendant as a parent", () => {
     const root = pr("1"),

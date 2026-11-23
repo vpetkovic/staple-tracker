@@ -50,7 +50,7 @@ export function ExternalPropertySummary({
         type="button"
         className="focus-ring flex size-7 shrink-0 items-center justify-center rounded hover:bg-accent pointer-coarse:size-9"
         aria-label={`Link ${kind === "issue" ? "issue" : "PR"}`}
-        onClick={() => openLinkExternal({ workspace: detail.workspace, ref: detail.issue.id })}
+        onClick={() => openLinkExternal({ workspace: detail.workspace, ref: detail.issue.id, kind })}
       >
         <Plus className="size-3.5" aria-hidden />
       </button>

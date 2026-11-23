@@ -142,6 +142,17 @@ describe("the three presentations", () => {
     expect(html.indexOf("data-status-sentence")).toBeLessThan(html.indexOf("data-summary-chips"));
   });
 
+  it("places external issue and PR pills after the assignee in the phone summary", () => {
+    const html = render("sheet");
+    const start = html.indexOf('data-summary-chips');
+    const assignee = html.indexOf('data-summary-assignee', start);
+    const issues = html.indexOf('0 linked issues; show External links', start);
+    const prs = html.indexOf('0 pull requests; show External links', start);
+    expect(assignee).toBeGreaterThan(start);
+    expect(issues).toBeGreaterThan(assignee);
+    expect(prs).toBeGreaterThan(issues);
+  });
+
   it("phone sheet: the task's reference is printed on one line in the breadcrumb", () => {
     const tag = /<span[^>]*data-detail-identifier=""[^>]*>/.exec(render("sheet"))?.[0] ?? "";
     expect(tag).toContain("whitespace-nowrap");
