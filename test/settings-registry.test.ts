@@ -387,9 +387,9 @@ describe("registering a category and a definition after module load", () => {
 describe("repository search preferences", () => {
   it("accepts scoped numeric repositories without storing account or credential data", () => {
     const definition = requireSettingDefinition("integrations.repositories", "workspace");
-    expect(() => validateSettingValue(definition, "github.com/42,github.example/91")).not.toThrow();
+    expect(() => validateSettingValue(definition, "github.com/42,github.example/91", "test")).not.toThrow();
     for (const value of ["github.com/team/repo", "token=secret", "github.com/0", {account:"ada"}]) {
-      expect(() => validateSettingValue(definition, value)).toThrow();
+      expect(() => validateSettingValue(definition, value, "test")).toThrow();
     }
   });
 });
