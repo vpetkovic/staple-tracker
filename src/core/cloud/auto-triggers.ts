@@ -75,6 +75,8 @@ import { isSharedWorkspace, readMembersCache } from "./members-cache.js";
  * — which exists to report what is wrong with a machine and must not change it.
  */
 export const CLI_COMMAND_TRIGGERS: Readonly<Record<string, AutoSyncTrigger>> = {
+  // Integration reads and machine-local configuration are filtered below.
+  integrations: "post-write",
   // writes
   new: "post-write",
   checkout: "post-write",
@@ -188,6 +190,9 @@ export async function runCommandTrigger(
   argv: readonly string[],
   options: CommandTriggerOptions,
 ): Promise<AutoSyncOutcome> {
+  if (command === "integrations" && !["link", "create", "unlink", "refresh", "stack", "share"].includes(argv[0] ?? "")) {
+    return { status: "skipped", reason: "no-connections" };
+  }
   const trigger = command === undefined ? undefined : CLI_COMMAND_TRIGGERS[command];
   if (trigger === undefined) return { status: "skipped", reason: "no-connections" };
 

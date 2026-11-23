@@ -1,3 +1,4 @@
+import { IntegrationOperations, integrationCommandSchema, INTEGRATION_READ_ACTIONS, INTEGRATION_WRITE_ACTIONS, INTEGRATION_CONFIG_ACTIONS } from "./core/integrations/operations.js";
 /**
  * staple MCP server (stdio) — the whole agent surface.
  *
@@ -258,7 +259,7 @@ const autoSync = new SurfaceAutoSync({
  * failure as `isError` rather than by throwing, so the check is on the value.
  */
 // `start_run` is not here: a goal run gates its milestone at start, a write that replicates.
-const MACHINE_LOCAL_WRITES = new Set(["record_budget_sample", "stop_run", "pause_run", "resume_run"]);
+const MACHINE_LOCAL_WRITES = new Set(["configure_integration","record_budget_sample", "stop_run", "pause_run", "resume_run"]);
 {
   type ToolConfig = {
     description?: string;
@@ -1329,6 +1330,25 @@ const replayedShape = {
     .boolean()
     .describe("True when an idempotency key replayed an earlier write; false when this call wrote."),
 };
+
+for (const spec of [
+  { name: "integration_read", actions: INTEGRATION_READ_ACTIONS, readOnly: true,
+    description: "Read local provider connections, check their health, discover repositories, search provider issues/PRs, resolve exact URLs, preview migration matches, list links or get batched counts. Search never creates execution work. Without a connection, cached context remains readable. Pass connectionId for live reads." },
+  { name: "integration_write", actions: INTEGRATION_WRITE_ACTIONS, readOnly: false,
+    description: "Link or unlink provider issues and PR references, refresh cached context, create local work from an issue with a requestKey, explicitly share source context, or set an explicit PR stack. Linking needs ref and confirmed=true; create requires additionalWork=true when matches already exist. No remote writes or PR operations." },
+  { name: "configure_integration", actions: INTEGRATION_CONFIG_ACTIONS, readOnly: false,
+    description: "Configure or remove a machine-local GitHub CLI connection for this workspace. Configure needs host and expected account; connectionId edits an existing binding. Uses installed gh authentication without changing it. No credentials are accepted or replicated." },
+] as const) {
+  server.registerTool(spec.name, {
+    description: spec.description,
+    inputSchema: { ...integrationCommandSchema.omit({ action: true }).shape, action: z.enum(spec.actions), ws: wsSchema },
+    outputSchema: { result: z.unknown() },
+    annotations: { title: spec.name === "integration_read" ? "Read integrations" : spec.name === "integration_write" ? "Update external links" : "Configure integration", readOnlyHint: spec.readOnly, ...(spec.readOnly ? { idempotentHint: true } : { destructiveHint: false }), openWorldHint: spec.name !== "configure_integration" },
+  }, async ({ ws, ...command }) => {
+    try { return ok({result: await new IntegrationOperations(storeFor(ws)).execute({ ...command, actor: command.actor ?? process.env.STAPLE_AGENT })}); }
+    catch(error) { return fail(error); }
+  });
+}
 
 server.registerTool(
   "inbox",

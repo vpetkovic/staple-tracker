@@ -745,7 +745,11 @@ describe("runCommandTrigger, on the everyday path", () => {
     await runCommandTrigger("ls", ["--db", dbPath], options);
     await runCommandTrigger("doctor", ["--db", dbPath], options);
     await runCommandTrigger("cloud", ["sync", "--db", dbPath], options);
-    expect(fired).toEqual(["post-write", "startup"]);
+    await runCommandTrigger("integrations", ["link", "--db", dbPath], options);
+    for (const action of ["search", "connections", "configure", "remove", "health"]) {
+      await runCommandTrigger("integrations", [action, "--db", dbPath], options);
+    }
+    expect(fired).toEqual(["post-write", "startup", "post-write"]);
   });
 
   it("closes the handle it opened, on every path", async () => {

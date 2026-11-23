@@ -1,3 +1,4 @@
+import { IntegrationOperations, INTEGRATION_READ_ACTIONS, INTEGRATION_WRITE_ACTIONS, INTEGRATION_CONFIG_ACTIONS } from "../core/integrations/operations.js";
 /**
  * staple ui — tiny local web server, alive only while you use the page.
  * Serves the single-page UI plus a JSON API over the workspace file(s).
@@ -306,6 +307,8 @@ const STARTED_REFRESH_MS = 30_000;
  * direction that turns automatic sync ON.
  */
 const CLOUD_LIFECYCLE_WRITES = new Set([
+  "/api/integrations/read",
+  "/api/integrations/configure",
   "/api/cloud/connect/preview",
   "/api/cloud/connect",
   "/api/cloud/disconnect",
@@ -1652,6 +1655,7 @@ export function startUiServer(options: UiOptions): UiHandle {
            * join preview and cancel contact the sync service, and every one is a person's
            * decision, so they sit behind the Origin check with the other cloud writes.
            */
+          ["/api/integrations/read", "/api/integrations/write", "/api/integrations/configure"].includes(url.pathname) ||
           MEMBER_POST_ROUTES.includes(url.pathname) ||
           url.pathname === "/api/hub/unregister" ||
           url.pathname === "/api/hub/backup" ||
@@ -3905,6 +3909,22 @@ export function startUiServer(options: UiOptions): UiHandle {
           return { registry, adoption: applied, digest: seen, retiresOptOuts };
         });
         json(res, 200, { ...answer, report: hubCloudReport(stapleHome()) });
+        return;
+      }
+
+      if (url.pathname === "/api/integrations") {
+        const handle = handleFor(url.searchParams.get("ws") ?? undefined);
+        json(res,200,await new IntegrationOperations(handle.store).execute({action:"connections"}));
+        return;
+      }
+      if (["/api/integrations/read","/api/integrations/write","/api/integrations/configure"].includes(url.pathname)) {
+        const body=await readBody(req);
+        const {ws,...command}=body;
+        const allowed:readonly string[]=url.pathname==="/api/integrations/read" ? INTEGRATION_READ_ACTIONS
+          : url.pathname==="/api/integrations/configure" ? INTEGRATION_CONFIG_ACTIONS : INTEGRATION_WRITE_ACTIONS;
+        if(typeof command.action!=="string" || !allowed.includes(command.action)) throw new StapleError("validation","This operation belongs on a different integration route");
+        const handle=handleFor(typeof ws==="string" ? ws:url.searchParams.get("ws") ?? undefined);
+        json(res,200,await new IntegrationOperations(handle.store).execute({...command,actor:command.actor ?? "user"}));
         return;
       }
 

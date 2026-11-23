@@ -466,7 +466,7 @@ export function initWorkspace(options: {
  * from cwd, then (optionally) a hub-registered workspace by slug or prefix.
  */
 export function resolveWorkspace(options: { db?: string; ws?: string } = {}): OpenedWorkspace {
-  const explicit = options.db ?? process.env.STAPLE_DB;
+  const explicit = options.db ?? (options.ws ? undefined : process.env.STAPLE_DB);
   if (explicit) return openWorkspace(resolve(explicit));
   if (options.ws) {
     const hub = Hub.open();
