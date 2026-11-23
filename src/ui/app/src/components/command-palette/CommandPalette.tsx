@@ -52,7 +52,7 @@ import { action, getIssues, getPlan, planWrite } from "@/lib/api";
 import { withDimension } from "@/lib/filters";
 import { useSession, type Selection } from "@/lib/session";
 import { workspaceSettings } from "@/lib/settings";
-import { openSettings } from "@/lib/shell-events";
+import { openLinkExternal, openSettings } from "@/lib/shell-events";
 import type { IssueStatus } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
@@ -398,6 +398,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           />
 
           <CommandList data-palette-list>
+            {!page ? <CommandGroup heading="Providers"><CommandItem value="search-provider-issues-prs" onSelect={()=>{onOpenChange(false); requestAnimationFrame(()=>openLinkExternal({workspace:session.ws || undefined}));}}>Link issue or PR · search providers</CommandItem></CommandGroup> : null}
             {page ? (
               <div className="px-3 py-4 text-reading">
                 <div className="text-muted-foreground">

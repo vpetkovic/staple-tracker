@@ -88,13 +88,13 @@ export class IntegrationOperations {
       case "preview": { const item=await this.source(c); return {item,...this.work.preview(item)}; }
       case "search": {
         const text=c.text?.trim() ?? "";
-        const local=this.store.listIssues({includeResolved:true}).filter(i=>i.title.toLowerCase().includes(text.toLowerCase())).slice(0,50);
+        const local=this.store.listIssues({includeResolved:true}).filter(i=>`${i.identifier} ${i.title}`.toLowerCase().includes(text.toLowerCase())).slice(0,50);
         const rows=this.store.db.prepare(`SELECT r.id FROM external_resources r LEFT JOIN external_private_cache p ON p.resource_id=r.id WHERE r.kind=? AND
           (instr(lower(COALESCE(p.title,r.title,'')),lower(?))>0 OR instr(lower(r.display_key),lower(?))>0) LIMIT 50`).all(c.kind ?? "issue",text,text) as Array<{id:string}>;
         const cached=rows.map(r=>this.decorate(this.store.externalLinks().resource(r.id)));
-        if (!c.connectionId) return {local,cached,remote:[],nextCursor:null,execution:"cached_only"};
+        if (!c.connectionId) return {local,counts:this.counts(),cached,remote:[],nextCursor:null,execution:"cached_only"};
         const page=await this.reader(c.connectionId).search(c.kind ?? "issue",{text,containerId:c.containerId,cursor:c.cursor});
-        return {local,cached,remote:page.items.map(item=>this.decorate(item)),nextCursor:page.nextCursor,execution:"local"};
+        return {local,counts:this.counts(),cached,remote:page.items.map(item=>this.decorate(item)),nextCursor:page.nextCursor,execution:"local"};
       }
       case "link": return this.work.adopt(need(c.ref,"local ticket"),await this.source(c),c.confirmed===true,actor());
       case "create": {

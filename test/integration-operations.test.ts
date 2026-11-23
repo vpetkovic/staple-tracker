@@ -66,7 +66,10 @@ describe("shared integration operations",()=>{
     expect((await call("/api/integrations/read",{action:"link",resourceId:resource.id,ref:task.id,confirmed:true})).status).toBe(409);
     expect((await call("/api/integrations/write",{action:"link",resourceId:resource.id,ref:task.id,confirmed:true},true)).status).toBe(403);
     expect((await call("/api/integrations/configure",{action:"configure",host:"github.com",account:"invalid account"})).status).toBe(409);
+    const beforePoll=await fetch(origin+"/api/poll",{headers:{"x-staple-token":ui.token}}).then(r=>r.json());
     const linked=await call("/api/integrations/write",{action:"link",resourceId:resource.id,ref:task.id,confirmed:true});expect(linked.status).toBe(200);
+    const afterPoll=await fetch(origin+"/api/poll",{headers:{"x-staple-token":ui.token}}).then(r=>r.json());
+    expect(afterPoll.fingerprint).not.toBe(beforePoll.fingerprint);
     const cli=spawnSync(process.execPath,[TSX_CLI,CLI_ENTRY,"integrations","list","--ref",task.id,"--db",dbPath,"--json"],{env:{...process.env,STAPLE_HOME:home,NODE_NO_WARNINGS:"1"},encoding:"utf8"});
     expect(cli.status,cli.stderr).toBe(0);expect(JSON.parse(cli.stdout)[0].resource.id).toBe(resource.id);
     harness=await startMcpClient({home,cwd:home,agent:"integration-test",env:{STAPLE_DB:dbPath}});
