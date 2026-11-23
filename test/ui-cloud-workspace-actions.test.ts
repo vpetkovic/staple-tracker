@@ -55,7 +55,7 @@ import { hubCloudReport } from "../src/core/cloud/hub-surface.js";
 const ENROLLMENT = "enrollment-secret";
 const CAPABILITIES = {
   // A Worker deployed for typed file attachments (protocol 4) — the one this build syncs with.
-  protocol: { min: 1, max: 4 },
+  protocol: { min: 1, max: 5 },
   maxBatchSize: 500,
   maxOpBytes: 65_536,
   maxPullLimit: 1000,
