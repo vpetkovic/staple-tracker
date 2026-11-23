@@ -3,7 +3,7 @@
  * Regenerate with: npx tsx scripts/regen-migration-snapshots.ts
  *
  * The `sqlite_master` dump of a workspace database that walked migrations
- * 001, 002, 003, 004, 005, 006, 007, 008, 009, 010, 011, 012, 013, 014, 015, 016, 017, 018, 019, 020, 021, 022. Executed verbatim by the runner when — and only when —
+ * 001, 002, 003, 004, 005, 006, 007, 008, 009, 010, 011, 012, 013, 014, 015, 016, 017, 018, 019, 020, 021, 022, 023. Executed verbatim by the runner when — and only when —
  * version detection proved the file has no tables at all.
  *
  * No `IF NOT EXISTS` anywhere, deliberately: reaching this text with tables
@@ -479,7 +479,7 @@ CREATE TABLE external_resources (
         status_json TEXT,
         fetched_at TEXT,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL, context_shared INTEGER NOT NULL DEFAULT 0 CHECK (context_shared IN (0,1)),
         UNIQUE (provider_id, host, scope_id, container_id, kind, remote_id)
       );
 
@@ -497,4 +497,12 @@ CREATE TABLE external_links (
       );
 
 CREATE INDEX external_links_resource_idx ON external_links(resource_id);
+
+CREATE TABLE external_private_cache (
+        resource_id TEXT PRIMARY KEY REFERENCES external_resources(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        body TEXT,
+        status_json TEXT,
+        fetched_at TEXT NOT NULL
+      );
 `;

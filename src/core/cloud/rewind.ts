@@ -477,6 +477,17 @@ function operationReferents(entity: string, entityId: string, payload: Record<st
     case "attemptTransition":
       if (typeof payload.attemptId === "string") out.push(["attempt", payload.attemptId]);
       break;
+    case "externalStack":
+      issue(entityId);
+      if (Array.isArray(payload.entries)) for (const e of payload.entries as Array<{ resourceId: string; parentResourceId: string | null }>) {
+        out.push(["externalResource", e.resourceId]);
+        if (e.parentResourceId) out.push(["externalResource", e.parentResourceId]);
+      }
+      break;
+    case "externalLink":
+      issue(payload.issueId);
+      if (typeof payload.resourceId === "string") out.push(["externalResource", payload.resourceId]);
+      break;
     case "attachment":
       issue(payload.issueId);
       break;
@@ -538,6 +549,16 @@ function foldNeeds(entities: readonly SnapshotEntity[]): Set<Key> {
       case "attemptTransition":
         need("attempt", state.attemptId);
         break;
+      case "externalStack":
+        need("issue",entity.entityId);
+        if (Array.isArray(state.entries)) for (const e of state.entries as Array<{ resourceId: string; parentResourceId: string | null }>) {
+          need("externalResource", e.resourceId); need("externalResource", e.parentResourceId);
+        }
+        break;
+      case "externalLink":
+        need("issue", state.issueId);
+        need("externalResource", state.resourceId);
+        break;
       case "attachment":
         need("issue", field(state, "issueId", "issue_id"));
         break;
@@ -568,6 +589,9 @@ function heldEntities(db: DatabaseSync): Array<readonly [SyncEntity, string]> {
   // An attempt outlives its issue by design; it is rewound as an entity of its own.
   for (const id of ids("SELECT id FROM attempts")) out.push(["attempt", id]);
   for (const id of ids("SELECT id FROM attempt_transitions")) out.push(["attemptTransition", id]);
+  for (const id of ids("SELECT DISTINCT issue_id AS id FROM external_links")) out.push(["externalStack", id]);
+  for (const id of ids("SELECT id FROM external_resources")) out.push(["externalResource", id]);
+  for (const id of ids("SELECT id FROM external_links")) out.push(["externalLink", id]);
   for (const id of ids("SELECT id FROM attachments")) out.push(["attachment", id]);
   return out;
 }
@@ -605,6 +629,12 @@ function holds(db: DatabaseSync, entity: string, id: string): boolean {
       return hit("SELECT 1 FROM attempts WHERE id = ?", id);
     case "attemptTransition":
       return hit("SELECT 1 FROM attempt_transitions WHERE id = ?", id);
+    case "externalStack":
+      return hit("SELECT 1 FROM issues WHERE id = ?", id);
+    case "externalResource":
+      return hit("SELECT 1 FROM external_resources WHERE id = ?", id);
+    case "externalLink":
+      return hit("SELECT 1 FROM external_links WHERE id = ?", id);
     case "attachment":
       return hit("SELECT 1 FROM attachments WHERE id = ?", id);
     default:
@@ -640,6 +670,11 @@ function referents(db: DatabaseSync, entity: string, id: string): Array<readonly
       return column("SELECT issue_id AS id FROM attempts WHERE id = ?", id).map((issue) => ["issue", issue] as const);
     case "attemptTransition":
       return column("SELECT attempt_id AS id FROM attempt_transitions WHERE id = ?", id).map((attempt) => ["attempt", attempt] as const);
+    case "externalStack":
+      return [["issue",id], ...column("SELECT resource_id AS id FROM external_links WHERE issue_id=? UNION SELECT parent_resource_id AS id FROM external_links WHERE issue_id=?", id, id).map(v => ["externalResource",v] as const)];
+    case "externalLink":
+      return [...column("SELECT issue_id AS id FROM external_links WHERE id = ?", id).map((v) => ["issue", v] as const),
+        ...column("SELECT resource_id AS id FROM external_links WHERE id = ? UNION SELECT parent_resource_id AS id FROM external_links WHERE id = ?", id, id).map((v) => ["externalResource", v] as const)];
     case "attachment":
       return column("SELECT issue_id AS id FROM attachments WHERE id = ?", id).map((issue) => ["issue", issue] as const);
     default:
@@ -702,6 +737,14 @@ function remove(db: DatabaseSync, entity: SyncEntity, id: string): number {
       return gone(db.prepare("DELETE FROM attempts WHERE id = ?").run(id).changes);
     case "attemptTransition":
       return gone(db.prepare("DELETE FROM attempt_transitions WHERE id = ?").run(id).changes);
+    case "externalStack":
+      return gone(db.prepare("UPDATE external_links SET parent_resource_id=NULL,position=0 WHERE issue_id=? AND (parent_resource_id IS NOT NULL OR position<>0)").run(id).changes);
+    case "externalLink":
+      return gone(db.prepare("DELETE FROM external_links WHERE id=?").run(id).changes);
+    case "externalResource":
+      db.prepare("DELETE FROM external_links WHERE resource_id=?").run(id);
+      db.prepare("UPDATE external_links SET parent_resource_id=NULL WHERE parent_resource_id=?").run(id);
+      return gone(db.prepare("DELETE FROM external_resources WHERE id=?").run(id).changes);
     case "attachment":
       return gone(db.prepare("DELETE FROM attachments WHERE id = ?").run(id).changes);
     default:

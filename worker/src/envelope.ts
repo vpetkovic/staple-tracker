@@ -82,6 +82,7 @@ const ENTITIES_BY_PROTOCOL: ReadonlyArray<readonly [number, ReadonlySet<string>]
    * a page or a fold that holds one.
    */
   [4, new Set(["attachment"])],
+  [5, new Set(["externalResource", "externalLink", "externalStack"])],
 ];
 
 /** The registry entities, named once so three files can ask about them. */
@@ -306,6 +307,14 @@ export function validateEnvelope(
    */
   if (entity === "attachment" && verb !== "create" && verb !== "delete") {
     throw new SyncError("validation", `${at}.verb '${verb}' is never valid for an attachment: it is created or deleted`, { index });
+  }
+
+  if ((entity === "externalResource" || entity === "externalStack") && verb === "delete") {
+    throw new SyncError("validation", "External identities and stack choices are retained; unlink associations instead", { index });
+  }
+
+  if (entity === "externalLink" && verb !== "create" && verb !== "delete") {
+    throw new SyncError("validation", "Associations are created or deleted; stack choices are separate", { index });
   }
 
   // `baseVersion` is null for `create` and an integer otherwise. The server records it

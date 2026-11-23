@@ -349,6 +349,7 @@ const ENTITIES_BY_PROTOCOL: ReadonlyArray<readonly [number, ReadonlySet<string>]
   [3, new Set(["attempt", "attemptTransition"])],
   // Typed file attachments — `worker/src/envelope.ts`.
   [4, new Set(["attachment"])],
+  [5, new Set(["externalResource", "externalLink", "externalStack"])],
 ];
 const REGISTRY_ENTITIES = new Set(["registration", "crossLink"]);
 const VERBS = new Set(["create", "update", "delete", "replace", "renumber"]);
@@ -456,7 +457,7 @@ export class FakeSyncServer {
       orphanEndReasons: [...ORPHAN_END_REASONS].sort(),
       // Matches `worker/src/limits.ts`. `min` did not move with `max`, which is what
       // keeps every protocol-1 client working.
-      protocol: { min: 1, max: 4 },
+      protocol: { min: 1, max: 5 },
       vocabulary: null,
       enrollmentSecret: null,
       rateLimit: null,
@@ -1269,6 +1270,12 @@ export class FakeSyncServer {
     }
     if (entity === "attemptTransition" && verb !== "create") {
       throw new ServerError(400, "validation", `${at}.verb '${verb}' is never valid for an attempt transition: it is immutable once written`);
+    }
+    if (entity === "externalLink" && verb !== "create" && verb !== "delete") {
+      throw new ServerError(400, "validation", "Associations are created or deleted; stack choices are separate");
+    }
+    if ((entity === "externalResource" || entity === "externalStack") && verb === "delete") {
+      throw new ServerError(400, "validation", "External identities and stack choices are permanent");
     }
     if (entity === "attachment" && verb !== "create" && verb !== "delete") {
       throw new ServerError(400, "validation", `${at}.verb '${verb}' is never valid for an attachment: it is created or deleted`);

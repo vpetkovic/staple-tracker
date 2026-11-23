@@ -37,7 +37,7 @@ describe("attachments are protocol 4", () => {
       426,
     );
     expect(refused.requiredProtocol).toBe(4);
-    expect(refused.max).toBe(4);
+    expect(refused.max).toBe(5);
 
     expect(
       (

@@ -73,6 +73,7 @@ export function snapshotOpId(
  */
 export function hydrationRank(entity: { entity: string; entityId: string }): number {
   switch (entity.entity) {
+    case "externalResource":
     case "setting":
     case "project":
       return 0;
@@ -81,6 +82,7 @@ export function hydrationRank(entity: { entity: string; entityId: string }): num
       return entity.entityId === VOCABULARY_ORDER_ID ? 3 : 0;
     case "issue":
       return 1;
+    case "externalStack":
     case "queue":
       return 3;
     default:

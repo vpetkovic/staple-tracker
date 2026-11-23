@@ -171,7 +171,7 @@ describe("a fresh repo-local `staple init`", () => {
       // "21" by 021-plan-delivered, then "22" by 022-external-links; the TEXT
       // typing is the characterization, the number
       // just tracks the migration list.
-      { key: "schema_version", value: "22" },
+      { key: "schema_version", value: "23" },
       { key: "slug", value: "metarepo" },
     ]);
   }, 30_000);
@@ -236,6 +236,7 @@ describe("a fresh repo-local `staple init`", () => {
       "index:sqlite_autoindex_documents_1",
       "index:sqlite_autoindex_external_links_1",
       "index:sqlite_autoindex_external_links_2",
+      "index:sqlite_autoindex_external_private_cache_1",
       "index:sqlite_autoindex_external_resources_1",
       "index:sqlite_autoindex_external_resources_2",
       "index:sqlite_autoindex_issues_1",
@@ -297,6 +298,7 @@ describe("a fresh repo-local `staple init`", () => {
       "table:documents",
       "table:events",
       "table:external_links",
+      "table:external_private_cache",
       "table:external_resources",
       "table:issues",
       "table:meta",
@@ -511,7 +513,7 @@ describe("global workspaces", () => {
       { key: "prefix", value: "SOL" },
       // WORKSPACE_SCHEMA_VERSION — 21 since 021-plan-delivered. The hub beside it
       // is still 8; the two databases version independently.
-      { key: "schema_version", value: "22" },
+      { key: "schema_version", value: "23" },
       { key: "slug", value: "solo" },
     ]);
   }, 30_000);

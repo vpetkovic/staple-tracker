@@ -34,6 +34,7 @@
  * the whole local state together.
  */
 import type { DatabaseSync } from "node:sqlite";
+import { resourcePayload, linkPayload, stackPayload, type ResourceRow, type LinkRow } from "../integrations/link-store.js";
 import { attachmentPayload, readAttachment, readAttachmentBytes } from "../attachments.js";
 import { tx } from "../db.js";
 import { moveIdentifier } from "../identifier-moves.js";
@@ -194,6 +195,8 @@ const NOUNS: Record<string, [string, string]> = {
   attempt: ["attempt", "attempts"],
   attemptTransition: ["attempt transition", "attempt transitions"],
   attachment: ["file", "files"],
+  externalResource: ["external resource", "external resources"],
+  externalLink: ["external link", "external links"],
 };
 
 function counted(n: number, entity: string): string {
@@ -298,6 +301,8 @@ export function workspaceHoldings(db: DatabaseSync): { total: number; summary: s
     queue: count("SELECT CASE WHEN EXISTS (SELECT 1 FROM queue_entries) THEN 1 ELSE 0 END AS n"),
     attempt: count("SELECT COUNT(*) AS n FROM attempts"),
     attemptTransition: count("SELECT COUNT(*) AS n FROM attempt_transitions"),
+    externalResource: count("SELECT COUNT(*) AS n FROM external_resources"),
+    externalLink: count("SELECT COUNT(*) AS n FROM external_links"),
     attachment: count("SELECT COUNT(*) AS n FROM attachments"),
   };
   const total = Object.values(byEntity).reduce((sum, n) => sum + n, 0);
@@ -727,6 +732,18 @@ function inventory(db: DatabaseSync, now: string, skipped: SeedSkipped[]): Local
       actor: meta.author,
       at: meta.createdAt,
     });
+  }
+
+  for (const row of db.prepare("SELECT * FROM external_resources ORDER BY id").all() as unknown as ResourceRow[]) {
+    out.push({ entity: "externalResource", entityId: row.id, label: row.display_key, payload: resourcePayload(row), actor: null, at: row.updated_at });
+  }
+  for (const row of db.prepare("SELECT * FROM external_links ORDER BY id").all() as unknown as LinkRow[]) {
+    out.push({ entity: "externalLink", entityId: row.id, label: `external link on ${identifierOf(db, row.issue_id)}`, payload: linkPayload(row), actor: row.created_by, at: row.updated_at });
+  }
+
+  for (const row of db.prepare("SELECT DISTINCT issue_id FROM external_links ORDER BY issue_id").all() as Array<{ issue_id: string }>) {
+    const entries = stackPayload(db,row.issue_id);
+    if (entries.length) out.push({ entity: "externalStack", entityId: row.issue_id, label: `PR stacks on ${identifierOf(db,row.issue_id)}`, payload: { entries }, actor: null, at: now });
   }
 
   const milestoneIds = (
