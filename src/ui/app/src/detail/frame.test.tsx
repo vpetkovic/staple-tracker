@@ -171,7 +171,7 @@ describe("the tab strip", () => {
       ["plan-time", "Time"],
     ]);
     // A task's strip: the plan's tabs are for plan records only.
-    expect(visibleTabs(LOADED).map((tab) => tab.id)).toEqual(["overview", "relations", "documents", "files", "activity", "agent", "analytics"]);
+    expect(visibleTabs(LOADED).map((tab) => tab.id)).toEqual(["overview", "external-links", "relations", "documents", "files", "activity", "agent", "analytics"]);
   });
 
   it("is a scrollable segmented control on the phone and an underlined strip on a desk", () => {
