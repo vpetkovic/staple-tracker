@@ -918,7 +918,11 @@ export function startUiServer(options: UiOptions): UiHandle {
         const comments = h.store.db.prepare("SELECT COUNT(*) AS c FROM comments").get() as { c: number };
         // Sync invalidates settings without writing local issue or event rows.
         const settings = h.store.db.prepare("SELECT value FROM meta WHERE key = 'settings_revision'").get() as { value: string } | undefined;
-        return `${h.slug}:${events.s}:${issues.c}:${issues.u}:${comments.c}:s${settings?.value ?? "0"}${driverFingerprint(h)}${clockFingerprint(h)}${membersFingerprint(h)}`;
+        // Integration links and private cache refreshes can change without an issue event.
+        // data_version observes other connections; total_changes observes this server handle.
+        const dataVersion = (h.store.db.prepare("PRAGMA data_version").get() as {data_version:number}).data_version;
+        const changes = (h.store.db.prepare("SELECT total_changes() AS n").get() as {n:number}).n;
+        return `${h.slug}:db${dataVersion}:${changes}:${events.s}:${issues.c}:${issues.u}:${comments.c}:s${settings?.value ?? "0"}${driverFingerprint(h)}${clockFingerprint(h)}${membersFingerprint(h)}`;
       })
       .join("|");
   }
