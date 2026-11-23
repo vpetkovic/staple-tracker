@@ -132,16 +132,10 @@ describe("workspace selector precedence", () => {
     expect(ls(nested, ["--db", repoDb], { STAPLE_DB: globalDb }).stdout).toBe(REPO_ROW);
   });
 
-  /**
-   * QUIRK (A3): an ENVIRONMENT variable outranks an EXPLICIT flag here.
-   * `resolveWorkspace` tests `options.db ?? STAPLE_DB` before it ever looks at
-   * `options.ws`, so `--ws outer` is silently ignored while STAPLE_DB is set —
-   * with no warning that the flag the user typed did nothing.
-   */
-  it("KNOWN: STAPLE_DB silently beats an explicit --ws", () => {
+  it("an explicit --ws beats STAPLE_DB", () => {
     const result = ls(nested, ["--ws", "outer"], { STAPLE_DB: globalDb });
     expect(result.status).toBe(0);
-    expect(result.stdout).toBe(GLOBAL_ROW);
+    expect(result.stdout).toBe(REPO_ROW);
     expect(result.stderr).toBe("");
   });
 

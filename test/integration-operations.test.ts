@@ -56,6 +56,32 @@ describe("shared integration operations",()=>{
     expect(await offline.execute({action:"search",text:"Remote"})).toMatchObject({cached:[{item:{id:resource.id}}],execution:"cached_only"});
     expect(adapter.readIssue).toHaveBeenCalledTimes(2);ws.store.db.close();
   });
+  it("links replicated URL-only references by id and cached URL without a local connection", async () => {
+    const {ws,task,service}=setup();
+    const reference={ref:{...item.ref,kind:"pull_request" as const},key:item.key,url:item.url.replace("issues/","pull/")};
+    const resource=ws.store.externalLinks().remember(reference);
+    await service.execute({action:"link",resourceId:resource.id,ref:task.id,confirmed:true,actor:"ada"});
+    const other=ws.store.createIssue({title:"Another local ticket"});
+    await service.execute({action:"link",url:reference.url,ref:other.id,confirmed:true,actor:"ada"});
+    expect(ws.store.externalLinks().list(task.id)[0]!.resource).toMatchObject({id:resource.id,title:null,fetchedAt:null});
+    expect(ws.store.externalLinks().associations(resource.id)).toHaveLength(2);
+    expect(service.connections.list()).toEqual([]);
+    ws.store.externalLinks().remember({...reference,ref:{...reference.ref,scopeId:"another-scope"}});
+    expect(await service.execute({action:"preview",resourceId:resource.id})).toMatchObject({item:{id:resource.id}});
+    await expect(service.execute({action:"preview",url:reference.url})).rejects.toThrow("Several scoped resources");
+    ws.store.db.close();
+  });
+  it("searches the newest effective context after another device shares a newer title", async () => {
+    const {ws,service}=setup();
+    const resource=ws.store.externalLinks().remember({...item,title:"Old private title",fetchedAt:"2026-11-23T10:00:00Z"});
+    // Simulate the shared snapshot applied from another device; retain older private cache.
+    ws.store.db.prepare("UPDATE external_resources SET title=?,fetched_at=?,context_shared=1 WHERE id=?")
+      .run("New shared title","2026-11-23T12:00:00Z",resource.id);
+    expect(ws.store.externalLinks().resource(resource.id).title).toBe("New shared title");
+    expect(await service.execute({action:"search",text:"New shared title"})).toMatchObject({cached:[{item:{id:resource.id,title:"New shared title"}}]});
+    expect(await service.execute({action:"search",text:"Old private title"})).toMatchObject({cached:[]});
+    ws.store.db.close();
+  });
   it("exposes the same cached links over HTTP, CLI and MCP and enforces HTTP method/action/origin boundaries",async()=>{
     const {ws,home,task}=setup();
     const resource=ws.store.externalLinks().remember(item);const dbPath=ws.dbPath;ws.store.db.close();
@@ -66,7 +92,10 @@ describe("shared integration operations",()=>{
     expect((await call("/api/integrations/read",{action:"link",resourceId:resource.id,ref:task.id,confirmed:true})).status).toBe(409);
     expect((await call("/api/integrations/write",{action:"link",resourceId:resource.id,ref:task.id,confirmed:true},true)).status).toBe(403);
     expect((await call("/api/integrations/configure",{action:"configure",host:"github.com",account:"invalid account"})).status).toBe(409);
+    const beforePoll=await fetch(origin+"/api/poll",{headers:{"x-staple-token":ui.token}}).then(r=>r.json());
     const linked=await call("/api/integrations/write",{action:"link",resourceId:resource.id,ref:task.id,confirmed:true});expect(linked.status).toBe(200);
+    const afterPoll=await fetch(origin+"/api/poll",{headers:{"x-staple-token":ui.token}}).then(r=>r.json());
+    expect(afterPoll.fingerprint).not.toBe(beforePoll.fingerprint);
     const cli=spawnSync(process.execPath,[TSX_CLI,CLI_ENTRY,"integrations","list","--ref",task.id,"--db",dbPath,"--json"],{env:{...process.env,STAPLE_HOME:home,NODE_NO_WARNINGS:"1"},encoding:"utf8"});
     expect(cli.status,cli.stderr).toBe(0);expect(JSON.parse(cli.stdout)[0].resource.id).toBe(resource.id);
     harness=await startMcpClient({home,cwd:home,agent:"integration-test",env:{STAPLE_DB:dbPath}});
