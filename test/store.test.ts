@@ -433,6 +433,7 @@ describe("schema migration against a live database", () => {
       legacyDb.exec("DROP TABLE IF EXISTS plan_members");
       legacyDb.exec("DROP TABLE IF EXISTS plan_links");
       legacyDb.exec("DROP TABLE IF EXISTS plan_rows");
+      for (const table of ["external_links", "external_private_cache", "external_resources"]) legacyDb.exec(`DROP TABLE IF EXISTS ${table}`);
       legacyDb.prepare("UPDATE meta SET value = '1' WHERE key = 'schema_version'").run();
       legacyDb.close();
 

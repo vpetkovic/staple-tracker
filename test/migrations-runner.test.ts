@@ -145,7 +145,7 @@ describe("version detection", () => {
     // Then workspace 18 -> 19 (019-instruction-documents, the revision flag and the run's own).
     // Then workspace 19 -> 20 (020-plan-fields, the plan columns on issues), hub still 8.
     // Then workspace 20 -> 21 (021-plan-delivered, the delivered-outside-the-tracker day), hub still 8.
-    expect(latestVersion(WORKSPACE_TARGET)).toBe(21);
+    expect(latestVersion(WORKSPACE_TARGET)).toBe(23);
     expect(latestVersion(HUB_TARGET)).toBe(8);
   });
 });
