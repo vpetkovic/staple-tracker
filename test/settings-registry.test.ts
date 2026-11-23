@@ -68,6 +68,7 @@ describe("the registered set", () => {
       ["machine.humanName", "humanName"],
     ]);
     expect(settingDefinitionsFor("workspace").map((d) => d.key)).toEqual([
+      "integrations.repositories",
       "kinds.default",
       "kinds.appearance",
       "queue.policy",
@@ -77,6 +78,7 @@ describe("the registered set", () => {
 
   it("lists statuses, kinds and the Workflow category as workspace categories the shell can enumerate", () => {
     expect(SETTING_CATEGORIES.map((c) => `${c.id}:${c.scope}:${c.editor}`)).toEqual([
+      "integrations:workspace:fields",
       "statuses:workspace:statuses",
       "kinds:workspace:kinds",
       "queue:workspace:fields",
@@ -134,7 +136,7 @@ describe("the registered set", () => {
     expect(settingDefinition("kinds.default")?.scope).toBe("workspace");
     expect(settingDefinition("nothing")).toBeUndefined();
     expect(() => requireSettingDefinition("nothing", "workspace")).toThrow(
-      /Unknown workspace setting "nothing"\. Known: kinds\.default/,
+      /Unknown workspace setting "nothing"\. Known: integrations\.repositories, kinds\.default/,
     );
     expect(() => requireSettingDefinition("machine.port", "workspace")).toThrow(
       /"machine\.port" is a global setting, not a workspace one\. Global settings are edited with `staple config set`/,
@@ -289,9 +291,10 @@ describe("wire views", () => {
 
   it("serves the whole registry in shell order", () => {
     const view = settingRegistryView();
-    expect(view.categories.map((c) => c.id)).toEqual(["statuses", "kinds", "queue", "features", "machine"]);
+    expect(view.categories.map((c) => c.id)).toEqual(["statuses", "kinds", "queue", "integrations", "features", "machine"]);
     expect(view.definitions.map((d) => d.key)).toEqual([
       "features.planning",
+      "integrations.repositories",
       "kinds.default",
       "machine.browser",
       "queue.policy",
@@ -377,5 +380,16 @@ describe("registering a category and a definition after module load", () => {
     expect(settingDefinitionsFor("workspace").map((d) => d.key)).toContain("fixture.count");
     expect(settingCategoriesFor("workspace").map((c) => c.id)).toContain("fixture");
     expect(settingRegistryView().definitions.map((d) => d.key)).toContain("fixture.count");
+  });
+});
+
+
+describe("repository search preferences", () => {
+  it("accepts scoped numeric repositories without storing account or credential data", () => {
+    const definition = requireSettingDefinition("integrations.repositories", "workspace");
+    expect(() => validateSettingValue(definition, "github.com/42,github.example/91")).not.toThrow();
+    for (const value of ["github.com/team/repo", "token=secret", "github.com/0", {account:"ada"}]) {
+      expect(() => validateSettingValue(definition, value)).toThrow();
+    }
   });
 });

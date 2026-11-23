@@ -1261,3 +1261,11 @@ export const planWrite = (verb: string, body: Record<string, unknown>) =>
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ actor: "ui", ...body }),
   });
+
+// Shared integration boundary. Authentication and refusal handling stay in request().
+export const integrationRead = <T>(command: Record<string, unknown>, ws?: string) =>
+  request<T>("/api/integrations/read", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...command, ws }) });
+export const integrationWrite = <T>(command: Record<string, unknown>, ws?: string) =>
+  request<T>("/api/integrations/write", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...command, ws }) });
+export const integrationConfigure = <T>(command: Record<string, unknown>, ws?: string) =>
+  request<T>("/api/integrations/configure", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...command, ws }) });
