@@ -253,15 +253,15 @@ export class IntegrationOperations {
     const pending=narrowed.filter(t=>!parts || parts[t.key]);
     const remote:Array<ReturnType<IntegrationOperations["decorate"]>&{targetKey:string}>=[];
     const next:Record<string,string>={};
-    const failures:Array<{connectionId:string|null;targetKeys:string[];state:ConnectionState;message:string}>=[];
-    const fail=(connectionId:string|null,key:string,state:ConnectionState,message:string)=>{
+    const failures:Array<{connectionId:string|null;targetKeys:string[];state:ConnectionState;message:string;action:string|null}>=[];
+    const fail=(connectionId:string|null,key:string,state:ConnectionState,message:string,action:string|null)=>{
       const seen=failures.find(f=>f.connectionId===connectionId && f.state===state);
-      if (seen) seen.targetKeys.push(key); else failures.push({connectionId,targetKeys:[key],state,message});
+      if (seen) seen.targetKeys.push(key); else failures.push({connectionId,targetKeys:[key],state,message,action});
     };
     const readers=new Map<string,IntegrationReader>();
     const pages=await mapBounded(pending,4,async target=>{
       const connection=target.connectionId ? this.connections.resolve(target.connectionId) : null;
-      if (!connection) { fail(null,target.key,"not_found",`No connection on this machine reads ${target.host}`); return null; }
+      if (!connection) { fail(null,target.key,"not_found",`No connection on this computer reads ${target.host}.`,"Add a connection for it in Settings > Integrations."); return null; }
       try {
         const reader=readers.get(connection.id) ?? this.readerFor(connection);
         readers.set(connection.id,reader);
@@ -271,9 +271,9 @@ export class IntegrationOperations {
         return {target,page};
       } catch (error) {
         if (!(error instanceof StapleError)) throw error;
-        const health=healthFromError(error);
-        if (isConnectionFailure(error)) this.caches.health.record(this.healthKey(connection),snapshot(connection,health,new Date()));
-        fail(connection.id,target.key,health.state,health.message);
+        const health=snapshot(connection,healthFromError(error),new Date());
+        if (isConnectionFailure(error)) this.caches.health.record(this.healthKey(connection),health);
+        fail(connection.id,target.key,health.state,health.message ?? error.message,health.action);
         return null;
       }
     });

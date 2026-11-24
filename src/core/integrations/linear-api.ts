@@ -12,7 +12,7 @@ export const linearConnectionSchema = z.object({
 }).strict();
 export type LinearApiConnection = z.infer<typeof linearConnectionSchema>;
 const slug = z.string().regex(/^[A-Za-z0-9_-]{1,100}$/);
-const organization = z.object({ id: uuid, urlKey: slug });
+const organization = z.object({ id: uuid, urlKey: slug, name: z.string().max(256).optional() });
 const identity = { viewer: z.object({ id: uuid, name: z.string().max(256).optional() }), organization };
 const team = z.object({ id: uuid, key: slug, name: z.string().max(8192), organization: z.object({ id: uuid }) });
 const issue = z.object({ id: uuid, identifier: z.string().regex(/^[A-Za-z][A-Za-z0-9_]*-[1-9][0-9]*$/),
@@ -20,7 +20,7 @@ const issue = z.object({ id: uuid, identifier: z.string().regex(/^[A-Za-z][A-Za-
   state: z.object({ id: uuid, name: z.string().max(8192) }), team, project: z.object({ id: uuid }).nullable().optional() });
 const project = z.object({ id: uuid, name: z.string().max(8192), url: z.string().max(8192) });
 const pageInfo = z.object({ hasNextPage: z.boolean(), endCursor: z.string().min(1).max(2048).nullable() });
-const IDENTITY = "viewer { id name } organization { id urlKey }";
+const IDENTITY = "viewer { id name } organization { id urlKey name }";
 const FIELDS = "id identifier title description url state { id name } team { id key name organization { id } } project { id }";
 const PAGE_SIZE = 50;
 const MAX_BYTES = 2_000_000;
@@ -48,8 +48,8 @@ export class LinearApiAdapter implements IntegrationAdapter {
   }
   async validate(options?: ProviderReadOptions): Promise<ConnectionHealth> {
     try {
-      const { viewer } = await this.query("", {}, z.object({}), options);
-      return { state: "ready", identity: viewer.name ? { login: viewer.name } : null };
+      const { viewer, organization: org } = await this.query("", {}, z.object({}), options);
+      return { state: "ready", identity: viewer.name ? { login: viewer.name, ...(org.name ? { organization: org.name } : {}) } : null };
     } catch (error) {
       if (options?.signal?.aborted) throw options.signal.reason;
       if (!(error instanceof StapleError)) throw error;
@@ -194,16 +194,16 @@ export class LinearApiAdapter implements IntegrationAdapter {
   private async query<T extends z.ZodRawShape>(selection: string, variables: object, shape: z.ZodObject<T>, options?: ProviderReadOptions, declarations = "") {
     options?.signal?.throwIfAborted();
     const key = this.credential();
-    if (!key || key.length > 4096 || /\s/.test(key)) throw new StapleError("auth", "Set the configured Linear API key environment variable on the machine running Staple");
+    if (!key || key.length > 4096 || /\s/.test(key)) throw new StapleError("auth", `${this.config.credentialEnv} isn't set where Staple runs.`);
     const timeout = AbortSignal.timeout(TIMEOUT_MS);
     const signal = options?.signal ? AbortSignal.any([timeout, options.signal]) : timeout;
     try {
       const response = await this.fetch("https://api.linear.app/graphql", { method: "POST", redirect: "error", signal,
         headers: { "content-type": "application/json", authorization: key },
         body: JSON.stringify({ query: `query StapleRead${declarations ? `(${declarations})` : ""} { ${IDENTITY} ${selection} }`, variables }) });
-      if (response.status === 401) { await response.body?.cancel(); throw new StapleError("auth", "Linear authentication failed; replace the configured API key"); }
+      if (response.status === 401) { await response.body?.cancel(); throw new StapleError("auth", `Linear rejected the API key in ${this.config.credentialEnv}.`); }
       if (response.status === 403) { await response.body?.cancel(); throw new StapleError("forbidden", "Linear denied access to this resource"); }
-      if (response.status === 429) { await response.body?.cancel(); throw new StapleError("rate_limited", "Linear rate limit reached; wait before trying again"); }
+      if (response.status === 429) { await response.body?.cancel(); throw new StapleError("rate_limited", "Linear's rate limit is reached."); }
       if (!response.ok) { await response.body?.cancel(); throw new StapleError("unavailable", "Linear API is unavailable; try again later"); }
       const reader = response.body?.getReader();
       if (!reader) throw new StapleError("unavailable", "Linear returned an empty response");
@@ -224,8 +224,8 @@ export class LinearApiAdapter implements IntegrationAdapter {
       if (!envelope.success) throw new StapleError("unavailable", "Linear returned an unsupported response");
       if (envelope.data.errors?.length) {
         const codes = envelope.data.errors.map(e => `${e.extensions?.code ?? ""} ${e.extensions?.type ?? ""}`.toUpperCase().replace(/[^A-Z0-9]+/g, "_"));
-        if (codes.some(c => /RATELIMIT|RATE_LIMIT|USAGE_LIMIT_EXCEEDED/.test(c))) throw new StapleError("rate_limited", "Linear rate limit reached; wait before trying again");
-        if (codes.some(c => /UNAUTHENTICATED|AUTHENTICATION_ERROR/.test(c))) throw new StapleError("auth", "Linear authentication failed; replace the configured API key");
+        if (codes.some(c => /RATELIMIT|RATE_LIMIT|USAGE_LIMIT_EXCEEDED/.test(c))) throw new StapleError("rate_limited", "Linear's rate limit is reached.");
+        if (codes.some(c => /UNAUTHENTICATED|AUTHENTICATION_ERROR/.test(c))) throw new StapleError("auth", `Linear rejected the API key in ${this.config.credentialEnv}.`);
         if (codes.some(c => /FORBIDDEN|AUTHORIZATION_ERROR|FEATURE_NOT_ACCESSIBLE/.test(c))) throw new StapleError("forbidden", "Linear denied access to this resource");
         if (codes.some(c => /ENTITY_NOT_FOUND|NOT_FOUND/.test(c))) throw new StapleError("not_found", "Linear issue was not found or is inaccessible");
         throw new StapleError("unavailable", "Linear could not complete the query; try again later");
@@ -234,10 +234,10 @@ export class LinearApiAdapter implements IntegrationAdapter {
       const fields = shape.safeParse(envelope.data.data);
       if (!data.success || !fields.success) throw new StapleError("unavailable", "Linear returned an unsupported response");
       if (data.data.viewer.id !== this.config.account) {
-        throw new StapleError("auth", `Linear API key belongs to ${data.data.viewer.name ?? "a different user"}, not the configured user; check the connection binding`,
+        throw new StapleError("auth", `The API key in ${this.config.credentialEnv} belongs to ${data.data.viewer.name ?? "another user"}, not the Linear user this connection expects.`,
           { reason: "account_mismatch", ...(data.data.viewer.name ? { login: data.data.viewer.name } : {}) });
       }
-      if (data.data.organization.id !== this.scope.scopeId) throw new StapleError("forbidden", "Linear API key belongs to a different organization; check the connection binding");
+      if (data.data.organization.id !== this.scope.scopeId) throw new StapleError("forbidden", `The API key in ${this.config.credentialEnv} belongs to a different Linear organization.`);
       return { ...fields.data, viewer: data.data.viewer, organization: data.data.organization };
     } catch (error) {
       if (options?.signal?.aborted) throw options.signal.reason;

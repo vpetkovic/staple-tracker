@@ -70,7 +70,11 @@ export interface ExternalSearch {
 export type ExternalLocator = { url: string } | { key: string; containerId: string };
 
 /** The account a provider actually authenticated, when known. A display login, never a credential. */
-export interface ConnectionIdentity { login: string }
+export interface ConnectionIdentity {
+  login: string;
+  /** Linear: the organization the key belongs to, for naming the connection. */
+  organization?: string;
+}
 
 export type ConnectionFailureState =
   | "missing_cli" | "unsupported_version" | "unauthenticated" | "account_mismatch"

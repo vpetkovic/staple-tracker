@@ -122,7 +122,8 @@ describe("search and link scope", () => {
     t.failing.add("43");
     const first = await t.gamma.execute({ action: "search", text: "x" }) as Search;
     expect(first.remote.map(r => r.targetKey)).toEqual(["github.com/42"]);
-    expect(first.failures).toEqual([{ connectionId: id, targetKeys: ["github.com/43"], state: "unauthenticated", message: expect.any(String) }]);
+    expect(first.failures).toEqual([{ connectionId: id, targetKeys: ["github.com/43"], state: "unauthenticated", message: expect.any(String),
+      action: "Run gh auth login --hostname github.com on the computer running Staple." }]);
     vi.mocked(t.adapter.searchIssues).mockClear();
     const second = await t.gamma.execute({ action: "search", text: "x", cursor: first.nextCursor! }) as Search;
     expect(searched(t.adapter)).toEqual(["42"]);
