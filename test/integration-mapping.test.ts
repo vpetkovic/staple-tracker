@@ -74,8 +74,13 @@ describe("workspace mapping", () => {
     ] });
     expect(t.handles[0]!.store.getSetting("integrations.repositories")).toBe("");
     expect(JSON.parse(String(t.handles[0]!.store.getSetting("integrations.mapping")))).toHaveLength(2);
-    // Reading fills the name the legacy entry never stored.
+    // Reading, in either form, fills the name the legacy entry never stored.
+    t.handles[1]!.store.setSetting("integrations.repositories", "github.com/43", "ada");
+    const every = await t.alpha.execute({ action: "mapping", allWorkspaces: true }) as { workspaces: Array<{ targets: Array<{ name: string | null }> }>; targets: Array<{ name: string | null }> };
+    expect(every.workspaces.map(w => w.targets.map(x => x.name))).toEqual([["team/repo44", "team/repo42"], ["team/repo43"], []]);
+    expect(every.targets.map(x => x.name)).toEqual(["team/repo44", "team/repo42", "team/repo43"]);
     expect((await t.alpha.execute({ action: "mapping" }) as { targets: Array<{ key: string; name: string | null }> }).targets.map(x => x.name)).toEqual(["team/repo44", "team/repo42"]);
+    t.handles[1]!.store.resetSetting("integrations.repositories", "ada");
     await t.alpha.execute({ action: "unmap", targetKey: "github.com/44", actor: "ada" });
     const all = await t.alpha.execute({ action: "mapping", allWorkspaces: true }) as { workspaces: Array<{ workspace: string; targets: Array<{ key: string }> }> };
     expect(all.workspaces.map(w => [w.workspace, w.targets.map(x => x.key)])).toEqual([["alpha", ["github.com/42"]], ["beta", []], ["gamma", []]]);

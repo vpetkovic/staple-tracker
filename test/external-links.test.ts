@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { openDb } from "../src/core/db.js";
 import { migrateWorkspace } from "../src/core/schema.js";
 import { WorkspaceStore } from "../src/core/store.js";
@@ -89,6 +89,14 @@ describe("external resource persistence", () => {
 });
 
 describe("row integration summaries",()=>{
+  it("keeps the order links were made when they share a timestamp, in row previews and the ticket's list",()=>{
+    const {store,links,first}=setup();
+    vi.useFakeTimers({toFake:["Date"]});vi.setSystemTime(new Date("2026-11-24T12:00:00Z"));
+    try { for(let n=1;n<=8;n++) links.link(first.id,source(String(n)),"ada"); } finally { vi.useRealTimers(); }
+    expect(links.summaries()[first.id]?.issues.items.map(i=>i.title)).toEqual(["Remote 1","Remote 2","Remote 3","Remote 4","Remote 5"]);
+    expect(links.list(first.id).map(l=>l.resource.title)).toEqual(Array.from({length:8},(_,i)=>`Remote ${i+1}`));
+    store.db.close();
+  });
   it("counts every association while bounding context-free previews per kind and omitting unlinked rows",()=>{
     const {store,links,first,second}=setup();
     for(let n=1;n<=8;n++) links.link(first.id,source(String(n)),"ada");
