@@ -146,7 +146,7 @@ describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
     const { page, context, errors } = await open(single, "/?issue=ALP-1");
     const dialog = page.locator("[data-link-external]");
     const pressed = (name: string) => dialog.getByRole("button", { name, exact: true }).getAttribute("aria-pressed");
-    await page.getByRole("button", { name: "Link PR", exact: true }).click();
+    await page.getByRole("button", { name: "Link pull request", exact: true }).click();
     await expect.poll(() => dialog.getByText("Nothing is set up to search yet.").count()).toBe(1);
     expect(await page.evaluate(() => document.activeElement?.getAttribute("placeholder"))).toBe("Search issues and pull requests, or paste a link");
     expect(await pressed("Pull requests")).toBe("true");
@@ -156,8 +156,8 @@ describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
     expect(await page.evaluate(() => localStorage.getItem("staple:link-kind:v1"))).toBe("issue");
     await page.keyboard.press("Escape");
     await expect.poll(() => dialog.count()).toBe(0);
-    await page.getByRole("tab", { name: "External links", exact: true }).click();
-    await page.getByRole("button", { name: "Link issue or PR", exact: true }).click();
+    await page.getByRole("tab", { name: /^External links/ }).click();
+    await page.getByRole("tabpanel").getByRole("button", { name: "Link", exact: true }).first().click();
     await expect.poll(() => pressed("Issues")).toBe("true");
     expect(errors).toEqual([]);
     await context.close();
@@ -198,7 +198,8 @@ describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
       await expect.poll(()=>page.getByRole("button",{name:"Remove Engineering (ENG) from alpha",exact:true}).count()).toBe(1);
       await page.keyboard.press("Escape");
       await page.goto(`${at(single)}/?issue=ALP-1&token=${single.token}`,{waitUntil:"networkidle"});
-      await page.getByRole("button",{name:"Link issue",exact:true}).click();
+      // The phone summary has one way to link, for both kinds.
+      await page.getByRole("button",{name:"Link an issue or pull request",exact:true}).click();
       const dialog=page.locator("[data-link-external]");
       await expect.poll(()=>dialog.getByRole("button",{name:/^Search scope: alpha · 1 source/}).count()).toBe(1);
       await page.keyboard.type("fixture");
@@ -211,17 +212,23 @@ describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
       await expect.poll(()=>dialog.getByRole("option",{name:/Linear fixture source/}).innerText()).toContain("Linked here");
       expect(await page.evaluate(()=>document.activeElement?.getAttribute("role"))).toBe("combobox");
       await page.keyboard.press("Escape");
-      await page.getByRole("tab",{name:"External links",exact:true}).click();
+      await page.getByRole("tab",{name:/^External links/}).click();
       const card=page.locator("[data-external-resource]");
       await expect.poll(()=>card.innerText()).toContain("In review");
-      await card.getByText("Source context",{exact:true}).click();
-      expect(await card.innerText()).toContain("Linear private source context");
+      // The row opens in place for the saved description.
+      await card.locator("[aria-expanded]").first().click();
+      await expect.poll(()=>card.innerText()).toContain("Linear private source context");
       title="Linear renamed source";identifier="ENG-99";
-      await page.getByRole("button",{name:"Refresh context for ENG-12",exact:true}).click();
+      // On a phone a row's actions are its menu.
+      const refresh=async(key:string)=>{
+        await page.getByRole("button",{name:`More actions for ${key}`,exact:true}).click();
+        await page.getByRole("menuitem",{name:"Refresh",exact:true}).click();
+      };
+      await refresh("ENG-12");
       await expect.poll(()=>card.innerText()).toContain("Linear renamed source");
       denied=true;
-      await page.getByRole("button",{name:"Refresh context for ENG-99",exact:true}).click();
-      await expect.poll(()=>page.getByRole("alert").innerText()).toContain("Linear rejected the API key in STAPLE_TEST_LINEAR_KEY");
+      await refresh("ENG-99");
+      await expect.poll(()=>card.getByRole("alert").innerText()).toContain("Linear rejected the API key in STAPLE_TEST_LINEAR_KEY");
       expect(await card.innerText()).toContain("Linear renamed source");
       expect(await heading(page).innerText()).toContain("Set up the repository (alpha)");
       expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
