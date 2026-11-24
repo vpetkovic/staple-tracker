@@ -5,6 +5,13 @@ const connections = [{ id: "work", host: "github.com" }, { id: "private", host: 
 const saved = { connectionId: "work", repository: "github.com/42", kind: "pull_request" as const };
 afterEach(() => vi.unstubAllGlobals());
 describe("link dialog defaults", () => {
+  it("scopes Linear defaults by organization and limits the type to issues", () => {
+    const linear = { id: "linear", providerId: "linear", mode: "api", host: "linear.app", scopeId: "org-a", account: "user", credentialEnv: "KEY" } satisfies ProviderConnection;
+    const choice = { connectionId: "linear", repository: "linear.app/org-a/team", kind: "pull_request" as const, rememberLastUsed: true };
+    expect(resolveLinkDefaults(choice, [linear], [choice.repository])).toEqual({ ...choice, kind: "issue" });
+    expect(resolveLinkDefaults({ ...choice, repository: "linear.app/org-b/team" }, [linear], ["linear.app/org-b/team"]).repository).toBe("");
+    expect(resolveLinkDefaults(choice, [{ ...linear, scopeId: "org-b" }], [choice.repository]).repository).toBe("");
+  });
   it("persists only selections, isolated by workspace", () => {
     const data = new Map<string, string>();
     vi.stubGlobal("localStorage", { getItem: (k: string) => data.get(k) ?? null, setItem: (k: string, v: string) => data.set(k, v) });

@@ -7,12 +7,15 @@ import { stapleHome } from "../../config/home.js";
 import { readStoredRepositoryId } from "../repo-identity.js";
 import type { WorkspaceStore } from "../store.js";
 import { StapleError } from "../types.js";
+import { linearConnectionSchema } from "./linear-api.js";
 
-export const connectionSchema = z.object({
+const githubConnectionSchema = z.object({
   id: z.string().regex(/^[A-Za-z0-9_-]{1,80}$/), providerId: z.literal("github"), mode: z.literal("cli"),
   host: z.string().regex(/^[a-z0-9][a-z0-9.-]*(?::[0-9]+)?$/i).max(255), account: z.string().regex(/^[A-Za-z0-9-]+$/).max(80),
 }).strict();
+export const connectionSchema = z.discriminatedUnion("providerId", [githubConnectionSchema, linearConnectionSchema]);
 export type ProviderConnection = z.infer<typeof connectionSchema>;
+type ConnectionInput = (Omit<z.infer<typeof githubConnectionSchema>, "id"> | Omit<z.infer<typeof linearConnectionSchema>, "id">) & { id?: string };
 
 /** No tokens, CLI paths or machine bindings enter a replicated database. One atomic file per connection. */
 export class IntegrationConnections {
@@ -28,9 +31,9 @@ export class IntegrationConnections {
       catch { throw new StapleError("validation", "A machine-local integration connection is invalid. Repair it in Settings > Integrations."); }
     });
   }
-  save(input: Omit<ProviderConnection,"id"> & {id?:string}): ProviderConnection {
+  save(input: ConnectionInput): ProviderConnection {
     const parsed = connectionSchema.safeParse({...input,id:input.id ?? randomUUID()});
-    if (!parsed.success) throw new StapleError("validation", "Use a valid GitHub host and account name; connection settings cannot contain credentials.");
+    if (!parsed.success) throw new StapleError("validation", "Use valid provider connection settings; supply a credential environment variable name, never a secret value.");
     const connection = parsed.data;
     writeFileAtomic(join(this.directory,`${connection.id}.json`),JSON.stringify(connection)+"\n",{mode:0o600,dirMode:0o700});
     return connection;

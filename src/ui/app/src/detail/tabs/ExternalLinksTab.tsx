@@ -69,7 +69,8 @@ export function ExternalLinksTab({ detail, workspace, refresh, onAuthError }: Ta
       link={link}
       busy={busy}
       canRefresh={connections.some(
-        (c) => c.providerId === link.resource.ref.providerId && c.host === link.resource.ref.host,
+        (c) => c.providerId === link.resource.ref.providerId && c.host === link.resource.ref.host &&
+          (c.providerId !== "linear" || c.scopeId === link.resource.ref.scopeId),
       )}
       onRefresh={() =>
         void write({
@@ -117,7 +118,7 @@ export function ExternalLinksTab({ detail, workspace, refresh, onAuthError }: Ta
           >
             <option value="">
               {connections.length
-                ? "Automatic by provider host"
+                ? "Automatic by provider scope"
                 : "Cached-only · no local connection"}
             </option>
             {connections.map((c) => (

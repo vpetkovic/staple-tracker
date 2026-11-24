@@ -48,9 +48,9 @@ export function resolveLinkDefaults(
   const connection = connections.find(c => c.id === connectionId);
   return {
     connectionId,
-    repository: connection && saved?.repository.startsWith(`${connection.host}/`) &&
+    repository: connection && saved?.repository.startsWith(containerPrefix(connection)) &&
       repositories.includes(saved.repository) ? saved.repository : "",
-    kind: saved?.kind ?? "issue",
+    kind: connection?.providerId === "linear" ? "issue" : saved?.kind ?? "issue",
     ...(saved?.rememberLastUsed ? { rememberLastUsed: true } : {}),
   };
 }
@@ -66,4 +66,9 @@ export function loadPickerDefaults(ws: string, connections: ProviderConnection[]
   const saved = loadLinkDefaults(ws);
   const last = saved?.rememberLastUsed ? readChoices(lastKey(ws)) : null;
   return resolveLinkDefaults(last ?? saved, connections, repositories);
+}
+
+/** Keep existing GitHub choices readable; Linear teams are scoped to their organization. */
+export function containerPrefix(connection: ProviderConnection): string {
+  return connection.providerId === "linear" ? `${connection.host}/${connection.scopeId}/` : `${connection.host}/`;
 }

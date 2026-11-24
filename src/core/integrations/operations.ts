@@ -4,6 +4,7 @@ import { StapleError } from "../types.js";
 import type { ExternalItem, ResolvedExternalItem, IntegrationAdapter } from "./contracts.js";
 import { IntegrationConnections, type ProviderConnection } from "./connections.js";
 import { ExternalWork } from "./external-work.js";
+import { LinearApiAdapter } from "./linear-api.js";
 import { GitHubCliAdapter } from "./github-cli.js";
 import { externalResourceId, type ExternalResource } from "./link-store.js";
 import { IntegrationReader } from "./provider.js";
@@ -13,6 +14,7 @@ export const INTEGRATION_WRITE_ACTIONS = ["link","create","unlink","refresh","st
 export const INTEGRATION_CONFIG_ACTIONS = ["configure","remove"] as const;
 export const integrationCommandSchema = z.object({
   action:z.enum([...INTEGRATION_READ_ACTIONS,...INTEGRATION_WRITE_ACTIONS,...INTEGRATION_CONFIG_ACTIONS]),
+  providerId:z.enum(["github","linear"]).optional(),scopeId:z.string().uuid().optional(),credentialEnv:z.string().max(128).optional(),key:z.string().max(128).optional(),
   connectionId:z.string().max(80).optional(),host:z.string().max(255).optional(),account:z.string().max(80).optional(),
   url:z.string().max(8192).optional(),resourceId:z.string().max(128).optional(),ref:z.string().max(512).optional(),
   text:z.string().max(2048).optional(),kind:z.enum(["issue","pull_request"]).optional(),containerId:z.string().max(512).optional(),cursor:z.string().max(8192).optional(),
@@ -21,7 +23,10 @@ export const integrationCommandSchema = z.object({
 }).strict();
 export type IntegrationCommand = z.infer<typeof integrationCommandSchema>;
 export type AdapterFactory = (connection:ProviderConnection)=>IntegrationAdapter;
-const DEFAULT_FACTORIES: ReadonlyMap<string,AdapterFactory> = new Map([["github:cli",c=>new GitHubCliAdapter(c)]]);
+const DEFAULT_FACTORIES: ReadonlyMap<string,AdapterFactory> = new Map<string,AdapterFactory>([
+  ["github:cli",c=> { if(c.providerId!=="github") throw new StapleError("validation","Expected a GitHub connection"); return new GitHubCliAdapter(c); }],
+  ["linear:api",c=> { if(c.providerId!=="linear") throw new StapleError("validation","Expected a Linear connection"); return new LinearApiAdapter(c); }],
+]);
 
 /** One boundary for terminal, agents and browser. Search reads never create work or persist source bodies. */
 export class IntegrationOperations {
@@ -39,14 +44,20 @@ export class IntegrationOperations {
     if (!factory) throw new StapleError("unavailable","This provider connection mode is not installed");
     return new IntegrationReader(factory(config));
   }
-  private select(c:IntegrationCommand, host:string,providerId?:string):string {
+  private select(c:IntegrationCommand, host:string,providerId?:string,scopeId?:string):string {
     if (c.connectionId) return c.connectionId;
-    const choices=this.connections.list().filter(x=>x.host===host && (!providerId || x.providerId===providerId));
+    const choices=this.connections.list().filter(x=>x.host===host && (!providerId || x.providerId===providerId) && (x.providerId!=="linear" || !scopeId || x.scopeId===scopeId));
     if (choices.length!==1) throw new StapleError("unavailable",choices.length ? "Choose which provider connection to use" : "Cached-only session. Configure a connection for live reads in Settings > Integrations.");
     return choices[0]!.id;
   }
   private async source(c:IntegrationCommand):Promise<ExternalResource|ExternalItem|ResolvedExternalItem> {
     if (c.resourceId) return storedSource(this.store.externalLinks().resource(c.resourceId));
+    if (c.key) {
+      const reader=this.reader(need(c.connectionId,"connection"));
+      const resolved=await reader.resolve({key:c.key,containerId:need(c.containerId,"container")});
+      if(!resolved) throw new StapleError("not_found","No accessible issue was found for this identifier");
+      return reader.read(resolved.ref);
+    }
     const url=need(c.url,"source URL");
     let parsed:URL;
     try { parsed=new URL(url); } catch { throw new StapleError("validation","Use an exact HTTPS issue or PR URL"); }
@@ -78,7 +89,10 @@ export class IntegrationOperations {
     const actor=()=>need(c.actor,"actor");
     switch(c.action) {
       case "connections": return {connections:this.connections.list(),execution:this.options.liveReadsAvailable===false ? "cached_only":"local",counts:this.counts()};
-      case "configure": return this.connections.save({id:c.connectionId,providerId:"github",mode:"cli",host:need(c.host,"GitHub host").toLowerCase(),account:need(c.account,"expected gh account")});
+      case "configure":
+        if(c.providerId === "linear") return this.connections.save({id:c.connectionId,providerId:"linear",mode:"api",host:"linear.app",
+          account:need(c.account,"expected Linear user UUID"),scopeId:need(c.scopeId,"Linear organization UUID"),credentialEnv:need(c.credentialEnv,"credential environment variable name")});
+        return this.connections.save({id:c.connectionId,providerId:"github",mode:"cli",host:need(c.host,"GitHub host").toLowerCase(),account:need(c.account,"expected gh account")});
       case "remove": this.connections.remove(need(c.connectionId,"connection")); return {removed:true};
       case "health": return {...await this.reader(need(c.connectionId,"connection")).validate(),checkedAt:new Date().toISOString()};
       case "containers": return this.reader(need(c.connectionId,"connection")).listContainers(c.cursor);
@@ -105,7 +119,7 @@ export class IntegrationOperations {
       case "unlink": this.store.externalLinks().unlink(need(c.ref,"local ticket"),need(c.resourceId,"resource"),actor()); return {unlinked:true};
       case "refresh": {
         const held=this.store.externalLinks().resource(need(c.resourceId,"resource"));
-        const item=await this.reader(this.select(c,held.ref.host,held.ref.providerId)).read(held.ref);
+        const item=await this.reader(this.select(c,held.ref.host,held.ref.providerId,held.ref.scopeId)).read(held.ref);
         return this.store.externalLinks().remember(item,actor());
       }
       case "share": {

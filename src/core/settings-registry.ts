@@ -193,9 +193,9 @@ export type QueuePolicy = (typeof QUEUE_POLICIES)[number];
 const definitions: SettingDefinition[] = [
   {
     key: "integrations.repositories", category: "integrations", scope: "workspace",
-    schema: { type: "string", pattern: /^(?:[a-z0-9][a-z0-9.:-]*\/[1-9][0-9]*(?:,[a-z0-9][a-z0-9.:-]*\/[1-9][0-9]*)*)?$/, patternHint: "comma-separated GitHub host/numeric repository id entries, or empty" },
+    schema: { type: "string", pattern: /^(?:(?:[a-z0-9][a-z0-9.:-]*\/[1-9][0-9]*|linear\.app\/[0-9a-f-]{36}\/[0-9a-f-]{36})(?:,(?:[a-z0-9][a-z0-9.:-]*\/[1-9][0-9]*|linear\.app\/[0-9a-f-]{36}\/[0-9a-f-]{36}))*)?$/i, patternHint: "comma-separated host/repository-id or linear.app/organization-uuid/team-uuid entries, or empty" },
     default: "", version: 1, sensitivity: "normal",
-    ui: { label: "GitHub repositories", description: "Repository search preferences shared with this workspace. Account bindings stay on this computer.", control: "text", order: 10 },
+    ui: { label: "Provider containers", description: "Repository and team search preferences shared with this workspace. Account bindings stay on this computer.", control: "text", order: 10 },
   },
   {
     key: "kinds.default",
