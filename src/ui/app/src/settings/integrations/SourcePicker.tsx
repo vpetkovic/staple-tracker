@@ -30,7 +30,7 @@ export function SourcePicker({ workspace, targets, connections, onChange }: {
         <button
           type="button"
           aria-label={`Add a source to ${workspace}`}
-          className="relative inline-flex h-6 shrink-0 items-center gap-1 rounded-md border border-dashed px-2 text-label text-muted-foreground hover:border-border-strong hover:bg-surface-hover hover:text-foreground focus-ring aria-expanded:bg-surface-hover pointer-coarse:before:absolute pointer-coarse:before:-inset-x-1 pointer-coarse:before:-inset-y-2.5"
+          className="relative inline-flex h-6 min-h-0 shrink-0 items-center gap-1 rounded-md border border-dashed px-2 text-label text-muted-foreground hover:border-border-strong hover:bg-surface-hover hover:text-foreground focus-ring aria-expanded:bg-surface-hover pointer-coarse:before:absolute pointer-coarse:before:-inset-x-1 pointer-coarse:before:-inset-y-2.5"
         >
           <Plus aria-hidden className="size-3" />
           Add

@@ -107,7 +107,7 @@ function WorkspaceRow({ row, rows, current, tile, connections, onChange }: {
   return (
     <li data-workspace-row={row.workspace} className="flex flex-wrap items-start gap-x-3 gap-y-2 px-3 py-2 pointer-coarse:py-2.5">
       {/* The rail's workspace tile: a letter on a 16px square, ink for the workspace the app is on. */}
-      <div className="flex h-6 w-40 max-w-full min-w-0 items-center gap-2 pointer-coarse:h-11">
+      <div className="flex h-6 w-40 max-w-full min-w-0 items-center gap-2">
         <span
           aria-hidden
           className={cn(
@@ -121,7 +121,7 @@ function WorkspaceRow({ row, rows, current, tile, connections, onChange }: {
           {row.workspace}
         </span>
       </div>
-      <div className="flex min-w-0 flex-[1_1_16rem] flex-wrap items-center gap-1.5 pointer-coarse:gap-x-3 pointer-coarse:gap-y-2.5 pointer-coarse:py-2.5">
+      <div className="flex min-w-0 flex-[1_1_16rem] flex-wrap items-center gap-1.5 pointer-coarse:gap-x-3 pointer-coarse:gap-y-4">
         {row.targets.length === 0 ? <span className="text-label text-text-tertiary">{unmappedSentence(rows, row.workspace)}</span> : null}
         {row.targets.map((target) => {
           const label = chipLabel(target);
@@ -143,7 +143,7 @@ function WorkspaceRow({ row, rows, current, tile, connections, onChange }: {
                 aria-label={`Remove ${label.text} from ${row.workspace}`}
                 disabled={removing === target.key}
                 onClick={() => void unmap(target)}
-                className="relative flex size-4 shrink-0 items-center justify-center rounded-sm text-text-tertiary hover:bg-surface-hover hover:text-foreground focus-ring pointer-coarse:before:absolute pointer-coarse:before:-inset-3.5"
+                className="relative flex size-4 min-h-0 shrink-0 items-center justify-center rounded-sm text-text-tertiary hover:bg-surface-hover hover:text-foreground focus-ring pointer-coarse:before:absolute pointer-coarse:before:-inset-3.5"
               >
                 {removing === target.key ? <Loader2 aria-hidden className="size-3 animate-spin" /> : <X aria-hidden className="size-3" />}
               </button>
