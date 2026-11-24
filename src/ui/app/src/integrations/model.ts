@@ -40,3 +40,22 @@ export function freshness(item: SourceItem, now = Date.now()): string {
   const age = now - Date.parse(item.fetchedAt);
   return `${age > 24 * 60 * 60 * 1000 ? "Stale cache" : "Cached context"} · ${new Date(item.fetchedAt).toLocaleString()}`;
 }
+
+export function groupLinks(
+  links: ExternalLink[],
+): Array<{ key: string; label: string; links: ExternalLink[] }> {
+  const groups = new Map<string, { key: string; label: string; links: ExternalLink[] }>();
+  for (const link of links) {
+    const r = link.resource;
+    const key = JSON.stringify([r.ref.providerId, r.ref.host, r.ref.scopeId, r.ref.containerId]);
+    let group = groups.get(key);
+    if (!group) {
+      const repository =
+        r.ref.providerId === "github" ? r.key.replace(/#[0-9]+$/, "") : r.ref.containerId;
+      group = { key, label: `${r.ref.providerId} · ${r.ref.host} · ${repository}`, links: [] };
+      groups.set(key, group);
+    }
+    group.links.push(link);
+  }
+  return [...groups.values()].sort((a, b) => a.label.localeCompare(b.label));
+}

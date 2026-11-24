@@ -1063,6 +1063,7 @@ export function startUiServer(options: UiOptions): UiHandle {
       ...context,
       crossBlockers,
       claim: handle.store.claimActivity(context.issue.id),
+      externalLinks: handle.store.externalLinks().list(context.issue.id),
       gate: handle.store.gate(context.issue.id),
       queuedBy: handle.store.queuedBy(context.issue.id),
       childrenQueued,

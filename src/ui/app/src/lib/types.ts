@@ -1,4 +1,4 @@
-import type { ExternalRowSummary } from "../../../../core/integrations/link-store.js";
+import type { ExternalLink, ExternalRowSummary } from "../../../../core/integrations/link-store.js";
 import type { HorizonData, IdeaData, IdeaDetailData, PlanStepData } from "./plan-types.js";
 /**
  * The wire vocabulary — one mirror of src/core/types.ts plus the envelopes
@@ -1101,6 +1101,7 @@ export interface IssueAttachment {
 
 /** GET /api/issue */
 export interface IssueDetail {
+  externalLinks?: ExternalLink[];
   workspace: string;
   issue: Issue;
   ancestors: Issue[];

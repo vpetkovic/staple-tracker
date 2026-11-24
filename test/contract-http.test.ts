@@ -248,6 +248,7 @@ describe("read shapes", () => {
     const body = normalize(await (await get("/api/issue?ref=CON-1")).json(), [home]);
     expect(body).toEqual({
       workspace: WS,
+      externalLinks: [],
       issue: issueGolden({
         identifier: "CON-1",
         title: "Contract root task",
