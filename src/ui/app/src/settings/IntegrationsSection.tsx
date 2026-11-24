@@ -5,7 +5,7 @@
  *
  * This file only fetches; the two halves under ./integrations render from what it passes.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { integrationRead } from "@/lib/api";
 import { useSession } from "@/lib/session";
 import type { WorkspaceSettingsEnvelope } from "@/lib/settings";
@@ -40,10 +40,12 @@ export function IntegrationsSection({ ws, onDirtyChange }: {
   useEffect(loadMapping, [loadMapping]);
   // A connection added or removed changes which machine connection serves each source.
   const connectionIds = state.connections.map((c) => c.id).join(",");
+  const seenIds = useRef<string | null>(null);
   useEffect(() => {
-    if (state.loaded && rows) loadMapping();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connectionIds]);
+    if (!state.loaded) return;
+    if (seenIds.current !== null && seenIds.current !== connectionIds) loadMapping();
+    seenIds.current = connectionIds;
+  }, [state.loaded, connectionIds, loadMapping]);
 
   const setRow = useCallback((workspace: string, targets: MappedTarget[]) => {
     setRows((held) => held?.map((row) => (row.workspace === workspace ? { ...row, targets } : row)) ?? held);
