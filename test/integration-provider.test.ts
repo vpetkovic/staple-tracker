@@ -15,7 +15,7 @@ function fixture(providerId: string, host: string, mode: string, statuses: strin
   }));
   const adapter: IntegrationAdapter = {
     scope, label: providerId, connection: { id: "local-binding", mode },
-    validate: async () => ({ state: "ready" }),
+    validate: async () => ({ state: "ready" }), readContainer: async () => null,
     listContainers: async () => ({ items: [{ id: "container-1", name: "A project", url: `https://${host}/project` }], nextCursor: null }),
     searchIssues: vi.fn(async (query) => {
       const index = query.cursor === undefined ? 0 : Number(query.cursor.replace("opaque:", ""));

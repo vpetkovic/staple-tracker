@@ -23,7 +23,7 @@ function setup() {
   const ws=initWorkspace({global:true,slug:"integration-tests"});
   const task=ws.store.createIssue({title:"Local search"});
   const adapter:IntegrationAdapter={scope:{providerId:"github",host:"github.com",scopeId:"host"},label:"GitHub",connection:{id:"work",mode:"cli"},
-    validate:vi.fn(async()=>({state:"ready" as const})),listContainers:vi.fn(async()=>({items:[],nextCursor:null})),
+    validate:vi.fn(async()=>({state:"ready" as const})),listContainers:vi.fn(async()=>({items:[],nextCursor:null})),readContainer:vi.fn(async(id:string)=>({id,name:"team/repo",url:"https://github.com/team/repo"})),
     searchIssues:vi.fn(async()=>({items:[item],nextCursor:null})),resolve:vi.fn(async()=>item),readIssue:vi.fn(async()=>item)};
   const service=new IntegrationOperations(ws.store,{home,factories:new Map([["github:cli",()=>adapter]])});
   return {home,ws,task,service,adapter};
@@ -58,7 +58,8 @@ describe("shared integration operations",()=>{
     denied=true;
     await expect(service.execute({action:"refresh",connectionId:"linear",resourceId:resource.id,actor:"ada"})).rejects.toMatchObject({code:"auth"});
     await service.execute({action:"remove",connectionId:"linear"});
-    expect(await service.execute({action:"search",text:"Renamed"})).toMatchObject({cached:[{item:{id:resource.id,title}}],execution:"cached_only"});
+    // No connection and nothing mapped: cached context still answers, and nothing is searched live.
+    expect(await service.execute({action:"search",text:"Renamed"})).toMatchObject({cached:[{item:{id:resource.id,title}}],remote:[],scope:{mode:"none"}});
     expect(JSON.stringify(service.connections.list())).not.toContain("fixture-key");
     expect(JSON.stringify(ws.store.db.prepare("SELECT * FROM external_resources").all())).not.toContain("Private source body");
     ws.store.db.close();
@@ -67,7 +68,8 @@ describe("shared integration operations",()=>{
     const {ws,service,adapter,task}=setup();
     await service.execute({action:"configure",connectionId:"work",host:"github.com",account:"ada"});
     expect(await service.execute({action:"health",connectionId:"work"})).toMatchObject({health:[{connectionId:"work",state:"ready"}]});
-    const result=await service.execute({action:"search",connectionId:"work",text:"search"}) as {local:unknown[];remote:unknown[]};
+    await service.execute({action:"map",connectionId:"work",containerId:"42",actor:"ada"});
+    const result=await service.execute({action:"search",text:"search"}) as {local:unknown[];remote:unknown[]};
     expect(result.local).toHaveLength(1);expect(result.remote).toHaveLength(1);
     expect(ws.store.db.prepare("SELECT * FROM external_resources").all()).toEqual([]);
     expect(ws.store.listIssues({includeResolved:true}).map(i=>i.id)).toEqual([task.id]);
@@ -132,6 +134,13 @@ describe("shared integration operations",()=>{
     expect(health.structuredContent).toMatchObject({result:{health:[{connectionId:"linear-mcp",state:"unauthenticated",action:expect.stringContaining("STAPLE_ABSENT_TEST_KEY")}]}});
     const cached=await harness.call("integration_read",{action:"list",ref:task.id});
     expect(cached.structuredContent).toMatchObject({result:[{resource:{key:"ENG-12",ref:{providerId:"linear"}}}]});
+    // The mapping is the same data on every surface.
+    const mapping=await harness.call("integration_read",{action:"mapping",allWorkspaces:true});
+    expect(mapping.structuredContent).toMatchObject({result:{workspaces:[{workspace:"integration-tests",targets:[]}],targets:[]}});
+    const unmap=await harness.call("integration_write",{action:"unmap",targetKey:`linear.app/${org}/33333333-3333-4333-8333-333333333333`});
+    expect(unmap.isError).toBe(true);
+    const listed=spawnSync(process.execPath,[TSX_CLI,CLI_ENTRY,"integrations","mapping","--db",dbPath,"--json"],{env:{...process.env,STAPLE_HOME:home,NODE_NO_WARNINGS:"1"},encoding:"utf8"});
+    expect(listed.status,listed.stderr).toBe(0);expect(JSON.parse(listed.stdout)).toEqual({workspace:"integration-tests",targets:[]});
   },30_000);
   it("exposes the same cached links over HTTP, CLI and MCP and enforces HTTP method/action/origin boundaries",async()=>{
     const {ws,home,task}=setup();

@@ -1,3 +1,4 @@
+import { hubWorkspaces } from "./core/integrations/mapping.js";
 import { IntegrationOperations, integrationCommandSchema, INTEGRATION_READ_ACTIONS, INTEGRATION_WRITE_ACTIONS, INTEGRATION_CONFIG_ACTIONS } from "./core/integrations/operations.js";
 /**
  * staple MCP server (stdio) — the whole agent surface.
@@ -1345,7 +1346,7 @@ for (const spec of [
     outputSchema: { result: z.unknown() },
     annotations: { title: spec.name === "integration_read" ? "Read integrations" : spec.name === "integration_write" ? "Update external links" : "Configure integration", readOnlyHint: spec.readOnly, ...(spec.readOnly ? { idempotentHint: true } : { destructiveHint: false }), openWorldHint: spec.name !== "configure_integration" },
   }, async ({ ws, ...command }) => {
-    try { return ok({result: await new IntegrationOperations(storeFor(ws)).execute({ ...command, actor: command.actor ?? process.env.STAPLE_AGENT })}); }
+    try { return ok({result: await new IntegrationOperations(storeFor(ws), { workspaces: () => { try { return hubWorkspaces(storeFor); } catch { const store = storeFor(ws); return [{ slug: store.slug, store }]; } } }).execute({ ...command, actor: command.actor ?? process.env.STAPLE_AGENT })}); }
     catch(error) { return fail(error); }
   });
 }

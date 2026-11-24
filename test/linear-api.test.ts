@@ -50,6 +50,24 @@ describe("read-only Linear API adapter",()=>{
     expect(JSON.parse(fetch.mock.calls[0]![1]!.body as string).variables.filter).toEqual({team:{id:{eq:teamId}}});
     expect(JSON.parse(fetch.mock.calls[0]![1]!.body as string).query).toContain("orderBy: updatedAt");
   });
+  it("lists and reads projects and teams, and scopes search to a project whatever the issue's team",async()=>{
+    const projectId="66666666-6666-4666-8666-666666666666";
+    const proj={id:projectId,name:"Launch",url:"https://linear.app/acme/project/launch-abc"};
+    const {reader,fetch}=setup(body=>body.query.includes("projects(") ? {projects:{nodes:[proj],pageInfo}}
+      : body.query.includes("project(id:") ? {project:proj} : body.query.includes("team(id:") ? {team}
+      : body.query.includes("searchIssues(") ? {searchIssues:{nodes:[{...issue,project:{id:projectId}}],pageInfo}} : {issues:{nodes:[{...issue,project:{id:projectId}}],pageInfo}});
+    expect(await reader.listProjects()).toEqual({items:[{id:projectId,name:"Launch",url:proj.url}],nextCursor:null});
+    expect(await reader.readContainer(projectId,"project")).toEqual({id:projectId,name:"Launch",url:proj.url});
+    expect(await reader.readContainer(teamId,"team")).toMatchObject({id:teamId,name:"Engineering (ENG)"});
+    expect((await reader.search("issue",{text:"title",projectId})).items).toHaveLength(1);
+    const typed=JSON.parse(fetch.mock.calls.at(-1)![1]!.body as string);
+    expect(typed.query).toContain("filter: $filter");
+    expect(typed.variables.filter).toEqual({project:{id:{eq:projectId}}});
+    await reader.search("issue",{text:"",projectId});
+    expect(JSON.parse(fetch.mock.calls.at(-1)![1]!.body as string).variables.filter).toEqual({project:{id:{eq:projectId}}});
+    const elsewhere=setup(()=>({searchIssues:{nodes:[{...issue,project:null}],pageInfo}}));
+    await expect(elsewhere.reader.search("issue",{text:"title",projectId})).rejects.toMatchObject({code:"unavailable"});
+  });
   it("resolves exact URLs and scoped identifiers, retaining UUID identity after display changes",async()=>{
     let current=issue;
     const {reader,fetch}=setup(()=>({issue:current}));

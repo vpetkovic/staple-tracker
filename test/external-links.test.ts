@@ -92,8 +92,10 @@ describe("row integration summaries",()=>{
   it("counts every association while bounding context-free previews per kind and omitting unlinked rows",()=>{
     const {store,links,first,second}=setup();
     for(let n=1;n<=8;n++) links.link(first.id,source(String(n)),"ada");
-    const pr=links.link(first.id,source("9","pull_request"),"ada");
+    const pr=links.link(first.id,{...source("9","pull_request"),status:{id:"merged",name:"merged"}},"ada");
     let summaries=links.summaries();
+    expect(summaries[first.id]?.issues.items[0]?.status).toEqual({id:"open",name:"Open"});
+    expect(summaries[first.id]?.pullRequests.items[0]?.status).toEqual({id:"merged",name:"merged"});
     expect(summaries[first.id]?.issues.count).toBe(8);
     expect(summaries[first.id]?.issues.items).toHaveLength(5);
     expect(summaries[first.id]?.issues.items[0]?.title).toBe("Remote 1");

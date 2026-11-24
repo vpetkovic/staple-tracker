@@ -1,11 +1,10 @@
-import { containerPrefix } from "@/integrations/link-defaults";
 import { LinkDefaultsSection } from "./LinkDefaultsSection";
 import { useEffect, useState } from "react";
 import { Plug, RefreshCw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { integrationConfigure, integrationRead } from "@/lib/api";
+import { integrationConfigure, integrationRead, integrationWrite } from "@/lib/api";
 import type { WorkspaceSettingsEnvelope } from "@/lib/settings";
 import type { ApplyTo } from "./CategoryContent";
 import { Section } from "./form/primitives";
@@ -14,17 +13,20 @@ import type { ConnectionHealthSnapshot, DetectedConnection, ExternalContainer, E
 
 type Listed = { connections: Array<ProviderConnection & { health?: ConnectionHealthSnapshot | null }>; detected?: DetectedConnection[] };
 type HealthRead = { health: ConnectionHealthSnapshot[] };
-export function IntegrationsSection({ ws, settings, applyTo, onDirtyChange }: {
+type Mapped = { key: string; name: string | null; kind: string; connectionId: string | null };
+type MappingRead = { workspaces: Array<{ workspace: string; targets: Mapped[] }> };
+type Found = ExternalContainer & { key: string; kind: "repository" | "team" | "project" };
+export function IntegrationsSection({ ws, onDirtyChange }: {
   ws?: string; settings: WorkspaceSettingsEnvelope; applyTo: ApplyTo; onDirtyChange: (dirty: boolean) => void;
 }) {
   const [connections, setConnections] = useState<ProviderConnection[]>([]);
   const [health, setHealth] = useState<Record<string, ConnectionHealthSnapshot>>({});
   const [detected, setDetected] = useState<DetectedConnection[]>([]);
   const remember = (read: HealthRead) => setHealth(old => ({ ...old, ...Object.fromEntries(read.health.map(h => [h.connectionId, h])) }));
-  const [repos, setRepos] = useState<Record<string, ExternalContainer>>({});
+  const [repos, setRepos] = useState<Record<string, Found & { connectionId: string }>>({});
   const [cursor, setCursor] = useState<Record<string, string | null>>({});
-  const stored = String(settings.values["integrations.repositories"]?.value ?? "");
-  const [selected, setSelected] = useState(stored);
+  const [mapping, setMapping] = useState<MappingRead["workspaces"]>([]);
+  const [choice, setChoice] = useState<Record<string, string>>({});
   const [provider, setProvider] = useState<"github" | "linear">("github");
   const [scopeId, setScope] = useState("");
   const [credentialEnv, setCredentialEnv] = useState("STAPLE_LINEAR_API_KEY");
@@ -35,9 +37,13 @@ export function IntegrationsSection({ ws, settings, applyTo, onDirtyChange }: {
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [defaultsDirty, setDefaultsDirty] = useState(false);
-  const dirty = defaultsDirty || selected !== stored || account !== "" || scopeId !== "" || credentialEnv !== "STAPLE_LINEAR_API_KEY" || host !== "github.com";
+  const dirty = defaultsDirty || account !== "" || scopeId !== "" || credentialEnv !== "STAPLE_LINEAR_API_KEY" || host !== "github.com";
   useEffect(() => { onDirtyChange(dirty); }, [dirty, onDirtyChange]);
-  useEffect(() => { setSelected(stored); }, [stored]);
+  useEffect(() => {
+    let active = true;
+    integrationRead<MappingRead>({action: "mapping", allWorkspaces: true}, ws).then(r => { if (active) setMapping(r.workspaces); }).catch(() => {});
+    return () => { active = false; };
+  }, [ws]);
   useEffect(() => {
     let active = true;
     integrationRead<Listed>({action: "connections"}, ws)
@@ -55,7 +61,6 @@ export function IntegrationsSection({ ws, settings, applyTo, onDirtyChange }: {
     setBusy(true); setError(null); setNotice("");
     try { await fn(); } catch(e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   }
-  const ids = selected ? selected.split(",") : [];
   return <div className="space-y-7" aria-busy={busy}>
     <Section title="Provider connections · this machine" error={error}
       description="GitHub uses gh authentication on the computer running Staple. Linear uses a personal API key from that computer’s environment. Your browser never receives a key; connections do not sync to other machines.">
@@ -72,8 +77,8 @@ export function IntegrationsSection({ ws, settings, applyTo, onDirtyChange }: {
         <div className="flex flex-wrap gap-2">
           <Button size="sm" variant="outline" disabled={busy} onClick={() => void run(async () => { remember(await integrationRead<HealthRead>({action:"health",connectionId:c.id,force:true},ws)); })}><RefreshCw className="size-3" />Check connection</Button>
           <Button size="sm" variant="outline" disabled={busy} onClick={() => void run(async () => {
-            const page = await integrationRead<ExternalPage<ExternalContainer>>({action:"containers",connectionId:c.id,cursor:cursor[c.id] ?? undefined},ws);
-            setRepos(old => ({...old,...Object.fromEntries(page.items.map(repo => [`${containerPrefix(c)}${repo.id}`,repo]))}));
+            const page = await integrationRead<ExternalPage<Found>>({action:"containers",connectionId:c.id,cursor:cursor[c.id] ?? undefined},ws);
+            setRepos(old => ({...old,...Object.fromEntries(page.items.map(repo => [repo.key,{...repo,connectionId:c.id}]))}));
             setCursor(old => ({...old,[c.id]:page.nextCursor}));
           })}>{c.providerId === "linear" ? cursor[c.id] ? "More teams" : "Find teams" : cursor[c.id] ? "More repositories" : "Find repositories"}</Button>
           <Button size="sm" variant="ghost" disabled={busy} onClick={() => void run(async () => { await integrationConfigure({action:"remove",connectionId:c.id},ws); setConnections(old => old.filter(x=>x.id!==c.id)); setNotice("Connection removed from this machine. Existing links are preserved."); })}><Trash2 className="size-3" />Remove</Button>
@@ -109,18 +114,35 @@ export function IntegrationsSection({ ws, settings, applyTo, onDirtyChange }: {
         <Button size="sm" disabled={busy || !account.trim() || (provider === "linear" && (!scopeId.trim() || !credentialEnv.trim()))} type="submit">Add connection</Button>
       </form>
     </Section>
-    <Section title="Workspace repositories and teams" description="Choose repositories and Linear teams to offer in search. These preferences sync with the workspace; each machine needs its own connection to read them. You can always link an exact accessible URL.">
-      {Object.keys(repos).length === 0 && ids.length === 0 ? <p className="text-sm text-muted-foreground">Use Find repositories or Find teams above to choose search scopes.</p> : null}
-      <div className="max-h-64 overflow-y-auto space-y-2">
-        {[...new Set([...ids,...Object.keys(repos)])].map(id => <label key={id} className="flex items-start gap-2 text-sm min-w-0"><input type="checkbox" className="mt-1" checked={ids.includes(id)} disabled={busy} onChange={e=>setSelected((e.target.checked ? [...ids,id] : ids.filter(x=>x!==id)).sort().join(","))} /><span className="wrap-anywhere">{repos[id]?.name ?? id}</span></label>)}
-      </div>
-      <div className="flex gap-2"><Button size="sm" disabled={busy || selected===stored} onClick={() => void run(async () => {
-        const refusal=await applyTo("settings",[{op:"set",key:"integrations.repositories",value:selected}]);
-        if(refusal) throw new Error(refusal.message); setNotice("Workspace container preferences saved.");
-      })}>Save containers</Button><Button size="sm" variant="ghost" disabled={busy || selected===stored} onClick={()=>setSelected(stored)}>Cancel</Button></div>
+    <Section title="What each workspace searches" description="Map GitHub repositories and Linear teams to a workspace; search and linking in that workspace stay inside them. A workspace with no mapping searches everything mapped on this computer. Mappings sync with each workspace.">
+      {mapping.map(row => {
+        const options = Object.values(repos).filter(r => !row.targets.some(t => t.key === r.key));
+        return <div key={row.workspace} className="rounded-lg border p-3 space-y-2 text-sm">
+          <p className="font-medium">{row.workspace}</p>
+          {row.targets.length === 0 ? <p className="text-xs text-muted-foreground">No mapping: searches every mapped repository and team.</p> : null}
+          {row.targets.map(t => <div key={t.key} className="flex flex-wrap items-center gap-2"><span className="wrap-anywhere">{t.name ?? t.key}</span>
+            <Button size="sm" variant="ghost" disabled={busy} onClick={() => void run(async () => {
+              const r = await integrationWrite<{ targets: Mapped[] }>({action: "unmap", targetKey: t.key}, row.workspace);
+              setMapping(old => old.map(m => m.workspace === row.workspace ? {...m, targets: r.targets} : m));
+            })}>Unmap</Button></div>)}
+          {options.length ? <div className="flex flex-wrap gap-2">
+            <select aria-label={`Repository or team to map to ${row.workspace}`} className="min-w-0 rounded-md border bg-background p-1" value={choice[row.workspace] ?? ""} onChange={e => setChoice(old => ({...old, [row.workspace]: e.target.value}))}>
+              <option value="">Choose a repository or team</option>
+              {options.map(o => <option key={o.key} value={o.key}>{o.name}</option>)}
+            </select>
+            <Button size="sm" disabled={busy || !choice[row.workspace]} onClick={() => void run(async () => {
+              const found = repos[choice[row.workspace]!]!;
+              const r = await integrationWrite<{ targets: Mapped[] }>({action: "map", connectionId: found.connectionId, containerId: found.id, containerKind: found.kind}, row.workspace);
+              setMapping(old => old.map(m => m.workspace === row.workspace ? {...m, targets: r.targets} : m));
+              setChoice(old => ({...old, [row.workspace]: ""}));
+            })}>Map</Button>
+          </div> : null}
+        </div>;
+      })}
+      {Object.keys(repos).length === 0 ? <p className="text-xs text-muted-foreground">Use Find repositories or Find teams above to list what you can map.</p> : null}
     </Section>
     {ws && loaded ? <LinkDefaultsSection key={ws} ws={ws} connections={connections}
-      repositories={stored.split(",").filter(Boolean)} onDirtyChange={setDefaultsDirty} /> : null}
+      repositories={(mapping.find(m => m.workspace === ws)?.targets ?? []).map(t => t.key)} onDirtyChange={setDefaultsDirty} /> : null}
     {notice ? <p role="status" className="text-sm">{notice}</p> : null}
     <p className="text-xs text-muted-foreground">Cloud-only sessions show synced links and shared cached context. Live reads require a configured connection on the machine running Staple.</p>
   </div>;

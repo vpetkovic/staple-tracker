@@ -3929,7 +3929,7 @@ export function startUiServer(options: UiOptions): UiHandle {
           : url.pathname==="/api/integrations/configure" ? INTEGRATION_CONFIG_ACTIONS : INTEGRATION_WRITE_ACTIONS;
         if(typeof command.action!=="string" || !allowed.includes(command.action)) throw new StapleError("validation","This operation belongs on a different integration route");
         const handle=handleFor(typeof ws==="string" ? ws:url.searchParams.get("ws") ?? undefined);
-        json(res,200,await new IntegrationOperations(handle.store).execute({...command,actor:command.actor ?? "user"}));
+        json(res,200,await new IntegrationOperations(handle.store,{workspaces:()=>allHandles().map(h=>({slug:h.slug,store:h.store}))}).execute({...command,actor:command.actor ?? "user"}));
         return;
       }
 

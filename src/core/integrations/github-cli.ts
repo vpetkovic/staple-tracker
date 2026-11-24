@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { StapleError } from "../types.js";
 import type {
-  ConnectionHealth, ExternalItem, ExternalItemKind, ExternalItemRef, ExternalLocator,
+  ConnectionHealth, ContainerKind, ExternalContainer, ExternalItem, ExternalItemKind, ExternalItemRef, ExternalLocator,
   ExternalPage, ExternalSearch, IntegrationAdapter, ProviderReadOptions,
 } from "./contracts.js";
 import { createGhRunner, type GhRunner } from "./gh-process.js";
@@ -69,6 +69,19 @@ export class GitHubCliAdapter implements IntegrationAdapter {
     };
   }
 
+  async readContainer(id: string, kind: ContainerKind, options?: ProviderReadOptions): Promise<ExternalContainer | null> {
+    if (kind !== "repository") throw new StapleError("validation", "GitHub containers are repositories");
+    this.numeric(id);
+    await this.checkConnection(options);
+    try {
+      const repo = await this.get(`repositories/${id}`, repository, options);
+      return String(repo.id) === id ? { id, name: repo.full_name, url: this.repoUrl(repo) } : null;
+    } catch (error) {
+      if (error instanceof StapleError && error.code === "not_found") return null;
+      throw error;
+    }
+  }
+
   searchIssues(query: ExternalSearch, options?: ProviderReadOptions) { return this.search("issue", query, options); }
   readIssue(ref: ExternalItemRef, options?: ProviderReadOptions) { return this.read(ref, "issue", options); }
 
@@ -109,6 +122,7 @@ export class GitHubCliAdapter implements IntegrationAdapter {
 
   private async search(kind: ExternalItemKind, query: ExternalSearch, options?: ProviderReadOptions): Promise<ExternalPage<ExternalItem>> {
     if (query.text.length > 256 || /[\x00-\x1f]/.test(query.text)) throw new StapleError("validation", "Use at most 256 characters of search text");
+    if (query.projectId !== undefined) throw new StapleError("validation", "GitHub has no projects to search by");
     if (query.containerId !== undefined) this.numeric(query.containerId);
     const binding = JSON.stringify([kind, query.text, query.containerId ?? null]);
     const page = this.page(query.cursor, binding);
@@ -141,7 +155,7 @@ export class GitHubCliAdapter implements IntegrationAdapter {
     return { items, nextCursor: page * PAGE_SIZE < Math.min(result.total_count, SEARCH_LIMIT) ? this.cursor(page + 1, binding) : null };
   }
 
-  /** Returns the effective gh login, which must be the configured account. */
+  /** Returns the effective gh login, which must be the configured account. Runs before every read. */
   private async checkConnection(options?: ProviderReadOptions): Promise<string> {
     const version = await this.run({ kind: "version" }, options);
     const match = /^gh version (\d+)\.(\d+)\.(\d+)/.exec(version);
