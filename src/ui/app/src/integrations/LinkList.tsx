@@ -481,7 +481,7 @@ function Description({ link }: { link: ExternalLink }) {
       <div
         ref={ref}
         className={cn(
-          "text-body wrap-anywhere text-muted-foreground [&_p]:m-0 [&_p+p]:mt-1.5 [&_p.font-semibold]:text-foreground [&>:first-child]:mt-0",
+          "text-body wrap-anywhere text-muted-foreground [&_p]:m-0 [&_p+p]:mt-1.5 [&_p.font-semibold]:mt-2 [&_p.font-semibold]:text-body [&_p.font-semibold]:font-medium [&_p.font-semibold]:text-foreground [&_ul]:my-1 [&_ol]:my-1 [&>:first-child]:mt-0",
           !more && "max-h-[7.5rem] overflow-hidden",
           !more && long && "[mask-image:linear-gradient(to_bottom,black_60%,transparent)]",
         )}
