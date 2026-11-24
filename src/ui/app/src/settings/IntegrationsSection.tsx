@@ -12,7 +12,7 @@ import { Section } from "./form/primitives";
 import type { ProviderConnection } from "../../../../core/integrations/connections";
 import type { ConnectionHealthSnapshot, DetectedConnection, ExternalContainer, ExternalPage } from "../../../../core/integrations/contracts";
 
-type Listed = { connections: Array<ProviderConnection & { health: ConnectionHealthSnapshot | null }>; detected: DetectedConnection[] };
+type Listed = { connections: Array<ProviderConnection & { health?: ConnectionHealthSnapshot | null }>; detected?: DetectedConnection[] };
 type HealthRead = { health: ConnectionHealthSnapshot[] };
 export function IntegrationsSection({ ws, settings, applyTo, onDirtyChange }: {
   ws?: string; settings: WorkspaceSettingsEnvelope; applyTo: ApplyTo; onDirtyChange: (dirty: boolean) => void;
@@ -43,7 +43,7 @@ export function IntegrationsSection({ ws, settings, applyTo, onDirtyChange }: {
     integrationRead<Listed>({action: "connections"}, ws)
       .then(r => {
         if(!active) return;
-        setConnections(r.connections); setDetected(r.detected);
+        setConnections(r.connections); setDetected(r.detected ?? []);
         setHealth(Object.fromEntries(r.connections.flatMap(c => c.health ? [[c.id, c.health]] : [])));
         // Show real status on arrival; the server answers from its cache unless the last check is old.
         if (r.connections.length) void integrationRead<HealthRead>({action: "health"}, ws).then(h => { if(active) remember(h); }).catch(() => {});
