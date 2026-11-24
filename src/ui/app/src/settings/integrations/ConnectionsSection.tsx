@@ -24,7 +24,7 @@ import type { Connections } from "@/integrations/useConnections";
 import type { DetectedConnection } from "../../../../../core/integrations/contracts";
 import { ConfirmDialog } from "../form/ConfirmDialog";
 import { InlineError, Section } from "../form/primitives";
-import { commandIn, connectionMeta, offeredDetections } from "./integrations-model";
+import { commandIn, connectionMeta, linearIdProblem, offeredDetections } from "./integrations-model";
 
 type Provider = "github" | "linear";
 const message = (caught: unknown) => (caught instanceof Error ? caught.message : String(caught));
@@ -508,7 +508,9 @@ export function ConnectionForm({ provider, ws, onCancel, onSaved, onDirtyChange 
     return () => window.removeEventListener("keydown", onKey, true);
   }, [onCancel]);
 
-  const complete = provider === "github" ? host.trim() !== "" && account.trim() !== "" : credentialEnv.trim() !== "" && organization.trim() !== "" && user.trim() !== "";
+  const idProblem = provider === "linear" ? linearIdProblem(organization, user) : null;
+  const complete =
+    provider === "github" ? host.trim() !== "" && account.trim() !== "" : credentialEnv.trim() !== "" && organization.trim() !== "" && user.trim() !== "" && !idProblem;
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!complete || pending) return;
@@ -565,9 +567,13 @@ export function ConnectionForm({ provider, ws, onCancel, onSaved, onDirtyChange 
                   <Input id={`${id}-user`} value={user} onChange={(e) => setUser(e.target.value)} autoComplete="off" spellCheck={false} aria-describedby={`${id}-ids-help`} className="pointer-coarse:h-11" />
                 </FormField>
               </div>
-              <p id={`${id}-ids-help`} className="text-label text-muted-foreground">
-                Both are in Linear under Settings → API.
-              </p>
+              {idProblem ? (
+                <InlineError id={`${id}-ids-help`}>{idProblem}</InlineError>
+              ) : (
+                <p id={`${id}-ids-help`} className="text-label text-muted-foreground">
+                  Both are in Linear under Settings → API.
+                </p>
+              )}
             </div>
           </>
         )}

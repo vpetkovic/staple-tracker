@@ -180,7 +180,8 @@ describe("workspaces", () => {
 
   it("falls back for a source with no name and for one no connection here reads", () => {
     const html = workspaces([{ workspace: "alpha", targets: [target({ name: null, key: "github.com/98765432109", connectionId: null })] }]);
-    expect(html).toContain(">98765432<");
+    expect(html).toContain(">Unnamed repository<");
+    expect(html).not.toContain("98765432");
     expect(html).toContain("Name unavailable until this source is read again");
     expect(html).toMatch(/title="[^"]*No connection on this computer reads this source"/);
     expect(html).toContain('aria-label="No connection on this computer reads this source"');

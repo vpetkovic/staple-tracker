@@ -62,10 +62,19 @@ export function unmappedSentence(rows: readonly WorkspaceMapping[], workspace: s
   return rows.some((r) => r.workspace !== workspace && r.targets.length > 0) ? "Searches everything chosen here" : "Nothing to search yet";
 }
 
-/** A chip's text and tooltip. A source never read on any computer shows a short piece of its key. */
+/** A chip's text and tooltip. A source never read on any computer is named by its kind, never by a piece of its id. */
 export function chipLabel(target: MappedTarget): { text: string; title: string } {
   if (target.name) return { text: target.name, title: target.name };
-  return { text: (target.key.split("/").pop() ?? target.key).slice(0, 8), title: "Name unavailable until this source is read again" };
+  return { text: `Unnamed ${target.kind}`, title: "Name unavailable until this source is read again" };
+}
+
+const LINEAR_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** What is wrong with the Linear form's two ids, before the server is asked; null while they are empty or right. */
+export function linearIdProblem(organization: string, user: string): string | null {
+  const wrong = (value: string) => value.trim() !== "" && !LINEAR_ID.test(value.trim());
+  const field = wrong(organization) ? "Organization ID" : wrong(user) ? "Your user ID" : null;
+  return field ? `${field} should be the 36-character id Linear shows, like 123e4567-e89b-12d3-a456-426614174000.` : null;
 }
 
 export interface PickerSection {

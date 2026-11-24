@@ -3,6 +3,7 @@ import type { ConnectionHealthSnapshot, DetectedConnection } from "../../../../.
 import type { ConnectionView } from "@/integrations/connection-status";
 import {
   chipLabel,
+  linearIdProblem,
   commandIn,
   connectionMeta,
   needsAttention,
@@ -105,9 +106,24 @@ describe("chipLabel", () => {
   it("uses the stored name", () => {
     expect(chipLabel(target())).toEqual({ text: "octo/app", title: "octo/app" });
   });
-  it("falls back to a short key segment and says why", () => {
-    const nameless = target({ name: null, key: "linear.app/22222222-2222-4222-8222-222222222222/33333333-3333-4333-8333-333333333333" });
-    expect(chipLabel(nameless)).toEqual({ text: "33333333", title: "Name unavailable until this source is read again" });
+  it("names the kind when no name is stored, never a piece of an id", () => {
+    const nameless = target({ name: null, kind: "team", key: "linear.app/22222222-2222-4222-8222-222222222222/33333333-3333-4333-8333-333333333333" });
+    expect(chipLabel(nameless)).toEqual({ text: "Unnamed team", title: "Name unavailable until this source is read again" });
+    expect(chipLabel(target({ name: null })).text).toBe("Unnamed repository");
+    expect(chipLabel(target({ name: null, kind: "project" })).text).toBe("Unnamed project");
+  });
+});
+
+describe("linearIdProblem", () => {
+  const id = "22222222-2222-4222-8222-222222222222";
+  it("accepts two ids in Linear's format and stays quiet while a field is still empty", () => {
+    expect(linearIdProblem(id, id)).toBeNull();
+    expect(linearIdProblem("", "")).toBeNull();
+    expect(linearIdProblem(` ${id} `, "")).toBeNull();
+  });
+  it("says which field is not an id, in words a person can act on", () => {
+    expect(linearIdProblem("acme", id)).toBe("Organization ID should be the 36-character id Linear shows, like 123e4567-e89b-12d3-a456-426614174000.");
+    expect(linearIdProblem(id, "me@example.com")).toBe("Your user ID should be the 36-character id Linear shows, like 123e4567-e89b-12d3-a456-426614174000.");
   });
 });
 
