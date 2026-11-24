@@ -200,7 +200,7 @@ describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
       await expect.poll(()=>card.innerText()).toContain("Linear renamed source");
       denied=true;
       await page.getByRole("button",{name:"Refresh context for ENG-99",exact:true}).click();
-      await expect.poll(()=>page.getByRole("alert").innerText()).toContain("Linear authentication failed");
+      await expect.poll(()=>page.getByRole("alert").innerText()).toContain("Linear rejected the API key in STAPLE_TEST_LINEAR_KEY");
       expect(await card.innerText()).toContain("Linear renamed source");
       expect(await heading(page).innerText()).toContain("Set up the repository (alpha)");
       expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
