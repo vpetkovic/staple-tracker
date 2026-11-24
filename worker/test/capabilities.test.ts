@@ -21,7 +21,7 @@ describe("GET /v1/capabilities", () => {
       // backwards-compatible. See `worker/src/limits.ts`. MOVED AGAIN to 3 for the
       // execution attempts (`attempt`, `attemptTransition`), on the same terms.
       // MOVED AGAIN to 4 for typed file attachments (`attachment`).
-      protocol: { min: 1, max: 4 },
+      protocol: { min: 1, max: 5 },
       maxOpBytes: 512 * 1024,
       maxPullLimit: 500,
       defaultPullLimit: 200,

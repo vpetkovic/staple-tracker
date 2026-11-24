@@ -61,6 +61,7 @@ import { aliasedIssueId, moveIdentifier, recordIdentifierMove } from "../identif
 import { ORIGIN_RELEASING_STATUSES, StapleError, holdsLiveOrigin, normalizeTitle, nowIso } from "../types.js";
 import { type OwnRevision, holderYields, oweSettlement, ownClaimSeq, ownOriginClaimSeq, ownRevisionOf, ownRevisions } from "./claims.js";
 import { applyAttempt, applyAttemptTransition } from "./apply-attempts.js";
+import { applyExternal } from "./apply-external.js";
 import { applyAttachment } from "./apply-attachments.js";
 import { writeEventRow } from "../event-row.js";
 import { placeRevision, sameRevision, summaryAt } from "./revision-placement.js";
@@ -636,6 +637,10 @@ export function applyToDatabase(db: DatabaseSync, input: ApplyInput): boolean {
       return applyAttempt(db, input);
     case "attemptTransition":
       return applyAttemptTransition(db, input);
+    case "externalResource":
+    case "externalLink":
+    case "externalStack":
+      return applyExternal(db, input);
     case "attachment":
       return applyAttachment(db, input);
     case "conflict":

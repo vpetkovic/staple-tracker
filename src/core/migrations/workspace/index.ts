@@ -22,6 +22,7 @@ import { migration as m018 } from "./018-attachments.js";
 import { migration as m019 } from "./019-instruction-documents.js";
 import { migration as m020 } from "./020-plan-fields.js";
 import { migration as m021 } from "./021-plan-delivered.js";
+import { migration as m023 } from "./023-external-context-sharing.js";
 import { migration as m022 } from "./022-external-links.js";
 
 /**
@@ -71,7 +72,7 @@ export const WORKSPACE_TARGET: MigrationTarget = {
   label: "workspace database",
   // `issues` has existed since version 1, so its absence means an empty file.
   sentinelTable: "issues",
-  migrations: [m001, m002, m003, m004, m005, m006, m007, m008, m009, m010, m011, m012, m013, m014, m015, m016, m017, m018, m019, m020, m021, m022],
+  migrations: [m001, m002, m003, m004, m005, m006, m007, m008, m009, m010, m011, m012, m013, m014, m015, m016, m017, m018, m019, m020, m021, m022, m023],
   consolidated: CONSOLIDATED_DDL,
 };
 

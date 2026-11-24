@@ -63,6 +63,15 @@ export const TABLES: Record<string, { readonly key: readonly string[]; readonly 
     key: ["id"],
     sql: "SELECT id, attempt_id, kind, at, actor, detection, reason, detail, concurrency FROM attempt_transitions ORDER BY id",
   },
+  // Protocol 5: private caches are deliberately absent.
+  external_resources: {
+    key: ["id"],
+    sql: "SELECT * FROM external_resources ORDER BY id",
+  },
+  external_links: {
+    key: ["id"],
+    sql: "SELECT id,issue_id,resource_id,parent_resource_id,position,created_by,created_at FROM external_links ORDER BY id",
+  },
   // File metadata (protocol 4). The bytes in attachment_bytes do not travel as a table.
   attachments: {
     key: ["id"],

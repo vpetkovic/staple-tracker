@@ -81,6 +81,10 @@ export const SYNC_ENTITIES = [
   "attemptTransition",
   // Protocol 4: typed file attachments. Metadata always; bytes only when they fit.
   "attachment",
+  // Protocol 5: shared source context and many-to-many associations.
+  "externalResource",
+  "externalLink",
+  "externalStack",
 ] as const;
 export type SyncEntity = (typeof SYNC_ENTITIES)[number];
 
@@ -144,10 +148,10 @@ export const JOURNAL_MAX_OP_BYTES = 512 * 1024;
 
 /**
  * The protocol this build's operations are stamped with: the workspace client's
- * (`CLIENT_PROTOCOL`, `cloud/client.ts`). 4 since typed file attachments — a new entity
- * kind is a protocol change, and the Worker that knows `attachment` is deployed first.
+ * (`CLIENT_PROTOCOL`, `cloud/client.ts`). 5 since external resources, links and stacks.
+ * A new entity kind is a protocol change; its Worker support must be deployed first.
  */
-export const SYNC_PROTOCOL = 4;
+export const SYNC_PROTOCOL = 5;
 
 /**
  * Derive the operation id.

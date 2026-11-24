@@ -206,7 +206,7 @@ export function retryQuarantine(
 }
 
 /** The entities a `create` brings whole; the collections — a blocker set, the plan, a milestone — have none. */
-const CREATED: ReadonlySet<string> = new Set(["issue", "comment", "project", "status", "kind", "documentRevision", "attempt", "attemptTransition", "attachment"]);
+const CREATED: ReadonlySet<string> = new Set(["issue", "comment", "project", "status", "kind", "documentRevision", "attempt", "attemptTransition", "attachment", "externalResource", "externalLink"]);
 
 /**
  * An operation applied out of its place in the log — after operations later than it, because
@@ -289,6 +289,10 @@ function withoutFields(record: Readonly<Record<string, unknown>>, superseded: Re
 function heldUpdatedAt(db: DatabaseSync, entity: string, entityId: string): string | null {
   const read = (sql: string): string | null => (db.prepare(sql).get(entityId) as { at: string | null } | undefined)?.at ?? null;
   switch (entity) {
+    case "externalResource":
+      return read("SELECT updated_at AS at FROM external_resources WHERE id = ?");
+    case "externalLink":
+      return read("SELECT updated_at AS at FROM external_links WHERE id = ?");
     case "issue":
       return read("SELECT updated_at AS at FROM issues WHERE id = ?");
     case "milestone":
@@ -329,6 +333,12 @@ function entityHeld(db: DatabaseSync, entity: string, entityId: string): boolean
       return hit("SELECT 1 FROM attempts WHERE id = ?", entityId);
     case "attemptTransition":
       return hit("SELECT 1 FROM attempt_transitions WHERE id = ?", entityId);
+    case "externalStack":
+      return hit("SELECT 1 FROM issues WHERE id = ?", entityId);
+    case "externalResource":
+      return hit("SELECT 1 FROM external_resources WHERE id = ?", entityId);
+    case "externalLink":
+      return hit("SELECT 1 FROM external_links WHERE id = ?", entityId);
     case "attachment":
       return hit("SELECT 1 FROM attachments WHERE id = ?", entityId);
     case "documentRevision": {

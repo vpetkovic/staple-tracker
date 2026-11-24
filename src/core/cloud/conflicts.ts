@@ -127,6 +127,7 @@ import {
   splitDocumentKey,
   type ApplyInput,
 } from "./apply.js";
+import { resourcePayload, stackPayload, type ResourceRow } from "../integrations/link-store.js";
 import { settleIncomingAttempt } from "./apply-attempts.js";
 import { ATTEMPT_END_FIELDS, settledByApplyRule } from "./attempt-ends.js";
 import type { RemoteOperation } from "./wire.js";
@@ -224,6 +225,10 @@ function policy(entity: string, key: string): FieldPolicy | null {
   });
 
   switch (entity) {
+    case "externalStack":
+      return key === "entries" ? named("entries") : null;
+    case "externalResource":
+      return ["context", "key", "url", "updatedAt"].includes(key) ? named(key === "updatedAt" ? "updated_at" : key) : null;
     case "issue":
       return ISSUE_COLUMNS[key] ? named(ISSUE_COLUMNS[key]!.column) : null;
     case "comment":
@@ -308,6 +313,12 @@ function readField(
   });
 
   switch (entity) {
+    case "externalStack":
+      return { present: true, value: stackPayload(db, entityId) };
+    case "externalResource": {
+      const row = db.prepare("SELECT * FROM external_resources WHERE id=?").get(entityId) as unknown as ResourceRow | undefined;
+      return row ? { present: true, value: resourcePayload(row)[name === "updated_at" ? "updatedAt" : name] } : { present: false, value: null };
+    }
     case "issue":
       return scalar("issues", "id", name);
     case "comment":

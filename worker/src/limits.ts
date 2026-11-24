@@ -59,7 +59,9 @@ export const PROTOCOL_MIN = 1;
  * while it upgrades; a page or fold that holds an attachment is refused to it with
  * `protocol_unsupported` and `requiredProtocol: 4`.
  */
-export const PROTOCOL_MAX = 4;
+// Protocol 5 adds externalResource, externalLink and externalStack. Older readers
+// refuse pages containing those entities rather than silently discarding them.
+export const PROTOCOL_MAX = 5;
 
 /**
  * The binding constraint on batch size is D1's queries-per-Worker-invocation limit:
