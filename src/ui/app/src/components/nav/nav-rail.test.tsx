@@ -19,7 +19,7 @@ import { SessionContext, type StapleSession } from "@/lib/session";
 import { DEFAULT_SORT } from "@/lib/sort-modes";
 import type { HubCloudReport, IssueRow, IssueStatus, Project, ProjectRow } from "@/lib/types";
 import { NAV_GROUPS } from "./nav-model";
-import { NavRail, RAIL_ROW_CLASS } from "./NavRail";
+import { IntegrationsRailRow, NavRail, RAIL_ROW_CLASS } from "./NavRail";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 
 const noop = () => {};
@@ -557,5 +557,27 @@ describe("the workspace switcher", () => {
     const one = crumb(shell({ ...hub, ws: "pinecone" }));
     expect(one).toContain(">pinecone</span>");
     expect(one).not.toContain(">PIN<");
+  });
+});
+
+describe("the Integrations row", () => {
+  const snapshot = (state: "ready" | "unauthenticated") => ({
+    connectionId: "c1", state, message: null, action: null, identity: null, checkedAt: "2026-11-24T12:00:00Z", retryAfterSeconds: null,
+  });
+  const row = (health: ReturnType<typeof snapshot> | null) =>
+    renderToStaticMarkup(<IntegrationsRailRow connections={[{ health }]} onClick={noop} />);
+
+  it("carries an amber dot, named for assistive tech, when a connection needs attention", () => {
+    const html = row(snapshot("unauthenticated"));
+    expect(html).toContain("data-integrations-attention");
+    expect(html).toContain('<span class="sr-only">, needs attention</span>');
+  });
+
+  it("has no dot when every connection is ready or not checked yet", () => {
+    for (const html of [row(snapshot("ready")), row(null), renderToStaticMarkup(<IntegrationsRailRow connections={[]} onClick={noop} />)]) {
+      expect(html).toContain(">Integrations");
+      expect(html).not.toContain("data-integrations-attention");
+      expect(html).not.toContain("needs attention");
+    }
   });
 });
