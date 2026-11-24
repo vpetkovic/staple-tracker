@@ -247,10 +247,12 @@ describe("External links tab", () => {
 
 describe("an open link row", () => {
   it("shows the description, the sharing switch, the saved copy age, Unlink and the way out", () => {
-    const html = row(link(1, { kind: "issue", body: "Line one\nLine two" }), { open: true });
+    const html = row(link(1, { kind: "issue", body: "## Summary\n\n- Line one\n- Line two" }), { open: true });
     expect(html).toMatch(/aria-expanded="true"/);
-    expect(html).toContain("Line one\nLine two");
-    expect(html).toContain("whitespace-pre-line");
+    // The description is the provider's markdown, read as markdown: no literal "##" or "- ".
+    expect(html).toMatch(/<p class="[^"]*font-semibold[^"]*">Summary<\/p>/);
+    expect(html).toMatch(/<li[^>]*><span[^>]*>Line one<\/span><\/li>/);
+    expect(html).not.toContain("## Summary");
     expect(html).toMatch(/<button[^>]*role="switch"[^>]*aria-checked="false"/);
     expect(html).toContain("Links always sync. Sharing also sends this title, description and state to everyone in the workspace.");
     expect(html).toMatch(/>2 min ago</);

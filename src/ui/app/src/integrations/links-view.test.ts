@@ -92,7 +92,7 @@ describe("links tab view logic", () => {
       { key: "github github.com", providerId: "github", text: "GitHub needs sign-in on this computer." },
     ]);
     expect(connectionNotices([link(1)], [connection("github", "forbidden")])[0]?.text).toBe("GitHub: No access.");
-    expect(connectionNotices([link(1)], [connection("github", "unavailable", "Set the API key on this machine")])[0]?.text).toBe("Set the API key on this machine.");
+    expect(connectionNotices([link(1)], [connection("github", "unavailable", "Set the API key on this machine")])[0]?.text).toBe("GitHub: Unavailable. Set the API key on this machine.");
     expect(connectionNotices(links, [connection("github", "ready"), connection("linear", "ready")])).toEqual([]);
   });
 

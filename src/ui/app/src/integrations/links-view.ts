@@ -58,7 +58,10 @@ export function connectionNotices(links: readonly ExternalLink[], connections: r
     const text = !held
       ? `${name} isn't connected on this computer.`
       : held.health?.message
-        ? sentence(held.health.message)
+        ? // A server sentence that already names the provider stands alone; any other gets the provider and its status first.
+          held.health.message.includes(name)
+          ? sentence(held.health.message)
+          : `${name}: ${connectionStatus(held.health).label}. ${sentence(held.health.message)}`
         : `${name}: ${connectionStatus(held.health).label}.`;
     notices.set(key, { key, providerId, text });
   }

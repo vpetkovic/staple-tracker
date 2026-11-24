@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Markdown } from "@/lib/markdown";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "@/settings/form/ConfirmDialog";
 import { InlineError } from "@/settings/form/primitives";
@@ -459,7 +460,7 @@ function Fact({ label, title, children }: { label: string; title?: string; child
 
 function Description({ link }: { link: ExternalLink }) {
   const body = link.resource.body?.trim();
-  const ref = useRef<HTMLParagraphElement>(null);
+  const ref = useRef<HTMLDivElement>(null);
   const [more, setMore] = useState(false);
   const [long, setLong] = useState(false);
   useLayoutEffect(() => {
@@ -476,9 +477,17 @@ function Description({ link }: { link: ExternalLink }) {
   if (!body) return <p className="text-body text-text-tertiary">No description</p>;
   return (
     <div className="min-w-0">
-      <p ref={ref} className={cn("text-body whitespace-pre-line wrap-anywhere text-muted-foreground", !more && "line-clamp-6")}>
-        {body}
-      </p>
+      {/* The provider's markdown, read as markdown and held to about six lines until asked for. */}
+      <div
+        ref={ref}
+        className={cn(
+          "text-body wrap-anywhere text-muted-foreground [&_p]:m-0 [&_p+p]:mt-1.5 [&_p.font-semibold]:text-foreground [&>:first-child]:mt-0",
+          !more && "max-h-[7.5rem] overflow-hidden",
+          !more && long && "[mask-image:linear-gradient(to_bottom,black_60%,transparent)]",
+        )}
+      >
+        <Markdown text={body} />
+      </div>
       {long || more ? (
         <button
           type="button"
