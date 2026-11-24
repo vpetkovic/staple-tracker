@@ -364,4 +364,26 @@ describe("the sections split out of Cloud", () => {
     expect(withShellCategories([])).toEqual([]);
     expect(withShellCategories(merged)).toEqual(merged);
   });
+
+  /**
+   * Integrations is workspace-scoped in the registry (its mapping syncs per workspace), but
+   * the screen is the computer's: connections are per machine and the mapping lists every
+   * workspace. So the shell files it under "Across all workspaces", after "Workspaces on
+   * this computer", with no workspace picker and no "Applies to <workspace> only".
+   */
+  it("files Integrations across all workspaces, right after Workspaces on this computer", () => {
+    const served = [...CATEGORIES, category("integrations", { label: "Integrations", order: 35 }), TELEMETRY_CATEGORY, CLOUD_CATEGORY];
+    const merged = withShellCategories(served);
+    const integrations = merged.find((c) => c.id === "integrations")!;
+    expect(integrations.scope).toBe("global");
+    const global = merged.filter((c) => c.scope === "global").map((c) => c.id);
+    expect(global.indexOf("integrations")).toBe(global.indexOf(HUB_REGISTRY_CATEGORY.id) + 1);
+    expect(needsWorkspaceChoice(integrations, "")).toBe(false);
+    expect(withShellCategories(merged)).toEqual(merged);
+
+    const html = render({ categories: merged, active: "integrations", scope: { ...SCOPE, workspace: "staple" }, workspacePicker: <div data-testid="picker" /> });
+    expect(html).toMatch(/data-settings-group="global"[\s\S]*data-settings-category="integrations"[\s\S]*data-settings-group="workspace"/);
+    expect(html).not.toContain("Applies to staple only");
+    expect(html).not.toContain("data-settings-workspace-picker");
+  });
 });
