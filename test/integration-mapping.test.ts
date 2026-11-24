@@ -1,7 +1,10 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { once } from "node:events";
+import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { startUiServer, type UiHandle } from "../src/ui/server.js";
 import { initWorkspace } from "../src/core/workspace.js";
 import { IntegrationOperations } from "../src/core/integrations/operations.js";
 import { ProbeCache } from "../src/core/integrations/health.js";
@@ -12,7 +15,9 @@ import { StapleError } from "../src/core/types.js";
 
 const dirs: string[] = [];
 const previous = process.env.STAPLE_HOME;
+let ui: UiHandle | undefined;
 afterEach(() => {
+  ui?.close(); ui = undefined;
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
   if (previous === undefined) delete process.env.STAPLE_HOME; else process.env.STAPLE_HOME = previous;
 });
@@ -25,7 +30,9 @@ const issue = (repo: string, n = 1): ExternalItem => ({
 
 function setup() {
   const home = mkdtempSync(join(tmpdir(), "staple-mapping-")); dirs.push(home); process.env.STAPLE_HOME = home;
-  const handles: WorkspaceHandle[] = ["alpha", "beta", "gamma"].map(slug => ({ slug, store: initWorkspace({ global: true, slug }).store }));
+  const opened = ["alpha", "beta", "gamma"].map(slug => initWorkspace({ global: true, slug }));
+  const handles: WorkspaceHandle[] = opened.map(w => ({ slug: w.store.slug, store: w.store }));
+  const paths = opened.map(w => w.dbPath);
   const failing = new Set<string>();
   const adapter: IntegrationAdapter = {
     scope: { providerId: "github", host: "github.com", scopeId: "host" }, label: "GitHub", connection: { id: "gh", mode: "cli" },
@@ -48,7 +55,7 @@ function setup() {
   const ops = (store: WorkspaceStore) => new IntegrationOperations(store, { home, factories: new Map([["github:cli", () => adapter]]), caches,
     gh: async () => "", workspaces: () => handles });
   const [alpha, beta, gamma] = handles.map(h => ops(h.store)) as [IntegrationOperations, IntegrationOperations, IntegrationOperations];
-  return { handles, adapter, failing, alpha, beta, gamma };
+  return { handles, paths, adapter, failing, alpha, beta, gamma };
 }
 type Search = { remote: Array<{ targetKey: string; item: ExternalItem }>; nextCursor: string | null; scope: { mode: string; workspaces: string[]; targets: Array<{ key: string }> };
   failures: Array<{ connectionId: string | null; targetKeys: string[]; state: string }> };
@@ -150,6 +157,21 @@ describe("search and link scope", () => {
     const resourceId = t.handles[0]!.store.externalLinks().list(ticket.id)[0]!.resource.id;
     const other = t.handles[0]!.store.createIssue({ title: "Second" });
     await expect(t.alpha.execute({ action: "link", resourceId, ref: other.id, confirmed: true, actor: "ada" })).resolves.toBeTruthy();
+  });
+
+  it("gives a single-workspace UI server the same scope as the CLI and MCP", async () => {
+    const t = setup();
+    t.handles[0]!.store.setSetting("integrations.mapping", JSON.stringify([{ providerId: "github", host: "github.com", scopeId: "host",
+      kind: "repository", containerId: "42", name: "team/repo42", url: "https://github.com/team/repo42" }]), "ada");
+    ui = startUiServer({ port: 0, hub: false, db: t.paths[1]! });
+    await once(ui.server, "listening");
+    const origin = `http://127.0.0.1:${(ui.server.address() as AddressInfo).port}`;
+    const response = await fetch(`${origin}/api/integrations/read`, { method: "POST",
+      headers: { "content-type": "application/json", "x-staple-token": ui.token, origin }, body: JSON.stringify({ action: "search", text: "x" }) });
+    const body = await response.json() as Search;
+    // beta has no mapping: like the CLI and MCP, it searches what the computer maps (alpha's repository).
+    expect([body.scope.mode, body.scope.workspaces, body.scope.targets.map(x => x.key)]).toEqual(["configured", ["alpha"], ["github.com/42"]]);
+    expect(await t.beta.execute({ action: "search", text: "x" })).toMatchObject({ scope: { mode: "configured", workspaces: ["alpha"] } });
   });
 
   it("links any exact URL while nothing is mapped", async () => {
