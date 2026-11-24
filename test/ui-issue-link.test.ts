@@ -179,7 +179,7 @@ describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
       await page.goto(`${at(single)}/?issue=ALP-1&token=${single.token}`,{waitUntil:"networkidle"});
       await page.getByRole("button",{name:"Link issue",exact:true}).click();
       expect(await page.getByLabel("Resource type",{exact:true}).inputValue()).toBe("issue");
-      expect(await page.getByLabel("Resource type",{exact:true}).locator('option[value="pull_request"]').isDisabled()).toBe(true);
+      await expect.poll(()=>page.getByLabel("Resource type",{exact:true}).locator('option[value="pull_request"]').isDisabled()).toBe(true);
       await page.getByLabel("Issue URL or search").fill("fixture");
       await page.getByRole("button",{name:"Search",exact:true}).click();
       await expect.poll(()=>page.getByRole("button",{name:/Linear fixture source/}).count()).toBe(1);
