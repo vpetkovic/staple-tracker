@@ -27,6 +27,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { CommandPaletteMount } from "@/components/CommandPaletteMount";
 import { LinkExternalMount } from "@/integrations/LinkExternalMount";
+import { MountBoundary } from "@/components/MountBoundary";
 import { CreateIssueMount } from "@/components/CreateIssueMount";
 import { TokenGate } from "@/components/TokenGate";
 import { IssueDetailMount } from "@/detail/IssueDetailMount";
@@ -731,25 +732,25 @@ export function App() {
           without either owning it, and the detail drawer portals out of the layout
           entirely. None of them are affected by what the shell does below.
         */}
-        <CommandPaletteMount />
-        <CreateIssueMount />
-        <LinkExternalMount />
-        <IssueDetailMount />
+        <MountBoundary label="Command palette" placement="overlay"><CommandPaletteMount /></MountBoundary>
+        <MountBoundary label="New task" placement="overlay"><CreateIssueMount /></MountBoundary>
+        <MountBoundary label="Link issue or PR" placement="overlay"><LinkExternalMount /></MountBoundary>
+        <MountBoundary label="Task details" placement="overlay"><IssueDetailMount /></MountBoundary>
         {/*
           O7b (STA-141). A fourth mount for the same reason as the other three: the
           workspace vocabulary editor has to be openable from the header and from the
           palette without either owning its open flag, and it must survive a view switch.
         */}
-        <SettingsMount />
+        <MountBoundary label="Settings" placement="overlay"><SettingsMount /></MountBoundary>
         {/* The project dialog (migration 009): opened from the rail's `+` and each project's gear. */}
-        <ProjectDialogMount />
+        <MountBoundary label="Project settings" placement="overlay"><ProjectDialogMount /></MountBoundary>
         {/* The autopilot run history: opened from the rail, the phone strip and a task's detail. */}
-        <RunHistoryMount />
+        <MountBoundary label="Run history" placement="overlay"><RunHistoryMount /></MountBoundary>
         {/* `?join=<link>`: join a shared workspace from a link, on any page, even with no workspace. */}
         <LinkJoinMount hubMode={session.mode === "hub"} />
 
         <AppShell>
-          <View onAuthError={onAuthError} />
+          <MountBoundary key={session.view} label="This view" placement="inline"><View onAuthError={onAuthError} /></MountBoundary>
         </AppShell>
       </RunsContext>
     </SessionContext>

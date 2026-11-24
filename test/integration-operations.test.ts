@@ -66,7 +66,7 @@ describe("shared integration operations",()=>{
   it("keeps connection bindings local and searches without importing or caching provider work",async()=>{
     const {ws,service,adapter,task}=setup();
     await service.execute({action:"configure",connectionId:"work",host:"github.com",account:"ada"});
-    expect(await service.execute({action:"health",connectionId:"work"})).toMatchObject({state:"ready" as const});
+    expect(await service.execute({action:"health",connectionId:"work"})).toMatchObject({health:[{connectionId:"work",state:"ready"}]});
     const result=await service.execute({action:"search",connectionId:"work",text:"search"}) as {local:unknown[];remote:unknown[]};
     expect(result.local).toHaveLength(1);expect(result.remote).toHaveLength(1);
     expect(ws.store.db.prepare("SELECT * FROM external_resources").all()).toEqual([]);
@@ -129,7 +129,7 @@ describe("shared integration operations",()=>{
     expect(configured.isError).not.toBe(true);
     expect(configured.structuredContent).toMatchObject({result:{providerId:"linear",scopeId:org}});
     const health=await harness.call("integration_read",{action:"health",connectionId:"linear-mcp"});
-    expect(health.structuredContent).toMatchObject({result:{state:"unauthenticated"}});
+    expect(health.structuredContent).toMatchObject({result:{health:[{connectionId:"linear-mcp",state:"unauthenticated",action:expect.stringContaining("STAPLE_ABSENT_TEST_KEY")}]}});
     const cached=await harness.call("integration_read",{action:"list",ref:task.id});
     expect(cached.structuredContent).toMatchObject({result:[{resource:{key:"ENG-12",ref:{providerId:"linear"}}}]});
   },30_000);

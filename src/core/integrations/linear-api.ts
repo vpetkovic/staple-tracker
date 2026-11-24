@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { StapleError } from "../types.js";
+import { healthFromError } from "./health.js";
 import type { ConnectionHealth, ExternalItem, ExternalItemRef, ExternalLocator, ExternalSearch, IntegrationAdapter, ProviderReadOptions } from "./contracts.js";
 
 const uuid = z.string().uuid().toLowerCase();
@@ -12,13 +13,13 @@ export const linearConnectionSchema = z.object({
 export type LinearApiConnection = z.infer<typeof linearConnectionSchema>;
 const slug = z.string().regex(/^[A-Za-z0-9_-]{1,100}$/);
 const organization = z.object({ id: uuid, urlKey: slug });
-const identity = { viewer: z.object({ id: uuid }), organization };
+const identity = { viewer: z.object({ id: uuid, name: z.string().max(256).optional() }), organization };
 const team = z.object({ id: uuid, key: slug, name: z.string().max(8192), organization: z.object({ id: uuid }) });
 const issue = z.object({ id: uuid, identifier: z.string().regex(/^[A-Za-z][A-Za-z0-9_]*-[1-9][0-9]*$/),
   title: z.string().max(8192), description: z.string().max(1_000_000).nullable(), url: z.string().max(8192),
   state: z.object({ id: uuid, name: z.string().max(8192) }), team });
 const pageInfo = z.object({ hasNextPage: z.boolean(), endCursor: z.string().min(1).max(2048).nullable() });
-const IDENTITY = "viewer { id } organization { id urlKey }";
+const IDENTITY = "viewer { id name } organization { id urlKey }";
 const FIELDS = "id identifier title description url state { id name } team { id key name organization { id } }";
 const PAGE_SIZE = 50;
 const MAX_BYTES = 2_000_000;
@@ -45,11 +46,13 @@ export class LinearApiAdapter implements IntegrationAdapter {
     this.now = dependencies.now ?? (() => new Date());
   }
   async validate(options?: ProviderReadOptions): Promise<ConnectionHealth> {
-    try { await this.query("", {}, z.object({}), options); return { state: "ready" }; }
-    catch (error) {
+    try {
+      const { viewer } = await this.query("", {}, z.object({}), options);
+      return { state: "ready", identity: viewer.name ? { login: viewer.name } : null };
+    } catch (error) {
       if (options?.signal?.aborted) throw options.signal.reason;
       if (!(error instanceof StapleError)) throw error;
-      return { state: error.code === "auth" ? "unauthenticated" : error.code === "forbidden" ? "forbidden" : "unavailable", message: error.message };
+      return healthFromError(error);
     }
   }
   async listContainers(cursor?: string, options?: ProviderReadOptions) {
@@ -72,7 +75,7 @@ export class LinearApiAdapter implements IntegrationAdapter {
     const field = text ? "searchIssues" : "issues";
     const selection = text
       ? `searchIssues(term: $text, teamId: $team, first: 50, after: $after) { nodes { ${FIELDS} } pageInfo { hasNextPage endCursor } }`
-      : `issues(filter: $filter, first: 50, after: $after) { nodes { ${FIELDS} } pageInfo { hasNextPage endCursor } }`;
+      : `issues(filter: $filter, orderBy: updatedAt, first: 50, after: $after) { nodes { ${FIELDS} } pageInfo { hasNextPage endCursor } }`;
     const variables = text ? { text, team: search.containerId ?? null, after }
       : { filter: search.containerId ? { team: { id: { eq: search.containerId } } } : {}, after };
     const data = await this.query(selection, variables, z.object({ [field]: z.object({ nodes: z.array(issue).max(PAGE_SIZE), pageInfo }) }), options,
@@ -194,7 +197,10 @@ export class LinearApiAdapter implements IntegrationAdapter {
       const data = z.object(identity).safeParse(envelope.data.data);
       const fields = shape.safeParse(envelope.data.data);
       if (!data.success || !fields.success) throw new StapleError("unavailable", "Linear returned an unsupported response");
-      if (data.data.viewer.id !== this.config.account) throw new StapleError("auth", "Linear API key belongs to a different user; check the connection binding");
+      if (data.data.viewer.id !== this.config.account) {
+        throw new StapleError("auth", `Linear API key belongs to ${data.data.viewer.name ?? "a different user"}, not the configured user; check the connection binding`,
+          { reason: "account_mismatch", ...(data.data.viewer.name ? { login: data.data.viewer.name } : {}) });
+      }
       if (data.data.organization.id !== this.scope.scopeId) throw new StapleError("forbidden", "Linear API key belongs to a different organization; check the connection binding");
       return { ...fields.data, viewer: data.data.viewer, organization: data.data.organization };
     } catch (error) {

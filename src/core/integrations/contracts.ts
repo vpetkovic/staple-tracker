@@ -62,10 +62,45 @@ export interface ExternalSearch {
 /** A display key needs a container; a pasted URL must be resolved to immutable ids. */
 export type ExternalLocator = { url: string } | { key: string; containerId: string };
 
+/** The account a provider actually authenticated, when known. A display login, never a credential. */
+export interface ConnectionIdentity { login: string }
+
+export type ConnectionFailureState =
+  | "missing_cli" | "unsupported_version" | "unauthenticated" | "account_mismatch"
+  | "forbidden" | "rate_limited" | "offline" | "unavailable";
+/** `not_found` is never probed: it names a connection id that is not configured on this machine. */
+export type ConnectionState = "ready" | ConnectionFailureState | "not_found";
+
 /** Health is local to a connection and never carries raw stderr or authentication data. */
 export type ConnectionHealth =
-  | { state: "ready" }
-  | { state: "missing_cli" | "unsupported_version" | "unauthenticated" | "forbidden" | "unavailable"; message: string };
+  | { state: "ready"; identity?: ConnectionIdentity | null }
+  | { state: ConnectionFailureState; message: string; identity?: ConnectionIdentity; retryAfterSeconds?: number };
+
+/**
+ * The last known health of one machine-local connection, as Settings and agents read it.
+ * `checkedAt` is when the provider was last really probed, or when a live read last failed.
+ */
+export interface ConnectionHealthSnapshot {
+  connectionId: string;
+  state: ConnectionState;
+  /** One redacted sentence; null when ready. */
+  message: string | null;
+  /** What the person does next; null when nothing is needed. */
+  action: string | null;
+  identity: ConnectionIdentity | null;
+  checkedAt: string;
+  /** Set for rate_limited only. */
+  retryAfterSeconds: number | null;
+}
+
+/** A provider account this machine is already signed in to, whether or not Staple has a connection for it. */
+export interface DetectedConnection {
+  providerId: "github";
+  host: string;
+  login: string;
+  /** The existing connection for this host and account in this workspace, if any. */
+  configuredConnectionId: string | null;
+}
 
 export interface PullRequestReader {
   read(ref: ExternalItemRef, options?: ProviderReadOptions): Promise<ExternalItem>;

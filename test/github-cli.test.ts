@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { GitHubCliAdapter } from "../src/core/integrations/github-cli.js";
+import { GitHubCliAdapter, parseGhAuthStatus } from "../src/core/integrations/github-cli.js";
 import type { GhCommand, GhRunner } from "../src/core/integrations/gh-process.js";
 import { IntegrationReader } from "../src/core/integrations/provider.js";
 import { StapleError } from "../src/core/types.js";
@@ -11,6 +11,7 @@ const issue = (number = 1) => ({ number, title: `Source ${number}`, body: "Conte
 function fixture() {
   const run = vi.fn<GhRunner>(async (command) => {
     if (command.kind === "version") return "gh version 2.46.0 (2024-03-20)";
+    if (command.kind !== "get") throw new Error(`Unexpected fixture command ${command.kind}`);
     const path = command.endpoint.split("?")[0];
     if (path === "user") return response({ login: "alice" });
     if (path === "user/repos") return response([repo]);
@@ -49,11 +50,48 @@ describe("GitHub CLI adapter", () => {
     ["missing_cli", new StapleError("unavailable", "Install gh", { reason: "missing_cli" })],
     ["unauthenticated", new StapleError("auth", "Login required")],
     ["forbidden", new StapleError("forbidden", "Access denied")],
-    ["unavailable", new StapleError("offline", "Offline")],
+    ["unavailable", new StapleError("unavailable", "Unsupported response")],
   ])("reports %s health without exposing raw provider errors", async (state, error) => {
     const { adapter, run } = fixture();
     run.mockRejectedValue(error);
     expect(await adapter.validate()).toMatchObject({ state });
+  });
+
+  it("reports the signed-in login when ready and names both accounts on a mismatch", async () => {
+    const { adapter, run } = fixture();
+    expect(await adapter.validate()).toEqual({ state: "ready", identity: { login: "alice" } });
+    run.mockImplementation(async command => command.kind === "version" ? "gh version 2.46.0" : response({ login: "bob" }));
+    const health = await adapter.validate();
+    expect(health).toMatchObject({ state: "account_mismatch", identity: { login: "bob" } });
+    expect("message" in health && health.message).toMatch(/bob.*alice|alice.*bob/);
+  });
+
+  it.each([
+    ["rate_limited", new StapleError("rate_limited", "Wait", { retryAfterSeconds: 42 }), { retryAfterSeconds: 42 }],
+    ["offline", new StapleError("offline", "Cannot reach"), {}],
+  ])("reports %s as its own state rather than a generic failure", async (state, error, extra) => {
+    const { adapter, run } = fixture();
+    run.mockRejectedValue(error);
+    expect(await adapter.validate()).toMatchObject({ state, ...extra });
+  });
+
+  it("reads the active gh accounts from auth status output of current and older CLIs", () => {
+    const current = [
+      "github.com",
+      "  ✓ Logged in to github.com account octo-old (keyring)",
+      "  - Active account: false",
+      "  ✓ Logged in to github.com account vpetkovic (keyring)",
+      "  - Active account: true",
+      "  - Token: gho_************************************",
+      "",
+      "ghe.example.com",
+      "  X Failed to log in to ghe.example.com account someone (keyring)",
+      "  - The token in keyring is invalid.",
+    ].join("\n");
+    expect(parseGhAuthStatus(current)).toEqual([{ host: "github.com", login: "vpetkovic" }]);
+    const older = "github.example.com\n  ✓ Logged in to github.example.com as alice (oauth_token)\n  ✓ Git operations for github.example.com configured to use https protocol.";
+    expect(parseGhAuthStatus(older)).toEqual([{ host: "github.example.com", login: "alice" }]);
+    expect(parseGhAuthStatus("You are not logged into any GitHub hosts. To log in, run: gh auth login")).toEqual([]);
   });
 
   it("reports an unsupported CLI version", async () => {
@@ -65,7 +103,7 @@ describe("GitHub CLI adapter", () => {
   it("pins the Enterprise host and resolves canonical issue and PR references", async () => {
     const { adapter, run } = fixture();
     run.mockImplementation(async c => {
-      if (c.kind === "version") return "gh version 2.46.0";
+      if (c.kind !== "get") return "gh version 2.46.0";
       if (c.endpoint === "user") return response({ login: "alice" });
       if (c.endpoint === "repos/team/project") return response(repo);
       return response({ ...issue(), html_url: `${repo.html_url}/pull/1`, pull_request: { url: "ignored" } });
@@ -137,16 +175,56 @@ describe("GitHub CLI adapter", () => {
     expect(result.items[0]?.status?.id).toBe("merged");
   });
 
-  it("rejects partial/over-limit search results and cross-repository refreshes", async () => {
+  it("serves the first 1000 results of a broad search and stops paging where GitHub stops serving", async () => {
     const { adapter, run } = fixture();
     const base = run.getMockImplementation()!;
-    for (const data of [
-      { total_count: 1, incomplete_results: true, items: [] },
-      { total_count: 1001, incomplete_results: false, items: [] },
-    ]) {
-      run.mockImplementation(async (c, o) => c.kind === "get" && c.endpoint.startsWith("search/issues") ? response(data) : base(c, o));
-      await expect(adapter.searchIssues({ text: "source" })).rejects.toBeInstanceOf(StapleError);
-    }
+    const pages: number[] = [];
+    run.mockImplementation(async (c, o) => {
+      if (c.kind !== "get" || !c.endpoint.startsWith("search/issues")) return base(c, o);
+      pages.push(Number(new URL(`https://example.test/${c.endpoint}`).searchParams.get("page")));
+      return response({ total_count: 25_000, incomplete_results: false, items: [{ ...issue(), repository_url: "https://github.example.com/api/v3/repos/team/project" }] });
+    });
+    let page = await adapter.searchIssues({ text: "staple" });
+    expect(page.items).toHaveLength(1);
+    while (page.nextCursor) page = await adapter.searchIssues({ text: "staple", cursor: page.nextCursor });
+    expect(pages).toEqual(Array.from({ length: 20 }, (_, i) => i + 1));
+  });
+
+  it("looks up the repositories of a cross-repository search concurrently, keeping result order", async () => {
+    const { adapter, run } = fixture();
+    const base = run.getMockImplementation()!;
+    const repos = Array.from({ length: 12 }, (_, i) => ({ id: 100 + i, full_name: `team/r${i}`, html_url: `https://github.example.com/team/r${i}` }));
+    let active = 0, peak = 0;
+    run.mockImplementation(async (c, o) => {
+      if (c.kind !== "get") return base(c, o);
+      if (c.endpoint.startsWith("search/issues")) return response({ total_count: 12, incomplete_results: false,
+        items: repos.map((r, i) => ({ ...issue(i + 1), html_url: `${r.html_url}/issues/${i + 1}`, repository_url: `https://github.example.com/api/v3/repos/${r.full_name}` })) });
+      const repo = repos.find(r => c.endpoint === `repos/${r.full_name}`);
+      if (!repo) return base(c, o);
+      active++; peak = Math.max(peak, active);
+      await new Promise(r => setTimeout(r, 5));
+      active--;
+      return response(repo);
+    });
+    const page = await adapter.searchIssues({ text: "source" });
+    expect(page.items.map(i => i.key)).toEqual(repos.map((r, i) => `${r.full_name}#${i + 1}`));
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThanOrEqual(8);
+  });
+
+  it("lists the most recently updated results first", async () => {
+    const { adapter, run } = fixture();
+    await adapter.searchIssues({ text: "", containerId: "42" });
+    const search = run.mock.calls.map(([c]) => c).find((c): c is Extract<GhCommand, { kind: "get" }> => c.kind === "get" && c.endpoint.startsWith("search/issues"))!;
+    const params = new URL(`https://example.test/${search.endpoint}`).searchParams;
+    expect([params.get("sort"), params.get("order"), params.get("q")]).toEqual(["updated", "desc", "is:issue repo:team/project"]);
+  });
+
+  it("rejects partial search results and cross-repository refreshes", async () => {
+    const { adapter, run } = fixture();
+    const base = run.getMockImplementation()!;
+    run.mockImplementation(async (c, o) => c.kind === "get" && c.endpoint.startsWith("search/issues") ? response({ total_count: 1, incomplete_results: true, items: [] }) : base(c, o));
+    await expect(adapter.searchIssues({ text: "source" })).rejects.toBeInstanceOf(StapleError);
     run.mockImplementation(async (c, o) => c.kind === "get" && c.endpoint === "repositories/42" ? response({ ...repo, id: 99 }) : base(c, o));
     await expect(adapter.readIssue({ ...adapter.scope, containerId: "42", id: "1", kind: "issue" })).rejects.toMatchObject({ code: "unavailable" });
   });

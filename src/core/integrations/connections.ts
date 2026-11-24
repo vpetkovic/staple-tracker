@@ -19,7 +19,8 @@ type ConnectionInput = (Omit<z.infer<typeof githubConnectionSchema>, "id"> | Omi
 
 /** No tokens, CLI paths or machine bindings enter a replicated database. One atomic file per connection. */
 export class IntegrationConnections {
-  private readonly directory: string;
+  /** Machine-local and per workspace: one directory per repository identity. */
+  readonly directory: string;
   constructor(store: WorkspaceStore, home = stapleHome()) {
     const identity = readStoredRepositoryId(store.db) ?? `workspace:${store.slug}`;
     this.directory = join(home,"integrations",createHash("sha256").update(identity).digest("hex"));

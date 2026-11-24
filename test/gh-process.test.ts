@@ -27,6 +27,16 @@ describe("bounded GitHub CLI process", () => {
     expect(result.env.GH_DEBUG).toBeUndefined();
   });
 
+  it("reads auth status as text even when gh exits non-zero because another host is signed out", async () => {
+    const status = "github.com\n  ✓ Logged in to github.com account alice (keyring)\n";
+    const run = runner(`console.log(JSON.stringify(process.argv.slice(2)));process.stderr.write(${JSON.stringify(status)});process.exit(1)`);
+    const output = await run({ kind: "auth-status" });
+    expect(output).toContain(JSON.stringify(["auth", "status"]));
+    expect(output).toContain("Logged in to github.com account alice");
+    const missing = createGhRunner({ executable: join(tmpdir(), "missing-gh-binary-for-staple-test") });
+    await expect(missing({ kind: "auth-status" })).rejects.toMatchObject({ code: "unavailable", detail: { reason: "missing_cli" } });
+  });
+
   it("rejects arbitrary endpoints and hosts before execution", async () => {
     const run = runner("console.log('should not run')");
     for (const endpoint of ["https://evil.test/user", "../auth/token", "graphql", "repos/a/b/issues/1;touch x", "-XPOST"])

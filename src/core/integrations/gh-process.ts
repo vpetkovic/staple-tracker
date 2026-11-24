@@ -2,10 +2,10 @@ import { execFile } from "node:child_process";
 import { StapleError } from "../types.js";
 import type { ProviderReadOptions } from "./contracts.js";
 
-export type GhCommand = { kind: "version" } | { kind: "get"; host: string; endpoint: string };
+export type GhCommand = { kind: "version" } | { kind: "auth-status" } | { kind: "get"; host: string; endpoint: string };
 export type GhRunner = (command: GhCommand, options?: ProviderReadOptions) => Promise<string>;
 
-/** Only version and fixed GET requests are supported. No shell, token extraction or auth changes. */
+/** Only version, auth status and fixed GET requests are supported. No shell, token extraction or auth changes. */
 export function createGhRunner(settings: {
   executable?: string;
   timeoutMs?: number;
@@ -14,7 +14,7 @@ export function createGhRunner(settings: {
 } = {}): GhRunner {
   return async (command, options) => {
     options?.signal?.throwIfAborted();
-    const args = command.kind === "version" ? ["--version"] : apiArgs(command);
+    const args = command.kind === "version" ? ["--version"] : command.kind === "auth-status" ? ["auth", "status"] : apiArgs(command);
     const env = { ...(settings.env ?? process.env), GH_PROMPT_DISABLED: "1", GH_PAGER: "cat", PAGER: "cat" };
     // gh honors GH_TOKEN before GITHUB_TOKEN, and the Enterprise equivalents on
     // other hosts. Preserve that behavior; GET /user checks the effective account.
@@ -26,12 +26,15 @@ export function createGhRunner(settings: {
         signal: options?.signal, killSignal: "SIGKILL",
       }, (error, stdout, stderr) => {
         if (options?.signal?.aborted) return reject(options.signal.reason);
-        if (!error) return resolve(stdout);
+        if (!error) return resolve(command.kind === "auth-status" ? `${stdout}\n${stderr}` : stdout);
         // Never expose the child error: it embeds command output and may contain
         // remote bodies, private repository names or inherited authentication.
         if (error.code === "ENOENT") return reject(new StapleError("unavailable", "Install GitHub CLI on this machine", { reason: "missing_cli" }));
         if (error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return reject(new StapleError("unavailable", "GitHub CLI response exceeded the size limit", { reason: "output_limit" }));
         if (error.killed) return reject(new StapleError("unavailable", "GitHub CLI timed out; try again", { reason: "timeout" }));
+        // gh exits 1 when any host is signed out; the per-host report is still the answer.
+        // Older gh prints it on stderr. Tokens appear only masked, and callers parse logins only.
+        if (command.kind === "auth-status") return resolve(`${stdout}\n${stderr}`);
         reject(providerFailure(stdout, stderr));
       });
     });
