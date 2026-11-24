@@ -542,6 +542,7 @@ describe("registered workspace settings", () => {
     expect(store.getSetting("kinds.default")).toBe("task");
     expect(store.settingValues()).toEqual([
       { key: "integrations.repositories", scope: "workspace", value: "", source: "default", version: 1 },
+      { key: "integrations.mapping", scope: "workspace", value: "", source: "default", version: 1 },
       { key: "kinds.default", scope: "workspace", value: "task", source: "default", version: 1 },
       { key: "kinds.appearance", scope: "workspace", value: {}, source: "default", version: 1 },
       { key: "queue.policy", scope: "workspace", value: "advisory", source: "default", version: 1 },
@@ -600,6 +601,7 @@ describe("registered workspace settings", () => {
     expect(store.unknownSettingKeys()).toEqual(["future.flag"]);
     expect(store.settingValues().map((v) => v.key)).toEqual([
       "integrations.repositories",
+      "integrations.mapping",
       "kinds.default",
       "kinds.appearance",
       "queue.policy",
@@ -702,6 +704,7 @@ describe("registered workspace settings", () => {
     expect(store.getSetting("kinds.default")).toBe("task");
     expect(store.applySettingOps([{ op: "set", key: "kinds.default", value: "spike" }])).toEqual([
       { key: "integrations.repositories", scope: "workspace", value: "", source: "default", version: 1 },
+      { key: "integrations.mapping", scope: "workspace", value: "", source: "default", version: 1 },
       { key: "kinds.default", scope: "workspace", value: "spike", source: "workspace", version: 1 },
       { key: "kinds.appearance", scope: "workspace", value: {}, source: "default", version: 1 },
       { key: "queue.policy", scope: "workspace", value: "advisory", source: "default", version: 1 },
