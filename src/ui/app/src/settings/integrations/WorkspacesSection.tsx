@@ -18,7 +18,7 @@ import { chipLabel, orderWorkspaces, unmappedSentence, type MappedTarget, type W
 
 const NO_READER = "No connection on this computer reads this source";
 
-export function WorkspacesSection({ rows, error, onRetry, current, prefixes, connections, onRowChange }: {
+export function WorkspacesSection({ rows, error, onRetry, current, prefixes, connections, cachedOnly, onRowChange }: {
   /** Null while the mapping is loading. */
   rows: WorkspaceMapping[] | null;
   error: string | null;
@@ -28,6 +28,8 @@ export function WorkspacesSection({ rows, error, onRetry, current, prefixes, con
   /** Workspace slug → identifier prefix, for the letter tile. */
   prefixes: Record<string, string>;
   connections: ConnectionView[];
+  /** A page that cannot read providers: sources can be removed but not added. */
+  cachedOnly: boolean;
   onRowChange: (workspace: string, targets: MappedTarget[]) => void;
 }) {
   let body;
@@ -62,6 +64,7 @@ export function WorkspacesSection({ rows, error, onRetry, current, prefixes, con
             current={row.workspace === current}
             tile={(prefixes[row.workspace] || row.workspace).slice(0, 1).toUpperCase()}
             connections={connections}
+            canAdd={!cachedOnly}
             onChange={(targets) => onRowChange(row.workspace, targets)}
           />
         ))}
@@ -79,12 +82,13 @@ export function WorkspacesSection({ rows, error, onRetry, current, prefixes, con
   );
 }
 
-function WorkspaceRow({ row, rows, current, tile, connections, onChange }: {
+function WorkspaceRow({ row, rows, current, tile, connections, canAdd, onChange }: {
   row: WorkspaceMapping;
   rows: WorkspaceMapping[];
   current: boolean;
   tile: string;
   connections: ConnectionView[];
+  canAdd: boolean;
   onChange: (targets: MappedTarget[]) => void;
 }) {
   const [rowError, setRowError] = useState<string | null>(null);
@@ -150,7 +154,7 @@ function WorkspaceRow({ row, rows, current, tile, connections, onChange }: {
             </span>
           );
         })}
-        <SourcePicker workspace={row.workspace} targets={row.targets} connections={connections} onChange={onChange} />
+        {canAdd ? <SourcePicker workspace={row.workspace} targets={row.targets} connections={connections} onChange={onChange} /> : null}
       </div>
       {rowError ? (
         <div className="basis-full @min-[30rem]:pl-43">

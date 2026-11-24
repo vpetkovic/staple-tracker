@@ -157,10 +157,10 @@ const target = (over: Partial<MappedTarget> = {}): MappedTarget => ({
   key: "github.com/123456", providerId: "github", host: "github.com", scopeId: "host", kind: "repository",
   containerId: "123456", name: "octo/app", url: null, connectionId: GH_ID, ...over,
 });
-const workspaces = (rows: WorkspaceMapping[], current = "") =>
+const workspaces = (rows: WorkspaceMapping[], current = "", cachedOnly = false) =>
   renderToStaticMarkup(
     <WorkspacesSection rows={rows} error={null} onRetry={() => {}} current={current} prefixes={{ alpha: "ALP", beta: "BET", gamma: "GAM" }}
-      connections={[github(health("ready"))]} onRowChange={() => {}} />,
+      connections={[github(health("ready"))]} cachedOnly={cachedOnly} onRowChange={() => {}} />,
   );
 
 describe("workspaces", () => {
@@ -195,6 +195,12 @@ describe("workspaces", () => {
   it("says what a workspace with nothing chosen searches", () => {
     expect(workspaces([{ workspace: "alpha", targets: [] }, { workspace: "beta", targets: [target()] }])).toContain("Searches everything chosen here");
     expect(workspaces([{ workspace: "alpha", targets: [] }])).toContain("Nothing to search yet");
+  });
+
+  it("offers no Add chip on a page that cannot read providers, and keeps removal", () => {
+    const html = workspaces([{ workspace: "alpha", targets: [target()] }], "", true);
+    expect(html).not.toContain("Add a source to alpha");
+    expect(html).toContain("Remove octo/app from alpha");
   });
 
   it("uses no native select, disclosure or checkbox", () => {

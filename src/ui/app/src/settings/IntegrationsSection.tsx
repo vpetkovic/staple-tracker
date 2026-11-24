@@ -61,6 +61,7 @@ export function IntegrationsSection({ ws, onDirtyChange }: {
         current={current}
         prefixes={prefixes}
         connections={state.connections}
+        cachedOnly={state.cachedOnly}
         onRowChange={setRow}
       />
       <p className="text-label text-text-tertiary">
