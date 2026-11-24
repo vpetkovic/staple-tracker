@@ -127,6 +127,7 @@ export interface SettingDefinition<T = unknown> {
  * it is `registerSettingCategory`, which also grows the index (R6f, STA-243).
  */
 const categories: SettingCategory[] = [
+  { id: "integrations", label: "Integrations", description: "Connect providers on this machine and choose repositories for this workspace.", scope: "workspace", editor: "fields", order: 35 },
   {
     id: "statuses",
     label: "Statuses",
@@ -190,6 +191,12 @@ export type QueuePolicy = (typeof QUEUE_POLICIES)[number];
 
 /** The mutable backing of `SETTING_DEFINITIONS`; grown only by `registerSettingDefinition`. */
 const definitions: SettingDefinition[] = [
+  {
+    key: "integrations.repositories", category: "integrations", scope: "workspace",
+    schema: { type: "string", pattern: /^(?:[a-z0-9][a-z0-9.:-]*\/[1-9][0-9]*(?:,[a-z0-9][a-z0-9.:-]*\/[1-9][0-9]*)*)?$/, patternHint: "comma-separated GitHub host/numeric repository id entries, or empty" },
+    default: "", version: 1, sensitivity: "normal",
+    ui: { label: "GitHub repositories", description: "Repository search preferences shared with this workspace. Account bindings stay on this computer.", control: "text", order: 10 },
+  },
   {
     key: "kinds.default",
     category: "kinds",

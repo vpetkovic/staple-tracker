@@ -45,6 +45,7 @@ import {
   Moon,
   PanelLeftClose,
   Plus,
+  Plug,
   Settings,
   Sun,
   X,
@@ -545,6 +546,12 @@ export function NavRail({
         />
       </div>
 
+      <div className="shrink-0 px-3 pb-1 max-md:px-2.5">
+        <button type="button" aria-label="Integrations" title="Configure integrations" className={RAIL_ROW_CLASS}
+          onClick={() => { openSettings({ section: "integrations" }); onNavigate?.(); }}>
+          <Plug aria-hidden />Integrations
+        </button>
+      </div>
       {/* ── the foot: Settings, and the theme ── */}
       <div className="flex shrink-0 items-center gap-1 border-t border-sidebar-border/70 px-3 py-2 max-md:block max-md:px-2.5">
         <button

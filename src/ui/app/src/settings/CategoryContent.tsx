@@ -21,6 +21,7 @@
 import type { SettingCategoryView, SettingOp, WorkspaceSettingsEnvelope } from "@/lib/settings";
 import type { Refusal } from "@/lib/refusal";
 import type { VocabularyOp } from "@/lib/types";
+import { IntegrationsSection } from "./IntegrationsSection";
 import { CloudSection } from "./CloudSection";
 import { isCloudCategory } from "./cloud-settings";
 import { isTelemetryCategory } from "./telemetry-settings";
@@ -71,6 +72,7 @@ export function CategoryContent({ category, settings, applyTo, onDirtyChange, ws
    * down: `applyTo` writes `/api/settings`, and there is nothing in this section
    * that route could ever legally carry.
    */
+  if (category.id === "integrations") return <IntegrationsSection ws={ws} settings={settings} applyTo={applyTo} onDirtyChange={onDirtyChange} />;
   if (isCloudCategory(category.id)) {
     return (
       <>
