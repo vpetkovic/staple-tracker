@@ -61,7 +61,7 @@ function Badge({
       cardLabel={label}
       align="end"
       data-link-badge={kind}
-      className="staple-link-badge focus-ring relative inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-label tabular-nums text-text-tertiary hover:bg-[var(--surface-selected)] hover:text-foreground focus-visible:bg-[var(--surface-selected)] data-[state=open]:bg-[var(--surface-selected)] data-[state=open]:text-foreground pointer-coarse:after:absolute pointer-coarse:after:inset-x-0 pointer-coarse:after:-inset-y-2.5 pointer-coarse:after:content-['']"
+      className="staple-link-badge focus-ring relative inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-label tabular-nums text-text-tertiary hover:bg-[var(--surface-selected)] hover:text-foreground focus-visible:bg-[var(--surface-selected)] data-[state=open]:bg-[var(--surface-selected)] data-[state=open]:text-foreground pointer-coarse:before:absolute pointer-coarse:before:inset-x-0 pointer-coarse:before:-inset-y-2.5 pointer-coarse:before:content-['']"
       card={(close) => (
         <LinkListCard
           kind={kind}

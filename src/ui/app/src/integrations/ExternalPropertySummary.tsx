@@ -16,7 +16,7 @@ import { ItemGlyph, LinkGlyph } from "./parts";
 const MAX_CHIPS = 4;
 
 /** A 44px target on a finger, around a control drawn smaller. */
-const HIT = "relative pointer-coarse:after:absolute pointer-coarse:after:-inset-y-2.5 pointer-coarse:after:inset-x-0 pointer-coarse:after:content-['']";
+const HIT = "relative pointer-coarse:before:absolute pointer-coarse:before:-inset-y-2.5 pointer-coarse:before:inset-x-0 pointer-coarse:before:content-['']";
 
 export function ExternalPropertySummary({
   detail,
@@ -120,7 +120,7 @@ export function ExternalPropertySummary({
         className={cn(
           "focus-ring inline-flex size-6 shrink-0 items-center justify-center rounded-md border border-dashed text-muted-foreground hover:bg-[var(--surface-hover)] hover:text-foreground",
           HIT,
-          "pointer-coarse:after:-inset-x-2.5",
+          "pointer-coarse:before:-inset-x-2.5",
         )}
         aria-label={addLabel}
         onClick={add}
