@@ -791,8 +791,6 @@ function SummaryChips({
   const members = useMembersCache(workspace, session.version, ignoreMembersAuthError);
   return (
     <div className={cn("flex flex-wrap items-center gap-2", className)} data-summary-chips="">
-      <ExternalPropertySummary detail={detail} kind="issue" compact />
-      <ExternalPropertySummary detail={detail} kind="pull_request" compact />
       <StatusMenu detail={detail} controller={controller} onRequestApproval={onRequestApproval} className="h-9 px-3" />
       <InlinePriority {...editor} />
       <InlineKind {...editor} />
@@ -807,6 +805,8 @@ function SummaryChips({
         )}
       </span>
       )}
+      <ExternalPropertySummary detail={detail} kind="issue" compact />
+      <ExternalPropertySummary detail={detail} kind="pull_request" compact />
     </div>
   );
 }

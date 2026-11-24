@@ -482,3 +482,18 @@ describe("touch rows — long-press does not select text, and the `⋯` never sh
     expect(width + actionsReach + 10).toBeGreaterThanOrEqual(44);
   });
 });
+
+it("keeps linked issue and PR pills after assignee on desktop and mobile rows", () => {
+  const source = row({ identifier: "STA-10", assignee: "vp" });
+  const line = flatRow({ ...source, externalLinks: {
+    issues: { count: 2, items: [] },
+    pullRequests: { count: 1, items: [] },
+  } });
+  for (const width of [390, 1440]) {
+    const markup = render(line, width);
+    const assignee = markup.indexOf("staple-row-assignee");
+    const links = markup.indexOf("data-external-link-badges");
+    expect(assignee).toBeGreaterThan(0);
+    expect(links).toBeGreaterThan(assignee);
+  }
+});

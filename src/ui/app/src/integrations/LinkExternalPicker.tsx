@@ -1,3 +1,4 @@
+import { loadPickerDefaults, rememberLinkChoices } from "./link-defaults";
 import { useEffect, useRef, useState } from "react";
 import { CircleDot, GitPullRequest, Link2, Search, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -28,10 +29,12 @@ import {
 export function LinkExternalPicker({
   initialWorkspace,
   initialRef,
+  initialKind,
   onClose,
 }: {
   initialWorkspace: string;
   initialRef?: string;
+  initialKind?: "issue" | "pull_request";
   onClose: () => void;
 }) {
   const session = useSession();
@@ -72,6 +75,7 @@ export function LinkExternalPicker({
             key={ws}
             ws={ws}
             initialRef={ws === initialWorkspace ? initialRef : undefined}
+            initialKind={initialKind}
             onClose={onClose}
           />
         ) : (
@@ -86,18 +90,21 @@ export function LinkExternalPicker({
 function PickerBody({
   ws,
   initialRef,
+  initialKind,
   onClose,
 }: {
   ws: string;
   initialRef?: string;
+  initialKind?: "issue" | "pull_request";
   onClose: () => void;
 }) {
   const session = useSession();
+  const [defaultsLoaded, setDefaultsLoaded] = useState(false);
   const [connections, setConnections] = useState<ProviderConnection[]>([]);
   const [connectionId, setConnection] = useState("");
   const [repositories, setRepositories] = useState<string[]>([]);
   const [containerId, setContainer] = useState("");
-  const [kind, setKind] = useState<"issue" | "pull_request">("issue");
+  const [kind, setKind] = useState<"issue" | "pull_request">(initialKind ?? "issue");
   const [text, setText] = useState("");
   const [rows, setRows] = useState<IssueRow[]>([]);
   const [target, setTarget] = useState(initialRef ?? "");
@@ -127,13 +134,16 @@ function PickerBody({
       .then(([c, issues, settings]) => {
         if (!active) return;
         setConnections(c.connections);
-        if (c.connections.length === 1) setConnection(c.connections[0]!.id);
+
         setRows(issues);
-        setRepositories(
-          String(settings.values["integrations.repositories"]?.value ?? "")
-            .split(",")
-            .filter(Boolean),
-        );
+        const repos = String(settings.values["integrations.repositories"]?.value ?? "")
+          .split(",").filter(Boolean);
+        setRepositories(repos);
+        const defaults = loadPickerDefaults(ws, c.connections, repos);
+        setConnection(defaults.connectionId);
+        setContainer(defaults.repository.slice(defaults.repository.lastIndexOf("/") + 1));
+        setKind(initialKind ?? defaults.kind);
+        setDefaultsLoaded(true);
       })
       .catch((e) => {
         if (active) setError(e.message);
@@ -141,7 +151,16 @@ function PickerBody({
     return () => {
       active = false;
     };
-  }, [ws]);
+  }, [ws, initialKind]);
+  useEffect(() => {
+    if (!defaultsLoaded) return;
+    const connection = connections.find(c => c.id === connectionId);
+    rememberLinkChoices(ws, {
+      connectionId,
+      repository: connection && containerId ? `${connection.host}/${containerId}` : "",
+      kind,
+    });
+  }, [ws, defaultsLoaded, connections, connectionId, containerId, kind]);
   async function run(fn: () => Promise<void>) {
     setBusy(true);
     setError(null);

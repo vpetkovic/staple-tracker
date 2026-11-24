@@ -17,6 +17,7 @@ export function LinkExternalMount() {
         (session.workspaces.length === 1 ? session.workspaces[0]!.slug : "")
       }
       initialRef={request.ref}
+      initialKind={request.kind}
       onClose={() => setRequest(null)}
     />
   );
