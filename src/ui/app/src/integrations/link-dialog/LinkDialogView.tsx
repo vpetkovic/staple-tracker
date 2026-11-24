@@ -284,7 +284,8 @@ function ScopeMenu({ state, actions }: { state: LinkDialogState; actions: LinkDi
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-72 max-w-[calc(100vw-2rem)] pointer-coarse:[&_[role^=menuitem]]:min-h-11">
-        {note ? <DropdownMenuLabel className="text-label font-normal text-text-tertiary">{note}</DropdownMenuLabel> : null}
+        {/* A sentence, not a heading: the menu label's capitals and tracking are undone. */}
+        {note ? <DropdownMenuLabel className="text-label font-normal tracking-normal text-text-tertiary normal-case">{note}</DropdownMenuLabel> : null}
         {scope && scope.targets.length ? (
           <DropdownMenuRadioGroup
             value={state.containerKey ?? EVERYTHING}
