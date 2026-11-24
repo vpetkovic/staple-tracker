@@ -19,7 +19,7 @@ export function integrationReadContract(name: string, create: () => IntegrationC
     it("validates its connection and discovers the selected container", async () => {
       const { adapter, items } = create();
       const reader = new IntegrationReader(adapter);
-      expect(await reader.validate()).toEqual({ state: "ready" });
+      expect(await reader.validate()).toMatchObject({ state: "ready" });
       const containers = [];
       let cursor: string | undefined;
       const seen = new Set<string>();

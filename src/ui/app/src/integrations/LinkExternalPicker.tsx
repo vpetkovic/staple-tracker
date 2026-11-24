@@ -15,6 +15,7 @@ import {
 import { getIssues, getSettings, integrationRead, integrationWrite } from "@/lib/api";
 import { useSession } from "@/lib/session";
 import { openSettings } from "@/lib/shell-events";
+import { newRequestKey } from "@/lib/request-key";
 import type { IssueRow, Issue } from "@/lib/types";
 import type { ProviderConnection } from "../../../../core/integrations/connections";
 import {
@@ -87,7 +88,7 @@ export function LinkExternalPicker({
     </Dialog>
   );
 }
-function PickerBody({
+export function PickerBody({
   ws,
   initialRef,
   initialKind,
@@ -116,7 +117,8 @@ function PickerBody({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
   const [additional, setAdditional] = useState(false);
-  const requestKey = useRef(crypto.randomUUID());
+  const requestKey = useRef("");
+  if (!requestKey.current) requestKey.current = newRequestKey();
   const alive = useRef(true);
   useEffect(() => {
     alive.current = true;
@@ -216,7 +218,7 @@ function PickerBody({
     if (alive.current) {
       setPreview(p);
       setAdditional(false);
-      requestKey.current = crypto.randomUUID();
+      requestKey.current = newRequestKey();
     }
   }
   function open(issue: Issue) {

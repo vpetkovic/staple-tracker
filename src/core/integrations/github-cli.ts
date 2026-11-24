@@ -5,6 +5,7 @@ import type {
   ExternalPage, ExternalSearch, IntegrationAdapter, ProviderReadOptions,
 } from "./contracts.js";
 import { createGhRunner, type GhRunner } from "./gh-process.js";
+import { healthFromError } from "./health.js";
 
 const identifier = z.number().int().positive().safe();
 const repository = z.object({ id: identifier, full_name: z.string().regex(/^[A-Za-z0-9-]+\/(?!\.{1,2}$)[A-Za-z0-9_.-]+$/), html_url: z.string() });
@@ -15,6 +16,8 @@ const sourceIssue = z.object({
 type Repository = z.infer<typeof repository>;
 type SourceIssue = z.infer<typeof sourceIssue>;
 const PAGE_SIZE = 50;
+const SEARCH_LIMIT = 1000;
+const REPOSITORY_LOOKUPS = 8;
 
 export interface GitHubCliConnection {
   id: string;
@@ -48,15 +51,11 @@ export class GitHubCliAdapter implements IntegrationAdapter {
 
   async validate(options?: ProviderReadOptions): Promise<ConnectionHealth> {
     try {
-      await this.checkConnection(options);
-      return { state: "ready" };
+      return { state: "ready", identity: { login: await this.checkConnection(options) } };
     } catch (error) {
       if (options?.signal?.aborted) throw options.signal.reason;
       if (!(error instanceof StapleError)) throw error;
-      const state = error.detail?.reason === "missing_cli" ? "missing_cli"
-        : error.detail?.reason === "unsupported_version" ? "unsupported_version"
-        : error.code === "auth" ? "unauthenticated" : error.code === "forbidden" ? "forbidden" : "unavailable";
-      return { state, message: error.message };
+      return healthFromError(error);
     }
   }
 
@@ -117,28 +116,33 @@ export class GitHubCliAdapter implements IntegrationAdapter {
     const selected = query.containerId === undefined ? null : await this.get(`repositories/${query.containerId}`, repository, options);
     if (selected && String(selected.id) !== query.containerId) throw new StapleError("unavailable", "GitHub returned a different repository");
     const q = [query.text.trim() ? JSON.stringify(query.text.trim()) : "", kind === "issue" ? "is:issue" : "is:pr", selected ? `repo:${selected.full_name}` : ""].filter(Boolean).join(" ");
-    const params = new URLSearchParams({ q, per_page: String(PAGE_SIZE), page: String(page), sort: "created", order: "asc" });
+    const params = new URLSearchParams({ q, per_page: String(PAGE_SIZE), page: String(page), sort: "updated", order: "desc" });
     const result = await this.get(`search/issues?${params}`, z.object({ total_count: z.number().int().nonnegative(), incomplete_results: z.boolean(), items: z.array(sourceIssue) }), options);
     if (result.incomplete_results) throw new StapleError("unavailable", "GitHub search was incomplete; narrow the search and try again");
-    if (result.total_count > 1000) throw new StapleError("validation", "GitHub search has over 1000 results; select a repository or narrow the search");
     const repos = new Map<string, Repository>();
     if (selected) repos.set(selected.full_name.toLowerCase(), selected);
-    const items: ExternalItem[] = [];
-    for (const source of result.items) {
-      if ((source.pull_request ? "pull_request" : "issue") !== kind) continue;
-      const fullName = this.searchRepo(source.repository_url);
-      let repo = repos.get(fullName.toLowerCase());
-      if (!repo) {
-        repo = await this.get(`repos/${fullName}`, repository, options);
-        repos.set(fullName.toLowerCase(), repo);
-      }
-      if (selected && repo.id !== selected.id) throw new StapleError("unavailable", "GitHub search returned a different repository");
-      items.push(this.item(repo, source));
+    const sources = result.items.filter(source => (source.pull_request ? "pull_request" : "issue") === kind)
+      .map(source => ({ source, fullName: this.searchRepo(source.repository_url) }));
+    // A cross-repository page can name dozens of repositories; one gh process each, run in
+    // sequence, kept the picker waiting for many seconds.
+    const missing = [...new Set(sources.map(s => s.fullName.toLowerCase()))].filter(name => !repos.has(name));
+    const names = new Map(sources.map(s => [s.fullName.toLowerCase(), s.fullName]));
+    for (let i = 0; i < missing.length; i += REPOSITORY_LOOKUPS) {
+      await Promise.all(missing.slice(i, i + REPOSITORY_LOOKUPS).map(async name => {
+        repos.set(name, await this.get(`repos/${names.get(name)!}`, repository, options));
+      }));
     }
-    return { items, nextCursor: page * PAGE_SIZE < result.total_count ? this.cursor(page + 1, binding) : null };
+    const items = sources.map(({ source, fullName }) => {
+      const repo = repos.get(fullName.toLowerCase())!;
+      if (selected && repo.id !== selected.id) throw new StapleError("unavailable", "GitHub search returned a different repository");
+      return this.item(repo, source);
+    });
+    // GitHub serves only the first 1000 results of any search; later pages are refused.
+    return { items, nextCursor: page * PAGE_SIZE < Math.min(result.total_count, SEARCH_LIMIT) ? this.cursor(page + 1, binding) : null };
   }
 
-  private async checkConnection(options?: ProviderReadOptions) {
+  /** Returns the effective gh login, which must be the configured account. */
+  private async checkConnection(options?: ProviderReadOptions): Promise<string> {
     const version = await this.run({ kind: "version" }, options);
     const match = /^gh version (\d+)\.(\d+)\.(\d+)/.exec(version);
     if (!match || Number(match[1]) < 2 || (Number(match[1]) === 2 && Number(match[2]) < 20)) {
@@ -146,8 +150,10 @@ export class GitHubCliAdapter implements IntegrationAdapter {
     }
     const user = await this.get("user", z.object({ login: z.string() }), options);
     if (user.login.toLowerCase() !== this.config.account.toLowerCase()) {
-      throw new StapleError("auth", "GitHub CLI is using a different account; select that account in Settings or change gh authentication yourself");
+      throw new StapleError("auth", `GitHub CLI is signed in as ${user.login}, but this connection expects ${this.config.account}`,
+        { reason: "account_mismatch", login: user.login });
     }
+    return user.login;
   }
 
   private async get<T>(endpoint: string, schema: z.ZodType<T>, options?: ProviderReadOptions): Promise<T> {
@@ -222,4 +228,20 @@ export class GitHubCliAdapter implements IntegrationAdapter {
       return page;
     } catch { throw new StapleError("cursor_invalid", "Search changed or its GitHub cursor is invalid; start again"); }
   }
+}
+
+/**
+ * Accounts gh reports as signed in and active, per host. Current gh prints
+ * "Logged in to HOST account LOGIN" with an "Active account" line; before 2.40 it printed
+ * "Logged in to HOST as LOGIN" and had one account per host. Failed logins are skipped.
+ */
+export function parseGhAuthStatus(output: string): Array<{ host: string; login: string }> {
+  const accounts: Array<{ host: string; login: string; active: boolean | null }> = [];
+  for (const line of output.split(/\r?\n/)) {
+    const login = /Logged in to ([a-z0-9][a-z0-9.-]*(?::[0-9]+)?) (?:account|as) ([A-Za-z0-9-]{1,80})\b/i.exec(line);
+    if (login) { accounts.push({ host: login[1]!.toLowerCase(), login: login[2]!, active: null }); continue; }
+    const active = /Active account: (true|false)/.exec(line);
+    if (active && accounts.length && accounts.at(-1)!.active === null) accounts.at(-1)!.active = active[1] === "true";
+  }
+  return accounts.filter(a => a.active !== false).map(({ host, login }) => ({ host, login }));
 }
