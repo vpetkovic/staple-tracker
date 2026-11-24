@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { StapleError } from "../types.js";
 import { healthFromError } from "./health.js";
-import type { ConnectionHealth, ExternalItem, ExternalItemRef, ExternalLocator, ExternalSearch, IntegrationAdapter, ProviderReadOptions } from "./contracts.js";
+import type { ConnectionHealth, ContainerKind, ExternalContainer, ExternalItem, ExternalItemRef, ExternalLocator, ExternalSearch, IntegrationAdapter, ProviderReadOptions } from "./contracts.js";
 
 const uuid = z.string().uuid().toLowerCase();
 export const linearConnectionSchema = z.object({
@@ -17,10 +17,11 @@ const identity = { viewer: z.object({ id: uuid, name: z.string().max(256).option
 const team = z.object({ id: uuid, key: slug, name: z.string().max(8192), organization: z.object({ id: uuid }) });
 const issue = z.object({ id: uuid, identifier: z.string().regex(/^[A-Za-z][A-Za-z0-9_]*-[1-9][0-9]*$/),
   title: z.string().max(8192), description: z.string().max(1_000_000).nullable(), url: z.string().max(8192),
-  state: z.object({ id: uuid, name: z.string().max(8192) }), team });
+  state: z.object({ id: uuid, name: z.string().max(8192) }), team, project: z.object({ id: uuid }).nullable().optional() });
+const project = z.object({ id: uuid, name: z.string().max(8192), url: z.string().max(8192) });
 const pageInfo = z.object({ hasNextPage: z.boolean(), endCursor: z.string().min(1).max(2048).nullable() });
 const IDENTITY = "viewer { id name } organization { id urlKey }";
-const FIELDS = "id identifier title description url state { id name } team { id key name organization { id } }";
+const FIELDS = "id identifier title description url state { id name } team { id key name organization { id } } project { id }";
 const PAGE_SIZE = 50;
 const MAX_BYTES = 2_000_000;
 const TIMEOUT_MS = 15_000;
@@ -65,22 +66,49 @@ export class LinearApiAdapter implements IntegrationAdapter {
       return { id: t.id, name: `${t.name} (${t.key})`, url: `https://linear.app/${data.organization.urlKey}/team/${t.key}/all` };
     }), nextCursor: this.next(data.teams.pageInfo, binding, after) };
   }
+  async listProjects(cursor?: string, options?: ProviderReadOptions) {
+    const binding = "projects";
+    const after = this.after(cursor, binding);
+    const data = await this.query("projects(first: 50, after: $after) { nodes { id name url } pageInfo { hasNextPage endCursor } }",
+      { after }, z.object({ projects: z.object({ nodes: z.array(project).max(PAGE_SIZE), pageInfo }) }), options, "$after: String");
+    return { items: data.projects.nodes.map(p => ({ id: p.id, name: p.name, url: this.projectUrl(p.url) })), nextCursor: this.next(data.projects.pageInfo, binding, after) };
+  }
+  async readContainer(id: string, kind: ContainerKind, options?: ProviderReadOptions): Promise<ExternalContainer | null> {
+    this.checkUuid(id);
+    try {
+      if (kind === "project") {
+        const data = await this.query("project(id: $id) { id name url }", { id }, z.object({ project }), options, "$id: String!");
+        return data.project.id === id.toLowerCase() ? { id: data.project.id, name: data.project.name, url: this.projectUrl(data.project.url) } : null;
+      }
+      if (kind !== "team") throw new StapleError("validation", "Linear containers are teams or projects");
+      const data = await this.query("team(id: $id) { id key name organization { id } }", { id }, z.object({ team }), options, "$id: String!");
+      this.checkTeam(data.team);
+      return { id: data.team.id, name: `${data.team.name} (${data.team.key})`, url: `https://linear.app/${data.organization.urlKey}/team/${data.team.key}/all` };
+    } catch (error) {
+      if (error instanceof StapleError && error.code === "not_found") return null;
+      throw error;
+    }
+  }
   async searchIssues(search: ExternalSearch, options?: ProviderReadOptions) {
     if (search.text.length > 256 || /[\x00-\x1f]/.test(search.text)) throw new StapleError("validation", "Use at most 256 characters of search text");
     if (search.containerId !== undefined) this.checkUuid(search.containerId);
-    const binding = JSON.stringify(["issues", search.text, search.containerId ?? null]);
+    if (search.projectId !== undefined) this.checkUuid(search.projectId);
+    if (search.containerId !== undefined && search.projectId !== undefined) throw new StapleError("validation", "Search a Linear team or a project, not both");
+    const binding = JSON.stringify(["issues", search.text, search.containerId ?? null, search.projectId ?? null]);
     const after = this.after(search.cursor, binding);
     const text = search.text.trim();
     // Linear's search requires non-empty text; the issues connection supports browsing a team.
     const field = text ? "searchIssues" : "issues";
+    const byProject = search.projectId ? { project: { id: { eq: search.projectId } } } : null;
     const selection = text
-      ? `searchIssues(term: $text, teamId: $team, first: 50, after: $after) { nodes { ${FIELDS} } pageInfo { hasNextPage endCursor } }`
+      ? `searchIssues(term: $text, teamId: $team${byProject ? ", filter: $filter" : ""}, first: 50, after: $after) { nodes { ${FIELDS} } pageInfo { hasNextPage endCursor } }`
       : `issues(filter: $filter, orderBy: updatedAt, first: 50, after: $after) { nodes { ${FIELDS} } pageInfo { hasNextPage endCursor } }`;
-    const variables = text ? { text, team: search.containerId ?? null, after }
-      : { filter: search.containerId ? { team: { id: { eq: search.containerId } } } : {}, after };
+    const variables = text ? { text, team: search.containerId ?? null, ...(byProject ? { filter: byProject } : {}), after }
+      : { filter: byProject ?? (search.containerId ? { team: { id: { eq: search.containerId } } } : {}), after };
     const data = await this.query(selection, variables, z.object({ [field]: z.object({ nodes: z.array(issue).max(PAGE_SIZE), pageInfo }) }), options,
-      text ? "$text: String!, $team: String, $after: String" : "$filter: IssueFilter, $after: String");
+      text ? `$text: String!, $team: String${byProject ? ", $filter: IssueFilter" : ""}, $after: String` : "$filter: IssueFilter, $after: String");
     const page = data[field]!;
+    if (search.projectId && page.nodes.some(n => n.project?.id !== search.projectId)) throw new StapleError("unavailable", "Linear returned an issue outside the selected project");
     const items = page.nodes.map(i => this.item(i, data.organization));
     if (search.containerId && items.some(i => i.ref.containerId !== search.containerId)) throw new StapleError("unavailable", "Linear returned an issue outside the selected team");
     return { items, nextCursor: this.next(page.pageInfo, binding, after) };
@@ -132,7 +160,15 @@ export class LinearApiAdapter implements IntegrationAdapter {
         || !(url.pathname === prefix || new RegExp(`^${prefix}/[A-Za-z0-9_-]+/?$`).test(url.pathname))) throw new Error();
     } catch { throw new StapleError("unavailable", "Linear returned an unexpected issue URL"); }
     return { ref: { ...this.scope, containerId: source.team.id, id: source.id, kind: "issue" }, key: source.identifier,
-      url: url.href, title: source.title, body: source.description, status: source.state, fetchedAt: this.now().toISOString() };
+      url: url.href, title: source.title, body: source.description, status: source.state, fetchedAt: this.now().toISOString(),
+      ...(source.project ? { projectId: source.project.id } : {}) };
+  }
+  private projectUrl(input: string): string {
+    try {
+      const url = new URL(input);
+      if (url.protocol !== "https:" || url.host !== "linear.app" || url.username || url.password) throw new Error();
+      return url.href;
+    } catch { throw new StapleError("unavailable", "Linear returned an unexpected project URL"); }
   }
   private checkTeam(t: z.infer<typeof team>) {
     if (t.organization.id !== this.scope.scopeId) throw new StapleError("forbidden", "Linear returned a team in a different organization");

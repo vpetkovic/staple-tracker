@@ -12,7 +12,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
-import { getIssues, getSettings, integrationRead, integrationWrite } from "@/lib/api";
+import { getIssues, integrationRead, integrationWrite } from "@/lib/api";
 import { useSession } from "@/lib/session";
 import { openSettings } from "@/lib/shell-events";
 import { newRequestKey } from "@/lib/request-key";
@@ -104,6 +104,7 @@ export function PickerBody({
   const [connections, setConnections] = useState<ProviderConnection[]>([]);
   const [connectionId, setConnection] = useState("");
   const [repositories, setRepositories] = useState<string[]>([]);
+  const [names, setNames] = useState<Record<string, string>>({});
   const [containerId, setContainer] = useState("");
   const [kind, setKind] = useState<"issue" | "pull_request">(initialKind ?? "issue");
   const [text, setText] = useState("");
@@ -131,15 +132,15 @@ export function PickerBody({
     Promise.all([
       integrationRead<{ connections: ProviderConnection[] }>({ action: "connections" }, ws),
       getIssues({ ws }),
-      getSettings({ ws }),
+      integrationRead<{ targets: Array<{ key: string; name: string | null; containerId: string }> }>({ action: "mapping" }, ws),
     ])
-      .then(([c, issues, settings]) => {
+      .then(([c, issues, mapped]) => {
         if (!active) return;
         setConnections(c.connections);
 
         setRows(issues);
-        const repos = String(settings.values["integrations.repositories"]?.value ?? "")
-          .split(",").filter(Boolean);
+        const repos = mapped.targets.map((t) => t.key);
+        setNames(Object.fromEntries(mapped.targets.map((t) => [t.key, t.name ?? t.key])));
         setRepositories(repos);
         const defaults = loadPickerDefaults(ws, c.connections, repos);
         const chosen = c.connections.find(connection => connection.id === defaults.connectionId);
@@ -191,27 +192,14 @@ export function PickerBody({
       await inspect({ key: text.trim(), containerId, connectionId });
       return;
     }
-    const cached = await integrationRead<MixedResults>({ action: "search", text, kind }, ws);
+    // One call: the server searches every repository or team mapped for this workspace.
+    const r = await integrationRead<MixedResults>(
+      { action: "search", text, kind, containerId: containerId || undefined, cursor },
+      ws,
+    );
     if (!alive.current) return;
-    setResults(old => cursor && old ? { ...cached, remote: old.remote } : cached);
     setPreview(null);
-    if (connectionId) {
-      const r = await integrationRead<MixedResults>(
-        {
-          action: "search",
-          text,
-          kind,
-          containerId: containerId || undefined,
-          connectionId,
-          cursor,
-        },
-        ws,
-      );
-      if (alive.current)
-        setResults((old) =>
-          cursor && old ? { ...r, remote: uniqueHits(old.remote, r.remote) } : r,
-        );
-    }
+    setResults((old) => (cursor && old ? { ...r, remote: uniqueHits(old.remote, r.remote) } : r));
   }
   async function inspect(input: Record<string, unknown>) {
     const p = await integrationRead<MatchPreview>({ action: "preview", ...input }, ws);
@@ -294,18 +282,17 @@ export function PickerBody({
             aria-label="Container scope"
             className="min-w-0 rounded-md border bg-background p-2"
             value={containerId}
-            disabled={busy || !connection}
+            disabled={busy}
             onChange={(e) => {
               setContainer(e.target.value);
               changed();
             }}
           >
-            <option value="">All accessible repositories / teams</option>
+            <option value="">All mapped repositories / teams</option>
             {repositories
-              .filter((r) => connection && r.startsWith(containerPrefix(connection)))
               .map((r) => (
                 <option key={r} value={r.slice(r.lastIndexOf("/") + 1)}>
-                  {r}
+                  {names[r] ?? r}
                 </option>
               ))}
           </select>

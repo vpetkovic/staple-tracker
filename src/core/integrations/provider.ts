@@ -1,7 +1,7 @@
 /** Shared read boundary; adapters supply provider-specific parsing and IO. */
 import { StapleError } from "../types.js";
 import type {
-  ExternalItem, ExternalItemKind, ExternalItemRef, ExternalLocator, ExternalPage,
+  ContainerKind, ExternalItem, ExternalItemKind, ExternalItemRef, ExternalLocator, ExternalPage,
   ExternalSearch, IntegrationAdapter, ProviderReadOptions, ProviderScope, ResolvedExternalItem,
 } from "./contracts.js";
 
@@ -70,6 +70,17 @@ export class IntegrationReader {
       return { ...container, url: resourceUrl(container.url, this.adapter.scope.host) };
     });
     return { ...page, items };
+  }
+
+  async listProjects(cursor?: string, options?: ProviderReadOptions) {
+    if (!this.adapter.listProjects) throw new StapleError("protocol_unsupported", "This connection has no projects");
+    const page = await this.adapter.listProjects(cursor, options);
+    return { ...page, items: page.items.map(p => ({ ...p, url: resourceUrl(p.url, this.adapter.scope.host) })) };
+  }
+
+  async readContainer(id: string, kind: ContainerKind, options?: ProviderReadOptions) {
+    const container = await this.adapter.readContainer(required(id), kind, options);
+    return container && { ...container, url: resourceUrl(container.url, this.adapter.scope.host) };
   }
 
   async resolve(locator: ExternalLocator, options?: ProviderReadOptions): Promise<ResolvedExternalItem | null> {
