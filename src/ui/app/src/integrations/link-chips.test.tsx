@@ -14,7 +14,7 @@ import { DetailContent } from "@/detail/IssueDetailPanel";
 import { useIssueActions } from "@/detail/IssueActions";
 import { DetailTabStrip } from "@/detail/tabs/DetailTabStrip";
 import { TABS } from "@/detail/tabs/registry";
-import { ExternalPropertySummary } from "./ExternalPropertySummary";
+import { ExternalLinkAdd, ExternalPropertySummary } from "./ExternalPropertySummary";
 import { LinkListCard, SingleLinkCard } from "./LinkHoverCard";
 import type { ExternalLink } from "./model";
 
@@ -141,18 +141,21 @@ describe("link chips", () => {
     expect(chips(html)).toEqual([]);
   });
 
-  it("is one counted pill per kind on the phone, with its own + ", () => {
+  it("is one counted pill per kind on the phone, and nothing for a kind with no links", () => {
     const html = summary(withLinks(Array.from({ length: 3 }, (_, i) => link(i + 1, { kind: "issue" }))), "issue", true);
     expect(html).toContain(">3 issues<");
     expect(chips(html)).toEqual([]);
-    expect(html).toContain('aria-label="Link issue"');
+    // Linking is one shared control on the phone (ExternalLinkAdd), not a + per kind.
+    expect(html).not.toContain("Link issue");
     expect(summary(withLinks(Array.from({ length: 6 }, (_, i) => link(i + 1))), "pull_request", true)).toContain(">6 pull requests<");
+    expect(summary(withLinks([]), "issue", true)).toBe("");
   });
 
-  it("is only the labelled + on the phone when nothing is linked", () => {
-    const html = summary(withLinks([]), "issue", true);
-    expect(html).toContain(">Link issue<");
-    expect(html).not.toContain("0 issues");
+  it("offers one labelled way to link on the phone, whatever is linked", () => {
+    const html = renderToStaticMarkup(<ExternalLinkAdd detail={withLinks([])} />);
+    expect(html.match(/<button/g)).toHaveLength(1);
+    expect(html).toContain('aria-label="Link an issue or pull request"');
+    expect(html).toContain(">Link<");
   });
 });
 
@@ -183,7 +186,7 @@ describe("the hover card", () => {
   it("lists a row's links, one row each, and offers them all in External links", () => {
     const items = Array.from({ length: 5 }, (_, i) => ({
       id: `r${i}`, providerId: "github", host: "github.com", containerId: "42",
-      key: `team/repo#${i + 1}`, url: `https://github.com/team/repo/pull/${i + 1}`, title: i === 2 ? null : `Change ${i + 1}`,
+      key: `team/repo#${i + 1}`, url: `https://github.com/team/repo/pull/${i + 1}`, title: i === 2 ? null : `Change ${i + 1}`, status: null,
     }));
     const html = renderToStaticMarkup(<LinkListCard kind="pull_request" count={6} items={items} onShowAll={noop} />);
     expect(html).toContain(">6 pull requests<");

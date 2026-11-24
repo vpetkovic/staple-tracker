@@ -1,4 +1,4 @@
-import { ExternalPropertySummary } from "@/integrations/ExternalPropertySummary";
+import { ExternalLinkAdd, ExternalPropertySummary } from "@/integrations/ExternalPropertySummary";
 import { ideaPlanHref } from "./PlannedIdeaLinks";
 /**
  * The detail panel's contents: the bar, the header (breadcrumb, title, status line, actions),
@@ -813,6 +813,7 @@ function SummaryChips({
       )}
       <ExternalPropertySummary detail={detail} kind="issue" compact />
       <ExternalPropertySummary detail={detail} kind="pull_request" compact />
+      <ExternalLinkAdd detail={detail} />
     </div>
   );
 }

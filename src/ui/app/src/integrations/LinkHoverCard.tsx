@@ -120,11 +120,11 @@ export function SingleLinkCard({
 }
 
 /**
- * A row summary's preview as a source item, for the shared key and tone rules. The server
- * does not send a preview's state yet; when it does, `status` is read here and nowhere else.
+ * A row summary's preview as a source item, for the shared key and tone rules. A preview from an
+ * older server has no `status`; it reads as no state.
  */
 function previewItem(item: ExternalLinkPreview, kind: "issue" | "pull_request"): SourceItem {
-  const status = (item as { status?: { id: string; name: string; category?: string } | null }).status ?? null;
+  const status = item.status ?? null;
   return {
     ref: { providerId: item.providerId, host: item.host, scopeId: "", containerId: item.containerId, id: item.id, kind },
     key: item.key,

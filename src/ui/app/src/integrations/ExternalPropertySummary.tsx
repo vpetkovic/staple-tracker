@@ -15,6 +15,26 @@ import { ItemGlyph, LinkGlyph } from "./parts";
 
 const MAX_CHIPS = 4;
 
+/** The phone summary's chip shape, matching the status and priority chips beside it. */
+const PILL =
+  "focus-ring inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-border bg-surface-raised px-3 text-[13px] font-medium text-foreground hover:bg-surface-hover pointer-coarse:h-11";
+
+/** The phone summary's one way to link: the dialog filters by kind itself, so two buttons would say the same thing twice. */
+export function ExternalLinkAdd({ detail }: { detail: IssueDetail }) {
+  return (
+    <button
+      type="button"
+      data-link-add=""
+      aria-label="Link an issue or pull request"
+      className={cn(PILL, "border-dashed bg-transparent font-normal text-muted-foreground")}
+      onClick={() => openLinkExternal({ workspace: detail.workspace, ref: detail.issue.id })}
+    >
+      <Plus aria-hidden className="size-3.5" />
+      Link
+    </button>
+  );
+}
+
 /** A 44px target on a finger, around a control drawn smaller (so it opts out of the base layer's 44px floor). */
 const HIT = "relative pointer-coarse:min-h-0 pointer-coarse:before:absolute pointer-coarse:before:-inset-y-2.5 pointer-coarse:before:inset-x-0 pointer-coarse:before:content-['']";
 
@@ -39,33 +59,13 @@ export function ExternalPropertySummary({
   const add = () => openLinkExternal({ workspace: detail.workspace, ref: detail.issue.id, kind });
 
   if (compact) {
-    const PILL =
-      "focus-ring inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-border bg-surface-raised px-3 text-[13px] font-medium text-foreground hover:bg-surface-hover pointer-coarse:h-11";
     const word = kind === "issue" ? "issue" : "pull request";
+    if (!links.length) return null;
     return (
-      <>
-        {links.length ? (
-          <button type="button" className={PILL} data-link-pill={kind} aria-label={`${countLabel(links.length, kind)}; show External links`} onClick={showAll}>
-            <LinkGlyph kind={kind} tone={leadingTone(peers.map(linkTone))} className="size-3.5" />
-            {`${links.length} ${word}${links.length === 1 ? "" : "s"}`}
-          </button>
-        ) : null}
-        {links.length ? (
-          <button
-            type="button"
-            className="focus-ring inline-flex size-9 shrink-0 items-center justify-center rounded-full border border-dashed border-border text-muted-foreground hover:bg-surface-hover hover:text-foreground pointer-coarse:size-11"
-            aria-label={addLabel}
-            onClick={add}
-          >
-            <Plus aria-hidden className="size-4" />
-          </button>
-        ) : (
-          <button type="button" className={cn(PILL, "border-dashed bg-transparent font-normal text-muted-foreground")} onClick={add}>
-            <Plus aria-hidden className="size-3.5" />
-            {addLabel}
-          </button>
-        )}
-      </>
+      <button type="button" className={PILL} data-link-pill={kind} aria-label={`${countLabel(links.length, kind)}; show External links`} onClick={showAll}>
+        <LinkGlyph kind={kind} tone={leadingTone(peers.map(linkTone))} className="size-3.5" />
+        {`${links.length} ${word}${links.length === 1 ? "" : "s"}`}
+      </button>
     );
   }
 

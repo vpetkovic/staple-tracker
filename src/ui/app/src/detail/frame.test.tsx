@@ -142,16 +142,16 @@ describe("the three presentations", () => {
     expect(html.indexOf("data-status-sentence")).toBeLessThan(html.indexOf("data-summary-chips"));
   });
 
-  it("places external issue and PR pills after the assignee in the phone summary", () => {
+  it("places the one link control after the assignee in the phone summary", () => {
     const html = render("sheet");
     const start = html.indexOf('data-summary-chips');
     const assignee = html.indexOf('data-summary-assignee', start);
-    // Nothing linked yet: each kind is only its labelled +.
-    const issues = html.indexOf('>Link issue<', start);
-    const prs = html.indexOf('>Link pull request<', start);
+    // Nothing linked yet: no counted pills, only the shared "Link".
+    const add = html.indexOf("data-link-add", start);
     expect(assignee).toBeGreaterThan(start);
-    expect(issues).toBeGreaterThan(assignee);
-    expect(prs).toBeGreaterThan(issues);
+    expect(add).toBeGreaterThan(assignee);
+    expect(html.match(/data-link-add/g)).toHaveLength(1);
+    expect(html).not.toContain("data-link-pill");
   });
 
   it("phone sheet: the task's reference is printed on one line in the breadcrumb", () => {

@@ -101,9 +101,10 @@ export function savedAge(item: SourceItem, now = Date.now()): SavedAge | null {
   return { short: `${count} ${unit}`, sentence: `Saved copy from ${count} ${unit} ago`, stale };
 }
 
-const TONE_RANK: Record<LinkTone, number> = { open: 0, active: 1, draft: 2, merged: 3, done: 4, closed: 5, neutral: 6 };
+// A state we cannot classify (neutral) may still be in motion, so it ranks ahead of everything finished.
+const TONE_RANK: Record<LinkTone, number> = { open: 0, active: 1, draft: 2, neutral: 3, merged: 4, done: 5, closed: 6 };
 
 /** A badge that stands for several links wears the tone of the one most in motion. */
 export function leadingTone(tones: readonly LinkTone[]): LinkTone {
-  return tones.reduce<LinkTone>((best, tone) => (TONE_RANK[tone] < TONE_RANK[best] ? tone : best), "neutral");
+  return tones.reduce<LinkTone>((best, tone) => (TONE_RANK[tone] < TONE_RANK[best] ? tone : best), tones[0] ?? "neutral");
 }

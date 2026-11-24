@@ -65,6 +65,9 @@ describe("how a link reads", () => {
     expect(leadingTone(["merged", "closed", "open"])).toBe("open");
     expect(leadingTone(["merged", "closed"])).toBe("merged");
     expect(leadingTone([])).toBe("neutral");
+    // A state we cannot classify may still be in motion, so it outranks anything finished.
+    expect(leadingTone(["closed", "neutral"])).toBe("neutral");
+    expect(leadingTone(["neutral", "open"])).toBe("open");
   });
 });
 
