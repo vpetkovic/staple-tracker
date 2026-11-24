@@ -27,6 +27,17 @@ export interface PickerPage {
 }
 
 /**
+ * What Add connection lists. The planned providers are shown so the list reads as a roadmap,
+ * and cannot be chosen until their adapter exists.
+ */
+export const CONNECTION_CHOICES: ReadonlyArray<{ providerId: string; label: string; available: boolean }> = [
+  { providerId: "github", label: "GitHub account or Enterprise host", available: true },
+  { providerId: "linear", label: "Linear workspace", available: true },
+  { providerId: "azure_devops", label: "Azure DevOps", available: false },
+  { providerId: "clickup", label: "ClickUp", available: false },
+];
+
+/**
  * The command in a fix sentence: what follows "Run " up to a full stop, or to where the
  * server's sentence goes back to prose (", or …", " on the computer …").
  */

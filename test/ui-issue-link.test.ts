@@ -125,6 +125,15 @@ describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
     // No workspace named: the screen is the computer's.
     await page.goto(`${at(single)}/?settings=integrations&token=${single.token}`, { waitUntil: "networkidle" });
     const settings = page.getByRole("dialog", { name: "Settings" });
+    // Planned providers are listed and cannot be chosen yet.
+    await page.getByRole("button", { name: "Add connection", exact: true }).click();
+    for (const planned of ["Azure DevOps", "ClickUp"]) {
+      const item = page.getByRole("menuitem", { name: new RegExp(`^${planned}`) });
+      expect(await item.getAttribute("aria-disabled")).toBe("true");
+      expect(await item.innerText()).toContain("Soon");
+    }
+    expect(await page.getByRole("menuitem", { name: /^Linear workspace/ }).getAttribute("aria-disabled")).toBeNull();
+    await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "Add account", exact: true }).click();
     await page.getByLabel("Account", { exact: true }).fill("tester");
     await page.keyboard.press("Escape");
@@ -152,6 +161,14 @@ describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
     expect(await pressed("Pull requests")).toBe("true");
     expect(await dialog.getByRole("button", { name: /^Link to ALP-1/ }).count()).toBe(1);
     expect(await dialog.locator("select, details, input[type=checkbox]").count()).toBe(0);
+    // The task can be taken back off: the chip returns to asking for one, and a task can be chosen again.
+    await dialog.getByRole("button", { name: /^Link to ALP-1/ }).click();
+    await page.getByRole("option", { name: /^No task/ }).click();
+    expect(await dialog.getByRole("button", { name: "Choose a task", exact: true }).count()).toBe(1);
+    await dialog.getByRole("button", { name: "Choose a task", exact: true }).click();
+    expect(await page.getByRole("option", { name: /^No task/ }).count()).toBe(0);
+    await page.getByRole("option", { name: /ALP-1/ }).click();
+    expect(await dialog.getByRole("button", { name: /^Link to ALP-1/ }).count()).toBe(1);
     await dialog.getByRole("button", { name: "Issues", exact: true }).click();
     expect(await page.evaluate(() => localStorage.getItem("staple:link-kind:v1"))).toBe("issue");
     await page.keyboard.press("Escape");

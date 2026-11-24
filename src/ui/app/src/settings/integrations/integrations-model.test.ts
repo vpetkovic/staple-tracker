@@ -3,6 +3,7 @@ import type { ConnectionHealthSnapshot, DetectedConnection } from "../../../../.
 import type { ConnectionView } from "@/integrations/connection-status";
 import {
   chipLabel,
+  CONNECTION_CHOICES,
   linearIdProblem,
   commandIn,
   connectionMeta,
@@ -147,6 +148,17 @@ describe("pickerSections", () => {
     expect(sections.map((s) => [s.label, s.kind, s.nextCursor])).toEqual([
       ["Teams", "team", "more"],
       ["Projects", "project", null],
+    ]);
+  });
+});
+
+describe("what Add connection offers", () => {
+  it("lists the providers that work first, then the planned ones as not yet available", () => {
+    expect(CONNECTION_CHOICES.map((c) => [c.providerId, c.label, c.available])).toEqual([
+      ["github", "GitHub account or Enterprise host", true],
+      ["linear", "Linear workspace", true],
+      ["azure_devops", "Azure DevOps", false],
+      ["clickup", "ClickUp", false],
     ]);
   });
 });

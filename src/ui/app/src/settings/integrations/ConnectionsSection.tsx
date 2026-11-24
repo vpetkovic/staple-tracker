@@ -24,7 +24,7 @@ import type { Connections } from "@/integrations/useConnections";
 import type { DetectedConnection } from "../../../../../core/integrations/contracts";
 import { ConfirmDialog } from "../form/ConfirmDialog";
 import { InlineError, Section } from "../form/primitives";
-import { commandIn, connectionMeta, linearIdProblem, offeredDetections } from "./integrations-model";
+import { commandIn, CONNECTION_CHOICES, connectionMeta, linearIdProblem, offeredDetections } from "./integrations-model";
 
 type Provider = "github" | "linear";
 const message = (caught: unknown) => (caught instanceof Error ? caught.message : String(caught));
@@ -235,15 +235,22 @@ export function ConnectionsSection({ state, ws, onDirtyChange, now: fixedNow }: 
               Add connection
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
-            <DropdownMenuItem onSelect={() => setForm("github")} className="pointer-coarse:min-h-11">
-              <ProviderMark providerId="github" />
-              GitHub account or Enterprise host
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setForm("linear")} className="pointer-coarse:min-h-11">
-              <ProviderMark providerId="linear" />
-              Linear workspace
-            </DropdownMenuItem>
+          <DropdownMenuContent align="start" className="min-w-64">
+            {CONNECTION_CHOICES.map((choice) => (
+              <DropdownMenuItem
+                key={choice.providerId}
+                disabled={!choice.available}
+                onSelect={() => setForm(choice.providerId as Provider)}
+                // A planned provider is dimmed by its words, not by fading the whole row: "Soon" stays readable.
+                className="pointer-coarse:min-h-11 data-[disabled]:text-text-tertiary data-[disabled]:opacity-100"
+              >
+                <ProviderMark providerId={choice.providerId} />
+                {choice.label}
+                {choice.available ? null : (
+                  <span className="ml-auto rounded-full border px-1.5 text-caption leading-4 font-medium text-muted-foreground">Soon</span>
+                )}
+              </DropdownMenuItem>
+            ))}
           </DropdownMenuContent>
         </DropdownMenu>
         {empty ? <p className="text-label text-muted-foreground">Links already in your workspaces keep working from their saved copies. A connection adds search and refresh.</p> : null}
