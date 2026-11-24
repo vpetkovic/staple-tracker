@@ -2,8 +2,6 @@ import { describe, it, expect } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ExternalLinkCard } from "@/detail/tabs/ExternalLinksTab";
 import { groupLinks, type ExternalLink } from "./model";
-import type { IssueDetail } from "@/lib/types";
-import { issue } from "@/components/task-list/fixtures";
 export function sourceLink(n: number): ExternalLink {
   return {
     id: `link-${n}`,
