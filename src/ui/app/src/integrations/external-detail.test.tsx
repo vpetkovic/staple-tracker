@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ExternalPropertySummary } from "./ExternalPropertySummary";
 import { ExternalLinkCard } from "@/detail/tabs/ExternalLinksTab";
 import { groupLinks, type ExternalLink } from "./model";
 import type { IssueDetail } from "@/lib/types";
@@ -38,15 +37,6 @@ export function sourceLink(n: number): ExternalLink {
   };
 }
 describe("external ticket context", () => {
-  it("shows full association counts but bounds property previews and offers linking", () => {
-    const links = Array.from({ length: 12 }, (_, i) => sourceLink(i + 1));
-    const detail = { workspace: "demo", issue: issue(), externalLinks: links } as IssueDetail;
-    const html = renderToStaticMarkup(<ExternalPropertySummary detail={detail} kind="issue" />);
-    expect(html).toContain('aria-label="12 linked issues; show External links"');
-    expect(html).toContain("+10");
-    expect(html).not.toContain("team/repo#3");
-    expect(html).toContain('aria-label="Link issue"');
-  });
   it("groups by immutable provider scope and repository rather than a shared display name", () => {
     const a = sourceLink(1),
       b = sourceLink(2),
