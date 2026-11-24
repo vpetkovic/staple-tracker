@@ -27,7 +27,7 @@ import type { ConnectionView } from "./connection-status";
 import { containerLabel, providerName, savedAge, shortKey, stateLabel } from "./link-state";
 import { countWords, isRefreshable, openLabel, stackIndent } from "./links-view";
 import { groupLinks, type ExternalLink } from "./model";
-import { ItemGlyph, LinkStatePill, ProviderMark } from "./parts";
+import { ItemGlyph, LINK_PROSE, LinkStatePill, ProviderMark } from "./parts";
 import { parentChoices, prStacks, prTreeRows } from "./pr-stacks";
 
 export type WriteLink = (command: Record<string, unknown>) => Promise<void>;
@@ -481,7 +481,7 @@ function Description({ link }: { link: ExternalLink }) {
       <div
         ref={ref}
         className={cn(
-          "text-body wrap-anywhere text-muted-foreground [&_p]:m-0 [&_p+p]:mt-1.5 [&_p.font-semibold]:mt-2 [&_p.font-semibold]:text-body [&_p.font-semibold]:font-medium [&_p.font-semibold]:text-foreground [&_ul]:my-1 [&_ol]:my-1 [&>:first-child]:mt-0",
+          LINK_PROSE,
           !more && "max-h-[7.5rem] overflow-hidden",
           !more && long && "[mask-image:linear-gradient(to_bottom,black_60%,transparent)]",
         )}

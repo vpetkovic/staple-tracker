@@ -195,3 +195,22 @@ describe("link dialog body", () => {
     }
   });
 });
+
+describe("link dialog refinements", () => {
+  it("prints a row's key as short as its group allows, with the whole key one hover away", () => {
+    const html = render(state());
+    expect(html).toMatch(/title="vpetkovic\/staple-tracker#1">#1</);
+    expect(html).not.toMatch(/>vpetkovic\/staple-tracker#1</);
+  });
+  it("reads the selected result's description as markdown", () => {
+    const one = hit("1");
+    (one.item as { body: string }).body = "## Summary\n\n- First change";
+    const html = render(state({}, [one]));
+    expect(html).toMatch(/<p class="[^"]*font-semibold[^"]*">Summary<\/p>/);
+    expect(html).not.toContain("## Summary");
+  });
+  it("says what to do about a source that failed, when the server knows", () => {
+    const failure = { connectionId: "gh", targetKeys: [repo.key], state: "unauthenticated" as const, message: "x", action: "Run gh auth login --hostname github.com on the computer running Staple." };
+    expect(text(render(state({ failures: [failure] })))).toContain("Run gh auth login --hostname github.com on the computer running Staple.");
+  });
+});

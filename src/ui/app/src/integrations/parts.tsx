@@ -119,3 +119,10 @@ export function ProviderMark({ providerId, className }: { providerId: string; cl
     </span>
   );
 }
+
+/**
+ * A provider's description, read as markdown but held to the surrounding body size: its
+ * headings are a medium-weight line, not a new level of hierarchy.
+ */
+export const LINK_PROSE =
+  "text-body wrap-anywhere text-muted-foreground [&_p]:m-0 [&_p+p]:mt-1.5 [&_p.font-semibold]:mt-2 [&_p.font-semibold]:text-body [&_p.font-semibold]:font-medium [&_p.font-semibold]:text-foreground [&_ul]:my-1 [&_ol]:my-1 [&>:first-child]:mt-0";

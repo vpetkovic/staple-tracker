@@ -21,11 +21,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type { SelectOption } from "@/components/ui/searchable-select";
+import { Markdown } from "@/lib/markdown";
 import { cn } from "@/lib/utils";
 import type { Issue } from "@/lib/types";
 import type { ConnectionView } from "../connection-status";
 import { providerName, shortKey } from "../link-state";
-import { ConnectionDot, ItemGlyph, LinkStatePill, ProviderMark } from "../parts";
+import { ConnectionDot, ItemGlyph, LINK_PROSE, LinkStatePill, ProviderMark } from "../parts";
 import { resourceKey, type MappingTarget, type SearchFailure, type SearchHit, type SearchScope } from "../model";
 import type { KindFilter } from "./last-kind";
 import { failureLine, freshnessLine, linkTag, scopeLabel, scopeNote, type ResultGroup } from "./logic";
@@ -323,7 +324,10 @@ function Results({
       className="flex items-start gap-2 border-b bg-[color-mix(in_oklab,var(--status-task-todo)_9%,transparent)] px-4 py-2 text-label"
     >
       <TriangleAlert aria-hidden className="mt-px size-3.5 shrink-0" style={{ color: "var(--status-task-icon-todo)" }} />
-      <span className="min-w-0 flex-1">{failureLine(f, state.scope?.targets ?? [])}</span>
+      <span className="min-w-0 flex-1">
+        {failureLine(f, state.scope?.targets ?? [])}
+        {f.action ? <span className="block text-muted-foreground">{f.action}</span> : null}
+      </span>
       <button
         type="button"
         onClick={actions.onSettings}
@@ -400,7 +404,7 @@ function Results({
                   <span className="truncate" title={group.label}>{group.label}</span>
                 </div>
                 {group.hits.map((hit) => (
-                  <Row key={resourceKey(hit.item)} hit={hit} state={state} actions={actions} id={optionId(resourceKey(hit.item))} />
+                  <Row key={resourceKey(hit.item)} hit={hit} peers={group.hits} state={state} actions={actions} id={optionId(resourceKey(hit.item))} />
                 ))}
               </div>
             ))}
@@ -416,7 +420,7 @@ function Results({
   );
 }
 
-function Row({ hit, state, actions, id }: { hit: SearchHit; state: LinkDialogState; actions: LinkDialogActions; id: string }) {
+function Row({ hit, peers, state, actions, id }: { hit: SearchHit; peers: readonly SearchHit[]; state: LinkDialogState; actions: LinkDialogActions; id: string }) {
   const key = resourceKey(hit.item);
   const selected = key === state.selected;
   const title = titleOf(hit);
@@ -461,7 +465,8 @@ function Row({ hit, state, actions, id }: { hit: SearchHit; state: LinkDialogSta
       <ItemGlyph item={hit.item} />
       <div className="min-w-0 flex-1">
         <div className="truncate text-body" title={title}>{title}</div>
-        <div className="truncate text-caption text-text-tertiary" title={hit.item.key}>{hit.item.key}</div>
+        {/* Its group's heading already names the repository or team. */}
+        <div className="truncate text-caption text-text-tertiary" title={hit.item.key}>{shortKey(hit.item, peers.map((peer) => peer.item))}</div>
       </div>
       {end ? <div className="flex max-w-[45%] shrink-0 items-center">{end}</div> : null}
     </div>
@@ -506,9 +511,13 @@ function Preview({
           </span>
         </div>
         {"body" in item ? (
-          <p className={cn("line-clamp-8 text-body whitespace-pre-line wrap-anywhere", !body && "text-text-tertiary")}>
-            {body || "No description"}
-          </p>
+          body ? (
+            <div className={cn(LINK_PROSE, "max-h-40 overflow-hidden [mask-image:linear-gradient(to_bottom,black_75%,transparent)]")}>
+              <Markdown text={body} />
+            </div>
+          ) : (
+            <p className="text-body text-text-tertiary">No description</p>
+          )
         ) : null}
         {others.length ? (
           <div className="rounded-lg bg-surface-sunken p-3">

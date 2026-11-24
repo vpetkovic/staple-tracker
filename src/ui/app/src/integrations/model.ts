@@ -17,6 +17,8 @@ export interface SearchFailure {
   targetKeys: string[];
   state: ConnectionState;
   message: string;
+  /** What the person does next, in the same words Settings shows; absent from older servers. */
+  action?: string | null;
 }
 /** The `search` answer. `local` (Staple's own tasks) is still sent; the link dialog ignores it. */
 export interface MixedResults {
