@@ -3,7 +3,7 @@
  * Regenerate with: npx tsx scripts/regen-migration-snapshots.ts
  *
  * The `sqlite_master` dump of a workspace database that walked migrations
- * 001, 002, 003, 004, 005, 006, 007, 008, 009, 010, 011, 012, 013, 014, 015, 016, 017, 018, 019, 020, 021. Executed verbatim by the runner when — and only when —
+ * 001, 002, 003, 004, 005, 006, 007, 008, 009, 010, 011, 012, 013, 014, 015, 016, 017, 018, 019, 020, 021, 022. Executed verbatim by the runner when — and only when —
  * version detection proved the file has no tables at all.
  *
  * No `IF NOT EXISTS` anywhere, deliberately: reaching this text with tables
@@ -463,4 +463,38 @@ CREATE TABLE plan_members (
       );
 
 CREATE INDEX plan_members_milestone_idx ON plan_members(milestone_id, position);
+
+CREATE TABLE external_resources (
+        id TEXT PRIMARY KEY,
+        provider_id TEXT NOT NULL,
+        host TEXT NOT NULL,
+        scope_id TEXT NOT NULL,
+        container_id TEXT NOT NULL,
+        remote_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('issue', 'pull_request')),
+        display_key TEXT NOT NULL,
+        url TEXT NOT NULL,
+        title TEXT,
+        body TEXT,
+        status_json TEXT,
+        fetched_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (provider_id, host, scope_id, container_id, kind, remote_id)
+      );
+
+CREATE TABLE external_links (
+        id TEXT PRIMARY KEY,
+        issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+        resource_id TEXT NOT NULL REFERENCES external_resources(id),
+        parent_resource_id TEXT REFERENCES external_resources(id),
+        position INTEGER NOT NULL DEFAULT 0 CHECK (position >= 0),
+        created_by TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (issue_id, resource_id),
+        CHECK (parent_resource_id IS NULL OR parent_resource_id <> resource_id)
+      );
+
+CREATE INDEX external_links_resource_idx ON external_links(resource_id);
 `;

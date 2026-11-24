@@ -97,6 +97,7 @@ import {
 import { MILESTONE_KIND, MILESTONE_MEMBERSHIP, assertNotReservedActor, isGoalRunGate } from "./milestones.js";
 import { IDEA_KIND, PLAN_KINDS_MISSING_MESSAGE, PLAN_KINDS, assertPlanParent, assertPlanRekind, displayRef, draftIdentifier, isPlanKind, planKindRefusal, steeringRefusal } from "./plan.js";
 import { PlanStore } from "./plan-store.js";
+import { ExternalLinkStore } from "./integrations/link-store.js";
 import { LISTED_HORIZON } from "./plan-members.js";
 import { fallbackTarget, recordRemovalTarget } from "./vocabulary-targets.js";
 import { ProjectStore } from "./project-store.js";
@@ -908,6 +909,8 @@ export interface TimingQualityQuery extends PageRequest {
 }
 
 export class WorkspaceStore {
+  externalLinks(): ExternalLinkStore { return new ExternalLinkStore(this); }
+
   constructor(
     readonly db: DatabaseSync,
     readonly slug: string,
