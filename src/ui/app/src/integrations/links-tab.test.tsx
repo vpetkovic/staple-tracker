@@ -127,15 +127,19 @@ const eight = [link(1, { kind: "issue" }), link(2, { kind: "issue" }), ...[3, 4,
 describe("External links tab", () => {
   it("offers a three-way filter with counts that drives which links show", () => {
     const html = view({ links: eight });
-    expect(html).toMatch(/<button[^>]*aria-pressed="true"[^>]*>All<span[^>]*>8<\/span><\/button>/);
-    expect(html).toMatch(/<button[^>]*aria-pressed="false"[^>]*>Issues<span[^>]*>2<\/span><\/button>/);
-    expect(html).toMatch(/<button[^>]*aria-pressed="false"[^>]*>Pull requests<span[^>]*>6<\/span><\/button>/);
+    expect(html).toMatch(/<button[^>]*aria-pressed="true"[^>]*aria-label="All, 8"/);
+    expect(html).toMatch(/<button[^>]*aria-pressed="false"[^>]*aria-label="Issues, 2"/);
+    expect(html).toMatch(/<button[^>]*aria-pressed="false"[^>]*aria-label="Pull requests, 6"/);
+    // The filter is as wide as its words, never a second tab strip across the panel.
+    const filter = /<div[^>]*role="group"[^>]*aria-label="Show"[^>]*>/.exec(html)![0];
+    expect(filter).not.toMatch(/\bw-full\b/);
+    expect(filter).not.toMatch(/\bflex-1\b/);
 
     const split = [link(1, { kind: "issue", repo: "acme/docs" }), link(2, { repo: "acme/api" })];
     const issues = view({ links: split, section: "issue" });
     expect(issues).toContain("acme/docs");
     expect(issues).not.toContain("acme/api");
-    expect(issues).toMatch(/aria-pressed="true"[^>]*>Issues/);
+    expect(issues).toMatch(/aria-pressed="true"[^>]*aria-label="Issues, 1"/);
   });
 
   it("names groups for the repository or team, with no UUID or numeric id on screen", () => {
@@ -218,10 +222,14 @@ describe("External links tab", () => {
 
   it("dates the toolbar by the oldest refreshable saved copy and offers Refresh all and Link", () => {
     const html = view({ links: [link(1), link(2, { fetchedAt: "2026-11-24T11:00:00Z" })] });
-    expect(html).toContain("Refreshed 1 hr ago");
-    expect(html).toContain('aria-label="Refresh all"');
+    // One control says when the copies were read and reads them again: the age is the button's own text.
+    expect(html).toMatch(/<button[^>]*aria-label="Refresh all\. Refreshed 1 hr ago"[^>]*>(?:(?!<\/button>).)*Refreshed 1 hr ago(?:(?!<\/button>).)*<\/button>/);
     expect(html).toMatch(/<button[^>]*>.*Link<\/button>/);
-    expect(view({ links: [link(1, { fetchedAt: null })] })).not.toContain("Refreshed");
+    const unread = view({ links: [link(1, { fetchedAt: null })] });
+    expect(unread).not.toContain("Refreshed");
+    expect(unread).toContain('aria-label="Refresh all"');
+    const running = view({ links: [link(1)], refreshAll: { running: true, error: null, run: () => {} } });
+    expect(running).toContain("Refreshing…");
     const failed = view({ links: [link(1)], refreshAll: { running: false, error: "2 of 8 could not be refreshed: gone", run: () => {} } });
     expect(failed).toContain("2 of 8 could not be refreshed: gone");
   });

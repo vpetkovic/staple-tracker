@@ -26,6 +26,11 @@ export interface TabProps {
   onAuthError: (error: AuthError) => void;
   /** Call after any write so the page reflects it without waiting for the next poll. */
   refresh: () => void;
+  /**
+   * Call just before a change that may make this tab shorter (a filter, a collapsed section):
+   * the scroll then stays where the reader has it instead of being pulled up (tab-scroll.ts).
+   */
+  holdScroll?: () => void;
 }
 
 export interface TabDefinition {

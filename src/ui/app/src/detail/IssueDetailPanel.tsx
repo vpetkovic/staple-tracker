@@ -866,6 +866,15 @@ function DetailTabs({
     if (keep > 0 && scroller && panels) setReserve(reserveFor(keep, panelGeometry(scroller, panels)));
     setTab(next);
   }, []);
+  /** The same reserve, for a tab that is about to get shorter without the tab changing: the scroll stays put. */
+  const holdScroll = useCallback(() => {
+    const sentinel = sentinelRef.current;
+    const panels = panelsRef.current;
+    const scroller = sentinel ? scrollerOf(sentinel) : null;
+    if (!scroller || !panels || scroller.scrollTop <= 0) return;
+    anchorRef.current = { kind: "at", scrollTop: scroller.scrollTop };
+    setReserve(reserveFor(scroller.scrollTop, panelGeometry(scroller, panels)));
+  }, []);
   /**
    * A tab asking to hand the reader to another tab (Details' worklog "Show all" lands on
    * Documents). This file subscribes to a verb and sets its own state; see
@@ -901,7 +910,7 @@ function DetailTabs({
           const Tab = definition.component;
           return (
             <TabsContent key={definition.id} value={definition.id} className="pt-5">
-              <Tab detail={detail} workspace={detail.workspace} onAuthError={onAuthError} refresh={refresh} />
+              <Tab detail={detail} workspace={detail.workspace} onAuthError={onAuthError} refresh={refresh} holdScroll={holdScroll} />
             </TabsContent>
           );
         })}

@@ -26,7 +26,7 @@ import { cn } from "@/lib/utils";
 import type { Issue } from "@/lib/types";
 import type { ConnectionView } from "../connection-status";
 import { providerName, shortKey } from "../link-state";
-import { ConnectionDot, ItemGlyph, LINK_PROSE, LinkStatePill, ProviderMark } from "../parts";
+import { ConnectionDot, ItemGlyph, KindSegments, LINK_PROSE, LinkStatePill, ProviderMark } from "../parts";
 import { resourceKey, type MappingTarget, type SearchFailure, type SearchHit, type SearchScope } from "../model";
 import type { KindFilter } from "./last-kind";
 import { failureLine, freshnessLine, linkTag, scopeLabel, scopeNote, sourceName, type ResultGroup } from "./logic";
@@ -98,11 +98,6 @@ export interface LinkDialogActions {
   onTarget: (identifier: string) => void;
 }
 
-const KINDS: Array<{ value: KindFilter; label: string }> = [
-  { value: "all", label: "All" },
-  { value: "issue", label: "Issues" },
-  { value: "pull_request", label: "Pull requests" },
-];
 const EVERYTHING = "__everything__";
 const KEY = "inline-flex h-5 min-w-5 items-center justify-center rounded-md border bg-surface-raised px-1 font-sans text-caption text-text-secondary";
 
@@ -185,19 +180,7 @@ export function LinkDialogView({
       </div>
 
       <div className={cn("flex shrink-0 items-center gap-2 border-b px-3 py-2 md:px-4", onPreview && "hidden @min-[720px]:flex")}>
-        <div role="group" aria-label="Show" className="inline-flex h-7 shrink-0 rounded-md border p-px pointer-coarse:h-11">
-          {KINDS.map((k) => (
-            <button
-              key={k.value}
-              type="button"
-              aria-pressed={state.kind === k.value}
-              onClick={() => actions.onKind(k.value)}
-              className="focus-ring-inset rounded-[5px] px-2 text-label whitespace-nowrap text-muted-foreground hover:text-foreground aria-pressed:bg-surface-selected aria-pressed:font-medium aria-pressed:text-foreground pointer-coarse:min-w-11 pointer-coarse:px-3"
-            >
-              {k.label}
-            </button>
-          ))}
-        </div>
+        <KindSegments value={state.kind} onChange={actions.onKind} />
         <ScopeMenu state={state} actions={actions} />
         {state.connections.length ? (
           <div className="ml-auto hidden shrink-0 items-center gap-3 md:flex" data-connections="">

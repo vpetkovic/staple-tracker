@@ -15,6 +15,7 @@ import { useNow } from "@/detail/parts/RelativeTime";
 import { InlineError } from "@/settings/form/primitives";
 import type { ConnectionView } from "@/integrations/connection-status";
 import { savedAge } from "@/integrations/link-state";
+import { KindSegments } from "@/integrations/parts";
 import { LinkGroups, LinkSkeleton, type WriteLink } from "@/integrations/LinkList";
 import {
   connectionNotices,
@@ -30,7 +31,7 @@ import type { TabProps } from "./registry";
 
 const message = (caught: unknown) => (caught instanceof Error ? caught.message : String(caught));
 
-export function ExternalLinksTab({ detail, workspace, refresh, onAuthError }: TabProps) {
+export function ExternalLinksTab({ detail, workspace, refresh, onAuthError, holdScroll }: TabProps) {
   const session = useOptionalSession();
   const [section, setSection] = useState<ExternalSection>(() => takeExternalSection() ?? "all");
   useEffect(() => onExternalSection(setSection), []);
@@ -78,7 +79,11 @@ export function ExternalLinksTab({ detail, workspace, refresh, onAuthError }: Ta
       loadError={resource.error?.message ?? null}
       connections={loaded ? connections : null}
       section={section}
-      onSection={setSection}
+      onSection={(next) => {
+        // A shorter list must not pull the reader up the page.
+        holdScroll?.();
+        setSection(next);
+      }}
       onLink={() => openLinkExternal({ workspace, ref: detail.issue.id })}
       onOpenSettings={() => openSettings({ section: "integrations", workspace })}
       onWrite={write}
@@ -103,12 +108,6 @@ export interface ExternalLinksViewProps {
   refreshAll: { running: boolean; error: string | null; run: () => void };
   now: number;
 }
-
-const FILTERS: Array<{ id: ExternalSection; label: string }> = [
-  { id: "all", label: "All" },
-  { id: "issue", label: "Issues" },
-  { id: "pull_request", label: "Pull requests" },
-];
 
 export function ExternalLinksView({
   links,
@@ -145,44 +144,25 @@ export function ExternalLinksView({
 
   return (
     <div data-external-links className="@container min-w-0 space-y-3" aria-busy={refreshAll.running}>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <div
-          role="group"
-          aria-label="Show"
-          className="flex h-7 w-full rounded-md border p-0.5 pointer-coarse:h-auto @min-[520px]:w-auto"
-        >
-          {FILTERS.map((filter) => (
-            <button
-              key={filter.id}
-              type="button"
-              aria-pressed={section === filter.id}
-              onClick={() => onSection(filter.id)}
-              className={cn(
-                "focus-ring inline-flex flex-1 items-center justify-center gap-1.5 rounded-[4px] px-2.5 text-label whitespace-nowrap @min-[520px]:flex-none",
-                section === filter.id
-                  ? "bg-surface-selected font-medium text-foreground"
-                  : "text-muted-foreground hover:bg-surface-hover hover:text-foreground",
-              )}
-            >
-              {filter.label}<span className="font-normal text-text-tertiary tabular-nums">{counts[filter.id]}</span>
-            </button>
-          ))}
-        </div>
-        <div className="ml-auto flex items-center gap-1.5">
-          {refreshed ? (
-            <span className="pr-1 text-label whitespace-nowrap text-text-tertiary">Refreshed {refreshed}</span>
-          ) : null}
+      {/* One row: the filter at its own width on the left, the two actions on the right. It wraps only under about 330px. */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-2">
+        <KindSegments value={section} onChange={onSection} counts={counts} />
+        <div className="ml-auto flex items-center gap-1">
+          {/* The age of the copies and the way to read them again are one control. Narrow, it is the icon alone. */}
           <Button
             type="button"
             variant="ghost"
-            size="icon"
-            aria-label="Refresh all"
+            size="xs"
+            aria-label={refreshed ? `Refresh all. Refreshed ${refreshed}` : "Refresh all"}
             title="Refresh all"
             disabled={!canRefresh || refreshAll.running}
             onClick={refreshAll.run}
-            className="size-7 text-muted-foreground pointer-coarse:size-11"
+            className="h-7 gap-1.5 px-2 font-normal text-muted-foreground pointer-coarse:h-11 pointer-coarse:min-w-11"
           >
             <RefreshCw aria-hidden className={cn("size-3.5", refreshAll.running && "animate-spin")} />
+            {refreshAll.running || refreshed ? (
+              <span className="whitespace-nowrap @max-[519px]:hidden">{refreshAll.running ? "Refreshing…" : `Refreshed ${refreshed}`}</span>
+            ) : null}
           </Button>
           <LinkButton onClick={onLink} />
         </div>

@@ -120,6 +120,57 @@ export function ProviderMark({ providerId, className }: { providerId: string; cl
   );
 }
 
+export type KindChoice = "all" | "issue" | "pull_request";
+const KIND_CHOICES: Array<{ value: KindChoice; label: string; short?: string }> = [
+  { value: "all", label: "All" },
+  { value: "issue", label: "Issues" },
+  { value: "pull_request", label: "Pull requests", short: "PRs" },
+];
+
+/**
+ * All / Issues / Pull requests: the one filter the link dialog and the External links tab
+ * share. As wide as its words and no taller than a button, so it reads as a filter beside the
+ * actions and not as a second tab strip. In a container under 420px "Pull requests" is "PRs"
+ * (the full words stay the control's name), which keeps the filter and its neighbours on one row.
+ */
+export function KindSegments({
+  value,
+  onChange,
+  counts,
+  className,
+}: {
+  value: KindChoice;
+  onChange: (value: KindChoice) => void;
+  counts?: Record<KindChoice, number>;
+  className?: string;
+}) {
+  return (
+    <div role="group" aria-label="Show" className={cn("inline-flex h-7 shrink-0 rounded-md border p-px pointer-coarse:h-11", className)}>
+      {KIND_CHOICES.map((choice) => (
+        <button
+          key={choice.value}
+          type="button"
+          aria-pressed={value === choice.value}
+          aria-label={counts ? `${choice.label}, ${counts[choice.value]}` : choice.label}
+          onClick={() => onChange(choice.value)}
+          // On touch the segment fills the 44px box less its border; the 2px either side are added back as hit area.
+          className="focus-ring-inset relative inline-flex items-center gap-1.5 rounded-[5px] px-2 text-label whitespace-nowrap text-muted-foreground hover:text-foreground aria-pressed:bg-surface-selected aria-pressed:font-medium aria-pressed:text-foreground pointer-coarse:min-h-0 pointer-coarse:min-w-11 pointer-coarse:justify-center pointer-coarse:px-3 pointer-coarse:before:absolute pointer-coarse:before:inset-x-0 pointer-coarse:before:-inset-y-0.5 pointer-coarse:before:content-['']"
+        >
+          {choice.short ? (
+            <>
+              <span className="@max-[419px]:hidden">{choice.label}</span>
+              <span className="hidden @max-[419px]:inline">{choice.short}</span>
+            </>
+          ) : (
+            choice.label
+          )}
+          {counts ? <span className="font-normal text-text-tertiary tabular-nums">{counts[choice.value]}</span> : null}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /**
  * A provider's description, read as markdown but held to the surrounding body size: its
  * headings are a medium-weight line, not a new level of hierarchy.
