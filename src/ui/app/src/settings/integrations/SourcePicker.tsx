@@ -118,8 +118,14 @@ function PickerBody({ workspace, targets, connections, onChange }: {
     }
   };
 
+  // cmdk highlights nothing when results arrive after it mounted; keep the first result
+  // highlighted until the person moves, so Enter works straight after typing.
+  const firstKey = readable.flatMap((c) => kindsOf(c.providerId).flatMap((kind) => slots[slotKey(c.id, kind)]?.items ?? []))[0]?.key ?? "";
+  const [active, setActive] = useState("");
+  useEffect(() => setActive(firstKey), [firstKey]);
+
   return (
-    <Command shouldFilter={false} loop className="min-h-0 flex-1 rounded-lg">
+    <Command shouldFilter={false} loop value={active} onValueChange={setActive} className="min-h-0 flex-1 rounded-lg">
       <CommandInput autoFocus value={text} onValueChange={setText} placeholder="Find a repository, team or project" className="pointer-coarse:h-11 pointer-coarse:text-base" />
       {writeError ? (
         <div className="border-b px-3 py-2">
