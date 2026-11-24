@@ -38,7 +38,7 @@ export function commandIn(action: string | null): string | null {
 /** The one secondary line under a connection's provider name. Never an id. */
 export function connectionMeta(connection: ConnectionView): string {
   if (connection.providerId === "linear")
-    return [connection.health?.identity?.login ?? "Linear account", `API key in ${connection.credentialEnv}`].join(" · ");
+    return [connection.health?.identity?.login ?? "Linear account", connection.health?.identity?.organization, `API key in ${connection.credentialEnv}`].filter(Boolean).join(" · ");
   return [connection.account, connection.host === "github.com" ? null : connection.host, "through GitHub CLI"].filter(Boolean).join(" · ");
 }
 

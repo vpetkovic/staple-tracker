@@ -50,7 +50,9 @@ export function SourcePicker({ workspace, targets, connections, onChange }: {
 type Slot = PickerPage & { loading: boolean; error: string | null };
 const kindsOf = (providerId: string): ContainerKind[] => (providerId === "linear" ? ["team", "project"] : ["repository"]);
 const groupName = (c: ConnectionView) =>
-  c.providerId === "linear" ? (c.health?.identity?.login ?? "Linear") : c.host === "github.com" ? c.account : `${c.account} · ${c.host}`;
+  c.providerId === "linear"
+    ? (c.health?.identity?.organization ?? c.health?.identity?.login ?? "Linear")
+    : c.host === "github.com" ? c.account : `${c.account} · ${c.host}`;
 
 function PickerBody({ workspace, targets, connections, onChange }: {
   workspace: string;

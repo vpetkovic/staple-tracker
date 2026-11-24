@@ -62,6 +62,7 @@ describe("connectionMeta", () => {
   it("names a Linear account by its login, never by its UUID", () => {
     expect(connectionMeta(linear())).toBe("Linear account · API key in STAPLE_LINEAR_API_KEY");
     expect(connectionMeta(linear({ health: health("ready", { identity: { login: "Ada" } }) }))).toBe("Ada · API key in STAPLE_LINEAR_API_KEY");
+    expect(connectionMeta(linear({ health: health("ready", { identity: { login: "Ada", organization: "Acme" } }) }))).toBe("Ada · Acme · API key in STAPLE_LINEAR_API_KEY");
     expect(connectionMeta(linear())).not.toMatch(/[0-9a-f]{8}-/);
   });
 });
