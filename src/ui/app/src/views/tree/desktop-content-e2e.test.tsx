@@ -254,7 +254,7 @@ describe("nothing moves when the actions appear", () => {
   it("lays the actions inside a trailing slot as wide as they are, on no ground of their own", () => {
     const trail = rule(".staple-row-trail");
     expect(trail).toMatch(/position:\s*relative/);
-    expect(trail).toMatch(/(?:^|;)\s*width:\s*var\(--desk-trail-w\)/);
+    expect(trail).toMatch(/min-width:\s*var\(--desk-trail-w\)/);
     const quick = rule(".staple-row-quick");
     expect(quick).toMatch(/position:\s*absolute/);
     expect(quick).toMatch(/inset:\s*0/);
@@ -266,7 +266,7 @@ describe("nothing moves when the actions appear", () => {
   it("makes the slot hold all three actions from 1280px and two below it", () => {
     // 3 × 24px buttons + 2 × 2px gaps = 76px; 2 × 24px + 2px = 50px. Both slots leave room.
     expect(rule(".staple-row[data-desk]")).toMatch(/--desk-trail-w:\s*84px/);
-    const narrow = DESK_CSS.slice(DESK_CSS.indexOf("@media (max-width: 1279.98px)"));
+    const narrow = DESK_CSS.slice(DESK_CSS.indexOf("@media (max-width: 1279.98px) and (hover: hover)"));
     expect(narrow).toMatch(/--desk-trail-w:\s*56px/);
     expect(narrow).toMatch(/\.staple-row-quick-btn\[data-quick="open"\]\s*\{\s*display:\s*none/);
   });

@@ -40,12 +40,15 @@ export function PropertyList({ layout, children, className }: { layout: Property
   );
 }
 
-/** One label → value row. `span` takes the full width of the drawer grid (labels). */
-export function PropertyRow({ label, span, children, id, right }: { label: string; span?: boolean; children: ReactNode; id?: string; right?: boolean }) {
+/**
+ * One label → value row. `span` takes the full width of the drawer grid: the rows whose values
+ * run long (links, labels) come after the paired facts, so neither column is left with a hole.
+ */
+export function PropertyRow({ label, span, children, id }: { label: string; span?: boolean; children: ReactNode; id?: string }) {
   return (
     <div
       data-property={id ?? label.toLowerCase()}
-      className={cn("grid min-h-8 grid-cols-[6.5rem_minmax(0,1fr)] items-start gap-x-3 py-0.5 pointer-coarse:min-h-11", span && "@lg:col-span-2", right && "@lg:col-start-2")}
+      className={cn("grid min-h-8 grid-cols-[6.5rem_minmax(0,1fr)] items-start gap-x-3 py-0.5 pointer-coarse:min-h-11", span && "@lg:col-span-2")}
     >
       <dt className="truncate text-label leading-8 text-text-secondary pointer-coarse:leading-10">{label}</dt>
       <dd className="m-0 flex min-h-8 min-w-0 flex-wrap items-center text-body text-foreground pointer-coarse:min-h-10">{children}</dd>

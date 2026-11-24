@@ -1,11 +1,12 @@
 import { requestExternalSection } from "./external-section";
-import { useEffect, useRef, useState } from "react";
-import { CircleDot, GitPullRequest } from "lucide-react";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useOptionalSession } from "@/lib/session";
 import { openTabOnArrival, openDetailTab } from "@/detail/tabs/registry";
 import type { ExternalRowSummary } from "../../../../core/integrations/link-store";
+import { leadingTone } from "./link-state";
+import { LinkGlyph } from "./parts";
+import { LinkHoverCard, LinkListCard, previewTones } from "./LinkHoverCard";
 
+/** A task row's linked issues and pull requests: a glyph and a count each, the list on hover, focus or tap. */
 export function ExternalLinkBadges({
   summary,
   workspace,
@@ -17,27 +18,16 @@ export function ExternalLinkBadges({
   issueId: string;
   issueRef?: string;
 }) {
-  if (!summary) return null;
+  if (!summary || (!summary.issues.count && !summary.pullRequests.count)) return null;
   return (
-    <span className="inline-flex shrink-0 items-center gap-1" data-external-link-badges>
-      <QuickList
-        group={summary.issues}
-        kind="issues"
-        workspace={workspace}
-        issueId={issueId}
-        issueRef={issueRef}
-      />
-      <QuickList
-        group={summary.pullRequests}
-        kind="pull requests"
-        workspace={workspace}
-        issueId={issueId}
-        issueRef={issueRef}
-      />
+    <span className="inline-flex shrink-0 items-center gap-0.5" data-external-link-badges>
+      <Badge group={summary.issues} kind="issue" workspace={workspace} issueId={issueId} issueRef={issueRef} />
+      <Badge group={summary.pullRequests} kind="pull_request" workspace={workspace} issueId={issueId} issueRef={issueRef} />
     </span>
   );
 }
-function QuickList({
+
+function Badge({
   group,
   kind,
   workspace,
@@ -45,127 +35,47 @@ function QuickList({
   issueRef,
 }: {
   group: ExternalRowSummary["issues"];
-  kind: "issues" | "pull requests";
+  kind: "issue" | "pull_request";
   workspace: string;
   issueId: string;
   issueRef?: string;
 }) {
-  const [open, setOpen] = useState(false);
   const session = useOptionalSession();
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const content = useRef<HTMLDivElement>(null);
-  const trigger = useRef<HTMLButtonElement>(null);
-  useEffect(() => () => clearTimeout(timer.current), []);
   if (!group.count) return null;
-  const label = `${group.count} linked ${kind}`;
-  const enter = () => {
-    clearTimeout(timer.current);
-    setOpen(true);
+  const label = `${group.count} linked ${kind === "issue" ? "issue" : "pull request"}${group.count === 1 ? "" : "s"}`;
+  const showAll = () => {
+    requestExternalSection(kind);
+    if (
+      session?.selection?.workspace === workspace &&
+      (session.selection.id === issueId || session.selection.ref === issueId)
+    )
+      openDetailTab("external-links");
+    else {
+      openTabOnArrival(issueRef ?? issueId, "external-links");
+      session?.open(workspace, issueId);
+    }
   };
-  const leave = () => {
-    clearTimeout(timer.current);
-    timer.current = setTimeout(() => {
-      if (
-        !content.current?.contains(document.activeElement) &&
-        document.activeElement !== trigger.current
-      )
-        setOpen(false);
-    }, 180);
-  };
-  const Icon = kind === "issues" ? CircleDot : GitPullRequest;
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          ref={trigger}
-          type="button"
-          aria-label={label}
-          className="focus-ring inline-flex h-7 items-center gap-1 rounded px-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground pointer-coarse:min-h-9"
-          onPointerEnter={(e) => {
-            if (e.pointerType === "mouse") enter();
+    <LinkHoverCard
+      aria-label={label}
+      cardLabel={label}
+      align="end"
+      data-link-badge={kind}
+      className="staple-link-badge focus-ring relative inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-label tabular-nums text-text-tertiary hover:bg-[var(--surface-selected)] hover:text-foreground focus-visible:bg-[var(--surface-selected)] data-[state=open]:bg-[var(--surface-selected)] data-[state=open]:text-foreground pointer-coarse:after:absolute pointer-coarse:after:inset-x-0 pointer-coarse:after:-inset-y-2.5 pointer-coarse:after:content-['']"
+      card={(close) => (
+        <LinkListCard
+          kind={kind}
+          count={group.count}
+          items={group.items}
+          onShowAll={() => {
+            close();
+            showAll();
           }}
-          onPointerLeave={leave}
-          onFocus={enter}
-          onBlur={leave}
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            enter();
-          }}
-          onPointerDown={(e) => e.stopPropagation()}
-          onKeyDown={(e) => {
-            e.stopPropagation();
-            if (e.key === "ArrowDown") {
-              e.preventDefault();
-              enter();
-              requestAnimationFrame(() =>
-                content.current?.querySelector<HTMLAnchorElement>("a")?.focus(),
-              );
-            }
-          }}
-        >
-          <Icon className="size-3.5" aria-hidden />
-          <span>{group.count}</span>
-        </button>
-      </PopoverTrigger>
-      <PopoverContent
-        ref={content}
-        aria-label={`Linked ${kind}`}
-        align="end"
-        className="w-80 max-w-[calc(100vw-1rem)] p-3"
-        onOpenAutoFocus={(e) => e.preventDefault()}
-        onCloseAutoFocus={(e) => e.preventDefault()}
-        onPointerEnter={() => clearTimeout(timer.current)}
-        onPointerLeave={leave}
-        onFocusCapture={() => clearTimeout(timer.current)}
-        onBlurCapture={leave}
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => e.stopPropagation()}
-      >
-        <p className="text-sm font-medium mb-2">{label}</p>
-        <ul className="space-y-2 max-h-64 overflow-y-auto">
-          {group.items.map((item) => (
-            <li key={item.id} className="text-xs min-w-0">
-              <span className="block text-muted-foreground truncate">
-                {item.providerId} · {item.host} · repository {item.containerId}
-              </span>
-              <a
-                href={item.url}
-                target="_blank"
-                rel="noreferrer"
-                className="block wrap-anywhere hover:underline focus:underline"
-              >
-                {item.key}
-                {item.title ? ` · ${item.title}` : ""}
-              </a>
-            </li>
-          ))}
-        </ul>
-        {group.count > group.items.length ? (
-          <p className="mt-2 text-xs text-muted-foreground">
-            +{group.count - group.items.length} more
-          </p>
-        ) : null}
-        <button
-          type="button"
-          className="mt-3 text-xs underline"
-          onClick={() => {
-            setOpen(false);
-            requestExternalSection(kind === "issues" ? "issue" : "pull_request");
-            if (
-              session?.selection?.workspace === workspace &&
-              (session.selection.id === issueId || session.selection.ref === issueId)
-            )
-              openDetailTab("external-links");
-            else {
-              openTabOnArrival(issueRef ?? issueId, "external-links");
-              session?.open(workspace, issueId);
-            }
-          }}
-        >
-          View all in External links
-        </button>
-      </PopoverContent>
-    </Popover>
+        />
+      )}
+    >
+      <LinkGlyph kind={kind} tone={leadingTone(previewTones(group.items, kind))} className="size-3.5" />
+      <span>{group.count}</span>
+    </LinkHoverCard>
   );
 }
