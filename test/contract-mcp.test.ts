@@ -311,7 +311,7 @@ describe("tool inventory", () => {
   // The ticket card added show_ticket: 70 -> 71. The progress view added show_progress: 71 -> 72.
   // The queue view added show_queue: 72 -> 73. A person's click in a view added the app-only
   // approve_gate_from_view and request_changes_from_view: 73 -> 75.
-  it("exposes exactly these 84 tools with these annotations and output schemas", async () => {
+  it("exposes exactly these 87 tools with these annotations and output schemas", async () => {
     const tools = await harness.listTools();
     const inventory = tools.map((t) => ({
       name: t.name,
@@ -319,6 +319,9 @@ describe("tool inventory", () => {
       hasOutputSchema: Boolean(t.outputSchema),
     }));
     expect(inventory).toEqual([
+      { name: "integration_read", annotations: { title: "Read integrations", readOnlyHint: true, idempotentHint: true, openWorldHint: true }, hasOutputSchema: true },
+      { name: "integration_write", annotations: { title: "Update external links", readOnlyHint: false, destructiveHint: false, openWorldHint: true }, hasOutputSchema: true },
+      { name: "configure_integration", annotations: { title: "Configure integration", readOnlyHint: false, destructiveHint: false, openWorldHint: false }, hasOutputSchema: true },
       {
         name: "inbox",
         annotations: { title: "Inbox: ready work", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
@@ -1093,6 +1096,7 @@ describe("tool inventory", () => {
     const tools = await harness.listTools();
     const readOnly = tools.filter((t) => t.annotations?.readOnlyHint === true).map((t) => t.name);
     expect(readOnly).toEqual([
+      "integration_read",
       "inbox",
       "list_tasks",
       "get_task",
@@ -1152,7 +1156,7 @@ describe("tool inventory", () => {
   it("never marks a read tool destructive and never omits openWorldHint", async () => {
     const tools = await harness.listTools();
     for (const tool of tools) {
-      expect(tool.annotations?.openWorldHint, tool.name).toBe(false);
+      expect(tool.annotations?.openWorldHint, tool.name).toBe(["integration_read", "integration_write"].includes(tool.name));
       if (tool.annotations?.readOnlyHint === true) {
         expect(tool.annotations?.destructiveHint, tool.name).toBeUndefined();
       }
@@ -1906,6 +1910,8 @@ describe("tool response shapes (31/31)", () => {
   it("covers every registered tool exactly once", async () => {
     const tools = (await harness.listTools()).map((t) => t.name);
     const covered = new Set([
+      // Shared integration behavior is pinned in integration-operations.test.ts.
+      "integration_read", "integration_write", "configure_integration",
       "init",
       "compare_plans",
       // Pinned in test/timing-quality-surfaces.test.ts, value for value against

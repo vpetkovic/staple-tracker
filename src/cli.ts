@@ -34,6 +34,7 @@ import { runCalibrateCommand } from "./commands/calibrate.js";
 import { runForecastCommand } from "./commands/forecast.js";
 import type { AttemptOptions } from "./core/telemetry/attempts.js";
 import { runCloudCommand } from "./commands/cloud.js";
+import { runIntegrationsCommand } from "./commands/integrations.js";
 import { runFileCommand } from "./commands/file.js";
 import { runHubRegistryCommand } from "./commands/hub-registry.js";
 import { EXIT_CODES, exitCodeFor } from "./commands/exit-codes.js";
@@ -1210,6 +1211,9 @@ Autopilot runs
               (staple run drive --help)
 
 Documents & events
+  integrations <action>                connections, health, search, resolve, preview, link, create, unlink, refresh, stack, share
+              See staple integrations --help. Uses installed gh; no provider writes.
+
   file attach <ref> <path> [--caption C] [--filename N]
               attach a file; the type is sniffed from the bytes
   file ls <ref>                         list a ticket's files (metadata only)
@@ -1296,7 +1300,7 @@ Exit codes: 0 ok · 1 unknown · 2 validation · 3 not_found · 4 conflict
             19 rate_limited · 20 unavailable · 21 offline (19–21 are retryable; try again later)`;
 
 /** Commands whose own module answers `--help` / `-h` with a page of its own. */
-const OWN_HELP: ReadonlySet<string> = new Set(["attempt", "attempts", "budget", "calibrate", "cloud", "compare", "forecast", "queue", "run", "timing"]);
+const OWN_HELP: ReadonlySet<string> = new Set(["integrations","attempt", "attempts", "budget", "calibrate", "cloud", "compare", "forecast", "queue", "run", "timing"]);
 
 /**
  * `staple <command> --help` for a command with no page of its own: its entries in HELP (every
@@ -2454,6 +2458,9 @@ function main() {
       break;
     }
 
+    case "integrations":
+      return runIntegrationsCommand(rest);
+
     case "file":
       runFileCommand(rest);
       break;
@@ -2950,7 +2957,7 @@ function main() {
 }
 
 try {
-  main();
+  await main();
   sayRenumberNotices(jsonMode);
 } catch (error) {
   sayRenumberNotices(true);
