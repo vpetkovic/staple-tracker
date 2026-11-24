@@ -15,8 +15,8 @@ import { ItemGlyph, LinkGlyph } from "./parts";
 
 const MAX_CHIPS = 4;
 
-/** A 44px target on a finger, around a control drawn smaller. */
-const HIT = "relative pointer-coarse:before:absolute pointer-coarse:before:-inset-y-2.5 pointer-coarse:before:inset-x-0 pointer-coarse:before:content-['']";
+/** A 44px target on a finger, around a control drawn smaller (so it opts out of the base layer's 44px floor). */
+const HIT = "relative pointer-coarse:min-h-0 pointer-coarse:before:absolute pointer-coarse:before:-inset-y-2.5 pointer-coarse:before:inset-x-0 pointer-coarse:before:content-['']";
 
 export function ExternalPropertySummary({
   detail,

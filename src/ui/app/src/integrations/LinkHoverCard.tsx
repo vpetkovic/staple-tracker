@@ -168,7 +168,7 @@ export function LinkListCard({
               href={source.url}
               target="_blank"
               rel="noreferrer noopener"
-              className="focus-ring flex h-7 min-w-0 items-center gap-2 rounded-md px-1.5 text-label text-foreground hover:bg-[var(--surface-hover)] pointer-coarse:h-9"
+              className="focus-ring flex h-7 min-w-0 items-center gap-2 rounded-md px-1.5 text-label text-foreground hover:bg-[var(--surface-hover)] pointer-coarse:h-11"
             >
               <LinkGlyph kind={kind} tone={tones[index]!} className="size-3.5" />
               <span className="min-w-0 flex-1 truncate">{items[index]!.title || source.key}</span>
