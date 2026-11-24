@@ -543,6 +543,7 @@ export function PickerBody({
     },
     onTarget: (identifier) => {
       setTargetRef(rows.find((r) => r.issue.identifier === identifier)?.issue.id ?? identifier);
+      resetFor();
       focusField();
     },
   };

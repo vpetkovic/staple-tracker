@@ -1,10 +1,11 @@
 /**
  * The header's chip: the task a link lands on, and the picker that changes it. The list is the
  * searchable select's own (its filtering, its rows), opened from the chip instead of from a
- * field-shaped trigger. On All workspaces with no workspace known it asks for one first.
+ * field-shaped trigger. On All workspaces with no workspace known it asks for one first. A
+ * chosen task can be taken back off with the list's first row.
  */
 import { useEffect, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, CircleSlash } from "lucide-react";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { filterOptions, type SelectOption } from "@/components/ui/searchable-select";
@@ -24,6 +25,7 @@ export function TargetPicker({
   options: readonly SelectOption[];
   workspaceChoices: string[] | null;
   onWorkspace: (ws: string) => void;
+  /** The task's identifier, or "" for no task. */
   onChoose: (identifier: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -86,6 +88,23 @@ export function TargetPicker({
             <CommandInput value={query} onValueChange={setQuery} placeholder="Search tasks…" />
             <CommandList className="max-h-[min(20rem,50dvh)]">
               {matches.length === 0 ? <CommandEmpty>No task matches</CommandEmpty> : null}
+              {/* The way back to no task: the dialog can then browse, or create a task from an issue. */}
+              {target && !query.trim() ? (
+                <CommandGroup>
+                  <CommandItem
+                    value="__no_task__"
+                    onSelect={() => {
+                      onChoose("");
+                      setOpen(false);
+                    }}
+                    className="pointer-coarse:min-h-11"
+                  >
+                    <CircleSlash aria-hidden className="size-3.5 shrink-0 text-text-tertiary" />
+                    <span className="shrink-0 font-medium">No task</span>
+                    <span className="flex-1 truncate text-text-tertiary">Create a task from a result instead</span>
+                  </CommandItem>
+                </CommandGroup>
+              ) : null}
               <CommandGroup>
                 {matches.map((option) => (
                   <CommandItem
