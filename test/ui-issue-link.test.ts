@@ -193,7 +193,8 @@ describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
       await expect.poll(()=>page.getByText("Connected for read-only access",{exact:false}).count()).toBe(1);
       await page.getByRole("button",{name:"Find teams",exact:true}).click();
       await page.getByLabel("Repository or team to map to alpha",{exact:true}).selectOption({label:"Engineering (ENG)"});
-      await page.getByRole("button",{name:"Map",exact:true}).click();
+      // One row per workspace on this computer; map from alpha's row.
+      await page.getByLabel("Repository or team to map to alpha",{exact:true}).locator("xpath=following-sibling::button").click();
       await expect.poll(()=>page.getByRole("button",{name:"Unmap",exact:true}).count()).toBe(1);
       await page.getByLabel("Default container",{exact:true}).selectOption(`linear.app/${org}/${team}`);
       await page.getByRole("checkbox",{name:/Remember last-used selections/}).check();
