@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { initWorkspace } from "../src/core/workspace.js";
+import { LinearApiAdapter, type LinearApiConnection } from "../src/core/integrations/linear-api.js";
 import { IntegrationOperations } from "../src/core/integrations/operations.js";
 import type { ExternalItem, IntegrationAdapter } from "../src/core/integrations/contracts.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
@@ -29,6 +30,39 @@ function setup() {
 }
 
 describe("shared integration operations",()=>{
+  it("uses Linear UUID identity for shared linking, refresh, duplicate confirmation, local creation and private cache",async()=>{
+    const {ws,home,task}=setup();
+    const account="11111111-1111-4111-8111-111111111111",org="22222222-2222-4222-8222-222222222222",team="33333333-3333-4333-8333-333333333333",id="44444444-4444-4444-8444-444444444444";
+    let title="Remote Linear title",identifier="ENG-12",denied=false;
+    const api=vi.fn(async()=>Response.json(denied ? {errors:[{extensions:{code:"UNAUTHENTICATED"},message:"never exposed"}]} : {data:{viewer:{id:account},organization:{id:org,urlKey:"acme"},issue:{id,identifier,title,description:"Private source body",url:`https://linear.app/acme/issue/${identifier}/title`,state:{id:account,name:"Review"},team:{id:team,key:"ENG",name:"Engineering",organization:{id:org}}}}}));
+    const service=new IntegrationOperations(ws.store,{home,factories:new Map([["linear:api",c=>new LinearApiAdapter(c as LinearApiConnection,{fetch:api,credential:()=>"fixture-key"})]])});
+    await service.execute({action:"configure",providerId:"linear",connectionId:"linear",account,scopeId:org,credentialEnv:"STAPLE_LINEAR_API_KEY"});
+    const original=ws.store.getIssue(task.id);
+    await service.execute({action:"link",connectionId:"linear",key:"ENG-12",containerId:team,ref:task.id,confirmed:true,actor:"ada"});
+    const resource=ws.store.externalLinks().list(task.id)[0]!.resource;
+    expect(resource).toMatchObject({ref:{providerId:"linear",scopeId:org,containerId:team,id},contextShared:false,body:"Private source body"});
+    expect(ws.store.getIssue(task.id)).toEqual(original);
+    const github=ws.store.externalLinks().remember({...item,ref:{...item.ref,kind:"pull_request"}});
+    await service.execute({action:"link",resourceId:github.id,ref:task.id,confirmed:true,actor:"ada"});
+    expect(service.counts()[task.id]).toEqual({issues:1,pullRequests:1});
+    const second=ws.store.createIssue({title:"Second local task"});
+    await service.execute({action:"link",resourceId:resource.id,ref:second.id,confirmed:true,actor:"ada"});
+    expect(ws.store.externalLinks().associations(resource.id)).toHaveLength(2);
+    await expect(service.execute({action:"create",resourceId:resource.id,requestKey:"retry",actor:"ada"})).rejects.toMatchObject({code:"duplicate"});
+    const created=await service.execute({action:"create",resourceId:resource.id,requestKey:"retry",additionalWork:true,actor:"ada"});
+    expect(await service.execute({action:"create",resourceId:resource.id,requestKey:"retry",additionalWork:true,actor:"ada"})).toEqual({...created as object,replayed:true});
+    title="Renamed remote title";identifier="ENG-99";
+    await service.execute({action:"refresh",connectionId:"linear",resourceId:resource.id,actor:"ada"});
+    expect(ws.store.externalLinks().resource(resource.id)).toMatchObject({id:resource.id,title,key:"ENG-99"});
+    expect(ws.store.getIssue(task.id)).toEqual(original);
+    denied=true;
+    await expect(service.execute({action:"refresh",connectionId:"linear",resourceId:resource.id,actor:"ada"})).rejects.toMatchObject({code:"auth"});
+    await service.execute({action:"remove",connectionId:"linear"});
+    expect(await service.execute({action:"search",text:"Renamed"})).toMatchObject({cached:[{item:{id:resource.id,title}}],execution:"cached_only"});
+    expect(JSON.stringify(service.connections.list())).not.toContain("fixture-key");
+    expect(JSON.stringify(ws.store.db.prepare("SELECT * FROM external_resources").all())).not.toContain("Private source body");
+    ws.store.db.close();
+  });
   it("keeps connection bindings local and searches without importing or caching provider work",async()=>{
     const {ws,service,adapter,task}=setup();
     await service.execute({action:"configure",connectionId:"work",host:"github.com",account:"ada"});
@@ -82,6 +116,23 @@ describe("shared integration operations",()=>{
     expect(await service.execute({action:"search",text:"Old private title"})).toMatchObject({cached:[]});
     ws.store.db.close();
   });
+  it("accepts machine-local Linear bindings through CLI and MCP without exposing or requiring a key for cache reads",async()=>{
+    const {ws,home,task}=setup();
+    const org="22222222-2222-4222-8222-222222222222",account="11111111-1111-4111-8111-111111111111";
+    const source={...item,ref:{providerId:"linear",host:"linear.app",scopeId:org,containerId:"33333333-3333-4333-8333-333333333333",id:"44444444-4444-4444-8444-444444444444",kind:"issue" as const},key:"ENG-12",url:"https://linear.app/acme/issue/ENG-12/example"};
+    ws.store.externalLinks().link(task.id,source,"ada");
+    const dbPath=ws.dbPath;ws.store.db.close();
+    const cli=spawnSync(process.execPath,[TSX_CLI,CLI_ENTRY,"integrations","configure","--provider","linear","--account",account,"--scope",org,"--credential-env","STAPLE_ABSENT_TEST_KEY","--connection","linear-cli","--db",dbPath,"--json"],{env:{...process.env,STAPLE_HOME:home,NODE_NO_WARNINGS:"1"},encoding:"utf8"});
+    expect(cli.status,cli.stderr).toBe(0);expect(JSON.parse(cli.stdout)).toMatchObject({providerId:"linear",mode:"api",account,scopeId:org,credentialEnv:"STAPLE_ABSENT_TEST_KEY"});
+    harness=await startMcpClient({home,cwd:home,agent:"integration-test",env:{STAPLE_DB:dbPath}});
+    const configured=await harness.call("configure_integration",{action:"configure",providerId:"linear",account,scopeId:org,credentialEnv:"STAPLE_ABSENT_TEST_KEY",connectionId:"linear-mcp"});
+    expect(configured.isError).not.toBe(true);
+    expect(configured.structuredContent).toMatchObject({result:{providerId:"linear",scopeId:org}});
+    const health=await harness.call("integration_read",{action:"health",connectionId:"linear-mcp"});
+    expect(health.structuredContent).toMatchObject({result:{state:"unauthenticated"}});
+    const cached=await harness.call("integration_read",{action:"list",ref:task.id});
+    expect(cached.structuredContent).toMatchObject({result:[{resource:{key:"ENG-12",ref:{providerId:"linear"}}}]});
+  },30_000);
   it("exposes the same cached links over HTTP, CLI and MCP and enforces HTTP method/action/origin boundaries",async()=>{
     const {ws,home,task}=setup();
     const resource=ws.store.externalLinks().remember(item);const dbPath=ws.dbPath;ws.store.db.close();

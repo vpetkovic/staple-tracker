@@ -1,4 +1,4 @@
-import { loadPickerDefaults, rememberLinkChoices } from "./link-defaults";
+import { containerPrefix, loadPickerDefaults, rememberLinkChoices } from "./link-defaults";
 import { useEffect, useRef, useState } from "react";
 import { CircleDot, GitPullRequest, Link2, Search, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -140,8 +140,9 @@ function PickerBody({
           .split(",").filter(Boolean);
         setRepositories(repos);
         const defaults = loadPickerDefaults(ws, c.connections, repos);
-        setConnection(defaults.connectionId);
-        setContainer(defaults.repository.slice(defaults.repository.lastIndexOf("/") + 1));
+        const chosen = c.connections.find(connection => connection.id === defaults.connectionId);
+        setConnection(initialKind === "pull_request" && chosen?.providerId === "linear" ? "" : defaults.connectionId);
+        setContainer(initialKind === "pull_request" && chosen?.providerId === "linear" ? "" : defaults.repository.slice(defaults.repository.lastIndexOf("/") + 1));
         setKind(initialKind ?? defaults.kind);
         setDefaultsLoaded(true);
       })
@@ -157,7 +158,7 @@ function PickerBody({
     const connection = connections.find(c => c.id === connectionId);
     rememberLinkChoices(ws, {
       connectionId,
-      repository: connection && containerId ? `${connection.host}/${containerId}` : "",
+      repository: connection && containerId ? `${containerPrefix(connection)}${containerId}` : "",
       kind,
     });
   }, [ws, defaultsLoaded, connections, connectionId, containerId, kind]);
@@ -184,9 +185,13 @@ function PickerBody({
       await inspect({ url: text.trim(), connectionId: connectionId || undefined });
       return;
     }
+    if (connection?.providerId === "linear" && containerId && /^[A-Za-z][A-Za-z0-9_]*-[1-9][0-9]*$/.test(text.trim())) {
+      await inspect({ key: text.trim(), containerId, connectionId });
+      return;
+    }
     const cached = await integrationRead<MixedResults>({ action: "search", text, kind }, ws);
     if (!alive.current) return;
-    setResults(cached);
+    setResults(old => cursor && old ? { ...cached, remote: old.remote } : cached);
     setPreview(null);
     if (connectionId) {
       const r = await integrationRead<MixedResults>(
@@ -258,6 +263,7 @@ function PickerBody({
             disabled={busy}
             onChange={(e) => {
               setConnection(e.target.value);
+              if (connections.find(c => c.id === e.target.value)?.providerId === "linear") setKind("issue");
               setContainer("");
               changed();
             }}
@@ -265,7 +271,7 @@ function PickerBody({
             <option value="">Cached context only</option>
             {connections.map((c) => (
               <option key={c.id} value={c.id}>
-                {c.account} · {c.host} (CLI)
+                {c.account} · {c.host} ({c.mode.toUpperCase()})
               </option>
             ))}
           </select>
@@ -280,10 +286,10 @@ function PickerBody({
             }}
           >
             <option value="issue">Issues</option>
-            <option value="pull_request">Pull requests</option>
+            <option value="pull_request" disabled={connection?.providerId === "linear"}>Pull requests</option>
           </select>
           <select
-            aria-label="Repository scope"
+            aria-label="Container scope"
             className="min-w-0 rounded-md border bg-background p-2"
             value={containerId}
             disabled={busy || !connection}
@@ -292,9 +298,9 @@ function PickerBody({
               changed();
             }}
           >
-            <option value="">All accessible repositories</option>
+            <option value="">All accessible repositories / teams</option>
             {repositories
-              .filter((r) => r.startsWith(`${connection?.host}/`))
+              .filter((r) => connection && r.startsWith(containerPrefix(connection)))
               .map((r) => (
                 <option key={r} value={r.slice(r.lastIndexOf("/") + 1)}>
                   {r}
@@ -304,7 +310,7 @@ function PickerBody({
         </div>
         <p className="text-xs text-muted-foreground">
           {connection
-            ? "Search uses this machine’s GitHub connection. Cached results remain available if it fails."
+            ? "Search uses this machine’s provider connection. Cached results remain available if it fails."
             : "Cached-only search. Configure a connection for live reads."}{" "}
           <button
             type="button"

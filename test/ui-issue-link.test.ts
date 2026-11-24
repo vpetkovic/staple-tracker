@@ -19,7 +19,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Browser, BrowserContext, Page } from "playwright-core";
 import { initWorkspace } from "../src/core/workspace.js";
 import { startUiServer, uiBundleExists, type UiHandle } from "../src/ui/server.js";
@@ -111,7 +111,7 @@ const heading = (p: Page) => detail(p).locator('aside[aria-label="Issue detail"]
 describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
   it("keeps first-connection defaults consistent and applies saved defaults with explicit type overrides", async () => {
     const { page, context, errors } = await open(single, "/?view=tasks");
-    const connection = { id: "test-gh", providerId: "github", host: "github.com", account: "tester", transport: "cli" };
+    const connection = { id: "test-gh", providerId: "github", host: "github.com", account: "tester", mode: "cli" };
     let configured = false;
     await page.route("**/api/integrations/read", route => {
       const command = route.request().postDataJSON();
@@ -160,6 +160,78 @@ describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
     expect(errors).toEqual([]);
     await context.close();
   }, 30_000);
+
+  it("configures Linear, discovers a team, searches and links, refreshes UUID context, and retains cache after revocation", async () => {
+    const { page, context, errors } = await open(single, "/?view=tasks", PHONE);
+    const account="11111111-1111-4111-8111-111111111111",org="22222222-2222-4222-8222-222222222222",team="33333333-3333-4333-8333-333333333333",id="44444444-4444-4444-8444-444444444444";
+    const originalFetch=globalThis.fetch;
+    let title="Linear fixture source",identifier="ENG-12",denied=false;
+    const previous=process.env.STAPLE_TEST_LINEAR_KEY;
+    process.env.STAPLE_TEST_LINEAR_KEY="fixture-key";
+    const mock=vi.spyOn(globalThis,"fetch").mockImplementation(async(input,init)=>{
+      if(String(input)!=="https://api.linear.app/graphql") return originalFetch(input,init);
+      const command=JSON.parse(init!.body as string);
+      const source={id,identifier,title,description:"Linear private source context",url:`https://linear.app/acme/issue/${identifier}/fixture`,state:{id:account,name:"In review"},team:{id:team,key:"ENG",name:"Engineering",organization:{id:org}}};
+      const pageInfo={hasNextPage:false,endCursor:null};
+      const fields=command.query.includes("teams(") ? {teams:{nodes:[source.team],pageInfo}}
+        : command.query.includes("searchIssues(") ? {searchIssues:command.variables.after
+          ? {nodes:[{...source,id:"55555555-5555-4555-8555-555555555555",identifier:"ENG-13",url:"https://linear.app/acme/issue/ENG-13/second",title:"Second page source"}],pageInfo}
+          : {nodes:[source],pageInfo:{hasNextPage:true,endCursor:"page-two"}}}
+        : command.query.includes("issues(") ? {issues:{nodes:[source],pageInfo}} : {issue:source};
+      return Response.json(denied ? {errors:[{message:"private fixture failure",extensions:{code:"UNAUTHENTICATED"}}]}
+        : {data:{viewer:{id:account},organization:{id:org,urlKey:"acme"},...fields}});
+    });
+    try {
+      await page.goto(`${at(single)}/?settings=integrations&settings-ws=alpha&token=${single.token}`,{waitUntil:"networkidle"});
+      await page.getByLabel("Connection provider").selectOption("linear");
+      await page.getByLabel("Expected Linear user UUID").fill(account);
+      await page.getByLabel("Linear organization UUID").fill(org);
+      await page.getByLabel("API key environment variable name").fill("STAPLE_TEST_LINEAR_KEY");
+      await page.getByRole("button",{name:"Add connection",exact:true}).click();
+      await page.getByRole("button",{name:"Check connection",exact:true}).click();
+      await expect.poll(()=>page.getByText("Connected for read-only access",{exact:false}).count()).toBe(1);
+      await page.getByRole("button",{name:"Find teams",exact:true}).click();
+      await page.getByRole("checkbox",{name:"Engineering (ENG)",exact:true}).check();
+      await page.getByRole("button",{name:"Save containers",exact:true}).click();
+      await page.getByLabel("Default container",{exact:true}).selectOption(`linear.app/${org}/${team}`);
+      await page.getByRole("checkbox",{name:/Remember last-used selections/}).check();
+      await page.getByRole("button",{name:"Save defaults",exact:true}).click();
+      await page.goto(`${at(single)}/?issue=ALP-1&token=${single.token}`,{waitUntil:"networkidle"});
+      await page.getByRole("button",{name:"Link issue",exact:true}).click();
+      await expect.poll(()=>page.getByLabel("Container scope",{exact:true}).inputValue()).toBe(team);
+      expect(await page.getByLabel("Resource type",{exact:true}).inputValue()).toBe("issue");
+      expect(await page.getByLabel("Resource type",{exact:true}).locator('option[value="pull_request"]').isDisabled()).toBe(true);
+      await page.getByLabel("Issue URL or search").fill("fixture");
+      await page.getByRole("button",{name:"Search",exact:true}).click();
+      await expect.poll(()=>page.getByRole("button",{name:/Linear fixture source/}).count()).toBe(1);
+      await page.getByRole("button",{name:"More results",exact:true}).click();
+      await expect.poll(()=>page.getByRole("button",{name:/Second page source/}).count()).toBe(1);
+      expect(await page.getByRole("button",{name:/Linear fixture source/}).count()).toBe(1);
+      await page.getByRole("button",{name:/Linear fixture source/}).click();
+      await page.getByRole("button",{name:"Confirm link",exact:true}).click();
+      await expect.poll(()=>page.getByText("Source linked. Local execution fields are unchanged.",{exact:true}).count()).toBe(1);
+      await page.keyboard.press("Escape");
+      await page.getByRole("tab",{name:"External links",exact:true}).click();
+      const card=page.locator("[data-external-resource]");
+      await expect.poll(()=>card.innerText()).toContain("In review");
+      await card.getByText("Source context",{exact:true}).click();
+      expect(await card.innerText()).toContain("Linear private source context");
+      title="Linear renamed source";identifier="ENG-99";
+      await page.getByRole("button",{name:"Refresh context for ENG-12",exact:true}).click();
+      await expect.poll(()=>card.innerText()).toContain("Linear renamed source");
+      denied=true;
+      await page.getByRole("button",{name:"Refresh context for ENG-99",exact:true}).click();
+      await expect.poll(()=>page.getByRole("alert").innerText()).toContain("Linear authentication failed");
+      expect(await card.innerText()).toContain("Linear renamed source");
+      expect(await heading(page).innerText()).toContain("Set up the repository (alpha)");
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+      expect(errors).toEqual([]);
+    } finally {
+      mock.mockRestore();
+      if(previous===undefined) delete process.env.STAPLE_TEST_LINEAR_KEY;else process.env.STAPLE_TEST_LINEAR_KEY=previous;
+      await context.close();
+    }
+  },45_000);
 
   it("loading an address with issue opens that ticket, and a reload keeps it open", async () => {
     const { page, context, errors } = await open(single, "/?issue=ALP-2");
