@@ -26,6 +26,7 @@ import { browserStorage, loadPlanMemory, withPlanLens } from "./views/plan/plan-
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { CommandPaletteMount } from "@/components/CommandPaletteMount";
+import { LinkExternalMount } from "@/integrations/LinkExternalMount";
 import { CreateIssueMount } from "@/components/CreateIssueMount";
 import { TokenGate } from "@/components/TokenGate";
 import { IssueDetailMount } from "@/detail/IssueDetailMount";
@@ -732,6 +733,7 @@ export function App() {
         */}
         <CommandPaletteMount />
         <CreateIssueMount />
+        <LinkExternalMount />
         <IssueDetailMount />
         {/*
           O7b (STA-141). A fourth mount for the same reason as the other three: the

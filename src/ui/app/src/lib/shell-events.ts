@@ -112,3 +112,14 @@ export function onOpenRunHistory(handler: (request: RunHistoryRequest) => void):
   window.addEventListener(RUN_HISTORY, listener);
   return () => window.removeEventListener(RUN_HISTORY, listener);
 }
+
+export interface LinkExternalRequest { workspace?: string; ref?: string }
+const LINK_EXTERNAL = "staple:link-external";
+export function openLinkExternal(request: LinkExternalRequest = {}): void {
+  window.dispatchEvent(new CustomEvent<LinkExternalRequest>(LINK_EXTERNAL, {detail:request}));
+}
+export function onLinkExternal(handler: (request: LinkExternalRequest) => void): () => void {
+  const listener=(event: Event)=>handler((event as CustomEvent<LinkExternalRequest>).detail ?? {});
+  window.addEventListener(LINK_EXTERNAL,listener);
+  return ()=>window.removeEventListener(LINK_EXTERNAL,listener);
+}
