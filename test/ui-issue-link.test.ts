@@ -142,6 +142,27 @@ describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
     await context.close();
   }, 30_000);
 
+  it("the link dialog opens on the field, remembers the last filter, and says when nothing is set up to search", async () => {
+    const { page, context, errors } = await open(single, "/?issue=ALP-1");
+    const dialog = page.locator("[data-link-external]");
+    const pressed = (name: string) => dialog.getByRole("button", { name, exact: true }).getAttribute("aria-pressed");
+    await page.getByRole("button", { name: "Link PR", exact: true }).click();
+    await expect.poll(() => dialog.getByText("Nothing is set up to search yet.").count()).toBe(1);
+    expect(await page.evaluate(() => document.activeElement?.getAttribute("placeholder"))).toBe("Search issues and pull requests, or paste a link");
+    expect(await pressed("Pull requests")).toBe("true");
+    expect(await dialog.getByRole("button", { name: /^Link to ALP-1/ }).count()).toBe(1);
+    expect(await dialog.locator("select, details, input[type=checkbox]").count()).toBe(0);
+    await dialog.getByRole("button", { name: "Issues", exact: true }).click();
+    expect(await page.evaluate(() => localStorage.getItem("staple:link-kind:v1"))).toBe("issue");
+    await page.keyboard.press("Escape");
+    await expect.poll(() => dialog.count()).toBe(0);
+    await page.getByRole("tab", { name: "External links", exact: true }).click();
+    await page.getByRole("button", { name: "Link issue or PR", exact: true }).click();
+    await expect.poll(() => pressed("Issues")).toBe("true");
+    expect(errors).toEqual([]);
+    await context.close();
+  }, 30_000);
+
   it("configures Linear, discovers a team, searches and links, refreshes UUID context, and retains cache after revocation", async () => {
     const { page, context, errors } = await open(single, "/?view=tasks", PHONE);
     const account="11111111-1111-4111-8111-111111111111",org="22222222-2222-4222-8222-222222222222",team="33333333-3333-4333-8333-333333333333",id="44444444-4444-4444-8444-444444444444";
@@ -178,17 +199,17 @@ describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
       await page.keyboard.press("Escape");
       await page.goto(`${at(single)}/?issue=ALP-1&token=${single.token}`,{waitUntil:"networkidle"});
       await page.getByRole("button",{name:"Link issue",exact:true}).click();
-      expect(await page.getByLabel("Resource type",{exact:true}).inputValue()).toBe("issue");
-      await expect.poll(()=>page.getByLabel("Resource type",{exact:true}).locator('option[value="pull_request"]').isDisabled()).toBe(true);
-      await page.getByLabel("Issue URL or search").fill("fixture");
-      await page.getByRole("button",{name:"Search",exact:true}).click();
-      await expect.poll(()=>page.getByRole("button",{name:/Linear fixture source/}).count()).toBe(1);
-      await page.getByRole("button",{name:"More results",exact:true}).click();
-      await expect.poll(()=>page.getByRole("button",{name:/Second page source/}).count()).toBe(1);
-      expect(await page.getByRole("button",{name:/Linear fixture source/}).count()).toBe(1);
-      await page.getByRole("button",{name:/Linear fixture source/}).click();
-      await page.getByRole("button",{name:"Confirm link",exact:true}).click();
-      await expect.poll(()=>page.getByText("Source linked. Local execution fields are unchanged.",{exact:true}).count()).toBe(1);
+      const dialog=page.locator("[data-link-external]");
+      await expect.poll(()=>dialog.getByRole("button",{name:/^Search scope: alpha · 1 source/}).count()).toBe(1);
+      await page.keyboard.type("fixture");
+      await expect.poll(()=>dialog.getByRole("option",{name:/Linear fixture source/}).count()).toBe(1);
+      await dialog.getByRole("button",{name:"Show more",exact:true}).click();
+      await expect.poll(()=>dialog.getByRole("option",{name:/Second page source/}).count()).toBe(1);
+      expect(await dialog.getByRole("option",{name:/Linear fixture source/}).count()).toBe(1);
+      expect(await dialog.getByRole("option",{name:/Linear fixture source/}).getAttribute("aria-selected")).toBe("true");
+      await page.keyboard.press("Enter");
+      await expect.poll(()=>dialog.getByRole("option",{name:/Linear fixture source/}).innerText()).toContain("Linked here");
+      expect(await page.evaluate(()=>document.activeElement?.getAttribute("role"))).toBe("combobox");
       await page.keyboard.press("Escape");
       await page.getByRole("tab",{name:"External links",exact:true}).click();
       const card=page.locator("[data-external-resource]");

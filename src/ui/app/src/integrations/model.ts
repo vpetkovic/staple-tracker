@@ -1,19 +1,32 @@
-import type { ExternalItem, ResolvedExternalItem } from "../../../../core/integrations/contracts";
+import type { ConnectionState, ExternalItem, ResolvedExternalItem } from "../../../../core/integrations/contracts";
 import type { ExternalResource, ExternalLink } from "../../../../core/integrations/link-store";
+import type { MappingTarget, SearchScope } from "../../../../core/integrations/mapping";
 import type { Issue } from "@/lib/types";
 import { containerLabel } from "./link-state";
-export type { ExternalResource, ExternalLink };
+export type { ExternalResource, ExternalLink, MappingTarget, SearchScope };
 export type SourceItem = ResolvedExternalItem | ExternalItem | ExternalResource;
 export interface SearchHit {
   item: SourceItem;
   associations: Issue[];
 }
+/** A live hit carries the mapped repository, team or project it came from. */
+export type RemoteHit = SearchHit & { targetKey: string };
+/** A source that could not be searched; the rest of the answer still stands. */
+export interface SearchFailure {
+  connectionId: string | null;
+  targetKeys: string[];
+  state: ConnectionState;
+  message: string;
+}
+/** The `search` answer. `local` (Staple's own tasks) is still sent; the link dialog ignores it. */
 export interface MixedResults {
   local: Issue[];
   counts?: Record<string, { issues: number; pullRequests: number }>;
   cached: SearchHit[];
-  remote: SearchHit[];
+  remote: RemoteHit[];
   nextCursor: string | null;
+  scope: SearchScope;
+  failures: SearchFailure[];
   execution: "local" | "cached_only";
 }
 export interface MatchPreview {
