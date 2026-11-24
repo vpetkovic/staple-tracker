@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -51,6 +51,52 @@ describe("machine-wide integration connections", () => {
     connections.remove("gh-in-b");
     expect(connections.list()).toEqual([]);
     expect(connections.resolve("gh-in-b")).toBeNull();
+  });
+
+  it("keeps both connections when two workspaces used one id for different accounts", () => {
+    const root = home();
+    legacy(root, A, { id: "gh", providerId: "github", mode: "cli", host: "github.com", account: "alice" });
+    legacy(root, B, { id: "gh", providerId: "github", mode: "cli", host: "ghe.example.com", account: "bob" });
+    const connections = new IntegrationConnections(root);
+    const listed = connections.list();
+    expect(listed.map(c => `${c.host}:${c.account}`).sort()).toEqual(["ghe.example.com:bob", "github.com:alice"]);
+    // The id keeps the connection migrated first (legacy directories in name order); the other gets a derived id.
+    expect(connections.resolve("gh")).toMatchObject({ host: "github.com", account: "alice" });
+    expect(listed.find(c => c.account === "bob")!.id).toMatch(/^gh-[0-9a-f]{8}$/);
+    expect(readdirSync(join(root, "integrations")).sort()).toEqual(["machine"]);
+    expect(new IntegrationConnections(root).list()).toEqual(listed);
+  });
+
+  it("keeps a legacy file when its connection cannot be written to the machine list", () => {
+    const root = home();
+    legacy(root, A, gh("gh-in-a"));
+    writeFileSync(join(root, "integrations", "machine"), "not a directory");
+    expect(() => new IntegrationConnections(root).list()).toThrow();
+    rmSync(join(root, "integrations", "machine"));
+    expect(existsSync(join(root, "integrations", A, "gh-in-a.json"))).toBe(true);
+    expect(new IntegrationConnections(root).list().map(c => c.id)).toEqual(["gh-in-a"]);
+  });
+
+  it("tolerates a legacy directory another process removed after it was listed", () => {
+    const root = home();
+    legacy(root, A, gh("gh-in-a"));
+    // A directory entry that no longer resolves: what a concurrent migration leaves between listing and reading.
+    symlinkSync(join(root, "gone"), join(root, "integrations", B));
+    expect(new IntegrationConnections(root).list().map(c => c.id)).toEqual(["gh-in-a"]);
+  });
+
+  it("forgets an alias once its id is configured again or removed, so a later remove cannot reach the survivor", () => {
+    const root = home();
+    legacy(root, A, gh("a1"));
+    legacy(root, B, gh("a2"));
+    const connections = new IntegrationConnections(root);
+    expect(connections.resolve("a2")?.id).toBe("a1");
+    connections.save({ id: "a2", providerId: "github", mode: "cli", host: "github.com", account: "octo" });
+    expect(connections.resolve("a2")).toMatchObject({ id: "a2", account: "octo" });
+    connections.remove("a2");
+    expect(connections.resolve("a2")).toBeNull();
+    expect(() => connections.remove("a2")).toThrow();
+    expect(connections.list().map(c => c.id)).toEqual(["a1"]);
   });
 
   it("leaves an unreadable legacy file in place rather than losing it", () => {

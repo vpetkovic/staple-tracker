@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, rmdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
@@ -59,6 +59,8 @@ export class IntegrationConnections {
     if (!parsed.success) throw new StapleError("validation", "Use valid provider connection settings; supply a credential environment variable name, never a secret value.");
     const connection = parsed.data;
     writeFileAtomic(join(this.directory, `${connection.id}.json`), JSON.stringify(connection) + "\n", { mode: 0o600, dirMode: 0o700 });
+    // A connection now owns this id directly; an alias left by a migration must not outlive it.
+    try { unlinkSync(join(this.aliases, `${connection.id}.json`)); } catch { /* none */ }
     return connection;
   }
 
@@ -86,28 +88,43 @@ export class IntegrationConnections {
   }
 
   /**
-   * Fold the per-workspace connections of earlier releases into the machine list. Each legacy file
-   * is written to the machine directory (or, when the same account is already there, recorded as an
-   * alias of it) before it is deleted, so a crash at any point loses nothing and a rerun finishes the
-   * job. Two processes migrating at once write identical files. Unreadable files stay where they are.
+   * Fold the per-workspace connections of earlier releases into the machine list. A legacy file is
+   * deleted only once the machine directory holds its account, as itself or as the connection an
+   * alias points to, so a crash at any point loses nothing and a rerun finishes the job.
+   *
+   * Ids were unique per workspace, not per machine. When a legacy id is already held by a different
+   * account, the newcomer keeps its account under a derived id (`<id>-<8 hex>`), and the plain id
+   * stays with the connection that took it first (legacy directories are visited in name order).
+   * Concurrent processes compute the same names and write identical files. Unreadable files stay.
    */
   private migrate(): void {
     if (!existsSync(this.root)) return;
     const legacy = readdirSync(this.root).filter(name => LEGACY_DIRECTORY.test(name)).sort();
     for (const name of legacy) {
       const dir = join(this.root, name);
-      for (const file of readdirSync(dir).filter(f => f.endsWith(".json")).sort()) {
+      let files: string[];
+      try { files = readdirSync(dir).filter(f => f.endsWith(".json")).sort(); }
+      catch { continue; } // another process finished this directory after we listed it
+      for (const file of files) {
         let connection: ProviderConnection;
         try { connection = connectionSchema.parse(JSON.parse(readFileSync(join(dir, file), "utf8"))); }
         catch { continue; }
-        const existing = this.held().find(c => identity(c) === identity(connection));
-        if (!existing) this.save(connection);
-        else if (existing.id !== connection.id) {
-          writeFileAtomic(join(this.aliases, `${connection.id}.json`), JSON.stringify({ id: existing.id }) + "\n", { mode: 0o600, dirMode: 0o700 });
+        const same = this.held().find(c => identity(c) === identity(connection));
+        if (!same) this.save({ ...connection, id: this.freeId(connection) });
+        else if (same.id !== connection.id && !this.held().some(c => c.id === connection.id)) {
+          writeFileAtomic(join(this.aliases, `${connection.id}.json`), JSON.stringify({ id: same.id }) + "\n", { mode: 0o600, dirMode: 0o700 });
         }
         try { unlinkSync(join(dir, file)); } catch { /* another process moved it first */ }
       }
       try { rmdirSync(dir); } catch { /* not empty: an unreadable file stays for a person to look at */ }
     }
+  }
+
+  /** The legacy id when nothing else holds it on this machine; otherwise one derived from the account. */
+  private freeId(connection: ProviderConnection): string {
+    const taken = (id: string) => this.held().some(c => c.id === id) || this.alias(id) !== null;
+    if (!taken(connection.id)) return connection.id;
+    const suffix = createHash("sha256").update(identity(connection)).digest("hex").slice(0, 8);
+    return `${connection.id.slice(0, 71)}-${suffix}`;
   }
 }
