@@ -640,6 +640,9 @@ export function TaskRowLine({
             {columns.worklog && plan.worklog ? (
               <WorklogCue worklog={row.worklog} claim={claim} checkoutAgent={issue.checkoutAgent} now={now} />
             ) : null}
+            {/* Last of the signals, so the who slot and the trailing slot after them stay clean columns. */}
+            <ExternalLinkBadges summary={row.externalLinks} workspace={row.workspace} issueId={issue.id} issueRef={issue.identifier} />
+            {columns.pr && plan.prBadge ? <PrBadge pullRequests={row.pullRequests} showNumber={plan.prNumber} /> : null}
           </span>
           {columns.claim || columns.assignee ? (
             <WhoCue
@@ -649,12 +652,11 @@ export function TaskRowLine({
               showWord={plan.workingLabel}
             />
           ) : null}
-          <ExternalLinkBadges summary={row.externalLinks} workspace={row.workspace} issueId={issue.id} issueRef={issue.identifier} />
-          {columns.pr && plan.prBadge ? <PrBadge pullRequests={row.pullRequests} showNumber={plan.prNumber} /> : null}
           {/*
-            THE TRAILING SLOT. The date, and in the same fixed box the quick actions, which
-            fade in over it on hover, keyboard focus, and on the open and selected rows.
-            Swapping two things inside one box is what keeps the row from moving.
+            THE TRAILING SLOT. The date, and in the same fixed box, as wide as they are, the
+            quick actions, which fade in over it on hover, keyboard focus, and on the open and
+            selected rows. Swapping two things inside one box is what keeps the row from moving,
+            and keeping them inside it is what leaves every cue before it reachable.
           */}
           <span className="staple-row-trail">
             {columns.date && plan.date ? (

@@ -251,13 +251,30 @@ describe("nothing moves when the actions appear", () => {
     expect(rule(".staple-row-quick")).toMatch(/pointer-events:\s*none/);
   });
 
-  it("lays the actions over the end of the cue cluster, on the row's opaque ground, instead of beside it", () => {
-    expect(rule(".staple-row-quick")).toMatch(/position:\s*absolute/);
-    expect(rule(".staple-row-quick")).toMatch(/right:\s*0/);
-    expect(rule(".staple-row-quick")).toMatch(/background:\s*var\(--card\)/);
-    expect(rule(".staple-row[data-desk] .staple-row-meta")).toMatch(/position:\s*relative/);
-    // No box of their own on every row: the trailing slot is only as wide as the date.
-    expect(rule(".staple-row-trail")).toMatch(/min-width:\s*var\(--desk-trail-w\)/);
+  it("lays the actions inside a trailing slot as wide as they are, on no ground of their own", () => {
+    const trail = rule(".staple-row-trail");
+    expect(trail).toMatch(/position:\s*relative/);
+    expect(trail).toMatch(/min-width:\s*var\(--desk-trail-w\)/);
+    const quick = rule(".staple-row-quick");
+    expect(quick).toMatch(/position:\s*absolute/);
+    expect(quick).toMatch(/inset:\s*0/);
+    expect(quick).toMatch(/justify-content:\s*flex-end/);
+    expect(quick).not.toMatch(/background|box-shadow/);
+    expect(DESK_CSS).not.toMatch(/\.staple-row-quick::before/);
+  });
+
+  it("makes the slot hold all three actions from 1280px and two below it", () => {
+    // 3 × 24px buttons + 2 × 2px gaps = 76px; 2 × 24px + 2px = 50px. Both slots leave room.
+    expect(rule(".staple-row[data-desk]")).toMatch(/--desk-trail-w:\s*84px/);
+    const narrow = DESK_CSS.slice(DESK_CSS.indexOf("@media (max-width: 1279.98px) and (hover: hover)"));
+    expect(narrow).toMatch(/--desk-trail-w:\s*56px/);
+    expect(narrow).toMatch(/\.staple-row-quick-btn\[data-quick="open"\]\s*\{\s*display:\s*none/);
+  });
+
+  it("never positions the actions against the cue cluster again", () => {
+    // The meta cluster is not a containing block: the only positioned ancestor is the slot.
+    expect(rule(".staple-row[data-desk] .staple-row-meta")).not.toMatch(/position/);
+    expect(DESK_CSS).not.toMatch(/\.staple-row-meta[^{]*\{[^}]*position:\s*relative/);
   });
 
   it("reveals them with opacity alone — no display, width or margin change", () => {

@@ -753,10 +753,16 @@ function Properties({
         <PropertyRow label="Created">
           <RelativeTime iso={issue.createdAt} inSentence />
         </PropertyRow>
-        {!phone ? <>
-          <PropertyRow label="Linked issues" right={layout === "grid"}><ExternalPropertySummary detail={detail} kind="issue" /></PropertyRow>
-          <PropertyRow label="Pull requests" right={layout === "grid"}><ExternalPropertySummary detail={detail} kind="pull_request" /></PropertyRow>
-        </> : null}
+        {!phone ? (
+          <>
+            <PropertyRow label="Linked issues" span>
+              <ExternalPropertySummary detail={detail} kind="issue" refresh={refresh} />
+            </PropertyRow>
+            <PropertyRow label="Pull requests" span>
+              <ExternalPropertySummary detail={detail} kind="pull_request" refresh={refresh} />
+            </PropertyRow>
+          </>
+        ) : null}
         <PropertyRow label="Labels" span>
           <InlineLabels {...editor} />
         </PropertyRow>
@@ -887,7 +893,7 @@ function DetailTabs({
         data-detail-tabs=""
         data-stuck={stuck ? "" : undefined}
       >
-        <DetailTabStrip sheet={sheet} label="Issue detail tabs" items={tabs} active={active} />
+        <DetailTabStrip sheet={sheet} label="Issue detail tabs" items={tabs.map((t) => ({ id: t.id, label: t.label, count: t.count?.(detail) ?? null }))} active={active} />
       </div>
       <div ref={panelsRef} data-detail-tabpanels="" style={reserve !== null ? { minHeight: reserve } : undefined}>
         {tabs.map((definition) => {

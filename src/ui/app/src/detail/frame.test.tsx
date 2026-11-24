@@ -146,8 +146,9 @@ describe("the three presentations", () => {
     const html = render("sheet");
     const start = html.indexOf('data-summary-chips');
     const assignee = html.indexOf('data-summary-assignee', start);
-    const issues = html.indexOf('0 linked issues; show External links', start);
-    const prs = html.indexOf('0 pull requests; show External links', start);
+    // Nothing linked yet: each kind is only its labelled +.
+    const issues = html.indexOf('>Link issue<', start);
+    const prs = html.indexOf('>Link pull request<', start);
     expect(assignee).toBeGreaterThan(start);
     expect(issues).toBeGreaterThan(assignee);
     expect(prs).toBeGreaterThan(issues);

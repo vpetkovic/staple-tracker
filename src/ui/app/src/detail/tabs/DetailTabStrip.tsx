@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 export function DetailTabStrip({ sheet, label, items, active, marker }: {
   sheet: boolean;
   label: string;
-  items: readonly { id: string; label: string }[];
+  items: readonly { id: string; label: string; count?: number | null }[];
   active?: string;
   marker?: "data-plan-lens";
 }) {
@@ -33,7 +33,7 @@ export function DetailTabStrip({ sheet, label, items, active, marker }: {
   }, [active]);
   return <div className="staple-detail-tabfade min-w-0" data-fade-start={edges.start ? "" : undefined} data-fade-end={edges.end ? "" : undefined}>
     <TabsList ref={stripRef} aria-label={label} variant={sheet ? "default" : "line"} className={cn("staple-detail-tabstrip w-full justify-start", sheet && "staple-detail-segments")}>
-      {items.map(item => <TabsTrigger key={item.id} value={item.id} className="focus-ring-inset flex-none" {...(marker ? { [marker]: item.id } : {})}>{item.label}</TabsTrigger>)}
+      {items.map(item => <TabsTrigger key={item.id} value={item.id} className="focus-ring-inset flex-none" aria-label={item.count ? `${item.label}, ${item.count}` : undefined} {...(marker ? { [marker]: item.id } : {})}>{item.label}{item.count ? <span className="ml-1.5 tabular-nums text-text-tertiary">{item.count}</span> : null}</TabsTrigger>)}
     </TabsList>
   </div>;
 }
