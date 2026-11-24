@@ -1,3 +1,8 @@
+import {
+  onExternalSection,
+  takeExternalSection,
+  type ExternalSection,
+} from "@/integrations/external-section";
 import { useEffect, useState } from "react";
 import { CircleDot, GitPullRequest, Link2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -5,12 +10,15 @@ import { integrationRead, integrationWrite } from "@/lib/api";
 import { openLinkExternal, openSettings } from "@/lib/shell-events";
 import { useOptionalSession } from "@/lib/session";
 import { useResource } from "@/lib/useStaple";
+import { PrStackView } from "@/integrations/PrStackView";
 import { freshness, groupLinks, type ExternalLink } from "@/integrations/model";
 import type { ProviderConnection } from "../../../../../core/integrations/connections";
 import type { TabProps } from "./registry";
 
 export function ExternalLinksTab({ detail, workspace, refresh, onAuthError }: TabProps) {
   const session = useOptionalSession();
+  const [section, setSection] = useState<ExternalSection>(() => takeExternalSection() ?? "all");
+  useEffect(() => onExternalSection(setSection), []);
   const resource = useResource(
     () => integrationRead<ExternalLink[]>({ action: "list", ref: detail.issue.id }, workspace),
     [workspace, detail.issue.id, session?.version],
@@ -55,6 +63,29 @@ export function ExternalLinksTab({ detail, workspace, refresh, onAuthError }: Ta
       setBusy(false);
     }
   }
+  const renderCard = (link: ExternalLink, editor?: React.ReactNode) => (
+    <ExternalLinkCard
+      key={link.id}
+      link={link}
+      busy={busy}
+      canRefresh={connections.some(
+        (c) => c.providerId === link.resource.ref.providerId && c.host === link.resource.ref.host,
+      )}
+      onRefresh={() =>
+        void write({
+          action: "refresh",
+          resourceId: link.resource.id,
+          connectionId: connectionId || undefined,
+        })
+      }
+      onUnlink={() =>
+        void write({ action: "unlink", ref: detail.issue.id, resourceId: link.resource.id })
+      }
+      onShare={(enabled) => void write({ action: "share", resourceId: link.resource.id, enabled })}
+    >
+      {editor}
+    </ExternalLinkCard>
+  );
   const links = resource.data ?? detail.externalLinks ?? [];
   return (
     <div className="space-y-5 min-w-0" aria-busy={busy}>
@@ -131,44 +162,58 @@ export function ExternalLinksTab({ detail, workspace, refresh, onAuthError }: Ta
           </p>
         </div>
       ) : null}
-      {groupLinks(links).map((group) => (
-        <section key={group.key} className="space-y-3">
-          <h3 className="text-xs font-semibold text-muted-foreground wrap-anywhere">
-            {group.label}
-          </h3>
-          <div className="space-y-3">
-            {group.links.map((link) => (
-              <ExternalLinkCard
-                key={link.id}
-                link={link}
-                busy={busy}
-                canRefresh={connections.some(
-                  (c) =>
-                    c.providerId === link.resource.ref.providerId &&
-                    c.host === link.resource.ref.host,
-                )}
-                onRefresh={() =>
-                  void write({
-                    action: "refresh",
-                    resourceId: link.resource.id,
-                    connectionId: connectionId || undefined,
-                  })
-                }
-                onUnlink={() =>
-                  void write({
-                    action: "unlink",
-                    ref: detail.issue.id,
-                    resourceId: link.resource.id,
-                  })
-                }
-                onShare={(enabled) =>
-                  void write({ action: "share", resourceId: link.resource.id, enabled })
-                }
-              />
-            ))}
-          </div>
-        </section>
-      ))}
+      <label className="block text-xs">
+        Show{" "}
+        <select
+          aria-label="External resource type"
+          className="ml-1 rounded border bg-background p-1"
+          value={section}
+          onChange={(e) => setSection(e.target.value as ExternalSection)}
+        >
+          <option value="all">Issues and PRs</option>
+          <option value="issue">Linked issues</option>
+          <option value="pull_request">Pull requests</option>
+        </select>
+      </label>
+      {groupLinks(links.filter((l) => section === "all" || l.resource.ref.kind === section)).map(
+        (group) => (
+          <section key={group.key} className="space-y-3">
+            <h3 className="text-xs font-semibold text-muted-foreground wrap-anywhere">
+              {group.label}
+            </h3>
+            {group.links.some((l) => l.resource.ref.kind === "issue") ? (
+              <div className="space-y-3">
+                <h4 className="text-xs font-medium">Linked issues</h4>
+                {group.links
+                  .filter((l) => l.resource.ref.kind === "issue")
+                  .map((l) => renderCard(l))}
+              </div>
+            ) : null}
+            {group.links.some((l) => l.resource.ref.kind === "pull_request") ? (
+              <div className="space-y-2">
+                <h4 className="text-xs font-medium">Pull request references</h4>
+                <p className="text-xs text-muted-foreground">
+                  Only recorded parents form stacks. Unset order does not imply a delivery sequence.
+                </p>
+                <PrStackView
+                  links={group.links}
+                  busy={busy}
+                  renderCard={renderCard}
+                  onSave={(link, parentResourceId, position) =>
+                    write({
+                      action: "stack",
+                      ref: detail.issue.id,
+                      resourceId: link.resource.id,
+                      parentResourceId,
+                      position,
+                    })
+                  }
+                />
+              </div>
+            ) : null}
+          </section>
+        ),
+      )}
     </div>
   );
 }

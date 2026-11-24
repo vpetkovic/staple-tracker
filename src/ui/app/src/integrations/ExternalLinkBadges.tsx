@@ -1,3 +1,4 @@
+import { requestExternalSection } from "./external-section";
 import { useEffect, useRef, useState } from "react";
 import { CircleDot, GitPullRequest } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -150,6 +151,7 @@ function QuickList({
           className="mt-3 text-xs underline"
           onClick={() => {
             setOpen(false);
+            requestExternalSection(kind === "issues" ? "issue" : "pull_request");
             if (
               session?.selection?.workspace === workspace &&
               (session.selection.id === issueId || session.selection.ref === issueId)

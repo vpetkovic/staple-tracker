@@ -1,3 +1,4 @@
+import { requestExternalSection } from "./external-section";
 import { CircleDot, GitPullRequest, Plus } from "lucide-react";
 import type { IssueDetail } from "@/lib/types";
 import { openLinkExternal } from "@/lib/shell-events";
@@ -23,7 +24,10 @@ export function ExternalPropertySummary({
         type="button"
         className="focus-ring flex min-w-0 max-w-full items-center gap-1 text-xs hover:underline"
         aria-label={`${links.length} ${label}; show External links`}
-        onClick={() => openDetailTab("external-links")}
+        onClick={() => {
+          requestExternalSection(kind);
+          openDetailTab("external-links");
+        }}
       >
         <Icon aria-hidden className="size-3.5 shrink-0" />
         <span className="shrink-0">{links.length}</span>
