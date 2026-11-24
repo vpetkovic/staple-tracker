@@ -10,7 +10,7 @@ import { SessionContext, type StapleSession } from "@/lib/session";
 import { PickerBody } from "./LinkExternalPicker";
 import { newRequestKey } from "@/lib/request-key";
 
-const session = { open: () => {}, refresh: () => {}, workspaces: [], ws: "staple" } as unknown as StapleSession;
+const session = { open: () => {}, refresh: () => {}, workspaces: [], ws: "staple", mode: "single", issues: { data: [] } } as unknown as StapleSession;
 
 function withoutRandomUuid() {
   Object.defineProperty(globalThis.crypto, "randomUUID", { value: undefined, configurable: true });
@@ -25,10 +25,10 @@ describe("link picker in an insecure context", () => {
     expect(typeof globalThis.crypto.randomUUID).toBe("undefined");
     const html = renderToStaticMarkup(
       <SessionContext value={session}>
-        <PickerBody ws="staple" onClose={() => {}} />
+        <PickerBody initialWorkspace="staple" initialRef="INT-2" onClose={() => {}} />
       </SessionContext>,
     );
-    expect(html).toContain("Issue URL or search");
+    expect(html).toContain('placeholder="Search issues and pull requests, or paste a link"');
   });
 
   it("still produces distinct version 4 request keys without crypto.randomUUID", () => {
