@@ -9,24 +9,51 @@ GitHub CLI and the Linear GraphQL API support live reads. Azure DevOps and Click
 ## Connect GitHub
 
 Install `gh` on the computer running Staple and authenticate there with `gh auth login`.
-Open **Settings → Integrations**, enter the host and expected account, and check the connection.
-Staple reuses the effective CLI authentication, including environment-token precedence. It refuses
-an unexpected account and never changes CLI authentication or extracts a token.
+Open **Settings → Integrations**. Staple notices the sign-in and offers **Connect as <account>**;
+**Add connection** covers another account or a GitHub Enterprise host. Staple reuses the effective
+CLI authentication, including environment-token precedence. It refuses an unexpected account and
+never changes CLI authentication or extracts a token.
 
-Use **Find repositories** to choose workspace search scopes. Repository preferences sync with the
-workspace. Account bindings remain on this machine. For another machine, configure its own
-connection. Missing CLI, authentication, permission, network and version failures have distinct
-health states; checking a connection does not change it.
+Connections belong to the computer, not to a workspace: one list serves every workspace, and
+another machine needs its own. Each connection shows its status at all times (Connected, Sign-in
+needed, Wrong account, No access, Rate limited, Offline, CLI missing). The screen rechecks when
+it opens and every two minutes while it is visible; **Check now** rechecks everything and the
+icon on a row rechecks one. A connection that is not working says what is wrong and what to do,
+with the command to copy where there is one. Checking a connection does not change it.
 
-From search/commands, ticket properties, or **External links**, open **Link issue or PR**. Paste an
-exact HTTPS URL or search a connected provider. Inspect existing links and exact migration matches,
-then select a local ticket and confirm. Search does not import work. Earlier AI migrations can be
-matched by a retained scoped identity or full source URL, including completed tickets. Similar
-titles never establish identity.
+## Choose what each workspace searches
 
-Creating linked work from an issue copies the title/body once and requires a stable retry key.
-Existing matches require an explicit choice to create additional work. Creation never adds the
-ticket to the pickup queue. PRs attach to existing tickets as references.
+Under **Workspaces** on the same screen, each workspace lists its sources: GitHub repositories,
+Linear teams and Linear projects. **Add** opens a searchable list of what your connections can
+read; adding or removing a source saves at once and syncs with that workspace. Search and linking
+follow these sources:
+
+- a workspace with sources searches and links only those;
+- a workspace with none searches everything chosen for any workspace on this computer;
+- **All workspaces** searches everything chosen;
+- with nothing chosen anywhere there is no live search, and an exact pasted URL still links.
+
+Search never covers all of GitHub.
+
+## Link an issue or pull request
+
+Open the link dialog from a task's **Linked issues** or **Pull requests** row, the **External
+links** tab, or the command palette. The task you opened it from is the target, shown in the
+header and changeable there. Type to search every source in scope, or paste an exact HTTPS URL.
+The scope control states what is being searched and can narrow to one source. Results show their
+state, their key and whether they are already linked here or to another task. **Enter** links the
+selected result and the dialog stays open for the next one; **Undo** removes a link just made.
+A source that cannot be reached is named in one line while the rest of the results still show.
+An item from a repository, team or project outside the workspace's sources is refused, with the
+offer to add that source and link.
+
+Search does not import work. Earlier AI migrations can be matched by a retained scoped identity
+or full source URL, including completed tickets. Similar titles never establish identity.
+
+**Create task from this** copies an issue's title and body once and requires a stable retry key.
+If a task for it may already exist, Staple shows the matches and asks before creating another.
+Creation never adds the task to the pickup queue. Pull requests attach to existing tasks as
+references.
 
 ## Connect Linear
 
@@ -36,11 +63,12 @@ process. For a background service, configure its environment privately. Never pa
 CLI argument or paste it into a connection form.
 
 Use [Linear's GraphQL explorer](https://studio.apollographql.com/public/Linear-API/variant/current/explorer)
-to run `query { viewer { id } organization { id urlKey } }` with that key to find the expected
-user and organization UUIDs. In **Settings → Integrations**, select **Linear API**, enter these
-UUIDs and the environment variable name, then **Check connection** and **Find teams**. Staple
-checks the key's user and organization on every response. A revoked key or changed account fails
-without replacing the saved context.
+to run `query { viewer { id } organization { id urlKey } }` with that key to find your user and
+organization ids. In **Settings → Integrations**, choose **Set up** on the Linear row (or **Add
+connection → Linear workspace**), enter the environment variable name and the two ids, and save.
+Then add teams or projects to a workspace under **Workspaces**. Staple checks the key's user and
+organization on every response. A revoked key or changed account fails without replacing the
+saved copy.
 
 The key value stays server-side. Only the variable name and expected identity are saved in a
 machine-local connection file. Use different variable names for different accounts. Organization
@@ -57,12 +85,12 @@ staple integrations link --ws my-workspace --ref ABC-12 --connection CONNECTION_
 staple integrations refresh --ws my-workspace --resource RESOURCE_ID --connection CONNECTION_ID --json
 ```
 
-Paste an exact issue URL in the link dialog, or select a team and enter an exact issue identifier.
-Other text searches accessible issues, with paginated results. Empty search browses issues.
-Linear preserves native workflow states and uses organization, team and issue UUIDs for identity.
-Issue identifiers and URL slugs are display context. Linear has no PR capability; GitHub PRs can
-coexist with Linear issues on the same Staple ticket. A **Link PR** shortcut keeps its type and
-starts cached-only if the saved connection is Linear.
+Paste an exact issue URL in the link dialog, or type to search the mapped teams and projects,
+most recently updated first, with **Show more** for further pages. An empty field lists recent
+issues. Linear preserves native workflow states and uses organization, team and issue UUIDs for
+identity. Issue identifiers and URL slugs are display context. Linear has no PR capability; GitHub
+PRs can coexist with Linear issues on the same Staple ticket, and the **Pull requests** filter
+skips Linear sources.
 
 Requests use the fixed `https://api.linear.app/graphql` endpoint, a 15-second timeout, a 2 MB
 response limit and 50 items per page. Cursors are bound to the connection and search. Authentication,
@@ -84,14 +112,16 @@ source across its linked tickets. Turning sharing off clears the current shared 
 preserving local cache; retained operation history and backups may still contain earlier shared
 context. Provider credentials and account bindings never enter workspace replication.
 
-The UI labels cached context with its fetch time and marks context older than 24 hours stale.
-A failed refresh preserves the saved context. A cloud-only session can show synced links and
+The UI calls this the saved copy. It shows the copy's age and marks one older than 24 hours.
+A failed refresh preserves the saved copy. A cloud-only session can show synced links and
 consented context, but live reads need a connection on the machine running Staple. There is no cloud-to-desktop execution bridge,
 hosted provider credential store or scheduled provider refresh in this version.
 
-PRs group by immutable provider scope and repository. Only explicit local parent/order choices
-form stacks. Missing parents and unset order stay labelled; PR numbers and branch names never
-imply ancestry. The parent/order editor changes Staple references only.
+The **External links** tab lists a task's links by repository or team, one row each, with state,
+key and the age of the saved copy. A row opens in place for the description, **Stacked on**, the
+sharing switch and **Unlink**. Only an explicit **Stacked on** choice forms a stack, drawn as
+indented rows; a parent that is not linked to the task stays labelled, and PR numbers and branch
+names never imply ancestry. **Stacked on** changes Staple references only.
 
 ## CLI and MCP
 
