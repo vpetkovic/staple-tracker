@@ -69,6 +69,7 @@ describe("the registered set", () => {
     ]);
     expect(settingDefinitionsFor("workspace").map((d) => d.key)).toEqual([
       "integrations.repositories",
+      "integrations.mapping",
       "kinds.default",
       "kinds.appearance",
       "queue.policy",
@@ -136,7 +137,7 @@ describe("the registered set", () => {
     expect(settingDefinition("kinds.default")?.scope).toBe("workspace");
     expect(settingDefinition("nothing")).toBeUndefined();
     expect(() => requireSettingDefinition("nothing", "workspace")).toThrow(
-      /Unknown workspace setting "nothing"\. Known: integrations\.repositories, kinds\.default/,
+      /Unknown workspace setting "nothing"\. Known: integrations\.repositories, integrations\.mapping, kinds\.default/,
     );
     expect(() => requireSettingDefinition("machine.port", "workspace")).toThrow(
       /"machine\.port" is a global setting, not a workspace one\. Global settings are edited with `staple config set`/,
@@ -293,6 +294,7 @@ describe("wire views", () => {
     const view = settingRegistryView();
     expect(view.categories.map((c) => c.id)).toEqual(["statuses", "kinds", "queue", "integrations", "features", "machine"]);
     expect(view.definitions.map((d) => d.key)).toEqual([
+      "integrations.mapping",
       "features.planning",
       "integrations.repositories",
       "kinds.default",
