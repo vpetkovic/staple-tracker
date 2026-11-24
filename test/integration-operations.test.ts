@@ -134,6 +134,13 @@ describe("shared integration operations",()=>{
     expect(health.structuredContent).toMatchObject({result:{health:[{connectionId:"linear-mcp",state:"unauthenticated",action:expect.stringContaining("STAPLE_ABSENT_TEST_KEY")}]}});
     const cached=await harness.call("integration_read",{action:"list",ref:task.id});
     expect(cached.structuredContent).toMatchObject({result:[{resource:{key:"ENG-12",ref:{providerId:"linear"}}}]});
+    // The mapping is the same data on every surface.
+    const mapping=await harness.call("integration_read",{action:"mapping",allWorkspaces:true});
+    expect(mapping.structuredContent).toMatchObject({result:{workspaces:[{workspace:"integration-tests",targets:[]}],targets:[]}});
+    const unmap=await harness.call("integration_write",{action:"unmap",targetKey:`linear.app/${org}/33333333-3333-4333-8333-333333333333`});
+    expect(unmap.isError).toBe(true);
+    const listed=spawnSync(process.execPath,[TSX_CLI,CLI_ENTRY,"integrations","mapping","--db",dbPath,"--json"],{env:{...process.env,STAPLE_HOME:home,NODE_NO_WARNINGS:"1"},encoding:"utf8"});
+    expect(listed.status,listed.stderr).toBe(0);expect(JSON.parse(listed.stdout)).toEqual({workspace:"integration-tests",targets:[]});
   },30_000);
   it("exposes the same cached links over HTTP, CLI and MCP and enforces HTTP method/action/origin boundaries",async()=>{
     const {ws,home,task}=setup();
