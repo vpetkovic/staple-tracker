@@ -7,7 +7,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { integrationRead } from "@/lib/api";
 import type { ConnectionHealthSnapshot, DetectedConnection } from "../../../../core/integrations/contracts";
-import { mergeHealth, type ConnectionView } from "./connection-status";
+import { CONNECTIONS_CHANGED, mergeHealth, type ConnectionView } from "./connection-status";
+
+const announce = () => window.dispatchEvent(new Event(CONNECTIONS_CHANGED));
 
 interface ConnectionsPayload {
   connections: ConnectionView[];
@@ -64,6 +66,7 @@ export function useConnections(ws: string | undefined, { poll = false }: { poll?
         if (answer.pollIntervalSeconds) interval.current = answer.pollIntervalSeconds;
         setConnections((held) => mergeHealth(held, answer.health));
         setError(null);
+        announce();
       } catch (caught) {
         if (alive.current && force) setError(caught instanceof Error ? caught.message : String(caught));
       } finally {
@@ -82,6 +85,7 @@ export function useConnections(ws: string | undefined, { poll = false }: { poll?
       setDetected(answer.detected ?? []);
       setCachedOnly(answer.execution === "cached_only");
       setError(null);
+      announce();
       if (answer.execution !== "cached_only" && answer.connections.length > 0) await check(false);
     } catch (caught) {
       if (alive.current) setError(caught instanceof Error ? caught.message : String(caught));

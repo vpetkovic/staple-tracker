@@ -105,7 +105,7 @@ function row(target: ExternalLink, props: Partial<Parameters<typeof LinkRow>[0]>
         depth={0}
         guides={[]}
         hasChildren={false}
-        refreshable
+        refreshWith="gh"
         open={false}
         onOpenChange={() => {}}
         onWrite={async () => {}}

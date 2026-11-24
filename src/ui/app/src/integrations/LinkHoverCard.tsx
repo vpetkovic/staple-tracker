@@ -58,12 +58,15 @@ export function SingleLinkCard({
   issueId,
   refresh,
   onShowAll,
+  onUnlinked,
 }: {
   link: ExternalLink;
   workspace: string;
   issueId: string;
   refresh: () => void;
   onShowAll: () => void;
+  /** Called once the link is gone, before the chip that opened this card unmounts: move focus somewhere that stays. */
+  onUnlinked?: () => void;
 }) {
   const item = link.resource;
   const age = savedAge(item);
@@ -75,6 +78,7 @@ export function SingleLinkCard({
     setError(null);
     try {
       await integrationWrite({ action: "unlink", ref: issueId, resourceId: item.id }, workspace);
+      onUnlinked?.();
       refresh();
     } catch (caught) {
       setError(`Could not unlink: ${caught instanceof Error ? caught.message : String(caught)}`);

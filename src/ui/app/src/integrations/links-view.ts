@@ -32,8 +32,13 @@ function serves(connection: ConnectionView, link: ExternalLink): boolean {
   );
 }
 
+/** The ready connection that reads this link, named on every refresh so the server never has to choose between two accounts. */
+export function refreshConnection(link: ExternalLink, connections: readonly ConnectionView[]): string | null {
+  return connections.find((c) => isReady(c) && serves(c, link))?.id ?? null;
+}
+
 export function isRefreshable(link: ExternalLink, connections: readonly ConnectionView[]): boolean {
-  return connections.some((c) => isReady(c) && serves(c, link));
+  return refreshConnection(link, connections) !== null;
 }
 
 /** Server messages do not always end their sentence; the notice continues after this one. */

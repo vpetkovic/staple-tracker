@@ -22,11 +22,15 @@ import {
   type ExternalLink,
   type MatchPreview,
   type MixedResults,
+  type RemoteHit,
   type SearchFailure,
+  type SearchHit,
   type SearchScope,
 } from "./model";
 import { loadKindFilter, saveKindFilter, type KindFilter } from "./link-dialog/last-kind";
 import {
+  answerFor,
+  connectionFor,
   createLatest,
   groupResults,
   keepSelection,
@@ -108,8 +112,9 @@ function mergeFailures(answers: MixedResults[]): SearchFailure[] {
 }
 
 type Answer =
-  | { mode: "search"; pages: Partial<Record<ItemKind, MixedResults[]>> }
-  | { mode: "paste"; preview: MatchPreview | null };
+  /** `asked` is what the answer answers (logic.ts `answerFor`): a list that no longer matches the field cannot be linked from. */
+  | { mode: "search"; asked: string; pages: Partial<Record<ItemKind, MixedResults[]>> }
+  | { mode: "paste"; asked: string; preview: MatchPreview | null };
 
 interface Problem {
   /** The result it is about; null for a pasted link that did not resolve. */
@@ -156,6 +161,7 @@ export function PickerBody({
   const [create, setCreate] = useState<CreateState | null>(null);
   const [sessionLinks, setSessionLinks] = useState<ReadonlySet<string>>(new Set());
   const [mappingVersion, setMappingVersion] = useState(0);
+  const connections = useConnections(searchWs);
   const inputRef = useRef<HTMLInputElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const latest = useRef(createLatest()).current;
@@ -217,6 +223,7 @@ export function PickerBody({
   // ---- search as you type
   useEffect(() => {
     const n = latest.next();
+    const asked = answerFor(text, kind, containerKey);
     const delay = firstSearch.current ? 0 : 250;
     firstSearch.current = false;
     setSearching(true);
@@ -225,14 +232,14 @@ export function PickerBody({
       try {
         if (queryKind(query) === "preview") {
           try {
-            const preview = await integrationRead<MatchPreview>({ action: "preview", url: query, ...scopeArgs }, searchWs);
+            const preview = await integrationRead<MatchPreview>({ action: "preview", url: query, connectionId: urlConnection(query), ...scopeArgs }, searchWs);
             if (!latest.isLatest(n)) return;
-            setAnswer({ mode: "paste", preview });
+            setAnswer({ mode: "paste", asked, preview });
             setSearchError(null);
             setProblem(null);
           } catch (error) {
             if (!latest.isLatest(n)) return;
-            setAnswer({ mode: "paste", preview: null });
+            setAnswer({ mode: "paste", asked, preview: null });
             setSearchError(null);
             setProblem({ key: null, message: describeRefusal(error).message, outside: outsideScopeTarget(error) });
           }
@@ -246,12 +253,12 @@ export function PickerBody({
           ),
         );
         if (!latest.isLatest(n)) return;
-        setAnswer({ mode: "search", pages: Object.fromEntries(pages) });
+        setAnswer({ mode: "search", asked, pages: Object.fromEntries(pages) });
         setSearchError(null);
       } catch (error) {
         if (!latest.isLatest(n)) return;
         setSearchError(describeRefusal(error).message);
-        setAnswer({ mode: "search", pages: {} });
+        setAnswer({ mode: "search", asked, pages: {} });
       } finally {
         if (latest.isLatest(n) && alive.current) setSearching(false);
       }
@@ -262,7 +269,9 @@ export function PickerBody({
   }, [text, kind, containerKey, searchWs, all]);
 
   const more = useCallback(async () => {
-    if (answer?.mode !== "search") return;
+    // Paging an answer the field has moved on from would cancel the pending search and send its cursor with the new text.
+    if (answer?.mode !== "search" || answer.asked !== answerFor(text, kind, containerKey)) return;
+    const asked = answer.asked;
     const n = latest.next();
     setSearching(true);
     try {
@@ -277,14 +286,14 @@ export function PickerBody({
           return [k, [...list, page]] as const;
         }),
       );
-      if (latest.isLatest(n)) setAnswer({ mode: "search", pages: Object.fromEntries(next) });
+      if (latest.isLatest(n)) setAnswer({ mode: "search", asked, pages: Object.fromEntries(next) });
     } catch (error) {
       if (latest.isLatest(n)) setSearchError(describeRefusal(error).message);
     } finally {
       if (latest.isLatest(n) && alive.current) setSearching(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [answer, text, containerKey, searchWs, all]);
+  }, [answer, text, kind, containerKey, searchWs, all]);
 
   // ---- results and selection
   const groups = useMemo(() => {
@@ -313,13 +322,26 @@ export function PickerBody({
   }, [groups, targetLinks, targetId]);
   const undoable = useMemo(() => new Set([...linkedHere].filter((k) => targetLinks?.has(k))), [linkedHere, targetLinks]);
 
+  /** The list on screen answers an older query: nothing may be linked, created or paged from it. */
+  const stale = !!answer && answer.asked !== answerFor(text, kind, containerKey);
+  /** Every read and write names its connection, so two accounts on one host never leave the server guessing. */
+  const input = (hit: SearchHit) =>
+    sourceInput(hit.item, connectionFor(hit.item.ref, (hit as Partial<RemoteHit>).targetKey, targets, connections.connections));
+  function urlConnection(url: string): string | undefined {
+    try {
+      return connectionFor({ host: new URL(url).host }, undefined, targetsRef.current, connections.connections);
+    } catch {
+      return undefined;
+    }
+  }
+
   const focusField = () => requestAnimationFrame(() => inputRef.current?.focus());
 
   // ---- writes
   const writeWs = targetWs || searchWs;
   async function link(key: string, close = false) {
     const hit = hitFor(key);
-    if (!hit || !target || !targetWs || linking) return;
+    if (!hit || !target || !targetWs || linking || stale) return;
     if (linkedHere.has(key)) {
       if (close) onClose();
       return;
@@ -328,7 +350,7 @@ export function PickerBody({
     setProblem(null);
     try {
       const made = await integrationWrite<ExternalLink>(
-        { action: "link", ...sourceInput(hit.item), ref: target.id, confirmed: true, ...scopeArgs },
+        { action: "link", ...input(hit), ref: target.id, confirmed: true, ...scopeArgs },
         targetWs,
       );
       if (!alive.current) return;
@@ -370,14 +392,14 @@ export function PickerBody({
 
   async function createFrom(key: string, additional: boolean) {
     const hit = hitFor(key);
-    if (!hit || !writeWs) return;
+    if (!hit || !writeWs || stale) return;
     let requestKey = createKeys.current.get(key);
     if (!requestKey) createKeys.current.set(key, (requestKey = newRequestKey()));
     setProblem(null);
     try {
       if (!additional) {
         setCreate({ key, phase: "checking", candidates: [], truncated: false });
-        const check = await integrationRead<MatchPreview>({ action: "preview", ...sourceInput(hit.item), ...scopeArgs }, writeWs);
+        const check = await integrationRead<MatchPreview>({ action: "preview", ...input(hit), ...scopeArgs }, writeWs);
         if (!alive.current) return;
         if (check.candidates.length || check.truncated) {
           setCreate({ key, phase: "candidates", candidates: check.candidates, truncated: check.truncated });
@@ -386,7 +408,7 @@ export function PickerBody({
       }
       setCreate({ key, phase: "creating", candidates: [], truncated: false });
       const made = await integrationWrite<{ issue: Issue }>(
-        { action: "create", ...sourceInput(hit.item), requestKey, additionalWork: additional, ...scopeArgs },
+        { action: "create", ...input(hit), requestKey, additionalWork: additional, ...scopeArgs },
         writeWs,
       );
       session.refresh();
@@ -416,14 +438,14 @@ export function PickerBody({
       }
       // A pasted link that was outside: link it by its URL, then show it.
       const made = await integrationWrite<ExternalLink>(
-        { action: "link", url: text.trim(), ref: target.id, confirmed: true, ...scopeArgs },
+        { action: "link", url: text.trim(), connectionId: outside.connectionId, ref: target.id, confirmed: true, ...scopeArgs },
         targetWs,
       );
       if (!alive.current) return;
       const linkedKey = resourceKey(made.resource);
       setTargetLinks((held) => new Map(held ?? []).set(linkedKey, made.resource.id));
       setSessionLinks((held) => new Set(held).add(linkedKey));
-      setAnswer({ mode: "paste", preview: { item: made.resource, associations: [target], candidates: [], truncated: false } });
+      setAnswer({ mode: "paste", asked: answerFor(text, kind, containerKey), preview: { item: made.resource, associations: [target], candidates: [], truncated: false } });
       session.refresh();
       focusField();
     } catch (error) {
@@ -525,7 +547,6 @@ export function PickerBody({
     },
   };
 
-  const connections = useConnections(searchWs);
   const served = new Set(targets.map((t) => t.connectionId).filter(Boolean));
   const shownProblem = problem && (problem.key === null || problem.key === selected) ? problem : null;
   const lastPages = answer?.mode === "search" ? Object.values(answer.pages).map((list) => list?.[list.length - 1]) : [];
@@ -556,6 +577,8 @@ export function PickerBody({
     create,
     linkedCount: sessionLinks.size,
     isMac: isMac(),
+    stale,
+    canCreate: !!writeWs,
   };
 
   return (

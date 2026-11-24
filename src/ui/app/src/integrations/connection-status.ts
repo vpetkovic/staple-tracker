@@ -7,6 +7,9 @@ import type { ConnectionHealthSnapshot, ConnectionState } from "../../../../core
 
 export type ConnectionView = ProviderConnection & { health: ConnectionHealthSnapshot | null };
 
+/** Fired on `window` whenever a surface learns something new about the connections; the rail re-reads on it. */
+export const CONNECTIONS_CHANGED = "staple:connections-changed";
+
 /** ok = working, warn = will recover or needs a small step, bad = needs the person, idle = not known yet. */
 export type StatusTone = "ok" | "warn" | "bad" | "idle";
 

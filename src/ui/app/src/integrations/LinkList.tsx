@@ -25,7 +25,7 @@ import { ConfirmDialog } from "@/settings/form/ConfirmDialog";
 import { InlineError } from "@/settings/form/primitives";
 import type { ConnectionView } from "./connection-status";
 import { containerLabel, providerName, savedAge, shortKey, stateLabel } from "./link-state";
-import { countWords, isRefreshable, openLabel, stackIndent } from "./links-view";
+import { countWords, openLabel, refreshConnection, stackIndent } from "./links-view";
 import { groupLinks, type ExternalLink } from "./model";
 import { ItemGlyph, LINK_PROSE, LinkStatePill, ProviderMark } from "./parts";
 import { parentChoices, prStacks, prTreeRows } from "./pr-stacks";
@@ -93,7 +93,7 @@ export function LinkGroups({
                   depth={row.depth}
                   guides={row.guides}
                   hasChildren={(rows[index + 1]?.depth ?? 0) > row.depth}
-                  refreshable={isRefreshable(row.link, connections)}
+                  refreshWith={refreshConnection(row.link, connections)}
                   open={open.has(row.link.id)}
                   onOpenChange={(next) => toggle(row.link.id, next)}
                   onWrite={onWrite}
@@ -138,7 +138,7 @@ export function LinkRow({
   depth,
   guides,
   hasChildren,
-  refreshable,
+  refreshWith,
   open,
   onOpenChange,
   onWrite,
@@ -151,7 +151,8 @@ export function LinkRow({
   depth: number;
   guides: boolean[];
   hasChildren: boolean;
-  refreshable: boolean;
+  /** The ready connection that reads this link; null when none can, and then there is no Refresh. */
+  refreshWith: string | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onWrite: WriteLink;
@@ -169,19 +170,23 @@ export function LinkRow({
   const open_ = openLabel(r.ref.providerId);
   const provider = providerName(r.ref.providerId);
 
-  async function run(action: string, command: Record<string, unknown>) {
+  /** Resolves to whether the write was accepted, so a control that showed it early can take it back. */
+  async function run(action: string, command: Record<string, unknown>): Promise<boolean> {
     setBusy(action);
     setError(null);
     try {
       await onWrite(command);
+      return true;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
       onOpenChange(true);
+      return false;
     } finally {
       setBusy(null);
     }
   }
-  const refresh = () => void run("refresh", { action: "refresh", resourceId: r.id });
+  const refreshable = refreshWith !== null;
+  const refresh = () => void run("refresh", { action: "refresh", resourceId: r.id, connectionId: refreshWith ?? undefined });
   const share = (enabled: boolean) => void run("share", { action: "share", resourceId: r.id, enabled });
   const unlink = () => {
     setConfirming(false);
@@ -514,7 +519,7 @@ function StackedOn({
   links: ExternalLink[];
   peers: readonly ExternalLink[];
   disabled: boolean;
-  onSave: (parentResourceId: string | null) => Promise<void>;
+  onSave: (parentResourceId: string | null) => Promise<boolean>;
 }) {
   const [value, setValue] = useState(link.parentResourceId ?? NOTHING);
   useEffect(() => setValue(link.parentResourceId ?? NOTHING), [link.parentResourceId]);
@@ -529,7 +534,10 @@ function StackedOn({
       disabled={disabled}
       onValueChange={(next) => {
         setValue(next);
-        void onSave(next === NOTHING ? null : next);
+        // A refused change is taken back: the select must never show a parent that was not saved.
+        void onSave(next === NOTHING ? null : next).then((saved) => {
+          if (!saved) setValue(link.parentResourceId ?? NOTHING);
+        });
       }}
     >
       <SelectTrigger

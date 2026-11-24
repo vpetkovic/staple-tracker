@@ -20,6 +20,7 @@ import {
   connectionNotices,
   filterCounts,
   isRefreshable,
+  refreshConnection,
   oldestRefresh,
   refreshFailure,
 } from "@/integrations/links-view";
@@ -59,7 +60,7 @@ export function ExternalLinksTab({ detail, workspace, refresh, onAuthError }: Ta
     const failures: string[] = [];
     for (const link of targets) {
       try {
-        await integrationWrite({ action: "refresh", resourceId: link.resource.id }, workspace);
+        await integrationWrite({ action: "refresh", resourceId: link.resource.id, connectionId: refreshConnection(link, connections) ?? undefined }, workspace);
       } catch (caught) {
         failures.push(message(caught));
       }

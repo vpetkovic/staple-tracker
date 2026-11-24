@@ -3,6 +3,7 @@
  * shortest key that is still unambiguous, at most four and then "+N more", and a `+` to link
  * another. On the phone (`compact`) it is one counted pill per kind beside the other chips.
  */
+import { useRef } from "react";
 import { Plus } from "lucide-react";
 import type { IssueDetail } from "@/lib/types";
 import { openLinkExternal } from "@/lib/shell-events";
@@ -56,6 +57,7 @@ export function ExternalPropertySummary({
     openDetailTab("external-links");
   };
   const addLabel = kind === "issue" ? "Link issue" : "Link pull request";
+  const addRef = useRef<HTMLButtonElement>(null);
   const add = () => openLinkExternal({ workspace: detail.workspace, ref: detail.issue.id, kind });
 
   if (compact) {
@@ -94,6 +96,7 @@ export function ExternalPropertySummary({
                 workspace={detail.workspace}
                 issueId={detail.issue.id}
                 refresh={refresh}
+                onUnlinked={() => addRef.current?.focus()}
                 onShowAll={() => {
                   close();
                   showAll();
@@ -122,6 +125,7 @@ export function ExternalPropertySummary({
           HIT,
           "pointer-coarse:before:-inset-x-2.5",
         )}
+        ref={addRef}
         aria-label={addLabel}
         onClick={add}
       >

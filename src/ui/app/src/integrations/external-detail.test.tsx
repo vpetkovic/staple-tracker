@@ -55,7 +55,7 @@ describe("external ticket context", () => {
           depth={0}
           guides={[]}
           hasChildren={false}
-          refreshable={false}
+          refreshWith={null}
           open
           onOpenChange={() => {}}
           onWrite={async () => {}}

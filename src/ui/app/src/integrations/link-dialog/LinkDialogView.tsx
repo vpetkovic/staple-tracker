@@ -29,7 +29,7 @@ import { providerName, shortKey } from "../link-state";
 import { ConnectionDot, ItemGlyph, LINK_PROSE, LinkStatePill, ProviderMark } from "../parts";
 import { resourceKey, type MappingTarget, type SearchFailure, type SearchHit, type SearchScope } from "../model";
 import type { KindFilter } from "./last-kind";
-import { failureLine, freshnessLine, linkTag, scopeLabel, scopeNote, type ResultGroup } from "./logic";
+import { failureLine, freshnessLine, linkTag, scopeLabel, scopeNote, sourceName, type ResultGroup } from "./logic";
 import { TargetPicker } from "./TargetPicker";
 
 export interface CreateState {
@@ -71,6 +71,10 @@ export interface LinkDialogState {
   create: CreateState | null;
   linkedCount: number;
   isMac: boolean;
+  /** The list on screen answers an older query than the field holds: it can be read, not acted on. */
+  stale: boolean;
+  /** There is a workspace to create a task in. */
+  canCreate: boolean;
 }
 
 export interface LinkDialogActions {
@@ -267,12 +271,12 @@ function ScopeMenu({ state, actions }: { state: LinkDialogState; actions: LinkDi
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          aria-label={`Search scope: ${narrowed?.name ?? label}`}
+          aria-label={`Search scope: ${narrowed ? sourceName(narrowed) : label}`}
           className="focus-ring inline-flex h-7 min-w-0 items-center gap-0 rounded-md px-2 text-label [&>svg]:mr-1.5 [&>svg:last-child]:mr-0 [&>svg:last-child]:ml-1.5 text-muted-foreground hover:bg-surface-hover hover:text-foreground data-[state=open]:bg-surface-hover pointer-coarse:h-11"
         >
           {narrowed ? <ProviderMark providerId={narrowed.providerId} /> : null}
           {narrowed ? (
-            <span className="truncate">{narrowed.name ?? narrowed.key}</span>
+            <span className="truncate">{sourceName(narrowed)}</span>
           ) : (
             // The count is the part worth keeping: a long workspace name truncates first.
             <>
@@ -295,7 +299,7 @@ function ScopeMenu({ state, actions }: { state: LinkDialogState; actions: LinkDi
             {scope.targets.map((t) => (
               <DropdownMenuRadioItem key={t.key} value={t.key} className="min-w-0">
                 <ProviderMark providerId={t.providerId} className="text-muted-foreground" />
-                <span className="truncate" title={t.name ?? t.key}>{t.name ?? t.key}</span>
+                <span className="truncate" title={sourceName(t)}>{sourceName(t)}</span>
               </DropdownMenuRadioItem>
             ))}
           </DropdownMenuRadioGroup>
@@ -394,7 +398,7 @@ function Results({
       ) : (
         <div className="p-2">
           {heading ? <p className="px-2.5 pt-1 pb-1 text-label font-medium text-muted-foreground">{heading}</p> : null}
-          <div role="listbox" id={listId} aria-label="Issues and pull requests">
+          <div role="listbox" id={listId} aria-label="Issues and pull requests" aria-busy={state.stale} className={cn(state.stale && "opacity-60")}>
             {state.groups.map((group) => (
               <div key={group.key} role="group" aria-labelledby={`${listId}-${group.key}`}>
                 <div
@@ -411,7 +415,7 @@ function Results({
             ))}
           </div>
           {state.hasMore ? (
-            <Button variant="ghost" size="sm" className="mt-1 w-full text-muted-foreground pointer-coarse:h-11" onClick={actions.onMore}>
+            <Button variant="ghost" size="sm" className="mt-1 w-full text-muted-foreground pointer-coarse:h-11" disabled={state.searching || state.stale} onClick={actions.onMore}>
               Show more
             </Button>
           ) : null}
@@ -441,6 +445,7 @@ function Row({ hit, peers, state, actions, id }: { hit: SearchHit; peers: readon
       <button
         type="button"
         tabIndex={-1}
+        disabled={state.stale}
         onClick={(e) => {
           e.stopPropagation();
           actions.onLink(key);
@@ -569,12 +574,12 @@ function Preview({
               ) : null}
             </>
           ) : (
-            <Button size="sm" className="pointer-coarse:h-11" disabled={!target || busy} onClick={() => actions.onLink(key)}>
+            <Button size="sm" className="pointer-coarse:h-11" disabled={!target || busy || state.stale} onClick={() => actions.onLink(key)}>
               {!target ? "Choose a task first" : state.linking === key ? "Linking…" : `Link to ${target.identifier}`}
             </Button>
           )}
-          {item.ref.kind === "issue" && !here ? (
-            <Button size="sm" variant="outline" className="pointer-coarse:h-11" disabled={busy} onClick={() => actions.onCreate(key, false)}>
+          {item.ref.kind === "issue" && !here && state.canCreate ? (
+            <Button size="sm" variant="outline" className="pointer-coarse:h-11" disabled={busy || state.stale} onClick={() => actions.onCreate(key, false)}>
               {create?.phase === "creating" ? "Creating…" : "Create task from this"}
             </Button>
           ) : null}

@@ -3,6 +3,7 @@ import type { ConnectionState } from "../../../../core/integrations/contracts";
 import type { ConnectionView } from "./connection-status";
 import {
   connectionNotices,
+  refreshConnection,
   countWords,
   filterCounts,
   isRefreshable,
@@ -120,5 +121,11 @@ describe("links tab view logic", () => {
 
   it("indents a stack by depth, capped at three levels", () => {
     expect([0, 1, 2, 3, 4, 7].map(stackIndent)).toEqual([0, 1, 2, 3, 3, 3]);
+  });
+  it("names the ready connection that reads a link, so a refresh never has to guess between two accounts", () => {
+    const other = { ...connection("github", "ready"), id: "gh-work" };
+    expect(refreshConnection(link(1), [connection("github", "unauthenticated"), other])).toBe("gh-work");
+    expect(refreshConnection(link(1), [connection("github", "ready"), other])).toBe("gh");
+    expect(refreshConnection(link(1), [connection("linear", "ready")])).toBeNull();
   });
 });

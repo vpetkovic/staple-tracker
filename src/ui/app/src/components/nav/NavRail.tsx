@@ -66,7 +66,7 @@ import { cn } from "@/lib/utils";
 import { NAV_GROUPS, chooseRailWorkspace, projectCaption, railWorkspaces, type NavGroup, type NavItem } from "./nav-model";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 import { integrationRead } from "@/lib/api";
-import type { ConnectionView } from "@/integrations/connection-status";
+import { CONNECTIONS_CHANGED, type ConnectionView } from "@/integrations/connection-status";
 import { needsAttention } from "@/settings/integrations/integrations-model";
 
 const THEME_KEY = "staple:theme";
@@ -579,7 +579,8 @@ export function NavRail({
 /**
  * INTEGRATIONS, WITH A DOT WHEN A CONNECTION NEEDS ATTENTION. The connections list carries
  * each connection's last known health and never probes, so it is read when the rail mounts
- * and again when the tab comes back into view; nothing here polls or checks.
+ * again when the tab comes back into view, and whenever another surface reports a change;
+ * nothing here polls or checks.
  */
 function IntegrationsRailItem({ onNavigate }: { onNavigate?: () => void }) {
   const session = useSession();
@@ -595,9 +596,12 @@ function IntegrationsRailItem({ onNavigate }: { onNavigate?: () => void }) {
     };
     read();
     document.addEventListener("visibilitychange", onVisible);
+    // Settings, the link dialog and the External links tab announce what they learn, so the dot follows a fix at once.
+    window.addEventListener(CONNECTIONS_CHANGED, read);
     return () => {
       active = false;
       document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener(CONNECTIONS_CHANGED, read);
     };
     // Connections belong to the computer: one read per mount, whatever workspace is shown.
     // eslint-disable-next-line react-hooks/exhaustive-deps

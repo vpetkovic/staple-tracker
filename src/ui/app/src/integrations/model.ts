@@ -51,12 +51,6 @@ export function sourceInput(item: SourceItem, connectionId?: string): Record<str
     ? { resourceId: item.id }
     : { url: item.url, connectionId: connectionId || undefined };
 }
-export function freshness(item: SourceItem, now = Date.now()): string {
-  if (!("fetchedAt" in item) || !item.fetchedAt) return "URL reference · context not fetched";
-  const age = now - Date.parse(item.fetchedAt);
-  return `${age > 24 * 60 * 60 * 1000 ? "Stale cache" : "Cached context"} · ${new Date(item.fetchedAt).toLocaleString()}`;
-}
-
 export function groupLinks(
   links: ExternalLink[],
 ): Array<{ key: string; label: string; links: ExternalLink[] }> {

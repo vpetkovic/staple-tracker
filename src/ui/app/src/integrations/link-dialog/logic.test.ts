@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { Issue } from "@/lib/types";
 import type { MappingTarget, SearchHit } from "../model";
 import {
+  answerFor,
+  connectionFor,
   createLatest,
   failureLine,
   freshnessLine,
@@ -15,6 +17,7 @@ import {
   scopeFromMapping,
   scopeNote,
   searchKinds,
+  sourceName,
 } from "./logic";
 
 const repo: MappingTarget = {
@@ -202,5 +205,43 @@ describe("the scope before the first answer", () => {
     expect(scopeFromMapping(mapping, "empty", false)).toEqual({ mode: "configured", workspaces: ["staple", "ops"], targets: [repo, team] });
     expect(scopeFromMapping(mapping, "staple", true)).toEqual({ mode: "all", workspaces: ["staple", "ops"], targets: [repo, team] });
     expect(scopeFromMapping({ workspaces: [{ workspace: "empty", targets: [] }], targets: [] }, "empty", false)).toEqual({ mode: "none", workspaces: [], targets: [] });
+  });
+});
+
+describe("what an answer belongs to", () => {
+  it("is tied to the text, the filter and the narrowing it was asked with", () => {
+    const asked = answerFor("auth", "all", null);
+    expect(answerFor(" auth ", "all", null)).toBe(asked);
+    // A new keystroke, filter or source makes the list on screen someone else's answer.
+    expect(answerFor("autho", "all", null)).not.toBe(asked);
+    expect(answerFor("auth", "issue", null)).not.toBe(asked);
+    expect(answerFor("auth", "all", repo.key)).not.toBe(asked);
+  });
+});
+
+describe("which connection reads an item", () => {
+  const ready = (id: string, host = "github.com") => ({ id, providerId: "github", host, health: { state: "ready" } }) as never;
+  const down = (id: string) => ({ id, providerId: "github", host: "github.com", health: { state: "unauthenticated" } }) as never;
+  it("is the one that serves the source a live result came from", () => {
+    const second = { ...repo, key: "github.com/77", containerId: "77", connectionId: "gh-work" };
+    expect(connectionFor(hit("1").item.ref, second.key, [repo, second], [ready("gh"), ready("gh-work")])).toBe("gh-work");
+  });
+  it("for a pasted link, prefers a ready connection on that host that serves a source in scope", () => {
+    const item = hit("1").item.ref;
+    expect(connectionFor(item, undefined, [{ ...repo, connectionId: "gh-work" }], [ready("gh"), ready("gh-work")])).toBe("gh-work");
+    expect(connectionFor(item, undefined, [], [down("gh"), ready("gh-work")])).toBe("gh-work");
+    expect(connectionFor(item, undefined, [], [ready("ghe", "git.example")])).toBeUndefined();
+    // A pasted link only tells us its host.
+    expect(connectionFor({ host: "github.com" }, undefined, [], [ready("gh")])).toBe("gh");
+  });
+});
+
+describe("a source's name", () => {
+  it("never falls back to its key", () => {
+    expect(sourceName(repo)).toBe("vpetkovic/staple-tracker");
+    expect(sourceName({ ...repo, name: null })).toBe("Unnamed repository");
+    expect(sourceName({ ...team, name: null })).toBe("Unnamed team");
+    expect(failureLine({ connectionId: "gh", targetKeys: [repo.key], state: "offline", message: "x" }, [{ ...repo, name: null }]))
+      .toBe("GitHub offline on this computer. Showing saved copies for Unnamed repository.");
   });
 });

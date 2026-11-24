@@ -5,7 +5,7 @@
  */
 import type { Issue } from "@/lib/types";
 import type { ConnectionHealthSnapshot } from "../../../../../core/integrations/contracts";
-import { connectionStatus } from "../connection-status";
+import { connectionStatus, type ConnectionView } from "../connection-status";
 import { containerLabel, providerName, savedAge } from "../link-state";
 import { resourceKey, uniqueHits, type MappingTarget, type MixedResults, type SearchFailure, type SearchHit, type SearchScope, type SourceItem } from "../model";
 import type { KindFilter } from "./last-kind";
@@ -123,7 +123,7 @@ export function failureLine(failure: SearchFailure, targets: readonly MappingTar
   const provider = named.find(Boolean)?.providerId;
   const status = connectionStatus({ connectionId: failure.connectionId ?? "", state: failure.state, message: failure.message,
     action: null, identity: null, checkedAt: new Date().toISOString(), retryAfterSeconds: null } satisfies ConnectionHealthSnapshot);
-  const names = named.map((t, i) => t?.name ?? t?.key ?? failure.targetKeys[i]!).join(", ");
+  const names = named.map((t) => (t ? sourceName(t) : "a source no longer chosen")).join(", ");
   return `${provider ? providerName(provider) : "A connection"} ${status.label.toLowerCase()} on this computer. Showing saved copies for ${names}.`;
 }
 
@@ -155,4 +155,35 @@ export function outsideScopeTarget(error: unknown): MappingTarget | null {
   if (typeof detail !== "object" || detail === null) return null;
   const { reason, target } = detail as { reason?: unknown; target?: unknown };
   return reason === "outside_scope" && typeof target === "object" && target !== null ? (target as MappingTarget) : null;
+}
+
+/** A source's name for the screen. One mapped before names were stored is named by its kind, never by its key. */
+export function sourceName(target: Pick<MappingTarget, "name" | "kind">): string {
+  return target.name ?? `Unnamed ${target.kind}`;
+}
+
+/**
+ * What a list of results is the answer to. The list on screen may be linked from only while
+ * it still answers what the field, the filter and the source menu say now.
+ */
+export function answerFor(text: string, kind: KindFilter, containerKey: string | null): string {
+  return JSON.stringify([text.trim(), kind, containerKey]);
+}
+
+/**
+ * The connection to read an item through, so the server never has to choose between two
+ * accounts on one host: the one serving the source a live result came from; for a pasted
+ * link, a ready connection on its host, preferring one that serves a source in scope.
+ */
+export function connectionFor(
+  where: { providerId?: string; host: string },
+  targetKey: string | undefined,
+  targets: readonly MappingTarget[],
+  connections: ReadonlyArray<Pick<ConnectionView, "id" | "providerId" | "host" | "health">>,
+): string | undefined {
+  const served = targets.find((t) => t.key === targetKey)?.connectionId;
+  if (served) return served;
+  const ready = connections.filter((c) => (!where.providerId || c.providerId === where.providerId) && c.host === where.host && c.health?.state === "ready");
+  const inScope = new Set(targets.map((t) => t.connectionId));
+  return (ready.find((c) => inScope.has(c.id)) ?? ready[0])?.id;
 }

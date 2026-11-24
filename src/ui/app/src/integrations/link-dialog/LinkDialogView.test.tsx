@@ -61,6 +61,8 @@ function state(over: Partial<LinkDialogState> = {}, hits = [hit("1"), hit("2", "
     create: null,
     linkedCount: 0,
     isMac: true,
+    stale: false,
+    canCreate: true,
     ...over,
   };
 }
@@ -212,5 +214,16 @@ describe("link dialog refinements", () => {
   it("says what to do about a source that failed, when the server knows", () => {
     const failure = { connectionId: "gh", targetKeys: [repo.key], state: "unauthenticated" as const, message: "x", action: "Run gh auth login --hostname github.com on the computer running Staple." };
     expect(text(render(state({ failures: [failure] })))).toContain("Run gh auth login --hostname github.com on the computer running Staple.");
+  });
+  it("offers no way to link or page while the list on screen answers an older query", () => {
+    const html = render(state({ stale: true, searching: true, hasMore: true }));
+    // The selected row's Link, the preview's Link and Show more are all held back.
+    expect(html.match(/<button[^>]*disabled=""[^>]*>(?:(?!<\/button>).)*Link/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>\s*Show more/);
+    expect(html).toContain('aria-busy="true"');
+  });
+  it("offers Create only when there is a workspace to create the task in", () => {
+    expect(text(render(state({ canCreate: false })))).not.toContain("Create task from this");
+    expect(text(render(state({ canCreate: true })))).toContain("Create task from this");
   });
 });
