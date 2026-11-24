@@ -1,6 +1,7 @@
 import type { ExternalItem, ResolvedExternalItem } from "../../../../core/integrations/contracts";
 import type { ExternalResource, ExternalLink } from "../../../../core/integrations/link-store";
 import type { Issue } from "@/lib/types";
+import { containerLabel } from "./link-state";
 export type { ExternalResource, ExternalLink };
 export type SourceItem = ResolvedExternalItem | ExternalItem | ExternalResource;
 export interface SearchHit {
@@ -50,9 +51,7 @@ export function groupLinks(
     const key = JSON.stringify([r.ref.providerId, r.ref.host, r.ref.scopeId, r.ref.containerId]);
     let group = groups.get(key);
     if (!group) {
-      const repository =
-        r.ref.providerId === "github" ? r.key.replace(/#[0-9]+$/, "") : r.ref.containerId;
-      group = { key, label: `${r.ref.providerId} · ${r.ref.host} · ${repository}`, links: [] };
+      group = { key, label: containerLabel(r), links: [] };
       groups.set(key, group);
     }
     group.links.push(link);
