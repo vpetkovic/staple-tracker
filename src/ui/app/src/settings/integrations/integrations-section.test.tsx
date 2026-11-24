@@ -165,7 +165,7 @@ const workspaces = (rows: WorkspaceMapping[], current = "", cachedOnly = false) 
 
 describe("workspaces", () => {
   it("lists the current workspace first, then alphabetically", () => {
-    const html = workspaces([{ workspace: "gamma", targets: [] }, { workspace: "alpha", targets: [] }, { workspace: "beta", targets: [] }], "gamma");
+    const html = workspaces([{ workspace: "beta", targets: [] }, { workspace: "gamma", targets: [] }, { workspace: "alpha", targets: [] }], "gamma");
     const order = [...html.matchAll(/data-workspace-row="([^"]+)"/g)].map((m) => m[1]);
     expect(order).toEqual(["gamma", "alpha", "beta"]);
   });
@@ -182,7 +182,8 @@ describe("workspaces", () => {
     const html = workspaces([{ workspace: "alpha", targets: [target({ name: null, key: "github.com/98765432109", connectionId: null })] }]);
     expect(html).toContain(">98765432<");
     expect(html).toContain("Name unavailable until this source is read again");
-    expect(html).toContain("No connection on this computer reads this source");
+    expect(html).toMatch(/title="[^"]*No connection on this computer reads this source"/);
+    expect(html).toContain('aria-label="No connection on this computer reads this source"');
   });
 
   it("prefixes a project with its kind only beside teams", () => {
