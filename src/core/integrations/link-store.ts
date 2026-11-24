@@ -196,7 +196,7 @@ export class ExternalLinkStore {
       SELECT l.issue_id,r.id,r.provider_id,r.host,r.container_id,r.kind,r.display_key,r.url,
         CASE WHEN p.fetched_at IS NOT NULL AND (r.fetched_at IS NULL OR p.fetched_at>=r.fetched_at) THEN p.title ELSE r.title END AS title,
         CASE WHEN p.fetched_at IS NOT NULL AND (r.fetched_at IS NULL OR p.fetched_at>=r.fetched_at) THEN p.status_json ELSE r.status_json END AS status_json,
-        ROW_NUMBER() OVER (PARTITION BY l.issue_id,r.kind ORDER BY r.provider_id,r.host,r.container_id,l.position,l.created_at,l.id) AS ordinal
+        ROW_NUMBER() OVER (PARTITION BY l.issue_id,r.kind ORDER BY r.provider_id,r.host,r.container_id,l.position,l.created_at,l.rowid,l.id) AS ordinal
       FROM external_links l JOIN external_resources r ON r.id=l.resource_id
       LEFT JOIN external_private_cache p ON p.resource_id=r.id
     ) WHERE ordinal<=5`).all() as Array<{issue_id:string;id:string;provider_id:string;host:string;container_id:string;kind:string;display_key:string;url:string;title:string|null;status_json:string|null}>;
@@ -209,7 +209,7 @@ export class ExternalLinkStore {
 
   list(ref: string): ExternalLink[] {
     const issue = this.store.getIssue(ref);
-    const rows = this.db.prepare("SELECT * FROM external_links WHERE issue_id = ? ORDER BY position, created_at, id").all(issue.id) as unknown as LinkRow[];
+    const rows = this.db.prepare("SELECT * FROM external_links WHERE issue_id = ? ORDER BY position, created_at, rowid, id").all(issue.id) as unknown as LinkRow[];
     const present = new Set(rows.map(l => l.resource_id));
     return rows.map(row => ({ id: row.id, issueId: row.issue_id, resource: this.resource(row.resource_id), parentResourceId: row.parent_resource_id,
       parentMissing: row.parent_resource_id !== null && !present.has(row.parent_resource_id), position: row.position,

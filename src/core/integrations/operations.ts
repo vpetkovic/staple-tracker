@@ -39,19 +39,22 @@ const DETECTION_RUNNER=createGhRunner({timeoutMs:10_000});
 /** One boundary for terminal, agents and browser. Search reads never create work or persist source bodies. */
 export class IntegrationOperations {
   readonly connections: IntegrationConnections;
-  private readonly work: ExternalWork;
   private readonly caches: { health: ProbeCache<ConnectionHealthSnapshot>; detection: ProbeCache<Array<{host:string;login:string}>> };
   /** The connection a live read in the current command used, so its failure can update health. */
   private used: ProviderConnection | null = null;
   private readonly names: TargetNames;
-  constructor(private readonly store:WorkspaceStore, private readonly options:{home?:string;factories?:ReadonlyMap<string,AdapterFactory>;liveReadsAvailable?:boolean;
+  constructor(private readonly workspaceStore:WorkspaceStore|null, private readonly options:{home?:string;factories?:ReadonlyMap<string,AdapterFactory>;liveReadsAvailable?:boolean;
     gh?:GhRunner;caches?:{health:ProbeCache<ConnectionHealthSnapshot>;detection:ProbeCache<Array<{host:string;login:string}>>};
     /** Every workspace on this machine, for All workspaces and for unmapped workspaces. Defaults to this one. */
     workspaces?:()=>WorkspaceHandle[]}={}) {
     this.connections = new IntegrationConnections(options.home);
     this.names = new TargetNames(`${this.connections.directory}/names`);
-    this.work = new ExternalWork(store);
     this.caches = options.caches ?? processCaches;
+  }
+  /** Connections, health and containers belong to the computer; everything else needs a workspace. */
+  private get store():WorkspaceStore {
+    if (!this.workspaceStore) throw new StapleError("validation","This integration operation needs a workspace; pass --ws or run it inside one");
+    return this.workspaceStore;
   }
   private workspaces():WorkspaceHandle[] {
     return this.options.workspaces?.() ?? [{slug:this.store.slug,store:this.store}];
@@ -166,7 +169,7 @@ export class IntegrationOperations {
         const connections=this.connections.list();
         return {connections:connections.map(connection=>({...connection,health:this.caches.health.peek(this.healthKey(connection))})),
           detected:await this.detect(connections),pollIntervalSeconds:HEALTH_POLL_INTERVAL_SECONDS,
-          execution:this.options.liveReadsAvailable===false ? "cached_only":"local",counts:this.counts()};
+          execution:this.options.liveReadsAvailable===false ? "cached_only":"local",counts:this.workspaceStore ? this.counts():{}};
       }
       case "configure":
         if(c.providerId === "linear") return this.connections.save({id:c.connectionId,providerId:"linear",mode:"api",host:"linear.app",
@@ -178,9 +181,13 @@ export class IntegrationOperations {
       case "mapping": {
         const connections=this.connections.list();
         if (c.allWorkspaces) {
-          const workspaces=this.workspaces().map(w=>({workspace:w.slug,targets:storedMapping(w.store,this.names).map(t=>present(t,connections))}));
-          const union=new Map(workspaces.flatMap(w=>w.targets).map(t=>[t.key,t]));
-          return {workspaces,targets:[...union.values()]};
+          const listed=this.workspaces().map(w=>({workspace:w.slug,targets:storedMapping(w.store,this.names).map(t=>present(t,connections))}));
+          // Each target is named once, however many workspaces map it.
+          const union=new Map<string,MappingTarget>();
+          for (const t of listed.flatMap(w=>w.targets)) if (!union.get(t.key)?.name) union.set(t.key,t);
+          const named=new Map((await this.named([...union.values()])).map(t=>[t.key,t]));
+          const workspaces=listed.map(w=>({workspace:w.workspace,targets:w.targets.map(t=>t.name ? t : {...t,name:named.get(t.key)!.name,url:named.get(t.key)!.url})}));
+          return {workspaces,targets:[...named.values()]};
         }
         return {workspace:this.store.slug,targets:await this.named(storedMapping(this.store,this.names).map(t=>present(t,connections)))};
       }
@@ -207,7 +214,7 @@ export class IntegrationOperations {
       case "counts": return this.counts();
       case "list": return this.store.externalLinks().list(need(c.ref,"local ticket"));
       case "resolve": return this.source(c);
-      case "preview": { const item=await this.source(c); return {item,...this.work.preview(item)}; }
+      case "preview": { const item=await this.source(c); return {item,...new ExternalWork(this.store).preview(item)}; }
       case "search": {
         const text=c.text?.trim() ?? "";
         const kind=c.kind ?? "issue";
@@ -220,11 +227,11 @@ export class IntegrationOperations {
         const result=live ? await this.searchTargets(c,scope,kind,text) : {remote:[],nextCursor:null,failures:[]};
         return {local,counts:this.counts(),cached,...result,scope,execution:live ? "local":"cached_only"};
       }
-      case "link": return this.work.adopt(need(c.ref,"local ticket"),await this.source(c),c.confirmed===true,actor());
+      case "link": return new ExternalWork(this.store).adopt(need(c.ref,"local ticket"),await this.source(c),c.confirmed===true,actor());
       case "create": {
         const item=await this.source(c);
         if (!("title" in item) || item.title===null || item.fetchedAt===null) throw new StapleError("unavailable","Read source context before creating local work");
-        return this.work.create(item as ExternalItem,{requestKey:need(c.requestKey,"retry request key"),actor:actor(),additionalWork:c.additionalWork,title:c.title});
+        return new ExternalWork(this.store).create(item as ExternalItem,{requestKey:need(c.requestKey,"retry request key"),actor:actor(),additionalWork:c.additionalWork,title:c.title});
       }
       case "unlink": this.store.externalLinks().unlink(need(c.ref,"local ticket"),need(c.resourceId,"resource"),actor()); return {unlinked:true};
       case "refresh": {

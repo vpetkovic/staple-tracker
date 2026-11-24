@@ -141,6 +141,14 @@ describe("shared integration operations",()=>{
     expect(unmap.isError).toBe(true);
     const listed=spawnSync(process.execPath,[TSX_CLI,CLI_ENTRY,"integrations","mapping","--db",dbPath,"--json"],{env:{...process.env,STAPLE_HOME:home,NODE_NO_WARNINGS:"1"},encoding:"utf8"});
     expect(listed.status,listed.stderr).toBe(0);expect(JSON.parse(listed.stdout)).toEqual({workspace:"integration-tests",targets:[]});
+    // Connections belong to the computer: listing them needs no workspace, even outside one.
+    const outside=spawnSync(process.execPath,[TSX_CLI,CLI_ENTRY,"integrations","connections","--json"],{cwd:tmpdir(),env:{...process.env,STAPLE_HOME:home,NODE_NO_WARNINGS:"1"},encoding:"utf8"});
+    expect(outside.status,outside.stderr).toBe(0);
+    expect(JSON.parse(outside.stdout).connections.map((c:{id:string})=>c.id).sort()).toEqual(["linear-cli","linear-mcp"]);
+    const every=spawnSync(process.execPath,[TSX_CLI,CLI_ENTRY,"integrations","mapping","--all-workspaces","--json"],{cwd:tmpdir(),env:{...process.env,STAPLE_HOME:home,NODE_NO_WARNINGS:"1"},encoding:"utf8"});
+    expect(every.status,every.stderr).toBe(0);expect(JSON.parse(every.stdout).workspaces).toEqual([{workspace:"integration-tests",targets:[]}]);
+    const needsOne=spawnSync(process.execPath,[TSX_CLI,CLI_ENTRY,"integrations","mapping","--json"],{cwd:tmpdir(),env:{...process.env,STAPLE_HOME:home,NODE_NO_WARNINGS:"1"},encoding:"utf8"});
+    expect(needsOne.status).not.toBe(0);
   },30_000);
   it("exposes the same cached links over HTTP, CLI and MCP and enforces HTTP method/action/origin boundaries",async()=>{
     const {ws,home,task}=setup();

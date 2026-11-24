@@ -75,14 +75,17 @@ machine-local connection file. Use different variable names for different accoun
 UUIDs scope team preferences; old GitHub repository preferences and browser defaults still work.
 
 ```sh
-staple integrations configure --ws my-workspace --provider linear \
+# Connections belong to this computer; every workspace uses them.
+staple integrations configure --provider linear \
   --account USER_UUID --scope ORGANIZATION_UUID --credential-env STAPLE_LINEAR_API_KEY --json
-staple integrations containers --ws my-workspace --connection CONNECTION_ID --json
-staple integrations search --ws my-workspace --connection CONNECTION_ID --container TEAM_UUID --text login --json
+staple integrations containers --connection CONNECTION_ID --json                          # teams
+staple integrations containers --connection CONNECTION_ID --container-kind project --json  # projects
+staple integrations map --ws my-workspace --connection CONNECTION_ID --container TEAM_UUID --json
+staple integrations search --ws my-workspace --text login --json
 staple integrations preview --ws my-workspace --connection CONNECTION_ID --container TEAM_UUID --key ENG-123 --json
-staple integrations link --ws my-workspace --ref ABC-12 --connection CONNECTION_ID \
+staple integrations link --ws my-workspace --ref ABC-12 \
   --url https://linear.app/my-workspace/issue/ENG-123/example --confirmed --json
-staple integrations refresh --ws my-workspace --resource RESOURCE_ID --connection CONNECTION_ID --json
+staple integrations refresh --ws my-workspace --resource RESOURCE_ID --json
 ```
 
 Paste an exact issue URL in the link dialog, or type to search the mapped teams and projects,
@@ -126,17 +129,35 @@ names never imply ancestry. **Stacked on** changes Staple references only.
 ## CLI and MCP
 
 ```sh
-staple integrations configure --ws my-workspace --host github.com --account my-account --json
-staple integrations connections --ws my-workspace --json
-staple integrations health --ws my-workspace --connection CONNECTION_ID --json
+# Connections and their health are per computer, so these take no workspace.
+staple integrations configure --host github.com --account my-account --json
+staple integrations connections --json
+staple integrations health --connection CONNECTION_ID --force --json
+
+# What each workspace searches and links. The mapping syncs with the workspace.
+staple integrations containers --connection CONNECTION_ID --text api --json
+staple integrations map --ws my-workspace --connection CONNECTION_ID --container REPOSITORY_ID --json
+staple integrations mapping --ws my-workspace --json
+staple integrations mapping --all-workspaces --json
+staple integrations unmap --ws my-workspace --target-key github.com/REPOSITORY_ID --json
+
+# Search and link inside that scope; --all-workspaces spans every mapping on this computer.
+staple integrations search --ws my-workspace --text login --json
+staple integrations search --ws my-workspace --all-workspaces --text login --json
 staple integrations preview --ws my-workspace --url https://github.com/owner/repo/issues/42 --json
 staple integrations link --ws my-workspace --ref ABC-12 --url https://github.com/owner/repo/issues/42 --confirmed --json
 ```
 
+A workspace with a mapping searches and links only its mapped repositories, teams and projects. A
+workspace with no mapping, and `--all-workspaces`, cover everything mapped on this computer. With
+nothing mapped anywhere, search reads cached context only and an exact URL still links. Search runs
+once per mapped source; a source that fails is reported in `failures` beside the others' results.
+Linking outside the scope is refused with `outside_scope` and names the repository or team to map.
+
 `staple integrations --help` lists the available operations. MCP exposes `integration_read`,
-`integration_write` and `configure_integration` through the same operation service. Every client
-must target the intended workspace. Configure is machine-local; only link/context writes trigger
-consented automatic workspace sync.
+`integration_write` and `configure_integration` through the same operation service, with the same
+fields (`allWorkspaces`, `containerKind`, `targetKey`, `containerKey`). Configure is machine-local;
+mapping and link/context writes sync with the workspace.
 
 ## Add a provider or API transport
 
