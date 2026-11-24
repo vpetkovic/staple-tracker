@@ -658,6 +658,7 @@ function flatten(
       claim: r.claim,
       workspace: r.workspace,
       pullRequests: r.pullRequests,
+      externalLinks: r.externalLinks,
       // W4 (STA-116). Carried for the same reason `claim` is, and with the same
       // history behind the reminder: this pass once mapped `IssueRow[] -> Issue[]` and
       // threw away a reading the server had batched a query to produce.

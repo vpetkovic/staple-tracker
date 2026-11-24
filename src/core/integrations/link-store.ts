@@ -27,6 +27,15 @@ export interface ExternalLink {
   updatedAt: string;
 }
 
+export interface ExternalLinkPreview {
+  id: string; providerId: string; host: string; containerId: string;
+  key: string; url: string; title: string | null;
+}
+export interface ExternalRowSummary {
+  issues: { count: number; items: ExternalLinkPreview[] };
+  pullRequests: { count: number; items: ExternalLinkPreview[] };
+}
+
 export interface ResourceRow {
   id: string; provider_id: string; host: string; scope_id: string; container_id: string;
   remote_id: string; kind: ExternalItemRef["kind"]; display_key: string; url: string;
@@ -170,6 +179,28 @@ export class ExternalLinkStore {
         this.recordStack(issue.id, actor);
       }
     });
+  }
+
+  /** Two bounded local queries for the entire list; never read provider context per row. */
+  summaries(): Record<string, ExternalRowSummary> {
+    const result: Record<string, ExternalRowSummary> = {};
+    const counts = this.db.prepare(`SELECT l.issue_id,r.kind,COUNT(*) AS n FROM external_links l
+      JOIN external_resources r ON r.id=l.resource_id GROUP BY l.issue_id,r.kind`).all() as Array<{issue_id:string;kind:string;n:number}>;
+    for(const row of counts) {
+      const summary=result[row.issue_id] ??= {issues:{count:0,items:[]},pullRequests:{count:0,items:[]}};
+      summary[row.kind === "issue" ? "issues" : "pullRequests"].count=row.n;
+    }
+    const rows = this.db.prepare(`SELECT * FROM (
+      SELECT l.issue_id,r.id,r.provider_id,r.host,r.container_id,r.kind,r.display_key,r.url,
+        CASE WHEN p.fetched_at IS NOT NULL AND (r.fetched_at IS NULL OR p.fetched_at>=r.fetched_at) THEN p.title ELSE r.title END AS title,
+        ROW_NUMBER() OVER (PARTITION BY l.issue_id,r.kind ORDER BY r.provider_id,r.host,r.container_id,l.position,l.created_at,l.id) AS ordinal
+      FROM external_links l JOIN external_resources r ON r.id=l.resource_id
+      LEFT JOIN external_private_cache p ON p.resource_id=r.id
+    ) WHERE ordinal<=5`).all() as Array<{issue_id:string;id:string;provider_id:string;host:string;container_id:string;kind:string;display_key:string;url:string;title:string|null}>;
+    for(const row of rows) result[row.issue_id]![row.kind === "issue" ? "issues" : "pullRequests"].items.push({
+      id:row.id,providerId:row.provider_id,host:row.host,containerId:row.container_id,key:row.display_key,url:row.url,title:row.title,
+    });
+    return result;
   }
 
   list(ref: string): ExternalLink[] {

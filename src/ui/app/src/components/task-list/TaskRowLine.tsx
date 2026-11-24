@@ -1,3 +1,4 @@
+import { ExternalLinkBadges } from "@/integrations/ExternalLinkBadges";
 /**
  * THE task row — R4 (STA-102), and originally V5 (STA-97) §3, §4, §11, §12, §13.
  *
@@ -632,6 +633,7 @@ export function TaskRowLine({
             {/* A live autopilot run holds this row, works through it, or (folded) works inside it (lib/runs.ts); a ghost row shows no claim. */}
             {columns.claim && !ghost ? <AutopilotBadge workspace={row.workspace} issueId={issue.id} folded={collapsedParent} /> : null}
             {columns.deps ? <DependencyBadges row={row} merged={plan.deps === "merged"} words /> : null}
+            <ExternalLinkBadges summary={row.externalLinks} workspace={row.workspace} issueId={issue.id} issueRef={issue.identifier} />
             {columns.pr && plan.prBadge ? <PrBadge pullRequests={row.pullRequests} showNumber={plan.prNumber} /> : null}
             {milestoneCue && plan.milestoneMark ? <MilestoneCue cue={milestoneCue} onOpen={onOpenMilestone} chip /> : null}
             {columns.labels && plan.labels !== "none" ? (
@@ -726,7 +728,8 @@ export function TaskRowLine({
           the edge that gets clipped first.
         */}
         {columns.deps ? <DependencyBadges row={row} merged={plan.deps === "merged"} /> : null}
-        {columns.pr && plan.prBadge ? <PrBadge pullRequests={row.pullRequests} showNumber={plan.prNumber} /> : null}
+        <ExternalLinkBadges summary={row.externalLinks} workspace={row.workspace} issueId={issue.id} issueRef={issue.identifier} />
+            {columns.pr && plan.prBadge ? <PrBadge pullRequests={row.pullRequests} showNumber={plan.prNumber} /> : null}
         {columns.labels && plan.labels !== "none" ? <LabelPills labels={issue.labels} max={labelMax} /> : null}
         {/*
           W4 (STA-116). Immediately LEFT of the claim slot, which is where §3C's mockup

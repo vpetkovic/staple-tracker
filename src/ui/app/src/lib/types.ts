@@ -1,3 +1,4 @@
+import type { ExternalRowSummary } from "../../../../core/integrations/link-store.js";
 import type { HorizonData, IdeaData, IdeaDetailData, PlanStepData } from "./plan-types.js";
 /**
  * The wire vocabulary — one mirror of src/core/types.ts plus the envelopes
@@ -943,6 +944,7 @@ export interface IssueRow {
    * freezing it into the entity would be a lie waiting to happen.
    */
   pullRequests?: PullRequestRef[];
+  externalLinks?: ExternalRowSummary;
   /**
    * The review gate ON this row, and the gate this row is QUEUED BEHIND
    * (STA-143). Two SIBLINGS of `issue` rather than one wrapper: they are

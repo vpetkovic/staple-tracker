@@ -3966,6 +3966,7 @@ export function startUiServer(options: UiOptions): UiHandle {
            * entity is a lie waiting to happen.
            */
           const worklogs = h.store.worklogSummaryFor(ids);
+          const externalSummaries = h.store.externalLinks().summaries();
           /**
            * O6 (STA-138): what each row is waiting on, and what is waiting on it.
            *
@@ -4005,6 +4006,7 @@ export function startUiServer(options: UiOptions): UiHandle {
             // `claim` does, so the page never has to tell "no worklog" from "field
             // missing" — it never invents a fact it was not sent.
             worklog: worklogs.get(issue.id) ?? null,
+            ...(externalSummaries[issue.id] ? {externalLinks:externalSummaries[issue.id]} : {}),
             deps: {
               blockedBy: blockedBy.get(issue.id) ?? [],
               blocks: blocks.get(issue.id) ?? [],

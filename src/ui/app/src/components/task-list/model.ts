@@ -1,3 +1,4 @@
+import type { ExternalRowSummary } from "../../../../../core/integrations/link-store";
 /**
  * What a task row IS, and the geometry it is drawn against — R4 (STA-102).
  *
@@ -127,6 +128,7 @@ export interface TaskRow {
   claim: ClaimActivity | null;
   workspace: string;
   pullRequests?: PullRequestRef[];
+  externalLinks?: ExternalRowSummary;
   /**
    * The latest checkpoint, or nothing — W1 (STA-113), rendered by W4 (STA-116).
    *
@@ -567,6 +569,7 @@ export interface TaskSource {
   claim: ClaimActivity | null;
   workspace: string;
   pullRequests?: PullRequestRef[];
+  externalLinks?: ExternalRowSummary;
   worklog?: WorklogSummary | null;
   deps?: IssueDeps;
   cues?: RowCues | null;
@@ -587,6 +590,7 @@ export function flatRow(source: TaskSource, over: Partial<TaskRow> = {}): TaskRo
     claim: source.claim,
     workspace: source.workspace,
     pullRequests: source.pullRequests,
+    externalLinks: source.externalLinks,
     worklog: source.worklog,
     deps: source.deps,
     // R4c (STA-188). A row built outside the ungrouped tree has no join behind it, so it
