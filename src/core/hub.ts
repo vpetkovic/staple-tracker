@@ -8,6 +8,7 @@ import { migrateHub } from "./schema.js";
 import { derivePrefixBase, parseIdentifier, prefixSuffixForAttempt } from "./ids.js";
 import { openWorkspace } from "./open.js";
 import { readWorkspaceManifest } from "./repo-identity.js";
+import { assertInTestSandbox } from "./test-sandbox.js";
 import { StapleError, nowIso } from "./types.js";
 import { crossLinkEntityId, type CrossLinkIdentity } from "./cloud/cross-link-key.js";
 import { assertNoHubCycle } from "./hub-cross-blockers.js";
@@ -383,6 +384,7 @@ export class Hub {
    */
   static openReadOnly(): Hub {
     const path = Hub.hubPath();
+    assertInTestSandbox(path, "hub database");
     if (!existsSync(path)) {
       throw new StapleError("not_found", `No hub database at ${path}.`);
     }

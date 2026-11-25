@@ -22,6 +22,7 @@ import {
   type WorkspaceLayout,
 } from "./path-migration.js";
 import { linkedWorktreeMainCheckout } from "./git-worktree.js";
+import { assertInTestSandbox } from "./test-sandbox.js";
 import { StapleError } from "./types.js";
 
 export type { OpenedWorkspace } from "./open.js";
@@ -98,8 +99,11 @@ export function findWorkspace(startDir: string): FoundWorkspace | null {
     if (report.currentPresent || report.legacyPresent) {
       assertResolvable(report);
       const layout = report.layout ?? "current";
+      const dbPath = layout === "current" ? report.currentPath : report.legacyPath;
+      // The walk-up from a test's working directory can reach a real checkout (`./test-sandbox.ts`).
+      assertInTestSandbox(dbPath, "workspace database");
       return {
-        dbPath: layout === "current" ? report.currentPath : report.legacyPath,
+        dbPath,
         layout,
         root: dir,
         report,

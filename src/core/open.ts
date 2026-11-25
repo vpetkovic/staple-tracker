@@ -10,6 +10,7 @@ import { assertNotNewer, describeSchema } from "./migrations/runner.js";
 import type { SchemaState } from "./migrations/types.js";
 import { WORKSPACE_TARGET, inspectWorkspaceSchema, migrateWorkspace } from "./schema.js";
 import { WorkspaceStore } from "./store.js";
+import { assertInTestSandbox } from "./test-sandbox.js";
 import { StapleError } from "./types.js";
 
 /** Where pre-upgrade snapshots land, beside the database they were taken from. */
@@ -165,6 +166,8 @@ export function snapshotWorkspaceForUpgrade(
  * at all, rather than merely from committing to it.
  */
 export function openWorkspace(dbPath: string): OpenedWorkspace {
+  // Before the schema is inspected, snapshotted or migrated (`./test-sandbox.ts`).
+  assertInTestSandbox(dbPath, "workspace database");
   if (!existsSync(dbPath)) {
     throw new StapleError(
       "not_found",
