@@ -109,7 +109,7 @@ try {
   await pinned.handshake();
 
   const tools = await rpc("tools/list", {});
-  assert(tools.tools.length === 87, `tools/list exposes ${tools.tools.length} tools`);
+  assert(tools.tools.length === 88, `tools/list exposes ${tools.tools.length} tools`);
 
   const byName = new Map<string, any>(tools.tools.map((t: any) => [t.name, t]));
   assert(
