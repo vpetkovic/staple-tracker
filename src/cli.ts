@@ -22,6 +22,7 @@ import { runHorizonCommand, runIdeaCommand, runPlanCommand } from "./commands/pl
 import { assertNotReservedActor } from "./core/milestones.js";
 import { renderInstructions } from "./core/instructions.js";
 import { runQueueCommand } from "./commands/queue.js";
+import { runAttentionCommand } from "./commands/attention.js";
 import { runRunCommand } from "./commands/run.js";
 import { runDriveCommand } from "./commands/run-drive.js";
 import { runHookCommand } from "./commands/run-hook.js";
@@ -1126,6 +1127,11 @@ Tasks
               QUEUED is work a HUMAN has to release (see Approval gates below) and
               checkout of it is refused; BLOCKED is work waiting on other WORK;
               --hub = all workspaces; --mine as for ls
+  attention [--hub]                     the work waiting on a PERSON: gates, resubmitted
+              gates, blockers a person owns, reviews, tickets made ready by closed
+              cross-workspace blockers, stopped runs, silent claims, sync conflicts;
+              each row: workspace, age, one action. Never the pickup queue;
+              attention dismiss <ref|run-id>; staple attention --help
 
 Flow
   start|checkout <ref> [--agent A] [--steal-if-stale <dur>] [--override -m <why>]
@@ -3081,6 +3087,12 @@ function main() {
      */
     case "queue": {
       runQueueCommand(rest);
+      break;
+    }
+
+    /** `staple attention` — the work waiting on a person (src/commands/attention.ts). */
+    case "attention": {
+      runAttentionCommand(rest);
       break;
     }
 

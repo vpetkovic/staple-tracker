@@ -33,6 +33,7 @@ import { VIEWS, RESOURCE_MIME_TYPE, linkToolView, readViewHtml, viewToolMeta, vi
 import { ticketCard, ticketCardText, type TicketCard } from "./mcp-ticket-card.js";
 import { DECISION_VIEW_IDS, approvalComment, configuredHumanName, personFor, sendBackComment } from "./mcp-view-actions.js";
 import { queueLanes, queueText, type QueueLanes } from "./mcp-queue.js";
+import { ATTENTION_KINDS, attentionList, attentionText } from "./core/attention.js";
 import { progressText, ticketProgress, type TicketProgress } from "./mcp-progress.js";
 import {
   attemptEndFields,
@@ -4486,6 +4487,53 @@ server.registerTool(
       const progress = ticketProgress(storeFor(ws), ref);
       // The text is the whole answer for a host without MCP Apps, so it is prose, not JSON.
       return { content: [{ type: "text" as const, text: progressText(progress) }], structuredContent: { progress } };
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+const attentionRowShape = {
+  key: z.string().describe("Stable row key: <workspace>/<kind>/<id>"),
+  workspace: z.string(),
+  kind: z.enum(ATTENTION_KINDS.map((spec) => spec.kind) as [string, ...string[]]),
+  ref: z.string().nullable().describe("The ticket the row is about; null for a run over the whole queue"),
+  runId: z.string().nullable(),
+  conflictId: z.string().nullable(),
+  title: z.string(),
+  detail: z.string().describe("Why it waits, in one line"),
+  since: z.string().describe("When it started waiting"),
+  ageSeconds: z.number(),
+  action: z.object({
+    verb: z.enum(["review", "open", "unblock", "inspect", "resolve"]),
+    label: z.string(),
+    command: z.string().describe("The CLI command that acts on it"),
+  }),
+  dismissible: z.boolean(),
+};
+
+server.registerTool(
+  "attention",
+  {
+    description:
+      "The work waiting on a PERSON, as rows: pending gates, resubmitted gates, blockers whose unblock owner is a person, tickets in review, tickets made ready because their cross-workspace blockers closed, stopped autopilot runs, claims silent past queue.silentClaimMinutes, and sync conflicts. Each row names its workspace, how long it has waited and one action. Gates and person-owned blockers first; within a kind the longest waiting first. The same rows as `staple attention` and the web view's Attention page. A ready ticket is never on it because it is in the pickup queue (that is inbox/list_queue). A silent claim is shown, never something to steal from here. Call it when a person asks what is waiting on them; it is not where an agent picks work.",
+    inputSchema: {
+      hub: z.boolean().optional().describe("Every workspace this machine's hub knows, instead of one"),
+      ws: wsSchema,
+    },
+    outputSchema: {
+      rows: z.array(z.object(attentionRowShape)),
+      workspaces: z.array(z.string()),
+      failed: z.array(z.object({ workspace: z.string(), message: z.string() })),
+      now: z.string(),
+    },
+    annotations: { title: "Attention: waiting on a person", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  },
+  ({ hub, ws }) => {
+    try {
+      if (hub && ws) throw new StapleError("validation", "hub reads every workspace; it does not combine with ws.");
+      const list = hub ? attentionList(hubWorkspaces(storeFor)) : (() => { const store = storeFor(ws); return attentionList([{ slug: store.slug, store }]); })();
+      return { content: [{ type: "text" as const, text: attentionText(list) }], structuredContent: { ...list } };
     } catch (error) {
       return fail(error);
     }

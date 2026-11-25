@@ -311,7 +311,7 @@ describe("tool inventory", () => {
   // The ticket card added show_ticket: 70 -> 71. The progress view added show_progress: 71 -> 72.
   // The queue view added show_queue: 72 -> 73. A person's click in a view added the app-only
   // approve_gate_from_view and request_changes_from_view: 73 -> 75.
-  it("exposes exactly these 87 tools with these annotations and output schemas", async () => {
+  it("exposes exactly these 88 tools with these annotations and output schemas", async () => {
     const tools = await harness.listTools();
     const inventory = tools.map((t) => ({
       name: t.name,
@@ -1028,6 +1028,12 @@ describe("tool inventory", () => {
        * The queue view: the pickup queue in lanes. A read; Take posts a message through the
        * host and Approve calls approve_task through it, so the view itself writes nothing.
        */
+      // The work waiting on a person, as rows: a read.
+      {
+        name: "attention",
+        annotations: { title: "Attention: waiting on a person", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
       {
         name: "show_queue",
         annotations: { title: "Show queue", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
@@ -1092,7 +1098,7 @@ describe("tool inventory", () => {
     ]);
   });
 
-  it("marks exactly the thirty-one read tools readOnlyHint: true", async () => {
+  it("marks exactly the thirty-two read tools readOnlyHint: true", async () => {
     const tools = await harness.listTools();
     const readOnly = tools.filter((t) => t.annotations?.readOnlyHint === true).map((t) => t.name);
     expect(readOnly).toEqual([
@@ -1142,6 +1148,8 @@ describe("tool inventory", () => {
       "show_ticket",
       // MCP Apps: the progress view reads one ticket's attempt, and polls itself with it.
       "show_progress",
+      // The attention list: the work waiting on a person.
+      "attention",
       // MCP Apps: the queue view reads the effective queue in lanes.
       "show_queue",
       // Execution telemetry: reading attempts and this machine's budget writes nothing,
@@ -1945,6 +1953,8 @@ describe("tool response shapes (31/31)", () => {
       "show_ticket",
       // The progress view: pinned in test/mcp-views-progress.test.ts, shape, text and view.
       "show_progress",
+      // The attention list: pinned in test/attention-surfaces.test.ts, against the CLI and HTTP rows.
+      "attention",
       // The queue view: pinned in test/mcp-views-queue.test.ts, against the resolver, text and view.
       "show_queue",
       // Typed files: pinned in test/attachments.test.ts, against the store, the CLI and these tools.
