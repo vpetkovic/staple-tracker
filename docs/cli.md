@@ -128,7 +128,7 @@ Guides: [Plans become tickets](plans-to-tickets.md),
 | Command | What it does |
 |---|---|
 | `staple new <title> --kind epic` | File an epic; give tickets `--parent` to put them under it. |
-| `staple blocked-by <ref> R1,R2` | Replace a ticket's blockers. `--none` clears them. |
+| `staple blocked-by <ref> R1,R2` | Replace a ticket's blockers. Only `--none` clears them; a missing or empty list is refused (exit 2). |
 | `staple block <ref> --owner O --action TEXT` | Mark a ticket blocked on a person, saying who and what. |
 | `staple link <blocker> <blocked>` | Make a ticket wait on a ticket in another repository. |
 

@@ -100,10 +100,69 @@ describe("a verb missing its issue reference", () => {
     }
   });
 
+  it("refuses comment and status without a reference, or with a blank one, as a validation error", () => {
+    for (const args of [["comment"], ["comment", " ", "hello"]]) {
+      const result = staple(...args, "--json");
+      expect(result.status).toBe(2);
+      expect(lastJson(result.stderr)).toMatchObject({ code: "validation", message: "staple comment needs an issue reference." });
+    }
+    for (const args of [["status", " ", "todo"], ["status", "VOC-1", " "]]) {
+      const result = staple(...args, "--json");
+      expect(result.status).toBe(2);
+      expect(lastJson(result.stderr)).toMatchObject({ code: "validation", message: "usage: staple status <ref> <status>" });
+    }
+  });
+
   it("still checks out an issue named by a valid reference", () => {
     const result = staple("checkout", "VOC-1", "--json");
     expect(result.status).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ identifier: "VOC-1", status: "in_progress", checkoutAgent: "cli-test" });
+  });
+});
+
+describe("staple blocked-by without a blocker list", () => {
+  const lastJson = (stderr: string) => JSON.parse(stderr.trim().split("\n").at(-1)!);
+  const blockers = () =>
+    (JSON.parse(staple("show", "VOC-3", "--json").stdout) as { blockedBy: Array<{ identifier: string }> }).blockedBy
+      .map((b) => b.identifier)
+      .sort();
+
+  beforeEach(() => {
+    staple("new", "Second");
+    staple("new", "Third");
+    expect(staple("blocked-by", "VOC-3", "VOC-1,VOC-2").status).toBe(0);
+    expect(blockers()).toEqual(["VOC-1", "VOC-2"]);
+  });
+
+  it.each([
+    ["no list", []],
+    ["an empty list", [""]],
+    ["a list of only separators", [" , "]],
+  ])("refuses %s and leaves the blockers as they were", (_label, list) => {
+    const result = staple("blocked-by", "VOC-3", ...list, "--json");
+    expect(result.status).toBe(2);
+    expect(lastJson(result.stderr)).toMatchObject({
+      code: "validation",
+      message: "staple blocked-by needs a blocker list or --none: staple blocked-by <ref> <R1,R2> | staple blocked-by <ref> --none.",
+    });
+    expect(blockers()).toEqual(["VOC-1", "VOC-2"]);
+  });
+
+  it("refuses a list together with --none, and a second list, without touching the blockers", () => {
+    const both = staple("blocked-by", "VOC-3", "VOC-1", "--none", "--json");
+    expect(both.status).toBe(2);
+    expect(lastJson(both.stderr)).toMatchObject({ code: "validation", message: "a blocker list and --none cannot be used together" });
+    const spaced = staple("blocked-by", "VOC-3", "VOC-1", "VOC-2", "--json");
+    expect(spaced.status).toBe(2);
+    expect(lastJson(spaced.stderr)).toMatchObject({ code: "validation", message: expect.stringContaining('unexpected argument "VOC-2"') });
+    expect(blockers()).toEqual(["VOC-1", "VOC-2"]);
+  });
+
+  it("still clears them with --none", () => {
+    const result = staple("blocked-by", "VOC-3", "--none", "--json");
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ identifier: "VOC-3", unresolvedBlockers: [] });
+    expect(blockers()).toEqual([]);
   });
 });
 
