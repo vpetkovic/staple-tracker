@@ -24,7 +24,10 @@ To look something up from the terminal:
 |---|---|
 | `--json` | Machine-readable output: the full objects, ISO-8601 timestamps. `events` prints one JSON object per line. An error is one JSON line on stderr. |
 | `--db <path>` | Use this workspace database instead of the one found by walking up from the current directory. |
-| `--ws <slug\|prefix>` | Use a registered workspace by name or prefix, from anywhere. `STAPLE_DB`, when set, wins over it. |
+| `--ws <slug\|prefix>` | Use a registered workspace by name or prefix, from anywhere. It wins over `STAPLE_DB`; `--db` wins over it. |
+
+The workspace is the first of: `--db`, `--ws`, `STAPLE_DB`, then the walk up from the
+current directory.
 
 Inside a linked git worktree (`git worktree add`), the current directory resolves to the
 workspace of the repository's main checkout, as if you had run the command there. A
