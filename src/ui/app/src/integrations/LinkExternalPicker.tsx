@@ -228,8 +228,10 @@ export function PickerBody({
     const asked = answerFor(text, kind, containerKey);
     const delay = firstSearch.current ? 0 : 250;
     firstSearch.current = false;
-    setSearching(true);
     const timer = setTimeout(async () => {
+      // Set from the timer, not the effect: the effect of a keystroke runs synchronously in its commit,
+      // so a state update here chained one commit per key and fast typing hit React's update limit (#185).
+      setSearching(true);
       const query = text.trim();
       try {
         if (queryKind(query) === "preview") {

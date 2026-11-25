@@ -200,6 +200,21 @@ describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
     await context.close();
   }, 30_000);
 
+  it("survives a long link typed with no delay between keys", async () => {
+    // Each keystroke used to leave a synchronous "searching" update behind; past 50 in a row React
+    // stopped with error #185 (maximum update depth), so a long link typed fast crashed the dialog.
+    const { page, context, errors } = await open(single, "/?issue=ALP-1");
+    await page.getByRole("button", { name: "Link pull request", exact: true }).click();
+    const field = page.getByRole("combobox", { name: "Search issues and pull requests, or paste a link" });
+    await field.waitFor();
+    const url = `https://dev.azure.com/contoso/Web%20Platform/_workitems/edit/123456?tracking=${"a".repeat(80)}`;
+    await page.keyboard.type(url);
+    await expect.poll(() => field.inputValue()).toBe(url);
+    await page.waitForTimeout(500);
+    expect(errors).toEqual([]);
+    await context.close();
+  }, 30_000);
+
   it("configures Linear, discovers a team, searches and links, refreshes UUID context, and retains cache after revocation", async () => {
     const { page, context, errors } = await open(single, "/?view=tasks", PHONE);
     const account="11111111-1111-4111-8111-111111111111",org="22222222-2222-4222-8222-222222222222",team="33333333-3333-4333-8333-333333333333",id="44444444-4444-4444-8444-444444444444";
