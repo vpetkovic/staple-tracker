@@ -680,7 +680,9 @@ pickup queue, \`checkout_task\` (with \`steal_if_idle_seconds\` and
 \`release_task\` (with \`if_idle_seconds\`), \`record_attempt_event\`, \`events_since\`, \`list_statuses\`,
 \`list_kinds\`, \`update_statuses\`, \`update_kinds\`, the gate verbs
 \`gate_task\` / \`approve_task\` / \`request_changes\`, and the views
-\`show_ticket\`, \`show_progress\` and \`show_queue\`. Writes require an
+\`show_ticket\`, \`show_progress\` and \`show_queue\`. When a person asks what is
+waiting on them, \`attention\` (\`staple attention\`) lists it; it is not where you
+pick work. Writes require an
 identity — pass \`actor\` or set \`STAPLE_AGENT\`; there is no silent default.
 The Approve and Request changes buttons on those views are the person's: they
 are recorded under the person's name, not yours. To decide a gate yourself, call

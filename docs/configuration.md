@@ -76,6 +76,7 @@ syncs it sees the same value.
 | Key | Values | Default | What it does |
 |---|---|---|---|
 | `queue.policy` | `advisory`, `strict` | `advisory` | Whether the [pickup queue](queue.md) only orders work, or refuses an agent that takes a ticket out of turn |
+| `queue.silentClaimMinutes` | 1 to 10080 | `30` | How long a claim's holder may write nothing before `staple attention` lists the claim. It never releases or takes over the claim |
 | `kinds.default` | a kind from `staple kinds ls` | `task` | The kind a new ticket gets when none is given |
 | `kinds.appearance` | an icon per kind | built-in icons | The icon each kind shows; set it in the web UI under **Settings → Task types** |
 | `features.planning` | `true`, `false` | `false` | Experimental. Turns on [planning](plan.md): ideas, horizons and the Plan view. Only a person changes it, under **Settings → Experimental** or with `--person`; turning it off keeps the data |
