@@ -46,7 +46,8 @@ export interface OwedSettlement {
   readonly entity: "issue" | "project" | "comment" | "relation" | "documentRevision";
   readonly entityId: string;
   /** `status` and `kind`: an issue moved off a status or kind that was removed (`vocabulary-targets.ts`). */
-  readonly field: "identifier" | "slug" | "idempotencyKey" | "originId" | "status" | "kind" | "edges" | "revision";
+  /** `parentId`: an issue detached from a parent loop two devices' moves made (`breakParentLoop`, `apply.ts`). */
+  readonly field: "identifier" | "slug" | "idempotencyKey" | "originId" | "status" | "kind" | "edges" | "revision" | "parentId";
   /** The value it gave up. */
   readonly from: string;
 }
@@ -305,6 +306,17 @@ function settleOne(db: DatabaseSync, journal: Journal, item: OwedSettlement): bo
       payload: { issueId, key, revision, body: row.body, title: null, changeSummary: row.change_summary, author: row.author, createdAt: row.created_at, instructions: row.instructions === 1 },
       actor: row.author,
     });
+    return true;
+  }
+  /**
+   * The issue this device detached from a parent loop: its top-level place is written to the log,
+   * so the fold holds a tree without the loop and a device joining later reads it as it is here.
+   * Every device that broke the loop writes the same value. Not when it has been moved since.
+   */
+  if (item.entity === "issue" && item.field === "parentId") {
+    const row = db.prepare("SELECT parent_id FROM issues WHERE id = ?").get(item.entityId) as { parent_id: string | null } | undefined;
+    if (!row || row.parent_id !== null) return false;
+    record("issue", "update", { parentId: null });
     return true;
   }
   if (item.entity === "issue" && (item.field === "status" || item.field === "kind")) {
