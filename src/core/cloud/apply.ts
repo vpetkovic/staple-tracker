@@ -51,6 +51,7 @@ import { planLinkFromValue, planLinkIssue, writePlanLink } from "../plan-links.j
 import { planRowFromValue, planRowId, writePlanRow } from "../plan-rows.js";
 import { isDraftIdentifier } from "../plan.js";
 import { writeCriterionMark } from "../milestone-marks.js";
+import { rederiveSubtreeDepths } from "../tree-depth.js";
 import {
   SETTING_DEFINITIONS,
   encodeStoredSetting,
@@ -807,6 +808,8 @@ function applyIssue(db: DatabaseSync, input: ApplyInput): boolean {
     deriveIssueColumns(db, values);
     // A settlement that lost its number to an earlier claim carries nothing else to write.
     if (values.size > 0) updateRow(db, "issues", "id", input.entityId, [...values]);
+    // A move: the subtree's depth follows the moved row's, as on the device that moved it.
+    if (values.has("depth")) rederiveSubtreeDepths(db, input.entityId);
     const after = identifierOf(db, input.entityId);
     if (before !== null && after !== null && before !== after) {
       /**

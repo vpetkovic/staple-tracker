@@ -147,6 +147,70 @@ export function isGoalMet(counts: GoalCounts): boolean {
   return counts.met === counts.total;
 }
 
+// ---------- marks across a criteria edit ----------
+
+/** What a criteria edit did to the marks on them. Every list is in the marks' old position order. */
+export interface CriterionMarkMoves {
+  /** The mark's criterion is still there: the mark follows it (`from` and `to` may be equal). */
+  kept: Array<{ criterion: string; verdict: CriterionVerdict; from: number; to: number }>;
+  /** Its words are gone but its position holds new words: the mark stays there and reads unknown ("reworded"). */
+  reworded: Array<{ criterion: string; verdict: CriterionVerdict; position: number; now: string }>;
+  /** Its criterion was removed: the mark is gone. */
+  cleared: Array<{ criterion: string; verdict: CriterionVerdict; position: number }>;
+}
+
+/**
+ * Where each mark goes when a list of criteria becomes another. A mark is keyed by position and
+ * holds the words it judged, so it follows those words: first where they still stand at the same
+ * position, then to the first position that holds them and no other mark. A mark whose words are
+ * gone stays where it is only when that position was reworded in place (or already read other
+ * words): it keeps reading unknown there, as a reword always has. Otherwise — its position was
+ * removed, or now holds a criterion that moved there — the mark is cleared. `placement` maps each
+ * old position to its new one, or null when the mark is cleared.
+ */
+export function followCriterionMarks(
+  before: readonly string[],
+  after: readonly string[],
+  marks: ReadonlyArray<Pick<CriterionMark, "position" | "criterion" | "verdict">>,
+): { moves: CriterionMarkMoves; placement: Map<number, number | null> } {
+  const ordered = [...marks].sort((a, b) => a.position - b.position);
+  const claimed = new Set<number>();
+  const placement = new Map<number, number | null>();
+  for (const mark of ordered) {
+    if (after[mark.position - 1] === mark.criterion) {
+      claimed.add(mark.position);
+      placement.set(mark.position, mark.position);
+    }
+  }
+  for (const mark of ordered) {
+    if (placement.has(mark.position)) continue;
+    const index = after.findIndex((text, i) => text === mark.criterion && !claimed.has(i + 1));
+    if (index >= 0) {
+      claimed.add(index + 1);
+      placement.set(mark.position, index + 1);
+    }
+  }
+  const moves: CriterionMarkMoves = { kept: [], reworded: [], cleared: [] };
+  for (const mark of ordered) {
+    const to = placement.get(mark.position);
+    if (to !== undefined && to !== null) {
+      moves.kept.push({ criterion: mark.criterion, verdict: mark.verdict, from: mark.position, to });
+      continue;
+    }
+    const now = after[mark.position - 1];
+    const inPlace = now !== undefined && !claimed.has(mark.position) && (now === before[mark.position - 1] || !before.includes(now));
+    if (inPlace) {
+      claimed.add(mark.position);
+      placement.set(mark.position, mark.position);
+      moves.reworded.push({ criterion: mark.criterion, verdict: mark.verdict, position: mark.position, now });
+    } else {
+      placement.set(mark.position, null);
+      moves.cleared.push({ criterion: mark.criterion, verdict: mark.verdict, position: mark.position });
+    }
+  }
+  return { moves, placement };
+}
+
 // ---------- pace against the target date ----------
 
 export const PACE_VERDICTS = ["done", "no_target", "overdue", "no_estimate", "behind", "on_track"] as const;

@@ -236,6 +236,24 @@ const SCENARIOS: readonly Scenario[] = [
   { method: "WorkspaceStore.setBlockedBy", name: "set blockers", run: (w) => void w.a.store.setBlockedBy(w.ids["Everything"]!, [w.ids["Retried"]!], "alice") },
   { method: "WorkspaceStore.setEstimate", name: "re-estimate without restating the status", run: (w) => void w.a.store.setEstimate(w.ids["The child"]!, 5400, "alice") },
   { method: "WorkspaceStore.setEstimate", name: "clear the estimate", run: (w) => void w.a.store.setEstimate(w.ids["The child"]!, null, "alice") },
+  {
+    method: "WorkspaceStore.updateIssueResult",
+    name: "edit the criteria in place",
+    prep: (w) => void issue(w, "Rescoped", { acceptanceCriteria: ["one", "two"] }),
+    run: (w) => void w.a.store.updateIssueResult(w.ids["Rescoped"]!, { removeCriteria: [1], addCriteria: ["three"] }, "alice"),
+  },
+  {
+    method: "WorkspaceStore.updateIssueResult",
+    name: "move a subtree under a deeper parent",
+    prep: (w) => {
+      const from = issue(w, "Move from", { kind: "epic" });
+      const program = issue(w, "Move program", { kind: "epic" });
+      issue(w, "Move to", { kind: "epic", parent: program });
+      const mover = issue(w, "Mover", { parent: from, blockParentUntilDone: true });
+      issue(w, "Mover child", { parent: mover });
+    },
+    run: (w) => void w.a.store.updateIssueResult(w.ids["Mover"]!, { parent: w.ids["Move to"]! }, "alice"),
+  },
   { method: "WorkspaceStore.updateIssue", name: "retitle", run: (w) => void w.a.store.updateIssue(w.ids["Everything"]!, { title: "Everything, renamed" }, "alice") },
   { method: "WorkspaceStore.updateIssue", name: "start work", run: (w) => void w.a.store.updateIssue(w.ids["The child"]!, { status: "in_progress" }, "alice") },
   { method: "WorkspaceStore.updateIssue", name: "finish work, moving the epic", run: (w) => void w.a.store.updateIssue(w.ids["The child"]!, { status: "done" }, "alice") },

@@ -94,6 +94,8 @@ Guides: [How an agent works a ticket](working-a-ticket.md),
 | `staple done <ref> [-m text]` | Finish it. `cancel` drops it. |
 | `staple release <ref>` | Give the claim back; the ticket returns to `todo`. |
 | `staple status <ref> <status>` | Move a ticket to any status the rules allow. |
+| `staple criteria <ref>` | Edit a ticket's acceptance criteria instead of recreating it. `--set "a;b"` replaces them, `--clear` empties them, `--rm 2,3` removes by position and `--add "c"` appends (repeatable). With no flag it lists them, numbered. A milestone criterion's met or unmet mark follows its words; the output names any mark the change cleared. |
+| `staple move <ref> --parent R` | Move a ticket, with everything under it, under another parent; `--none` makes it top-level. A loop, the depth cap, an idea and the tree of a pending gate are refused. Both parents re-derive their status, and a child made to block its parent until done now blocks the new one. |
 | `staple comment <ref> <text>` | Add a comment. |
 | `staple doc <ref> <key> --put <file>` | Store a document on a ticket (a plan, a worklog). Without `--put` it prints the latest; `--revisions` lists the history. `--instructions` makes it an [instruction document](runs.md#instructions-for-everything-in-scope), handed to every ticket beneath `<ref>`; `--no-instructions` turns that off. |
 | `staple instructions <ref> [--run <id>]` | The instructions that apply to a ticket, nearest first: its own, its parents', its milestone's, then the run's. |

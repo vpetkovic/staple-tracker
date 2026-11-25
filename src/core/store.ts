@@ -88,6 +88,9 @@ import {
   type SettingValueView,
 } from "./settings-registry.js";
 import { MilestoneStore, assertRekindAllowed } from "./milestone-store.js";
+import type { CriterionMarkMoves } from "./milestone-goal.js";
+import { followMarksAcrossEdit } from "./milestone-marks.js";
+import { rederiveSubtreeDepths, subtreeHeight } from "./tree-depth.js";
 import {
   resolveKindAppearance,
   type KindAppearance,
@@ -223,7 +226,10 @@ export interface CreateIssueInput {
 }
 
 export interface UpdateIssueInput {
-  /** Explicitly validated; generic updates do not support changing parent. */
+  /**
+   * Move the issue: a ref puts it under that parent, null makes it top-level, absent leaves it.
+   * Its subtree comes with it (`planMove`, `afterMove`).
+   */
   parent?: string | null;
   title?: string;
   description?: string | null;
@@ -239,7 +245,12 @@ export interface UpdateIssueInput {
   priority?: IssuePriority;
   assignee?: string | null;
   labels?: string[];
+  /** Replace the acceptance criteria whole (trimmed, blanks dropped; [] clears them). */
   acceptanceCriteria?: string[];
+  /** Append criteria, after any removals in the same write. Not with `acceptanceCriteria`. */
+  addCriteria?: string[];
+  /** Remove criteria by 1-based position in the list as it stands. Not with `acceptanceCriteria`. */
+  removeCriteria?: number[];
   unblockOwner?: string | null;
   unblockAction?: string | null;
   expectedStatusVersion?: number;
@@ -267,6 +278,28 @@ export interface PlanInternal {
   plan?: boolean;
   /** The id the plan layer derived for a task Scaffold makes (`scaffoldTaskId`); a create otherwise mints one. */
   id?: string;
+}
+
+/** What an update did to the criteria, when it named them. Marks are a milestone's (`followCriterionMarks`). */
+export interface CriteriaChange {
+  from: string[];
+  to: string[];
+  changed: boolean;
+  marks: CriterionMarkMoves;
+}
+
+/** What an update did to the parent, when it named one: identifiers, null for top-level. */
+export interface ParentChange {
+  from: string | null;
+  to: string | null;
+  changed: boolean;
+}
+
+/** `updateIssueResult`: the issue, and what the update said about its criteria and parent. */
+export interface UpdateIssueResult {
+  issue: Issue;
+  criteriaChange: CriteriaChange | null;
+  parentChange: ParentChange | null;
 }
 
 export interface CreateIssueResult {
@@ -407,6 +440,15 @@ interface IssueRow {
   /** The status derivation last wrote here; NULL once anything else moved the row (migration 017). */
   derived_status?: string | null;
 }
+
+/** An issue's stored criteria as a list: none stored reads as an empty one. */
+function parseCriteria(stored: string | null): string[] {
+  if (!stored) return [];
+  const parsed = JSON.parse(stored) as unknown;
+  return Array.isArray(parsed) ? parsed.filter((criterion): criterion is string => typeof criterion === "string") : [];
+}
+
+const NO_MARK_MOVES: CriterionMarkMoves = { kept: [], reworded: [], cleared: [] };
 
 function rowToIssue(row: IssueRow): Issue {
   return {
@@ -4098,32 +4140,33 @@ export class WorkspaceStore {
          SELECT milestone_id AS id FROM ${MILESTONE_MEMBERSHIP} WHERE issue_id = ?`,
       )
       .all(row.parent_id ?? "", row.id) as Array<{ id: string }>;
-    for (const { id: holderId } of holders) {
-      const parent = this.db.prepare("SELECT * FROM issues WHERE id = ?").get(holderId) as unknown as
-        | IssueRow
-        | undefined;
-      if (!parent) continue;
-      const siblings = this.derivationInputRows(parent);
-      const open = siblings.filter((s) => !this.isResolvedStatus(s.status));
-      if (open.length === 0 && siblings.length > 0 && !this.isResolvedStatus(parent.status)) {
-        this.emitEvent({
-          kind: "children_complete",
-          issueId: parent.id,
-          payload: {
-            identifier: parent.identifier,
-            assignee: parent.assignee,
-            children: siblings.map((s) => ({
-              identifier: s.identifier,
-              title: s.title,
-              status: s.status,
-            })),
-          },
-          dedupKey: childrenCompleteDedupKey(
-            parent.id,
-            siblings.map((s) => s.id),
-          ),
-        });
-      }
+    for (const { id: holderId } of holders) this.wakeIfChildrenComplete(holderId);
+  }
+
+  /** `children_complete` on an open holder whose every input has landed: its owner writes the summary. */
+  private wakeIfChildrenComplete(holderId: string): void {
+    const parent = this.db.prepare("SELECT * FROM issues WHERE id = ?").get(holderId) as unknown as IssueRow | undefined;
+    if (!parent) return;
+    const siblings = this.derivationInputRows(parent);
+    const open = siblings.filter((s) => !this.isResolvedStatus(s.status));
+    if (open.length === 0 && siblings.length > 0 && !this.isResolvedStatus(parent.status)) {
+      this.emitEvent({
+        kind: "children_complete",
+        issueId: parent.id,
+        payload: {
+          identifier: parent.identifier,
+          assignee: parent.assignee,
+          children: siblings.map((s) => ({
+            identifier: s.identifier,
+            title: s.title,
+            status: s.status,
+          })),
+        },
+        dedupKey: childrenCompleteDedupKey(
+          parent.id,
+          siblings.map((s) => s.id),
+        ),
+      });
     }
   }
 
@@ -4979,6 +5022,21 @@ export class WorkspaceStore {
   }
 
   updateIssue(ref: string, patch: UpdateIssueInput, actor?: string | null, attempt?: AttemptOptions, internal: PlanInternal = {}): Issue {
+    return this.updateIssueResult(ref, patch, actor, attempt, internal).issue;
+  }
+
+  /**
+   * `updateIssue`, also saying what the patch did to the criteria and the parent when it named
+   * them (`criteriaChange`, `parentChange`; null when it did not), as `setEstimate` says what it
+   * did to the estimate: what `update_task`, `staple criteria` and `staple move` print.
+   */
+  updateIssueResult(
+    ref: string,
+    patch: UpdateIssueInput,
+    actor?: string | null,
+    attempt?: AttemptOptions,
+    internal: PlanInternal = {},
+  ): UpdateIssueResult {
     assertAttemptOptions(attempt);
     if (patch.status) this.assertConfiguredStatus(patch.status);
     if (patch.kind) this.assertConfiguredKind(patch.kind);
@@ -4996,11 +5054,8 @@ export class WorkspaceStore {
         if (isPlanKind(row.kind) && patch.status !== undefined && patch.status !== row.status) throw steeringRefusal("status", displayRef(row));
         if (isPlanKind(row.kind) && (patch.title !== undefined || patch.description !== undefined)) this.plan().assertEditable(row.id);
       }
-      if (patch.parent !== undefined) {
-        const parent = patch.parent === null ? null : this.requireRow(patch.parent);
-        assertPlanParent({ kind: patch.kind ?? row.kind }, parent === null ? null : { ...parent, planRecord: parent.plan_maturity !== null });
-        if ((parent?.id ?? null) !== row.parent_id) throw new StapleError("validation", "Changing parent through update_task is not supported.");
-      }
+      const move = patch.parent === undefined ? null : this.planMove(row, patch.parent, patch.kind, internal);
+      const criteria = this.planCriteriaEdit(row, patch);
       if (
         patch.expectedStatusVersion !== undefined &&
         patch.expectedStatusVersion !== row.status_version
@@ -5034,9 +5089,8 @@ export class WorkspaceStore {
       if (patch.priority !== undefined) next.priority = patch.priority;
       if (patch.assignee !== undefined) next.assignee = patch.assignee;
       if (patch.labels !== undefined) next.labels = JSON.stringify(patch.labels);
-      if (patch.acceptanceCriteria !== undefined) {
-        next.acceptance_criteria = JSON.stringify(patch.acceptanceCriteria);
-      }
+      if (criteria?.changed) next.acceptance_criteria = JSON.stringify(criteria.to);
+      if (move?.changed) next.parent_id = move.to?.id ?? null;
       // Three-state, exactly like assignee above: absent -> untouched,
       // null -> cleared, number -> validated and set.
       if (patch.estimatedSeconds !== undefined) {
@@ -5149,11 +5203,17 @@ export class WorkspaceStore {
       }
 
       const columns = Object.keys(next);
-      const updated = this.db
+      let updated = this.db
         .prepare(
           `UPDATE issues SET ${columns.map((c) => `${c} = ?`).join(", ")} WHERE id = ? RETURNING *`,
         )
         .get(...columns.map((c) => next[c] as never), row.id) as unknown as IssueRow;
+      // `depth` is derived, never journaled: the receiver derives it from `parent_id` as this does.
+      if (move?.changed) {
+        this.db.prepare("UPDATE issues SET depth = ? WHERE id = ?").run(move.to === null ? 0 : move.to.depth + 1, row.id);
+        rederiveSubtreeDepths(this.db, row.id);
+        updated = this.requireRow(row.id);
+      }
 
       /**
        * The payload is the CHANGED columns and nothing else — `next` is exactly
@@ -5183,6 +5243,24 @@ export class WorkspaceStore {
        * The estimate has no history of its own — it is overwritten in place — so a change says
        * what it was and what it became (`design/execution-telemetry.md`, "The estimate reading").
        */
+      const marks = criteria?.changed ? this.followMarks(row, criteria.from, criteria.to, actor ?? null) : null;
+      if (criteria?.changed) {
+        this.emitEvent({
+          kind: "criteria_changed",
+          issueId: row.id,
+          actor,
+          payload: { identifier: row.identifier, from: criteria.from, to: criteria.to, marks },
+        });
+      }
+      if (move?.changed) {
+        this.emitEvent({
+          kind: "parent_changed",
+          issueId: row.id,
+          actor,
+          payload: { identifier: row.identifier, from: move.from?.identifier ?? null, to: move.to?.identifier ?? null },
+        });
+        this.moveParentEdge(updated, move.from, move.to, actor ?? null);
+      }
       if (patch.estimatedSeconds !== undefined && (next.estimated_seconds ?? null) !== (row.estimated_seconds ?? null)) {
         this.emitEvent({
           kind: "estimate_changed",
@@ -5219,11 +5297,185 @@ export class WorkspaceStore {
         // so the log reads cause-then-effect.
         this.recomputeAncestorStatuses(updated, actor ?? null);
       }
+      if (move?.changed) this.afterMove(updated, move.from, statusChanging, actor ?? null);
       if (patch.comment) {
         this.insertComment(row.id, actor ?? "unknown", actor ? "agent" : "system", patch.comment);
       }
-      return rowToIssue(updated);
+      return {
+        issue: rowToIssue(this.requireRow(row.id)),
+        criteriaChange: criteria === null ? null : { from: criteria.from, to: criteria.to, changed: criteria.changed, marks: marks ?? NO_MARK_MOVES },
+        parentChange:
+          move === null ? null : { from: move.from?.identifier ?? null, to: move.to?.identifier ?? null, changed: move.changed },
+      };
     });
+  }
+
+  /**
+   * Where a patch's criteria edit leaves the list, validated before anything is written: a
+   * replace (`acceptanceCriteria`), or removals by position in the list as it stands followed by
+   * additions. Criteria are trimmed and blanks dropped from a replace, as `staple new --criteria`
+   * splits them; an added blank is refused, since it can only be a mistake. Null when the patch
+   * names no criteria.
+   */
+  private planCriteriaEdit(row: IssueRow, patch: UpdateIssueInput): { from: string[]; to: string[]; changed: boolean } | null {
+    const { acceptanceCriteria: replace, addCriteria: add, removeCriteria: remove } = patch;
+    if (replace === undefined && add === undefined && remove === undefined) return null;
+    if (replace !== undefined && (add !== undefined || remove !== undefined)) {
+      throw new StapleError("validation", "Either replace the acceptance criteria whole, or add and remove them; not both in one write.");
+    }
+    const from = parseCriteria(row.acceptance_criteria);
+    let to: string[];
+    if (replace !== undefined) {
+      to = replace.map((criterion) => criterion.trim()).filter(Boolean);
+    } else {
+      const positions = remove ?? [];
+      for (const position of positions) {
+        if (!Number.isInteger(position) || position < 1 || position > from.length) {
+          throw new StapleError(
+            "validation",
+            from.length === 0
+              ? `${row.identifier} has no acceptance criteria to remove.`
+              : `${row.identifier} has criteria 1 to ${from.length}; got ${String(position)}.`,
+            { identifier: row.identifier, criteria: from.length },
+          );
+        }
+      }
+      if (new Set(positions).size !== positions.length) {
+        throw new StapleError("validation", `A criterion can be removed once; a position was named twice (${positions.join(", ")}).`);
+      }
+      const added = (add ?? []).map((criterion) => criterion.trim());
+      if (added.some((criterion) => criterion === "")) throw new StapleError("validation", "An added criterion cannot be empty.");
+      to = [...from.filter((_, index) => !positions.includes(index + 1)), ...added];
+    }
+    return { from, to, changed: JSON.stringify(from) !== JSON.stringify(to) };
+  }
+
+  /**
+   * Carry the marks on an issue's criteria across an edit (only a milestone's criteria carry
+   * marks, `milestone_criterion_marks`), replicated as the milestone fields a mark travels as.
+   */
+  private followMarks(row: IssueRow, from: string[], to: string[], actor: string | null): CriterionMarkMoves {
+    const { moves, fields } = followMarksAcrossEdit(this.db, row.id, from, to);
+    if (Object.keys(fields).length > 0) {
+      // A mark's move is a change to the milestone and says when, as `markCriterion` does.
+      const now = this.journal.mutationAt();
+      this.db.prepare("INSERT OR IGNORE INTO milestone_meta (issue_id, updated_at) VALUES (?, ?)").run(row.id, now);
+      this.db.prepare("UPDATE milestone_meta SET updated_at = ? WHERE issue_id = ?").run(now, row.id);
+      this.journal.record({ entity: "milestone", entityId: row.id, verb: "update", payload: fields, actor });
+    }
+    return moves;
+  }
+
+  /**
+   * Check a move before anything is written. Refused: an idea or a plan record (its parent is
+   * the person's, set in the plan), tracker work under an idea (`assertPlanParent`), the issue
+   * itself or anything beneath it as its parent (a loop), a subtree that would pass the depth
+   * cap, and leaving or entering the tree of a pending gate — a gate is a promise that what it
+   * queues does not change until a person answers it.
+   */
+  private planMove(
+    row: IssueRow,
+    parentRef: string | null,
+    kind: IssueKind | undefined,
+    internal: PlanInternal,
+  ): { from: IssueRow | null; to: IssueRow | null; changed: boolean } {
+    // The parent rule speaks first, naming the idea, even while planning is hidden.
+    const to = parentRef === null ? null : this.requireRow(parentRef);
+    assertPlanParent({ kind: kind ?? row.kind }, to === null ? null : { ...to, planRecord: to.plan_maturity !== null });
+    const from = row.parent_id === null ? null : this.requireRow(row.parent_id);
+    if ((to?.id ?? null) === row.parent_id) return { from, to: from, changed: false };
+    if (parentRef !== null) this.requireTarget(parentRef);
+    if (!internal.plan && (isPlanKind(row.kind) || row.plan_maturity !== null)) throw steeringRefusal("parent", displayRef(row));
+    if (to !== null) {
+      if (to.id === row.id) throw new StapleError("cycle", `${row.identifier} cannot be its own parent.`);
+      let cursor: string | null = to.parent_id;
+      for (let hops = 0; cursor !== null && hops < MAX_TREE_DEPTH; hops += 1) {
+        if (cursor === row.id) {
+          throw new StapleError("cycle", `${to.identifier} sits under ${row.identifier}; a ticket cannot move beneath itself.`, {
+            identifier: row.identifier,
+            parent: to.identifier,
+          });
+        }
+        cursor = (this.db.prepare("SELECT parent_id FROM issues WHERE id = ?").get(cursor) as { parent_id: string | null } | undefined)?.parent_id ?? null;
+      }
+      if (to.depth + 1 + subtreeHeight(this.db, row.id) > MAX_TREE_DEPTH) {
+        throw new StapleError("validation", `Tree depth cap (${MAX_TREE_DEPTH}) exceeded: ${row.identifier} and what sits under it would be deeper than that under ${to.identifier}.`);
+      }
+    }
+    for (const [holder, direction] of [[from, "out of"], [to, "into"]] as const) {
+      const gate = holder === null ? null : this.pendingGateAtOrAbove(holder.id);
+      if (gate !== null) {
+        throw new StapleError(
+          "conflict",
+          `${gate.identifier} is parked behind a review gate${gate.gate_owner ? ` awaiting ${gate.gate_owner}` : ""}, which queues the tree beneath it; moving ${row.identifier} ${direction} that tree would change what it holds. Resolve it first: \`staple approve ${gate.identifier}\` or \`staple request-changes ${gate.identifier} -m "..."\`.`,
+          { gated: gate.identifier, gateOwner: gate.gate_owner },
+        );
+      }
+    }
+    return { from, to, changed: true };
+  }
+
+  /** The nearest issue at or above `id` holding a pending gate, or null. */
+  private pendingGateAtOrAbove(id: string): IssueRow | null {
+    let cursor: string | null = id;
+    for (let hops = 0; cursor !== null && hops <= MAX_TREE_DEPTH; hops += 1) {
+      const holder = this.db.prepare("SELECT * FROM issues WHERE id = ?").get(cursor) as unknown as IssueRow | undefined;
+      if (!holder) return null;
+      if (holder.gate_state === "pending") return holder;
+      cursor = holder.parent_id;
+    }
+    return null;
+  }
+
+  /**
+   * A child made to block its parent until done blocks whichever parent it has: the edge leaves
+   * the old parent's blocker set and joins the new one's. Each set that changed is journaled
+   * whole, as `setBlockedBy` journals one, and says so (`blockers_changed`).
+   */
+  private moveParentEdge(row: IssueRow, from: IssueRow | null, to: IssueRow | null, actor: string | null): void {
+    if (row.block_parent_until_done !== 1) return;
+    if (from !== null) {
+      const dropped = this.db.prepare("DELETE FROM relations WHERE blocker_id = ? AND blocked_id = ? AND type = 'blocks'").run(row.id, from.id);
+      if (Number(dropped.changes) > 0) {
+        this.journalBlockerSet(from.id, actor);
+        this.maybeEmitBlockersResolved(this.requireRow(from.id));
+      }
+    }
+    if (to !== null) {
+      this.assertNoCycle(to.id, [row.id]);
+      this.insertEdge(row.id, to.id, actor);
+      this.journalBlockerSet(to.id, actor);
+    }
+  }
+
+  /** One blocker set as it stands now: its event and its replicated operation. */
+  private journalBlockerSet(blockedId: string, actor: string | null): void {
+    this.emitBlockerSet(blockedId, actor);
+    const set = this.db.prepare("SELECT blocker_id FROM relations WHERE blocked_id = ? AND type = 'blocks' ORDER BY created_at, blocker_id").all(blockedId) as Array<{
+      blocker_id: string;
+    }>;
+    this.journal.record({
+      entity: "relation",
+      entityId: blockedId,
+      verb: "update",
+      payload: { blockedBy: set.map((edge) => edge.blocker_id), edges: this.edgeFactsOf(blockedId) },
+      actor,
+    });
+  }
+
+  /**
+   * After a move the two parents re-derive, as they would if the child had changed status. The
+   * one it left loses an input: when everything left under it has landed its owner hears
+   * `children_complete` first, as for a last child landing, and then it may close. The one it
+   * joined (and everything above) gains one, and may start or reopen; a status change in the
+   * same patch has already walked that chain.
+   */
+  private afterMove(row: IssueRow, from: IssueRow | null, walkedNewChain: boolean, actor: string | null): void {
+    if (from !== null) {
+      this.wakeIfChildrenComplete(from.id);
+      this.deriveHolders([from.id], row.identifier, actor, new Set([from.id]), { mayCloseStart: true });
+    }
+    if (!walkedNewChain && row.parent_id !== null) this.recomputeAncestorStatuses(row, actor);
   }
 
   // ---------- claim liveness (derived, never stored) ----------
