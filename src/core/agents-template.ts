@@ -343,6 +343,11 @@ If you hold a worker attempt and an orchestrator attempt on the same issue, pass
 Keep a document keyed \`worklog\` on every task you hold, and **revise it at every
 milestone**, not at the end.
 
+Automated runs check the latest worklog before accepting a handoff. It must
+have been written during the current session (or tenure for an interactive
+run), with content under Done, Next, and Files touched. Write "none" when a
+section has nothing to report. Comments alone do not satisfy this check.
+
 \`\`\`bash
 staple doc ${ref} worklog --put worklog.md
 staple doc ${ref} worklog              # read the latest

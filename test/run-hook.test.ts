@@ -75,6 +75,12 @@ function workspace(titles: string[]): { dir: string; epic: string; refs: string[
   return { dir, epic, refs };
 }
 
+function checkpoint(dir: string, ref: string): void {
+  const path = join(dir, "checkpoint.md");
+  writeFileSync(path, "## Done\n- Implemented and reviewed.\n## Next\n- Await review.\n## Files touched\n- Result file.\n");
+  ok(dir, ["doc", ref, "worklog", "--put", path]);
+}
+
 function startAndBind(dir: string, scope: string, session = "sess-1", extra: string[] = []): string {
   const run = ok(dir, ["run", "start", "--scope", scope, ...extra]);
   ok(dir, ["run", "hook", "bind", "--session", session]);
@@ -159,9 +165,30 @@ describe("claude-stop: a bound session works the run", () => {
     expect(unreviewed.answer?.reason).toContain(`${refs[0]} is in_review but has no review since the run took it`);
     expect(issue(dir, refs[1]!).checkoutAgent).toBeNull();
     ok(dir, ["comment", refs[0]!, "review: reproduced each criterion; nothing found"]);
+    const missing = claudeStop(dir, { stop_hook_active: true });
+    expect(missing.answer?.decision).toBe("block");
+    expect(missing.answer?.reason).toContain("current worklog");
+    expect(issue(dir, refs[1]!).checkoutAgent).toBeNull();
+    checkpoint(dir, refs[0]!);
     const next = claudeStop(dir, { stop_hook_active: true });
     expect(next.answer?.reason).toContain(`next ticket ${refs[1]} "two"`);
     expect(issue(dir, refs[1]!).checkoutAgent).toBe(ACTOR);
+  });
+
+  it("rejects a previous tenure's checkpoint and lets a person stop after checkpoint reminders", () => {
+    const { dir, epic, refs } = workspace(["one", "two"]);
+    checkpoint(dir, refs[0]!);
+    const runId = startAndBind(dir, epic);
+    claudeStop(dir, {});
+    ok(dir, ["comment", refs[0]!, "review: reproduced it"]);
+    ok(dir, ["status", refs[0]!, "in_review"]);
+    expect(claudeStop(dir, { stop_hook_active: true }).answer?.reason).toContain("current worklog");
+    expect(claudeStop(dir, { stop_hook_active: true }).answer?.decision).toBe("block");
+    expect(claudeStop(dir, { stop_hook_active: true }).answer?.systemMessage).toContain("2 reminders in a row");
+    expect(issue(dir, refs[1]!).checkoutAgent).toBeNull();
+    ok(dir, ["run", "stop", runId, "-m", "stop now"]);
+    expect(claudeStop(dir, {}).answer?.systemMessage).toContain("ended: stopped_by_human");
+    expect(bindingFiles()).toEqual([]);
   });
 
   it("lets the session stop on a stop answer, shows who stopped it and why, and unbinds", () => {
@@ -199,6 +226,7 @@ describe("claude-stop: a bound session works the run", () => {
     startAndBind(dir, epic);
     expect(claudeStop(dir, {}, { args: ["--max-blocks", "1"] }).answer?.decision).toBe("block");
     ok(dir, ["comment", refs[0]!, "review: fine"]);
+    checkpoint(dir, refs[0]!);
     ok(dir, ["status", refs[0]!, "in_review"]);
     const guarded = claudeStop(dir, { stop_hook_active: true }, { args: ["--max-blocks", "1"] });
     expect(guarded.answer?.systemMessage).toContain("after 1 continuations in a row");
@@ -582,6 +610,7 @@ describe("end to end: a scripted session works a whole scope through the hook", 
       expect(ref, String(last.reason)).toBeDefined();
       worked.push(ref!);
       ok(dir, ["comment", ref!, "review: reproduced it; nothing found"]);
+      checkpoint(dir, ref!);
       ok(dir, ["done", ref!, "-m", "evidence: it works"]);
       continuing = true;
     }

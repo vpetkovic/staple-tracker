@@ -27,7 +27,9 @@
  *   2. It was handed on without a `review: ...` comment since it was taken: block, asking
  *      for the review. The rule `run drive` enforces (no_review), reached the interactive
  *      way: a person's session is asked to do it rather than failed for skipping it.
- *   3. Otherwise `continue` answers: `take` blocks with the next ticket (already claimed);
+ *   3. It was handed on without a complete worklog from this tenure: block, asking for
+ *      Done, Next, and Files touched. The same loop limits and human stop still apply.
+ *   4. Otherwise `continue` answers: `take` blocks with the next ticket (already claimed);
  *      `wait` lets the session stop with a message (a wait can last hours, and holding a
  *      session in a loop burns its turn budget for nothing); `stop` lets it stop, prints the
  *      reason, and removes the binding.
@@ -54,6 +56,7 @@ import type { ContinueAnswer, Run, RunStore } from "./run-store.js";
 import { shellQuote } from "./run-driver.js";
 import type { WorkspaceStore } from "./store.js";
 import { StapleError, nowIso } from "./types.js";
+import { checkpointedSince, worklogReminder } from "./run-worklog.js";
 
 /** The same reminder, in a row, before the session is let go. */
 export const DEFAULT_MAX_REPEATS = 2;
@@ -98,7 +101,7 @@ export type HookAllowWhy =
   | "error";
 
 /** Why the hook kept the session going. */
-export type HookBlockWhy = "unfinished" | "no_review" | "take";
+export type HookBlockWhy = "unfinished" | "no_review" | "no_worklog" | "take";
 
 /**
  * What a stop hook answers, provider-neutral. `message` on an allow is for the person
@@ -430,6 +433,9 @@ export function decideStop(input: {
       if (handedOn && !reviewedSince(store, issue.id, current.takenAt)) {
         return block("no_review", ref, noReviewReason({ ref, status: issue.status, as }));
       }
+      if (handedOn && !checkpointedSince(store, issue.id, current.takenAt)) {
+        return block("no_worklog", ref, `staple autopilot: ${ref} needs a current worklog since the run took it. Run every staple command as the run's actor, on its workspace: ${as} staple ...\n${worklogReminder(ref)}`);
+      }
     }
   }
 
@@ -534,6 +540,7 @@ export function takeReason(input: { answer: Extract<ContinueAnswer, { action: "t
     `staple autopilot: next ticket ${ref} "${answer.title}". It is already checked out to ${run.actor} for you: do not check it out again.`,
     answer.resumed ? `Resuming: ${ref} was left unfinished. Read its comments, plan and worklog first and carry on from there; an earlier review does not count.` : answer.why,
     `Run every staple command as the run's actor, on its workspace: ${as} staple ...`,
+    worklogReminder(ref),
   ];
   if (goalCheck && milestone !== null) {
     lines.push(

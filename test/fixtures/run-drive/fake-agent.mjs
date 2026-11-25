@@ -53,11 +53,16 @@ if (mode === "mainline-handed-on") {
   staple("status", ref, "in_review");
 }
 
-if (["review", "done", "unreviewed", "background", "mainline"].includes(mode)) {
+if (["review", "done", "unreviewed", "uncheckpointed", "background", "mainline"].includes(mode)) {
   writeFileSync(`${ref}.txt`, `${ref}\n`);
   if (mode !== "unreviewed") {
     const reviewed = staple("comment", ref, `review: reproduced ${ref}.txt; nothing found`);
     if (reviewed.status !== 0) process.stderr.write(reviewed.stderr);
+  }
+  if (mode !== "uncheckpointed") {
+    writeFileSync(`${ref}-worklog.md`, "## Done\n- Implemented and reviewed.\n## Next\n- Await review.\n## Files touched\n- Result file.\n");
+    const checkpointed = staple("doc", ref, "worklog", "--put", `${ref}-worklog.md`);
+    if (checkpointed.status !== 0) process.exit(checkpointed.status ?? 1);
   }
   const verb = mode === "done" ? ["done", ref] : ["status", ref, "in_review"];
   const moved = staple(...verb);

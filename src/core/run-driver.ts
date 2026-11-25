@@ -30,6 +30,7 @@
  *   non-zero exit            failed, `session exited N`
  *   exit 0, still held       failed: the session ended without handing the ticket on
  *   exit 0, no review        failed, `no_review`: the brief's review comment is missing
+ *   exit 0, no checkpoint    failed, `no_worklog`: no complete worklog from this session
  *   exit 0, handed on        nothing stated: the tracker reads the ended attempt or the
  *                            status (review or done is done) and records it
  *   master or main moved     failed, `touched_main_line: …`, and the run is stopped
@@ -55,6 +56,7 @@ import { join } from "node:path";
 import { mainLineGuardGap, mainLineMoves, mainLineSnapshot } from "./main-line-guard.js";
 import { acquireDriverLock, clearDriver, ensureRunDirectory, groupAlive, readDriver, writeDriver, type DriverRecord } from "./run-attachment.js";
 import { buildBrief, type DriveFinish } from "./run-brief.js";
+import { checkpointedSince, worklogReminder } from "./run-worklog.js";
 import type { ContinueAnswer, RunStore, RunTicketOutcome } from "./run-store.js";
 import type { WorkspaceStore } from "./store.js";
 import { StapleError, nowIso } from "./types.js";
@@ -449,7 +451,7 @@ function outcomeOf(
     return { outcome: "failed", reason: `session exited 0 but left ${ref} ${issue.status} and still held` };
   }
   /**
-   * The brief's review step is the one part of it the tracker can check: a session that
+   * The brief's review step is checked before the checkpoint: a session that
    * handed its ticket on without recording its review (`review: ...`) did not finish the
    * job it was given, whatever state it left the ticket in. Green gates are not evidence.
    */
@@ -461,6 +463,9 @@ function outcomeOf(
   const reviewed = bodies.some((comment) => /^\s*review:/i.test(comment.body));
   if (!reviewed) {
     return { outcome: "failed", reason: `no_review: the session handed ${ref} on without a "review: ..." comment` };
+  }
+  if (!checkpointedSince(store, issue.id, sessionStartedAt)) {
+    return { outcome: "failed", reason: `no_worklog: ${worklogReminder(ref)}` };
   }
   return {};
 }
