@@ -192,7 +192,9 @@ describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
       const command=JSON.parse(init!.body as string);
       const source={id,identifier,title,description:"Linear private source context",url:`https://linear.app/acme/issue/${identifier}/fixture`,state:{id:account,name:"In review"},team:{id:team,key:"ENG",name:"Engineering",organization:{id:org}}};
       const pageInfo={hasNextPage:false,endCursor:null};
-      const fields=command.query.includes("teams(") ? {teams:{nodes:[source.team],pageInfo}}
+      // Enough teams that the Add source list has to scroll.
+      const more=Array.from({length:30},(_,i)=>({...source.team,id:`66666666-6666-4666-8666-${String(i).padStart(12,"0")}`,key:`T${i}`,name:`Team ${i}`}));
+      const fields=command.query.includes("teams(") ? {teams:{nodes:[source.team,...more],pageInfo}}
         : command.query.includes("team(id:") ? {team:source.team}
         : command.query.includes("searchIssues(") ? {searchIssues:command.variables.after
           ? {nodes:[{...source,id:"55555555-5555-4555-8555-555555555555",identifier:"ENG-13",url:"https://linear.app/acme/issue/ENG-13/second",title:"Second page source"}],pageInfo}
@@ -214,9 +216,18 @@ describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
       expect(await page.locator("[data-workspace-row]").count()).toBeGreaterThan(1);
       expect(await page.getByRole("button",{name:/^Add a source to /}).count()).toBe(1);
       await page.getByRole("button",{name:"Add a source to alpha",exact:true}).click();
+      // The list opens outside the Settings dialog, whose scroll lock must not swallow the wheel over it.
+      const sources=page.locator("[cmdk-list]");
+      await expect.poll(()=>sources.evaluate(el=>el.scrollHeight-el.clientHeight)).toBeGreaterThan(100);
+      await sources.hover();
+      await page.mouse.wheel(0,120);
+      await expect.poll(()=>sources.evaluate(el=>el.scrollTop)).toBeGreaterThan(0);
+      await sources.evaluate(el=>{el.scrollTop=0;});
       await page.getByRole("option",{name:/Engineering \(ENG\)/}).click();
-      await expect.poll(()=>page.getByRole("button",{name:"Remove Engineering (ENG) from alpha",exact:true}).count()).toBe(1);
+      // The picker stays open for more; while it is open the screen behind it is inert. Escape closes the picker alone.
+      await expect.poll(()=>page.getByRole("option",{name:/Engineering \(ENG\).*chosen/}).count()).toBe(1);
       await page.keyboard.press("Escape");
+      await expect.poll(()=>page.getByRole("button",{name:"Remove Engineering (ENG) from alpha",exact:true}).count()).toBe(1);
       await page.goto(`${at(single)}/?issue=ALP-1&token=${single.token}`,{waitUntil:"networkidle"});
       // The phone summary has one way to link, for both kinds.
       await page.getByRole("button",{name:"Link an issue or pull request",exact:true}).click();
