@@ -5,7 +5,8 @@
  * discover`, on the page's poll). Merging is not finishing: a ticket can hold several pull
  * requests, a stacked one can merge first, and review or evidence may still be owed. So the
  * ticket's status never moves on its own; the detail says the pull request merged and puts
- * the ordinary Mark done write one click away, the same write the primary action makes.
+ * the ordinary Mark done write one click away: its own button, or, when the primary action
+ * already is Mark done, a pointer to that one so the write is never drawn twice.
  *
  * Shown in both layouts, under the status line where the autopilot notice sits, while the
  * ticket is not finished, not cancelled and not waiting behind a review gate.
@@ -14,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import type { IssueDetail } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { contextOf, type IssueActionsController } from "@/detail/IssueActions";
-import { doneItem, type ActionContext } from "@/detail/plain-actions";
+import { doneItem, primaryItem, type ActionContext } from "@/detail/plain-actions";
 import type { ExternalLink } from "../../../../core/integrations/link-store";
 import { LinkGlyph } from "./parts";
 
@@ -38,15 +39,21 @@ export function MergedPullRequestNotice({
   controller: IssueActionsController;
   className?: string;
 }) {
-  const offer = mergedOffer(detail, contextOf(detail, controller));
+  const ctx = contextOf(detail, controller);
+  const offer = mergedOffer(detail, ctx);
   if (!offer) return null;
+  // When the primary action already is Mark done, the line points at it instead of drawing a second one.
+  const primaryIsDone = primaryItem(ctx).id === "done";
   const keys = offer.merged.map((link) => link.resource.key.slice(link.resource.key.lastIndexOf("#")));
   const sentence = offer.merged.length === 1 ? `Pull request ${keys[0]} merged.` : `Pull requests ${keys.join(", ")} merged.`;
   return (
     <p data-merged-offer="" className={cn("m-0 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-body text-text-secondary", className)}>
-      <LinkGlyph kind="pull_request" tone="merged" className="size-3.5" />
-      <span className="min-w-0">{sentence} If the work is finished, mark it done.</span>
-      <Button
+      {/* The glyph stays with the first line of the sentence when it wraps on a phone. */}
+      <span className="flex min-w-0 items-start gap-2">
+        <LinkGlyph kind="pull_request" tone="merged" className="mt-1 size-3.5" />
+        <span className="min-w-0">{sentence} {primaryIsDone ? "If the work is finished, Mark done finishes the ticket." : "If the work is finished, mark it done."}</span>
+      </span>
+      {primaryIsDone ? null : <Button
         variant="outline"
         size="sm"
         data-merged-done=""
@@ -55,7 +62,7 @@ export function MergedPullRequestNotice({
         className="pointer-coarse:min-h-11"
       >
         {offer.done.label}
-      </Button>
+      </Button>}
     </p>
   );
 }
