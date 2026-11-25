@@ -16,6 +16,7 @@ import type { IssueAttachment, IssueComment, IssueDetail, IssueTiming } from "@/
 import { ActivityTab } from "./ActivityTab";
 import { DocumentsTab } from "./DocumentsTab";
 import { FilesTab } from "./FilesTab";
+import { OverviewTab } from "./OverviewTab";
 import { RelationsTab } from "./RelationsTab";
 import { visibleTabs, type TabProps } from "./registry";
 
@@ -218,6 +219,24 @@ describe("Connections", () => {
     expect(html).toContain("data-empty-state");
     expect(html).toContain("This task stands on its own");
     expect(html).not.toContain("Show map");
+  });
+});
+
+describe("Details", () => {
+  it("names where a finding was found and lists an origin's findings, with the waiting-on rows' pattern", () => {
+    const html = render(
+      OverviewTab,
+      detail({
+        foundIn: { identifier: "STA-20", title: "where it was found", status: "in_review", disposition: "follow-up" },
+        findings: [{ identifier: "STA-71", title: "a blocking finding", status: "todo", disposition: "blocker" }],
+      }),
+    );
+    expect(html).toContain('aria-label="Found in"');
+    expect(html).toContain('aria-label="Findings"');
+    expect(html).toContain('data-relation="STA-20"');
+    expect(html).toContain('data-relation="STA-71"');
+    expect(html).toContain(">Follow-up<");
+    expect(html).toContain(">Blocker<");
   });
 });
 

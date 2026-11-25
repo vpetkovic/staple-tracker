@@ -50,7 +50,7 @@ import { buildLineageIndex, lineageFrom, type Lineage } from "@/lib/graph-lineag
 import { relationContext, type RelationContext } from "@/lib/relation-context";
 import { useSession } from "@/lib/session";
 import { isResolvedStatus, statusLabel } from "@/lib/settings";
-import type { CrossBlocker, FindingRef, Graph, IssueDetail } from "@/lib/types";
+import type { CrossBlocker, Graph, IssueDetail } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
 import {
   canvasDimmed,
@@ -65,7 +65,7 @@ import { selectionTarget } from "@/views/graph/graph-folding";
 import { nodeTypes, type GraphFlowNode } from "@/views/graph/node-types";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
 import { EmptyState, SectionHeading, cn } from "../parts";
-import { directCounts, relationStats, unreachableWords } from "../relation-stats";
+import { directCounts, findingNote, relationStats, unreachableWords } from "../relation-stats";
 import type { TabProps } from "./registry";
 
 import "./tabs.css";
@@ -322,11 +322,6 @@ function Group({ title, action, children }: { title: string; action?: React.Reac
       <ul className="overflow-hidden rounded-xl border border-border bg-surface-raised">{children}</ul>
     </section>
   );
-}
-
-/** How a finding stands toward where it was found, in the row's quiet note. */
-function findingNote(disposition: FindingRef["disposition"]): string {
-  return disposition === "blocker" ? "Blocker" : "Follow-up";
 }
 
 /** Sub-tasks finished, as a thin bar beside the words. */
