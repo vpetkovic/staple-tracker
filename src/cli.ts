@@ -413,6 +413,29 @@ function estimateOption(
  * Only the literal `--clear` erases, and `<dur> --clear` together is refused rather than
  * resolved by precedence, for the reason `estimateOption` gives.
  */
+/**
+ * The blocker set `staple blocked-by` replaces the issue's with. The set is replaced whole, so
+ * an absent or blank list used to clear every blocker without a word; only --none clears.
+ */
+function blockedByVerbList(raw: string | undefined, extra: readonly string[], none: boolean | undefined): string[] {
+  if (extra.length > 0) {
+    throw new StapleError(
+      "validation",
+      `usage: staple blocked-by <ref> <R1,R2> | staple blocked-by <ref> --none (unexpected argument "${extra[0]}"; separate blockers with commas)`,
+    );
+  }
+  if (none && raw !== undefined) throw new StapleError("validation", "a blocker list and --none cannot be used together");
+  if (none) return [];
+  const refs = (raw ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (refs.length === 0) {
+    throw new StapleError(
+      "validation",
+      "staple blocked-by needs a blocker list or --none: staple blocked-by <ref> <R1,R2> | staple blocked-by <ref> --none.",
+    );
+  }
+  return refs;
+}
+
 function estimateVerbValue(
   ref: string | undefined,
   raw: string | undefined,
@@ -1083,7 +1106,8 @@ Execution attempts (one agent's tenure on one issue; opened and ended by the ver
               while the issue that left it is checked out, leased here, or moved
               under a day ago — this writes to whatever holds it now. Or use the id
   block <ref> --owner O --action TEXT   mark blocked with an unblock descriptor
-  blocked-by <ref> [R1,R2|--none]       replace the dependency set
+  blocked-by <ref> R1,R2 | --none       replace the dependency set; only --none clears
+              it, and a missing or empty list is refused (exit 2)
   wait <ref> [--timeout S] [--interval MS]
               block until <ref> is ready (no unresolved blockers) or finished;
               --interval default 500ms, no --timeout means wait forever
@@ -1838,7 +1862,9 @@ function main() {
           ...ATTEMPT_END_OPTIONS,
         },
       });
-      if (positionals.length < 2) throw new StapleError("validation", "usage: staple status <ref> <status>");
+      if (positionals.length < 2 || !positionals[0]!.trim() || !positionals[1]!.trim()) {
+        throw new StapleError("validation", "usage: staple status <ref> <status>");
+      }
       const { store } = getStore(values);
       const target = positionals[1]! as IssueStatus;
       /**
@@ -2044,10 +2070,8 @@ function main() {
         options: { ...common, none: { type: "boolean" } },
       });
       const ref = requireRef(positionals[0], "blocked-by");
+      const refs = blockedByVerbList(positionals[1], positionals.slice(2), values.none);
       const { store } = getStore(values);
-      const refs = values.none
-        ? []
-        : (positionals[1] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
       const issue = store.setBlockedBy(ref, refs, agentName());
       const blockers = store.unresolvedBlockersOf(issue.id);
       if (values.json) {
@@ -2205,9 +2229,10 @@ function main() {
         allowPositionals: true,
         options: { ...common, author: { type: "string" } },
       });
+      const [rawRef, ...body] = positionals;
+      const ref = requireRef(rawRef, "comment");
       const { store } = getStore(values);
-      const [ref, ...body] = positionals;
-      const comment = store.addComment(ref!, body.join(" "), agentName(values.author), "user");
+      const comment = store.addComment(ref, body.join(" "), agentName(values.author), "user");
       if (values.json) {
         outJson(comment);
         break;
