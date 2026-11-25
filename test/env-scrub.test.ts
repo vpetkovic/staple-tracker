@@ -78,22 +78,27 @@ describe("the run's setup", () => {
   });
 
   it("scrubs the vitest process before it starts a worker", async () => {
-    const liveHome = mkdtempSync(join(tmpdir(), "staple-env-scrub-live-"));
-    Object.assign(process.env, LIVE_SHELL, { STAPLE_HOME: liveHome });
-    const { default: setup } = await import("./setup/isolated-home.js");
-    const teardown = setup({ provide: () => undefined } as unknown as Parameters<typeof setup>[0]);
+    // A HOME of its own, so the nested setup watches only directories this test owns and
+    // not the run's shared home, which other workers write while it runs.
+    const scratch = mkdtempSync(join(tmpdir(), "staple-env-scrub-"));
     try {
-      for (const name of Object.keys(LIVE_SHELL).filter((n) => n !== "STAPLE_HOME")) expect(process.env[name], name).toBeUndefined();
-      expect(process.env.STAPLE_HOME).not.toBe(liveHome);
+      const liveHome = join(scratch, "live-staple-home");
+      Object.assign(process.env, LIVE_SHELL, { HOME: join(scratch, "home"), STAPLE_HOME: liveHome });
+      const { default: setup } = await import("./setup/isolated-home.js");
+      const teardown = setup({ provide: () => undefined } as unknown as Parameters<typeof setup>[0]);
+      try {
+        for (const name of Object.keys(LIVE_SHELL).filter((n) => n !== "STAPLE_HOME")) expect(process.env[name], name).toBeUndefined();
+        expect(process.env.STAPLE_HOME).not.toBe(liveHome);
+      } finally {
+        teardown();
+      }
     } finally {
-      teardown();
-      rmSync(liveHome, { recursive: true, force: true });
+      rmSync(scratch, { recursive: true, force: true });
     }
   });
 
   it("leaves this worker, and a child it spawns, without the inherited tracker", () => {
-    const owned = new Set(["STAPLE_HOME", "STAPLE_TEST_LAUNCHCTL"]);
-    const seen = (names: string[]) => names.filter((n) => n.startsWith("STAPLE_") && !owned.has(n) && !keepsStapleVariable(n));
+    const seen = (names: string[]) => names.filter((n) => n.startsWith("STAPLE_") && n !== "STAPLE_HOME" && !keepsStapleVariable(n));
     expect(seen(Object.keys(process.env))).toEqual([]);
     const child = spawnSync(process.execPath, ["-e", "console.log(JSON.stringify(Object.keys(process.env)))"], { encoding: "utf8" });
     expect(seen(JSON.parse(child.stdout) as string[])).toEqual([]);
