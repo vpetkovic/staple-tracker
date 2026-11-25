@@ -3406,3 +3406,32 @@ export interface CloudLinkJoinStarted extends CloudJoinStarted {
   workspace: string;
   created: boolean;
 }
+
+/**
+ * The attention list: the work waiting on a person. A hand-kept mirror of the row shape in
+ * `src/core/attention.ts`, which `/api/attention`, `staple attention --json` and the
+ * `attention` MCP tool all answer. `kind` is an open string and every row carries its kind's
+ * `label`, so a kind added to the core registry needs no change here.
+ */
+export interface AttentionRow {
+  key: string;
+  workspace: string;
+  kind: string;
+  label: string;
+  ref: string | null;
+  runId: string | null;
+  conflictId: string | null;
+  title: string;
+  detail: string;
+  since: string;
+  ageSeconds: number;
+  action: { verb: "review" | "open" | "unblock" | "inspect" | "resolve"; label: string; command: string };
+  dismissible: boolean;
+}
+
+export interface AttentionList {
+  rows: AttentionRow[];
+  workspaces: string[];
+  failed: Array<{ workspace: string; message: string }>;
+  now: string;
+}

@@ -109,7 +109,7 @@ try {
   await pinned.handshake();
 
   const tools = await rpc("tools/list", {});
-  assert(tools.tools.length === 87, `tools/list exposes ${tools.tools.length} tools`);
+  assert(tools.tools.length === 88, `tools/list exposes ${tools.tools.length} tools`);
 
   const byName = new Map<string, any>(tools.tools.map((t: any) => [t.name, t]));
   assert(
@@ -118,7 +118,7 @@ try {
   );
   const readOnly = tools.tools.filter((t: any) => t.annotations?.readOnlyHint === true).map((t: any) => t.name);
   assert(
-    readOnly.length === 34 &&
+    readOnly.length === 35 &&
       [
         "integration_read",
         "inbox",
@@ -132,6 +132,8 @@ try {
         "list_statuses",
         "list_kinds",
         "hub_overview",
+        // The attention list reads what waits on a person; it changes nothing.
+        "attention",
         // STA-172: reading a plan is as read-only as reading a task.
         "list_milestones",
         "get_milestone",
@@ -174,7 +176,7 @@ try {
         "get_idea",
         "list_horizons",
       ].every((n) => readOnly.includes(n)),
-    `exactly the 34 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
+    `exactly the 35 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
   );
   // A host decides from these hints whether to ask a person first, including for a tool a
   // view's button calls through it.
@@ -975,7 +977,7 @@ try {
 
   const coldTools = await cold.rpc("tools/list", {});
   assert(
-    coldTools.tools.length === tools.tools.length && coldTools.tools.length === 87,
+    coldTools.tools.length === tools.tools.length && coldTools.tools.length === 88,
     `server connects and lists ${coldTools.tools.length} tools with no workspace anywhere above cwd`,
   );
 
@@ -1010,8 +1012,8 @@ try {
   // decide a gate in the view's workspace, 65. The plan tools list_ideas, get_idea,
   // list_horizons, capture_idea, update_idea, start_idea, unlink_idea and the app-only
   // reset_idea_baseline read and write one workspace's ideas, 73, and scaffold_idea, 74.
-  // Integration read/write/configure add three workspace-targetable tools, 77.
-  assert(wsTargetable.length === 77, `77 workspace tools accept ws targeting (${wsTargetable.length} found)`);
+  // Integration read/write/configure add three workspace-targetable tools, 77, and attention, 78.
+  assert(wsTargetable.length === 78, `78 workspace tools accept ws targeting (${wsTargetable.length} found)`);
   // A person's click in a view is recorded under the person only while hosts keep these two
   // away from the model: both declare MCP Apps visibility ["app"] and take no actor.
   for (const name of ["approve_gate_from_view", "request_changes_from_view"]) {

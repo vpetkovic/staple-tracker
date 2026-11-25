@@ -35,7 +35,7 @@ machine only and stops on Ctrl-C.
 ## 2. Find your way around
 
 On a wide screen the **rail** on the left lists the views: *Tasks*, *Queue*,
-*Graph*, *Milestones* and *Estimates*, then *Usage* under *This computer*, and
+*Attention*, *Graph*, *Milestones* and *Estimates*, then *Usage* under *This computer*, and
 *Settings* with the dark-mode switch at the foot. The **top bar** names where you
 are, shows the sync state if the workspace uses [cloud sync](cloud-sync.md), and
 holds the search field and **New task**.
@@ -71,6 +71,18 @@ The [pickup queue](queue.md) as one list. **Next up** names the ticket an agent
 asking now would get; below it, your plan in order, each queued epic or milestone
 expanded into its tickets. Drag rows (or Alt-↑ and Alt-↓) to reorder; *Queue a
 task, epic or milestone…* adds work, and a row's `⋯` menu removes it.
+
+### Attention: what waits on you
+
+The work only a person can move, one card per thing: gates waiting on approval
+(resubmitted ones apart), blockers a person owns, tickets in review, tickets made
+ready again because their blockers in other workspaces closed, stopped autopilot
+runs, claims silent past `queue.silentClaimMinutes`, and sync conflicts. Each card
+names its workspace, how long it has waited and one action: a gate, a review or a
+blocker opens the ticket, a stopped run opens its history, and a conflict asks which
+value to keep. A silent claim only opens the ticket; taking work over stays
+explicit. Under *All workspaces* every workspace's cards are listed. `staple
+attention` prints the same rows.
 
 ## 5. Graph: how work depends on work
 

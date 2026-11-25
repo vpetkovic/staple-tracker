@@ -472,6 +472,7 @@ describe("registered settings on /api/settings", () => {
       "queue.policy:workspace",
       "kinds.appearance:workspace",
       "machine.port:global",
+      "queue.silentClaimMinutes:workspace",
       "machine.setupComplete:global",
       "machine.humanName:global",
     ]);
@@ -486,6 +487,7 @@ describe("registered settings on /api/settings", () => {
       "kinds.default": { key: "kinds.default", scope: "workspace", value: "task", source: "default", version: 1 },
       "kinds.appearance": { key: "kinds.appearance", scope: "workspace", value: {}, source: "default", version: 1 },
       "queue.policy": { key: "queue.policy", scope: "workspace", value: "advisory", source: "default", version: 1 },
+      "queue.silentClaimMinutes": { key: "queue.silentClaimMinutes", scope: "workspace", value: 30, source: "default", version: 1 },
     });
     expect(settings.unknownKeys).toEqual([]);
     expect(settings.global.path).toBe(join(home, "config.json"));

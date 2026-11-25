@@ -14,6 +14,7 @@
  * WAVE 2: import from here. Adding an endpoint means adding a function here.
  */
 import { replaceUrl } from "./back-to-close";
+import type { AttentionList, AttentionRow } from "./types";
 import type { IdeaDetailData, PlanData, PlanWriteResult } from "./plan-types";
 import type {
   ActionPayload,
@@ -1102,6 +1103,31 @@ export const assignProject = (target: { ws?: string; ref: string; project: strin
   projectWrite<IssueDetail>("assign", target);
 
 // ---------- autopilot runs (design/runs.md) ----------
+
+/**
+ * The work waiting on a person (`staple attention`). With no `ws` in hub mode, every
+ * workspace's rows, each naming its own.
+ */
+export const getAttention = (params: { ws?: string } = {}) => request<AttentionList>(`/api/attention${qs(params)}`);
+
+/** Take a dismissible attention row off the list: a ticket made ready by closed cross-workspace blockers, or a stopped run. */
+export const dismissAttention = (body: { ws: string; target: string; actor?: string }) =>
+  request<{ dismissed: AttentionRow }>("/api/attention/dismiss", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+/**
+ * Settle one sync conflict by keeping this device's value or taking the other device's
+ * (`staple cloud resolve <id> --take local|remote`). Never a default: the page asks which.
+ */
+export const resolveCloudConflict = (body: { ws: string; id: string; take: "local" | "remote"; actor?: string }) =>
+  request<unknown>("/api/cloud/conflicts/resolve", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
 
 /**
  * Every live run and the recent ended ones, each the object `staple run status --json`

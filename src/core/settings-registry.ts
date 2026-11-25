@@ -260,6 +260,22 @@ const definitions: SettingDefinition[] = [
     },
   },
   {
+    key: "queue.silentClaimMinutes",
+    category: "queue",
+    scope: "workspace",
+    schema: { type: "integer", min: 1, max: 10_080 },
+    default: 30,
+    version: 1,
+    sensitivity: "normal",
+    ui: {
+      label: "Silent claim after (minutes)",
+      description:
+        "How long a claim's holder may write nothing before the attention list shows the claim. It never releases or steals the claim; taking work over stays an explicit act.",
+      control: "number",
+      order: 20,
+    },
+  },
+  {
     key: "features.planning", category: "features", scope: "workspace",
     schema: { type: "boolean" }, default: false, version: 1, sensitivity: "normal",
     ui: { label: "Planning (experimental)", description: "Ideas, horizons and the Plan view. Only a person can change this; turning it off keeps all planning data.", control: "toggle", order: 10 },

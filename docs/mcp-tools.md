@@ -36,6 +36,7 @@ The loop an agent follows, described in
 | Tool | What it does | CLI | Writes |
 |---|---|---|---|
 | `inbox` | What is ready, waiting on a person, or blocked, in pickup order | `staple inbox` | no |
+| `attention` | The work waiting on a person, as rows: gates, resubmitted gates, person-owned blockers, reviews, tickets made ready by closed cross-workspace blockers, stopped runs, silent claims and sync conflicts. Each row names its workspace, age and one action. `hub: true` covers every workspace | `staple attention` | no |
 | `list_tasks` | List tickets by status, kind, assignee or text | `staple ls` | no |
 | `get_task` | One ticket in full: claim, time, gate, blockers, attempts, and file metadata. `foundIn` names the ticket a finding was filed from, and `findings` lists what was found in this one; each carries `disposition`, `blocker` or `follow-up` | `staple show` | no |
 | `create_task` | File a ticket, with parent, blockers and estimate. For a review finding, `found_in` names the ticket it was found in, and `blocks` (`true`, or a parent, ancestor or milestone of that ticket) blocks it in the same write | `staple new --found-in` | yes |

@@ -411,6 +411,9 @@ describe("KNOWN: logical errors this surface cannot project", () => {
     expect(routes.sort()).toEqual([
       "/api/action",
       "/api/agent-context",
+      // The attention list (core/attention.ts): the read, and the one dismissal write.
+      "/api/attention",
+      "/api/attention/dismiss",
       "/api/bootstrap",
       // `staple budget` / MCP `get_budget`: GET-only, a read of this machine's hub, no `ws`.
       "/api/budget",

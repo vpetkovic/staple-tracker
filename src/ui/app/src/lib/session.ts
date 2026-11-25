@@ -27,13 +27,15 @@ import type { Resource } from "./useStaple";
  * preference. What the user sees is `VIEW_LABELS` — the tree view is called "Tasks"
  * everywhere a human reads it.
  */
-export const VIEWS = ["tree", "queue", "graph", "milestones", "plan", "calibration", "budget"] as const;
+export const VIEWS = ["tree", "queue", "attention", "graph", "milestones", "plan", "calibration", "budget"] as const;
 export type ViewName = (typeof VIEWS)[number];
 
 /** The human name of each view — the rail row, the content header, the palette command. */
 export const VIEW_LABELS: Record<ViewName, string> = {
   tree: "Tasks",
   queue: "Queue",
+  // The work waiting on a person (views/attention): gates, reviews, blockers a person owns.
+  attention: "Attention",
   graph: "Graph",
   milestones: "Milestones",
   plan: "Plan",
@@ -67,7 +69,7 @@ export function isMachineView(view: ViewName): boolean {
  *                 group or sort, and finished work has its own control in the graph's View
  *                 menu (show, fade, hide), so a second Done here would be a duplicate.
  *   Milestones  — Done alone: it lists finished milestones when finished work is shown.
- *   Queue, Estimates, Usage — none. The queue is the pickup order itself, and the two
+ *   Queue, Attention, Estimates, Usage — none. The queue is the pickup order itself, and the two
  *                 reports read a workspace's (or the machine's) whole history.
  */
 export interface ViewControls {
@@ -85,6 +87,7 @@ const VIEW_CONTROLS: Record<ViewName, ViewControls> = {
   milestones: { arrange: false, filter: false, done: true },
   plan: { arrange: false, filter: false, done: false },
   queue: { arrange: false, filter: false, done: false },
+  attention: { arrange: false, filter: false, done: false },
   calibration: { arrange: false, filter: false, done: false },
   budget: { arrange: false, filter: false, done: false },
 };

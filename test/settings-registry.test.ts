@@ -60,7 +60,7 @@ describe("the registered set", () => {
     }
   });
 
-  it("registers the four machine preferences as global and four workspace field settings", () => {
+  it("registers the four machine preferences as global and five workspace field settings", () => {
     expect(settingDefinitionsFor("global").map((d) => [d.key, d.configKey])).toEqual([
       ["machine.browser", "browser"],
       ["machine.port", "port"],
@@ -73,6 +73,7 @@ describe("the registered set", () => {
       "kinds.default",
       "kinds.appearance",
       "queue.policy",
+      "queue.silentClaimMinutes",
       "features.planning",
     ]);
   });
@@ -302,6 +303,7 @@ describe("wire views", () => {
       "queue.policy",
       "kinds.appearance",
       "machine.port",
+      "queue.silentClaimMinutes",
       "machine.setupComplete",
       "machine.humanName",
     ]);

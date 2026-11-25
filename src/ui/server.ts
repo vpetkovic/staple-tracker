@@ -1,3 +1,4 @@
+import { attentionList, dismissAttention } from "../core/attention.js";
 import { IntegrationOperations, INTEGRATION_READ_ACTIONS, INTEGRATION_WRITE_ACTIONS, INTEGRATION_CONFIG_ACTIONS } from "../core/integrations/operations.js";
 /**
  * staple ui — tiny local web server, alive only while you use the page.
@@ -1625,6 +1626,8 @@ export function startUiServer(options: UiOptions): UiHandle {
            * does not share it, so the family admits no read.
            */
           url.pathname.startsWith("/api/run/") ||
+          /** Dismissing an attention row. `/api/attention` is the read and is not this path. */
+          url.pathname === "/api/attention/dismiss" ||
           /**
            * The queue's mutating verbs (STA-168). `/api/queue` and
            * `/api/queue/next` are READS and are deliberately NOT in this list, so
@@ -1821,7 +1824,9 @@ export function startUiServer(options: UiOptions): UiHandle {
           url.pathname !== BUDGET_REFRESH_ROUTE &&
           url.pathname !== "/api/budget/forget" &&
           // A run is machine-local and never synchronized (core/run-store.ts): nothing to send.
-          !url.pathname.startsWith("/api/run/")
+          !url.pathname.startsWith("/api/run/") &&
+          // A dismissal is a local event, like the cross_blockers_resolved event it answers.
+          url.pathname !== "/api/attention/dismiss"
         ) {
           const ws = url.searchParams.get("ws") ?? undefined;
           res.once("finish", () => {
@@ -5080,6 +5085,27 @@ export function startUiServer(options: UiOptions): UiHandle {
         // `now`: the server's clock, so a page counts "stopped since I first looked" against
         // the same clock that wrote `endedAt`, not against a phone's skewed one.
         json(res, 200, { runs: out, now: new Date().toISOString() });
+        return;
+      }
+
+      /**
+       * The attention list (core/attention.ts): the work waiting on a person. The same
+       * `attentionList` `staple attention` and the `attention` MCP tool call. Hub mode with no
+       * `ws` reads every workspace; each row names its own.
+       */
+      if (url.pathname === "/api/attention") {
+        const wanted = url.searchParams.get("ws") ?? undefined;
+        const targets = options.hub && !wanted ? allHandles() : [handleFor(wanted)];
+        json(res, 200, attentionList(targets.map((h) => ({ slug: h.slug, store: h.store }))));
+        return;
+      }
+
+      /** `POST /api/attention/dismiss` `{ ws, target, actor? }`: take a dismissible row off the list. */
+      if (url.pathname === "/api/attention/dismiss") {
+        const body = await readBody(req);
+        const handle = handleFor((body.ws as string) || undefined);
+        const target = typeof body.target === "string" ? body.target : "";
+        json(res, 200, { dismissed: dismissAttention(handle.store, target, bodyActor(body)) });
         return;
       }
 
