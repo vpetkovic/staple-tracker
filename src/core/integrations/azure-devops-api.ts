@@ -29,7 +29,9 @@ const MAX_ID = 2_147_483_647;
 const FIELDS = ["System.Id", "System.Title", "System.State", "System.TeamProject", "System.WorkItemType", "System.Description"];
 
 const project = z.object({ id: uuid, name: z.string().min(1).max(256) });
-const connectionData = z.object({ authenticatedUser: z.object({ id: uuid, providerDisplayName: z.string().max(256).optional() }), instanceId: uuid });
+const connectionData = z.object({ authenticatedUser: z.object({ id: uuid, descriptor: z.string().max(512).optional(), providerDisplayName: z.string().max(256).optional() }), instanceId: uuid });
+/** The public-access user connectionData answers with, with status 200, when the token is wrong or absent. */
+const ANONYMOUS_USER = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 const workItem = z.object({
   id: z.number().int().positive().max(MAX_ID),
   fields: z.object({
@@ -60,6 +62,10 @@ class AzureDevOpsClient {
   async identity(options?: ProviderReadOptions): Promise<AzureDevOpsIdentity> {
     // connectionData is unversioned; it names the token's user and the organization's GUID.
     const { data } = await this.request("_apis/connectionData", connectionData, { versioned: false }, options);
+    // Never bind to, or read as, the anonymous user: a rejected token is a sign-in problem.
+    if (data.authenticatedUser.id === ANONYMOUS_USER || data.authenticatedUser.descriptor?.startsWith("System:PublicAccess")) {
+      throw new StapleError("auth", `Azure DevOps rejected the personal access token in ${this.credentialEnv}.`);
+    }
     return { account: data.authenticatedUser.id, scopeId: data.instanceId, login: data.authenticatedUser.providerDisplayName?.trim() || null };
   }
 

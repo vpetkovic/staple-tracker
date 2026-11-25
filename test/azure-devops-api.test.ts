@@ -186,6 +186,14 @@ describe("read-only Azure DevOps adapter", () => {
     expect(stranger.calls.filter(c => !c.path.endsWith("/connectionData"))).toHaveLength(0);
   });
 
+  it("treats the anonymous identity Azure DevOps answers a bad or missing token with as unauthenticated, never as a user to bind", async () => {
+    // Observed live: connectionData answers 200 with the public-access identity instead of 401.
+    const anonymous = { authenticatedUser: { id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", descriptor: "System:PublicAccess;aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", providerDisplayName: "Anonymous" }, instanceId: org };
+    const { reader, fetch } = setup(undefined, { identity: anonymous });
+    expect(await reader.validate()).toMatchObject({ state: "unauthenticated", message: expect.stringContaining("STAPLE_AZURE_DEVOPS_PAT") });
+    await expect(discoverAzureDevOps("acme", "STAPLE_AZURE_DEVOPS_PAT", { fetch: fetch as typeof globalThis.fetch, credential: () => "wrong" })).rejects.toMatchObject({ code: "auth" });
+  });
+
   it.each([
     [401, {}, "auth", "unauthenticated"],
     [203, { "content-type": "text/html" }, "auth", "unauthenticated"],
