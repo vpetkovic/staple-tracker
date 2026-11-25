@@ -145,6 +145,8 @@ describe("in-process resolution and opens", () => {
     const before = decoyState();
     refused(() => findWorkspace(decoyWorktree));
     refused(() => openWorkspace(decoyDb));
+    // Refused before anything is read: a missing file outside is the guard's error, not not_found.
+    refused(() => openWorkspace(join(decoy, "missing", "staple.db")));
     refused(() => resolveWorkspace({ db: decoyDb }));
     refused(() => openDb(join(decoy, "other.db")));
     expect(decoyState()).toEqual(before);
