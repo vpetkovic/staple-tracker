@@ -4,7 +4,8 @@
  * Queue, Milestones and Estimates each read one workspace: `/api/queue`,
  * `/api/milestones` and `/api/calibration` answer for a single store (a plan's positions and
  * revision, a milestone's membership, a workspace's own estimate history), and in hub mode
- * with no `ws` the server answers for ITS first registered workspace. These pages used to do
+ * with no `ws` the server answers for ITS first registered workspace (`/api/milestones` now
+ * joins every workspace's list, tagged, but a page still reads one). These pages used to do
  * the same on the client (`session.ws || session.workspaces[0]`), so "All workspaces" showed
  * one workspace's queue under a header that said all of them, and a write from it landed in
  * a workspace the reader never picked.
