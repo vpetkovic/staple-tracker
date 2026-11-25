@@ -210,6 +210,9 @@ describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
       await page.getByRole("button",{name:"Save",exact:true}).click();
       // Saving reloads the list and checks the new connection.
       await expect.poll(()=>page.locator('[data-connection-row="linear"] [data-connection-state="ready"]').count()).toBe(1);
+      // A window on one workspace lists the others on this computer but only its own row can change.
+      expect(await page.locator("[data-workspace-row]").count()).toBeGreaterThan(1);
+      expect(await page.getByRole("button",{name:/^Add a source to /}).count()).toBe(1);
       await page.getByRole("button",{name:"Add a source to alpha",exact:true}).click();
       await page.getByRole("option",{name:/Engineering \(ENG\)/}).click();
       await expect.poll(()=>page.getByRole("button",{name:"Remove Engineering (ENG) from alpha",exact:true}).count()).toBe(1);

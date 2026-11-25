@@ -1,7 +1,8 @@
 /**
  * Settings → Integrations. Connections belong to this computer and every workspace maps its
  * own sources, so the screen needs no workspace: `ws` is whatever the shell has (or none) and
- * only reaches routes that ignore it. Each workspace row writes to its own workspace.
+ * only reaches routes that ignore it. Each workspace row writes to its own workspace; a window
+ * on one workspace can only write to that one, so there the other rows are read-only.
  *
  * This file only fetches; the two halves under ./integrations render from what it passes.
  */
@@ -64,6 +65,7 @@ export function IntegrationsSection({ ws, onDirtyChange }: {
         prefixes={prefixes}
         connections={state.connections}
         cachedOnly={state.cachedOnly}
+        onlyCurrent={session.mode !== "hub"}
         onRowChange={setRow}
       />
       <p className="text-label text-text-tertiary">

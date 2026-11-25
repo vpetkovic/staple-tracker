@@ -18,7 +18,7 @@ import { chipLabel, orderWorkspaces, unmappedSentence, type MappedTarget, type W
 
 const NO_READER = "No connection on this computer reads this source";
 
-export function WorkspacesSection({ rows, error, onRetry, current, prefixes, connections, cachedOnly, onRowChange }: {
+export function WorkspacesSection({ rows, error, onRetry, current, prefixes, connections, cachedOnly, onlyCurrent = false, onRowChange }: {
   /** Null while the mapping is loading. */
   rows: WorkspaceMapping[] | null;
   error: string | null;
@@ -30,8 +30,14 @@ export function WorkspacesSection({ rows, error, onRetry, current, prefixes, con
   connections: ConnectionView[];
   /** A page that cannot read providers: sources can be removed but not added. */
   cachedOnly: boolean;
+  /**
+   * A window on one workspace writes to that workspace whatever a request names, so the other
+   * rows are shown (an empty workspace searches them too) but cannot be changed from here.
+   */
+  onlyCurrent?: boolean;
   onRowChange: (workspace: string, targets: MappedTarget[]) => void;
 }) {
+  const others = onlyCurrent && (rows ?? []).some((row) => row.workspace !== current);
   let body;
   if (error && !rows) {
     body = (
@@ -64,6 +70,7 @@ export function WorkspacesSection({ rows, error, onRetry, current, prefixes, con
             current={row.workspace === current}
             tile={(prefixes[row.workspace] || row.workspace).slice(0, 1).toUpperCase()}
             connections={connections}
+            editable={!onlyCurrent || row.workspace === current}
             canAdd={!cachedOnly}
             onChange={(targets) => onRowChange(row.workspace, targets)}
           />
@@ -75,19 +82,23 @@ export function WorkspacesSection({ rows, error, onRetry, current, prefixes, con
     <section aria-labelledby="integrations-workspaces" className="space-y-3" data-integrations-workspaces>
       <div className="space-y-1">
         <SectionHeading id="integrations-workspaces" title="Workspaces" tag="Shared with each workspace" />
-        <p className="text-label text-muted-foreground">Choose what each workspace searches and links. A workspace with nothing chosen searches everything chosen here.</p>
+        <p className="text-label text-muted-foreground">
+          Choose what each workspace searches and links. A workspace with nothing chosen searches everything chosen here.
+          {others ? ` Only ${current} can be changed from this window.` : null}
+        </p>
       </div>
       {body}
     </section>
   );
 }
 
-function WorkspaceRow({ row, rows, current, tile, connections, canAdd, onChange }: {
+function WorkspaceRow({ row, rows, current, tile, connections, editable, canAdd, onChange }: {
   row: WorkspaceMapping;
   rows: WorkspaceMapping[];
   current: boolean;
   tile: string;
   connections: ConnectionView[];
+  editable: boolean;
   canAdd: boolean;
   onChange: (targets: MappedTarget[]) => void;
 }) {
@@ -136,25 +147,27 @@ function WorkspaceRow({ row, rows, current, tile, connections, canAdd, onChange 
               data-source-chip={target.kind}
               aria-busy={removing === target.key || undefined}
               title={orphan ? `${label.title}\n${NO_READER}` : label.title}
-              className={cn("inline-flex h-6 max-w-full min-w-0 items-center gap-1.5 rounded-md border pr-1 pl-2 text-label", removing === target.key && "opacity-60")}
+              className={cn("inline-flex h-6 max-w-full min-w-0 items-center gap-1.5 rounded-md border pl-2 text-label", editable ? "pr-1" : "pr-2", removing === target.key && "opacity-60")}
             >
               {orphan ? <AlertTriangle aria-label={NO_READER} className="size-3.5 shrink-0 text-[var(--status-task-icon-todo)]" /> : null}
               <ProviderMark providerId={target.providerId} className="text-muted-foreground" />
               {target.kind === "project" && withTeams ? <span className="text-text-tertiary">Project</span> : null}
               <span className="max-w-[16rem] truncate">{label.text}</span>
-              <button
-                type="button"
-                aria-label={`Remove ${label.text} from ${row.workspace}`}
-                disabled={removing === target.key}
-                onClick={() => void unmap(target)}
-                className="relative flex size-4 min-h-0 shrink-0 items-center justify-center rounded-sm text-text-tertiary hover:bg-surface-hover hover:text-foreground focus-ring pointer-coarse:before:absolute pointer-coarse:before:-inset-3.5"
-              >
-                {removing === target.key ? <Loader2 aria-hidden className="size-3 animate-spin" /> : <X aria-hidden className="size-3" />}
-              </button>
+              {editable ? (
+                <button
+                  type="button"
+                  aria-label={`Remove ${label.text} from ${row.workspace}`}
+                  disabled={removing === target.key}
+                  onClick={() => void unmap(target)}
+                  className="relative flex size-4 min-h-0 shrink-0 items-center justify-center rounded-sm text-text-tertiary hover:bg-surface-hover hover:text-foreground focus-ring pointer-coarse:before:absolute pointer-coarse:before:-inset-3.5"
+                >
+                  {removing === target.key ? <Loader2 aria-hidden className="size-3 animate-spin" /> : <X aria-hidden className="size-3" />}
+                </button>
+              ) : null}
             </span>
           );
         })}
-        {canAdd ? <SourcePicker workspace={row.workspace} targets={row.targets} connections={connections} onChange={onChange} /> : null}
+        {editable && canAdd ? <SourcePicker workspace={row.workspace} targets={row.targets} connections={connections} onChange={onChange} /> : null}
       </div>
       {rowError ? (
         <div className="basis-full @min-[30rem]:pl-43">

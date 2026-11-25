@@ -157,10 +157,10 @@ const target = (over: Partial<MappedTarget> = {}): MappedTarget => ({
   key: "github.com/123456", providerId: "github", host: "github.com", scopeId: "host", kind: "repository",
   containerId: "123456", name: "octo/app", url: null, connectionId: GH_ID, ...over,
 });
-const workspaces = (rows: WorkspaceMapping[], current = "", cachedOnly = false) =>
+const workspaces = (rows: WorkspaceMapping[], current = "", cachedOnly = false, onlyCurrent = false) =>
   renderToStaticMarkup(
     <WorkspacesSection rows={rows} error={null} onRetry={() => {}} current={current} prefixes={{ alpha: "ALP", beta: "BET", gamma: "GAM" }}
-      connections={[github(health("ready"))]} cachedOnly={cachedOnly} onRowChange={() => {}} />,
+      connections={[github(health("ready"))]} cachedOnly={cachedOnly} onlyCurrent={onlyCurrent} onRowChange={() => {}} />,
   );
 
 describe("workspaces", () => {
@@ -203,6 +203,27 @@ describe("workspaces", () => {
     const html = workspaces([{ workspace: "alpha", targets: [target()] }], "", true);
     expect(html).not.toContain("Add a source to alpha");
     expect(html).toContain("Remove octo/app from alpha");
+  });
+
+  it("in a window on one workspace, shows the others without any way to change them", () => {
+    const rows = [{ workspace: "alpha", targets: [target()] }, { workspace: "beta", targets: [target({ key: "github.com/7", name: "octo/site" })] }, { workspace: "gamma", targets: [] }];
+    const html = workspaces(rows, "alpha", false, true);
+    expect(html).toContain('aria-label="Remove octo/app from alpha"');
+    expect(html).toContain('aria-label="Add a source to alpha"');
+    expect(html).toContain(">octo/site<");
+    expect(html).not.toContain("from beta");
+    expect(html).not.toContain("Add a source to beta");
+    expect(html).not.toContain("Add a source to gamma");
+    expect(html).toContain("Only alpha can be changed from this window.");
+    // Every workspace open at once: each row is its own, and nothing needs saying.
+    const hub = workspaces(rows, "alpha");
+    expect(hub).toContain('aria-label="Remove octo/site from beta"');
+    expect(hub).toContain("Add a source to gamma");
+    expect(hub).not.toContain("can be changed from this window");
+  });
+
+  it("says nothing about other workspaces when the window's own is the only one", () => {
+    expect(workspaces([{ workspace: "alpha", targets: [] }], "alpha", false, true)).not.toContain("can be changed from this window");
   });
 
   it("uses no native select, disclosure or checkbox", () => {
