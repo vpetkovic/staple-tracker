@@ -66,9 +66,10 @@ interface Scenario {
   build: (store: Store, ws: string) => string;
   /**
    * Items the page holds back ON PURPOSE although the store alone would accept them, keyed
-   * to the words the reason must contain: work waiting on another workspace (the queue reads
-   * that as blocked too), and In Progress by the status menu while a gate or the strict queue
-   * says no (a way round them). For these the audit asserts the hold-back and its reason.
+   * to the words the reason must contain: In Progress by the status menu while a gate or the
+   * strict queue says no (a way round them). For these the audit asserts the hold-back and its
+   * reason. Work waiting on another workspace is not here: checkout and a takeover refuse it in
+   * the store too, so its held-back Start and Take over are checked as real refusals.
    */
   stricter?: Record<string, string>;
 }
@@ -106,7 +107,6 @@ const SCENARIOS: Scenario[] = [
       crossLink("other", otherTask(), ws, id);
       return id;
     },
-    stricter: { "primary:start": "Waiting on 1 other task to finish first." },
   },
   {
     name: "todo, waiting on a task missing from a workspace on this computer",
@@ -116,7 +116,6 @@ const SCENARIOS: Scenario[] = [
       crossLink("other", `${otherTask().split("-")[0]}-9999`, ws, id);
       return id;
     },
-    stricter: { "primary:start": "-9999, which can't be found in other." },
   },
   {
     name: "todo, waiting on a task in a workspace not on this computer",
@@ -126,7 +125,6 @@ const SCENARIOS: Scenario[] = [
       crossLink("gone", "GON-1", ws, id);
       return id;
     },
-    stricter: { "primary:start": "Waiting on GON-1 in gone, which isn't on this computer." },
   },
   {
     name: "strict queue, and the holder went quiet",
@@ -150,9 +148,6 @@ const SCENARIOS: Scenario[] = [
       clock += 31 * 60_000;
       return id;
     },
-    // A takeover does not check other workspaces, so the store would take it; the page holds
-    // back because the work cannot finish from here.
-    stricter: { "primary:take-over": "Waiting on GON-2 in gone, which isn't on this computer." },
   },
   {
     name: "strict queue, another task is next",
@@ -471,6 +466,23 @@ describe("the primary action per state", () => {
       const { ws, ref } = world(scenario);
       const primary = primaryItem(await contextFor(scenario, ws, await detailOf(ws, ref)));
       expect(`${primary.id}${primary.disabledReason ? " (disabled)" : ""}`).toBe(expected[scenario.name]);
+    });
+  }
+});
+
+describe("why work waiting on another workspace is held back", () => {
+  // The store refuses these (checked above); the page names the link in its own words.
+  const reasons: Record<string, string> = {
+    "todo, waiting only on an open task in another workspace": "Waiting on 1 other task to finish first.",
+    "todo, waiting on a task missing from a workspace on this computer": "-9999, which can't be found in other.",
+    "todo, waiting on a task in a workspace not on this computer": "Waiting on GON-1 in gone, which isn't on this computer.",
+    "waiting on a task this computer can't see, and the holder went quiet": "Waiting on GON-2 in gone, which isn't on this computer.",
+  };
+  for (const scenario of SCENARIOS.filter((s) => s.name in reasons)) {
+    it(scenario.name, async () => {
+      const { ws, ref } = world(scenario);
+      const primary = primaryItem(await contextFor(scenario, ws, await detailOf(ws, ref)));
+      expect(primary.disabledReason).toContain(reasons[scenario.name]);
     });
   }
 });

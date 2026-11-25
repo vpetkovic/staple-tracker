@@ -97,6 +97,8 @@ const READS: Record<StoreName, readonly string[]> = {
     "runs",
     // Whether some horizon's status inputs moved since this device last settled them (`rederivePlanHolds`).
     "owesPlanHolds",
+    // This machine's hub links into the workspace (`hub-cross-blockers.ts`), read-only.
+    "crossBlockers",
   ],
   // `criteriaCheck`: the goal check's criteria half, read by a goal run's stop rules.
   // `leafProgress`: the ticket leaves a horizon's accounting starts from.
@@ -331,6 +333,12 @@ const SCENARIOS: readonly Scenario[] = [
       event.run("release", id, "agent-new", "{}", "old-3", "2026-01-01T06:00:00.000Z");
     },
     run: (w) => void w.a.store.reconstructAttemptHistory(),
+  },
+  {
+    // The hub fan-out's note on a waiting ticket: an event and nothing synchronized.
+    method: "WorkspaceStore.recordCrossBlockersResolved",
+    name: "record a cross-repository blocker resolved",
+    run: (w) => void w.a.store.recordCrossBlockersResolved(w.ids["Everything"]!, [{ identifier: "APP-1", workspace: "app" }], "cross_blockers_resolved:test"),
   },
   { method: "WorkspaceStore.addComment", name: "comment", run: (w) => void w.a.store.addComment(w.ids["Everything"]!, "A comment", "alice") },
   {

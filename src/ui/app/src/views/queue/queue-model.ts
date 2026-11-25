@@ -102,11 +102,17 @@ export function rowOrdinal(row: EffectiveQueueRow | null): number | null {
 export function blockersOf(row: EffectiveQueueRow | null): string[] {
   const detail = row?.detail;
   if (!detail) return [];
-  const named = (key: string): string[] => {
+  const list = (key: string): unknown[] => {
     const value = detail[key];
-    return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+    return Array.isArray(value) ? value : [];
   };
-  return [...named("blockers"), ...named("crossBlockers")];
+  // Local blockers are identifiers; cross-workspace ones are `{ identifier, workspace, unresolvable }`.
+  const local = list("blockers").filter((item): item is string => typeof item === "string");
+  const cross = list("crossBlockers").flatMap((item) => {
+    const identifier = typeof item === "object" && item !== null ? (item as { identifier?: unknown }).identifier : undefined;
+    return typeof identifier === "string" ? [identifier] : [];
+  });
+  return [...local, ...cross];
 }
 
 // ---------- the plan, joined to its expansion ----------

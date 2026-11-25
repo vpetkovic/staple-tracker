@@ -102,6 +102,7 @@ import { LISTED_HORIZON } from "./plan-members.js";
 import { fallbackTarget, recordRemovalTarget } from "./vocabulary-targets.js";
 import { ProjectStore } from "./project-store.js";
 import { QueueStore } from "./queue-store.js";
+import { type HubCrossBlocker, assertNoHubCycle, describeCrossBlocker, holdingCrossBlockers, localEdgesOf, readCrossBlockers } from "./hub-cross-blockers.js";
 import { RunStore } from "./run-store.js";
 /**
  * `scope.js`, NOT `status.js`. See the header of `cloud/scope.ts`: `status.ts`
@@ -3027,6 +3028,20 @@ export class WorkspaceStore {
       this.assertNoCycle(
         row.id,
         deduped.map((b) => b.id),
+      );
+      /**
+       * A loop can also close through another repository: this edge, then a link out, then
+       * back. Only the edges this write ADDS are checked, so restating a set never fails on a
+       * loop that already exists (one a link made while the other side was not on this machine).
+       */
+      const existing = new Set(
+        (this.db.prepare("SELECT blocker_id FROM relations WHERE blocked_id = ? AND type = 'blocks'").all(row.id) as Array<{ blocker_id: string }>).map(
+          (edge) => edge.blocker_id,
+        ),
+      );
+      assertNoHubCycle(
+        deduped.filter((b) => !existing.has(b.id)).map((b) => [b.identifier, row.identifier] as const),
+        { own: { slug: this.slug, edges: localEdgesOf(this.db) } },
       );
       /**
        * Only the edges that leave are deleted, and only the ones that arrive inserted: an edge
@@ -7211,6 +7226,37 @@ export class WorkspaceStore {
         );
       }
       /**
+       * THE CROSS-REPOSITORY GUARD. A blocker in another workspace (`staple link`) lives in
+       * the hub, not in `relations`, so the claiming UPDATE below cannot see it; this is where
+       * it holds the ticket. After the gate (the more binding fact), before the order guard,
+       * and like it inside the claim's transaction. A blocker this machine cannot read holds
+       * the ticket too, and says so.
+       *
+       * Unlike a local blocker, a person can step over it with the override, because the hub
+       * is this machine's view of another repository and can be stale or absent. The step is
+       * never silent: it is recorded as `cross_blocker_overridden` with the reason.
+       */
+      const crossHeld = holdingCrossBlockers(this.crossBlockers().get(row.identifier) ?? []);
+      // Here a fresh claim only: work someone holds, or a status checkout refuses, is answered below.
+      const freshClaim = row.checkout_agent === null && expected.includes(row.status);
+      if (freshClaim && crossHeld.length > 0 && overrideReason === undefined) {
+        throw new StapleError(
+          "conflict",
+          `Checkout refused: ${row.identifier} is blocked across repositories by ${crossHeld.map(describeCrossBlocker).join(", ")}. Pick a different task, or ask a person to step over it with --override -m "<why>".`,
+          {
+            currentStatus: row.status,
+            heldBy: row.checkout_agent,
+            blockers: [],
+            crossBlockers: crossHeld.map((blocker) => ({
+              identifier: blocker.identifier,
+              workspace: blocker.workspace,
+              status: blocker.status,
+              unresolvable: blocker.unresolvable,
+            })),
+          },
+        );
+      }
+      /**
        * THE ORDER GUARD (STA-168), and its position is the whole design, exactly
        * as the gate guard's above is:
        *
@@ -7255,6 +7301,25 @@ export class WorkspaceStore {
        */
       const emitOverride = (): void => {
         if (overrideReason === undefined) return;
+        if (crossHeld.length > 0) {
+          this.emitEvent({
+            kind: "cross_blocker_overridden",
+            issueId: row.id,
+            actor: agent,
+            payload: {
+              identifier: row.identifier,
+              reason: overrideReason,
+              crossBlockers: crossHeld.map((blocker) => ({
+                identifier: blocker.identifier,
+                workspace: blocker.workspace,
+                status: blocker.status,
+                unresolvable: blocker.unresolvable,
+              })),
+            },
+          });
+          // Stepped over the link and nothing in the queue: one event says it all.
+          if ((order?.expected ?? []).length === 0) return;
+        }
         this.emitEvent({
           kind: "queue_overridden",
           issueId: row.id,
@@ -7295,6 +7360,27 @@ export class WorkspaceStore {
         | undefined;
       if (!claimed) {
         const unresolved = this.unresolvedBlockersOf(row.id).map((b) => b.identifier);
+        /**
+         * A takeover is a fresh claim of held work, so a cross-repository blocker holds it as
+         * the guard above holds an unheld ticket: only the override steps over it, recorded.
+         */
+        if (stealIfIdleSeconds !== undefined && unresolved.length === 0 && overrideReason === undefined && crossHeld.length > 0 && row.checkout_agent !== null) {
+          throw new StapleError(
+            "conflict",
+            `Checkout refused: ${row.identifier} is blocked across repositories by ${crossHeld.map(describeCrossBlocker).join(", ")}. A takeover does not step over it; ask a person to override with --override -m "<why>".`,
+            {
+              currentStatus: row.status,
+              heldBy: row.checkout_agent,
+              blockers: [],
+              crossBlockers: crossHeld.map((blocker) => ({
+                identifier: blocker.identifier,
+                workspace: blocker.workspace,
+                status: blocker.status,
+                unresolvable: blocker.unresolvable,
+              })),
+            },
+          );
+        }
         // Explicit takeover. Blockers still win: taking over dead work must not
         // bypass a dependency the dead agent was correctly waiting on.
         if (stealIfIdleSeconds !== undefined && unresolved.length === 0) {
@@ -8263,7 +8349,9 @@ export class WorkspaceStore {
      * descendants: a queued epic and the child that made it urgent stay together
      * instead of the parent sinking to the bottom.
      */
-    const effective = this.queue().effectiveQueue({ actor: assignee ?? null });
+    // Read once and handed to the resolver, so the BLOCKED bucket and the effective order agree.
+    const crossBlockers = this.crossBlockers();
+    const effective = this.queue().effectiveQueue({ actor: assignee ?? null, crossBlockers });
     const effectiveByIssue = new Map(effective.rows.map((row) => [row.issueId, row]));
     const planPositions = new Map(
       this.queue().entries({ all: true }).map((entry) => [entry.issueId, entry.planPosition]),
@@ -8293,7 +8381,11 @@ export class WorkspaceStore {
     const queued: InboxEntry[] = [];
     const blocked: InboxEntry[] = [];
     for (const issue of items) {
-      const unresolved = blockersByIssue.get(issue.id) ?? [];
+      // A cross-repository blocker is named beside the local ones, by its hub identifier.
+      const unresolved = [
+        ...(blockersByIssue.get(issue.id) ?? []),
+        ...holdingCrossBlockers(crossBlockers.get(issue.identifier) ?? []).map((blocker) => blocker.identifier),
+      ];
       const row = effectiveByIssue.get(issue.id) ?? null;
       const entry: InboxEntry = {
         ...issue,
@@ -8462,6 +8554,36 @@ export class WorkspaceStore {
   /** The queue service over this store: the ordered plan and its revision. Built on first use. */
   queue(): QueueStore {
     return (this.queueStore ??= new QueueStore(this));
+  }
+
+  /**
+   * This workspace's cross-repository blockers, from this machine's hub (`staple link`), keyed
+   * by the blocked identifier. What the resolver and the checkout guard hold work on; empty
+   * with no hub. See `hub-cross-blockers.ts` for why this reads the hub read-only.
+   */
+  crossBlockers(home: string = stapleHome()): Map<string, HubCrossBlocker[]> {
+    return readCrossBlockers(this.slug, home);
+  }
+
+  /**
+   * Record, on the waiting ticket, that its cross-repository blockers have all resolved: the
+   * hook a person's attention list reads. Called by the hub's fan-out after a blocker in
+   * another workspace closes; the dedup key makes a repeated fan-out for the same set a no-op.
+   */
+  recordCrossBlockersResolved(ref: string, blockers: ReadonlyArray<{ identifier: string; workspace: string }>, dedupKey: string): void {
+    this.journaled(() => {
+      const row = this.requireRow(ref);
+      this.emitEvent({
+        kind: "cross_blockers_resolved",
+        issueId: row.id,
+        payload: {
+          identifier: row.identifier,
+          assignee: row.assignee,
+          crossBlockers: blockers.map((blocker) => ({ identifier: blocker.identifier, workspace: blocker.workspace })),
+        },
+        dedupKey,
+      });
+    });
   }
 
   // ---------- the plan layer (design/plan.md) ----------

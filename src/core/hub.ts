@@ -8,8 +8,9 @@ import { migrateHub } from "./schema.js";
 import { derivePrefixBase, parseIdentifier, prefixSuffixForAttempt } from "./ids.js";
 import { openWorkspace } from "./open.js";
 import { readWorkspaceManifest } from "./repo-identity.js";
-import { RESOLVED_STATUSES, StapleError, nowIso } from "./types.js";
+import { StapleError, nowIso } from "./types.js";
 import { crossLinkEntityId, type CrossLinkIdentity } from "./cloud/cross-link-key.js";
+import { assertNoHubCycle } from "./hub-cross-blockers.js";
 
 /** Best-effort cross-workspace fan-out after a resolution; never throws. */
 export function notifyHubResolvedSafe(workspaceSlug: string, identifier: string): void {
@@ -1001,9 +1002,7 @@ export class Hub {
         ws.store.db.close();
       }
     }) as [typeof typed[0], typeof typed[1]];
-    // Cross-file cycle guard over the hub edges (workspace-local edges cannot
-    // close a cross-file loop unless a hub edge participates in it too — a
-    // documented prototype simplification).
+    // Cross-file cycle guard over the hub edges and the local edges they join.
     this.assertNoCrossCycle(blocker.identifier, blocked.identifier);
     return { blocker, blocked };
   }
@@ -1276,26 +1275,12 @@ export class Hub {
     });
   }
 
+  /**
+   * The new link may not close a loop, through the hub's links alone or through them and the
+   * local `blocks` edges of the workspaces they name (`assertNoHubCycle`).
+   */
   private assertNoCrossCycle(newBlocker: string, newBlocked: string): void {
-    const edges = this.listCrossLinks();
-    const adjacency = new Map<string, string[]>();
-    for (const edge of edges) {
-      const list = adjacency.get(edge.blockerIdentifier) ?? [];
-      list.push(edge.blockedIdentifier);
-      adjacency.set(edge.blockerIdentifier, list);
-    }
-    // Path from newBlocked back to newBlocker would close a loop.
-    const queue = [newBlocked];
-    const visited = new Set<string>();
-    while (queue.length > 0) {
-      const current = queue.shift()!;
-      if (current === newBlocker) {
-        throw new StapleError("cycle", "Cross-workspace blocking relations cannot contain cycles");
-      }
-      if (visited.has(current)) continue;
-      visited.add(current);
-      queue.push(...(adjacency.get(current) ?? []));
-    }
+    assertNoHubCycle([[newBlocker, newBlocked]], { hub: this.db });
   }
 
   /**
@@ -1428,15 +1413,16 @@ export class Hub {
    * graceful-degradation rule from the evaluation).
    */
   crossBlockersOf(identifier: string): CrossBlockerState[] {
-    return this.crossBlockerRows(identifier).map(({ title: _title, missing: _missing, ...state }) => state);
+    return this.crossBlockerRows(identifier).map(({ title: _title, missing: _missing, resolvedAt: _at, ...state }) => state);
   }
 
   /** {@link crossBlockersOf}, plus each blocker's title. Read by the web UI's detail only. */
   crossBlockersWithTitles(identifier: string): CrossBlockerDetail[] {
-    return this.crossBlockerRows(identifier);
+    return this.crossBlockerRows(identifier).map(({ resolvedAt: _at, ...detail }) => detail);
   }
 
-  private crossBlockerRows(identifier: string): CrossBlockerDetail[] {
+  /** Each row also carries when its blocker finished, which tells one close from the next. */
+  private crossBlockerRows(identifier: string): Array<CrossBlockerDetail & { resolvedAt: string | null }> {
     const target = this.resolveIdentifier(identifier);
     const links = this.db
       .prepare("SELECT * FROM cross_links WHERE blocked_ws = ? AND blocked_identifier = ?")
@@ -1455,6 +1441,7 @@ export class Hub {
           unresolvable: true,
           title: null,
           missing: "workspace",
+          resolvedAt: null,
         };
       }
       const ws = openWorkspace(entry.path);
@@ -1464,10 +1451,12 @@ export class Hub {
           identifier: link.blocker_identifier,
           workspace: link.blocker_ws,
           status: issue.status,
-          resolved: (RESOLVED_STATUSES as readonly string[]).includes(issue.status),
+          // By the blocker workspace's own categories: a `shipped` filed under done resolves.
+          resolved: ws.store.isResolvedStatus(issue.status),
           unresolvable: false,
           title: issue.title,
           missing: null,
+          resolvedAt: issue.completedAt ?? issue.cancelledAt ?? null,
         };
       } catch {
         return {
@@ -1478,6 +1467,7 @@ export class Hub {
           unresolvable: true,
           title: null,
           missing: "task",
+          resolvedAt: null,
         };
       } finally {
         ws.store.db.close();
@@ -1497,7 +1487,8 @@ export class Hub {
       blocked_identifier: string;
     }>;
     for (const dependent of dependents) {
-      const states = this.crossBlockersOf(dependent.blocked_identifier);
+      const rows = this.crossBlockerRows(dependent.blocked_identifier);
+      const states: CrossBlockerState[] = rows.map(({ title: _title, missing: _missing, resolvedAt: _at, ...state }) => state);
       if (states.length === 0 || states.some((s) => !s.resolved)) continue;
       const digest = createHash("sha256")
         .update(states.map((s) => s.identifier).sort().join(","))
@@ -1517,6 +1508,35 @@ export class Hub {
           `cross_blockers_resolved:${dependent.blocked_identifier}:${digest}`,
           nowIso(),
         );
+      /**
+       * Keyed on when each blocker finished too, so closing a blocker again after a reopen is
+       * a new fact on the waiting ticket, while a repeated fan-out for the same close is not.
+       */
+      const closure = createHash("sha256")
+        .update(rows.map((row) => `${row.identifier}@${row.resolvedAt ?? ""}`).sort().join(","))
+        .digest("hex")
+        .slice(0, 32);
+      this.recordResolvedInWorkspace(dependent.blocked_ws, dependent.blocked_identifier, states, closure);
+    }
+  }
+
+  /**
+   * The same fact, on the waiting ticket in its own workspace, where a person's attention
+   * list reads it and where `staple wait` notices it. Best effort: the waiting workspace may
+   * not be on this machine, and the hub event above stands either way.
+   */
+  private recordResolvedInWorkspace(slug: string, identifier: string, states: CrossBlockerState[], digest: string): void {
+    const entry = this.get(slug);
+    if (!entry?.available) return;
+    try {
+      const ws = openWorkspace(entry.path);
+      try {
+        ws.store.recordCrossBlockersResolved(identifier, states, `cross_blockers_resolved:${identifier}:${digest}`);
+      } finally {
+        ws.store.db.close();
+      }
+    } catch {
+      // The workspace could not be opened or no longer has the ticket: nothing to record on.
     }
   }
 

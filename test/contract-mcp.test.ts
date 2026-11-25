@@ -170,12 +170,12 @@ beforeAll(async () => {
   await call("create_remote", "create_task", { title: "Remote dependency", ws: "contract-two" });
 
   await call("set_blocked_by", "set_blocked_by", { ref: "CON-4", blockers: ["CON-3"], ws: WS });
+  await call("checkout", "checkout_task", { ref: "CON-1", ws: WS });
+  // Linked after the checkout: a cross-repository blocker refuses a fresh one.
   await call("cross_link", "cross_link", {
     blocker_identifier: "CONA-1",
     blocked_identifier: "CON-1",
   });
-
-  await call("checkout", "checkout_task", { ref: "CON-1", ws: WS });
   await call("add_comment", "add_comment", {
     ref: "CON-1",
     body: "contract comment",
@@ -1619,6 +1619,22 @@ describe("tool response shapes (31/31)", () => {
     assertGolden("inbox", {
       ready: [
         issueGolden({
+          identifier: "CON-2",
+          title: "Contract idempotent",
+          idempotencyKey: "idem-1",
+          unresolvedBlockers: [],
+          claim: null,
+          gate: null,
+          queuedBy: null,
+          // A leaf, so it IS an effective row: first in the unqueued band.
+          position: 1,
+          planPosition: null,
+        }),
+      ],
+      // ready+queued+blocked partition ONE page (H9).
+      queued: [],
+      blocked: [
+        issueGolden({
           identifier: "CON-1",
           title: "Contract root task",
           description: "Root of the contract fixture tree",
@@ -1631,7 +1647,9 @@ describe("tool response shapes (31/31)", () => {
           checkoutAgent: CONTRACT_AGENT,
           checkoutAt: ISO,
           startedAt: ISO,
-          unresolvedBlockers: [],
+          // Held, and blocked across repositories by CONA-1 (`cross_link` above): BLOCKED, as a
+          // local blocker would put it, named by its hub identifier.
+          unresolvedBlockers: ["CONA-1"],
           claim: claimGolden(),
           // STA-143: additive, and present-as-null rather than omitted.
           gate: null,
@@ -1647,22 +1665,7 @@ describe("tool response shapes (31/31)", () => {
           position: null,
           planPosition: null,
         }),
-        issueGolden({
-          identifier: "CON-2",
-          title: "Contract idempotent",
-          idempotencyKey: "idem-1",
-          unresolvedBlockers: [],
-          claim: null,
-          gate: null,
-          queuedBy: null,
-          // A leaf, so it IS an effective row: first in the unqueued band.
-          position: 1,
-          planPosition: null,
-        }),
       ],
-      // ready+queued+blocked partition ONE page, so a page can be all-ready (H9).
-      queued: [],
-      blocked: [],
       nextCursor: CURSOR,
       hasMore: true,
     });
