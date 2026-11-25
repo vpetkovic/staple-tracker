@@ -22,7 +22,7 @@
  * Presentational pieces take props and read no context, so `attention-render.test.tsx`
  * renders them to static markup.
  */
-import { ArrowUpRight, Check, ChevronDown, Inbox, X } from "lucide-react";
+import { ArrowUpRight, ChevronDown, Inbox, X } from "lucide-react";
 import { useCallback, useState } from "react";
 import { GuardRefusal } from "@/components/GuardRefusal";
 import { EmptyState } from "@/components/plain/States";
@@ -177,7 +177,7 @@ export function AttentionCard({ row, busy, handlers }: { row: AttentionRow; busy
           <Button
             variant="ghost"
             size="sm"
-            className="max-sm:min-h-11 max-sm:flex-none"
+            className="max-sm:min-h-11"
             disabled={busy}
             data-attention-dismiss={row.key}
             aria-label={`Dismiss ${subject ?? row.title}`}
@@ -206,11 +206,9 @@ function AttentionAction({ row, busy, handlers }: { row: AttentionRow; busy: boo
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="pointer-coarse:[&_[role=menuitem]]:min-h-11">
           <DropdownMenuItem data-attention-take="local" onSelect={() => handlers.resolve(row, "local")}>
-            <Check aria-hidden />
             Keep this device's value
           </DropdownMenuItem>
           <DropdownMenuItem data-attention-take="remote" onSelect={() => handlers.resolve(row, "remote")}>
-            <Check aria-hidden />
             Take the other device's value
           </DropdownMenuItem>
         </DropdownMenuContent>
