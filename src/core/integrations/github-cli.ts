@@ -2,7 +2,7 @@ import { z } from "zod";
 import { StapleError } from "../types.js";
 import type {
   ConnectionHealth, ContainerKind, ExternalContainer, ExternalItem, ExternalItemKind, ExternalItemRef, ExternalLocator,
-  ExternalPage, ExternalSearch, IntegrationAdapter, ProviderReadOptions,
+  ExternalPage, ExternalSearch, IntegrationAdapter, ProviderReadOptions, PullRequestChecks,
 } from "./contracts.js";
 import { createGhRunner, type GhRunner } from "./gh-process.js";
 import { healthFromError } from "./health.js";
@@ -10,11 +10,25 @@ import { healthFromError } from "./health.js";
 const identifier = z.number().int().positive().safe();
 const repository = z.object({ id: identifier, full_name: z.string().regex(/^[A-Za-z0-9-]+\/(?!\.{1,2}$)[A-Za-z0-9_.-]+$/), html_url: z.string() });
 const sourceIssue = z.object({
-  number: identifier, title: z.string(), body: z.string().nullable(), state: z.enum(["open", "closed"]),
+  number: identifier, title: z.string(), body: z.string().nullable(), state: z.enum(["open", "closed"]), draft: z.boolean().optional(),
   html_url: z.string(), pull_request: z.object({ merged_at: z.string().nullable().optional() }).optional(), repository_url: z.string().optional(),
+});
+/** A pull request as `repos/{repo}/pulls` answers it: what an issue read lacks is the head. */
+const sourcePull = z.object({
+  number: identifier, title: z.string(), body: z.string().nullable(), state: z.enum(["open", "closed"]), draft: z.boolean().optional(),
+  merged_at: z.string().nullable().optional(), html_url: z.string(),
+  head: z.object({ ref: z.string().min(1).max(255), sha: z.string().regex(/^[0-9a-f]{40,64}$/), repo: z.object({ id: identifier }).nullable() }),
+});
+const checkRuns = z.object({
+  check_runs: z.array(z.object({ name: z.string().max(512), status: z.string(), conclusion: z.string().nullable(), completed_at: z.string().nullable() })),
 });
 type Repository = z.infer<typeof repository>;
 type SourceIssue = z.infer<typeof sourceIssue>;
+type SourcePull = z.infer<typeof sourcePull>;
+/** Conclusions that mean the check did not pass. `neutral` and `skipped` are not failures. */
+const FAILED_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled", "action_required", "startup_failure"]);
+/** How many of a repository's most recently updated pull requests a branch lookup reads: one request. */
+const PULL_WINDOW = 100;
 const PAGE_SIZE = 50;
 const SEARCH_LIMIT = 1000;
 const REPOSITORY_LOOKUPS = 8;
@@ -46,6 +60,8 @@ export class GitHubCliAdapter implements IntegrationAdapter {
     this.pullRequests = {
       read: (ref: ExternalItemRef, options?: ProviderReadOptions) => this.read(ref, "pull_request", options),
       search: (query: ExternalSearch, options?: ProviderReadOptions) => this.search("pull_request", query, options),
+      forBranches: (containerId: string, branches: readonly string[], options?: ProviderReadOptions) => this.forBranches(containerId, branches, options),
+      details: (ref: ExternalItemRef, options?: ProviderReadOptions) => this.details(ref, options),
     };
   }
 
@@ -155,6 +171,67 @@ export class GitHubCliAdapter implements IntegrationAdapter {
     return { items, nextCursor: page * PAGE_SIZE < Math.min(result.total_count, SEARCH_LIMIT) ? this.cursor(page + 1, binding) : null };
   }
 
+  /**
+   * One read of the repository's most recently updated pull requests, matched to the branches
+   * here rather than one request per branch. Only heads in the repository itself count: a
+   * fork's branch of the same name is somebody else's work.
+   */
+  private async forBranches(containerId: string, branches: readonly string[], options?: ProviderReadOptions): Promise<ExternalItem[]> {
+    this.numeric(containerId);
+    const wanted = new Set(branches);
+    if (wanted.size === 0) return [];
+    await this.checkConnection(options);
+    const repo = await this.get(`repositories/${containerId}`, repository, options);
+    if (String(repo.id) !== containerId) throw new StapleError("unavailable", "GitHub returned a different repository");
+    const pulls = await this.get(`repos/${repo.full_name}/pulls?state=all&sort=updated&direction=desc&per_page=${PULL_WINDOW}`, z.array(sourcePull), options);
+    const items: ExternalItem[] = [];
+    for (const pull of pulls) {
+      if (!wanted.has(pull.head.ref) || pull.head.repo?.id !== repo.id) continue;
+      items.push(await this.pullItem(repo, pull, options));
+    }
+    return items;
+  }
+
+  private async details(ref: ExternalItemRef, options?: ProviderReadOptions): Promise<ExternalItem> {
+    if (ref.providerId !== "github" || ref.host !== this.scope.host || ref.scopeId !== "host" || ref.kind !== "pull_request") {
+      throw new StapleError("validation", "Reference belongs to a different GitHub resource scope");
+    }
+    this.numeric(ref.containerId); this.numeric(ref.id);
+    await this.checkConnection(options);
+    const repo = await this.get(`repositories/${ref.containerId}`, repository, options);
+    if (String(repo.id) !== ref.containerId) throw new StapleError("unavailable", "GitHub returned a different repository");
+    const result = await this.pullItem(repo, await this.get(`repos/${repo.full_name}/pulls/${ref.id}`, sourcePull, options), options);
+    if (result.ref.id !== ref.id) throw new StapleError("unavailable", "GitHub returned a different pull request");
+    return result;
+  }
+
+  /** A pull request with its head, and the checks on that head while it can still change. */
+  private async pullItem(repo: Repository, pull: SourcePull, options?: ProviderReadOptions): Promise<ExternalItem> {
+    const url = `${this.repoUrl(repo)}/pull/${pull.number}`;
+    if (pull.html_url !== url) throw new StapleError("unavailable", "GitHub resource moved or returned an unexpected URL; resolve its current URL again");
+    const state = pull.merged_at ? "merged" : pull.state === "closed" ? "closed" : pull.draft ? "draft" : "open";
+    const live = state === "open" || state === "draft";
+    return {
+      ref: { ...this.scope, containerId: String(repo.id), id: String(pull.number), kind: "pull_request" },
+      key: `${repo.full_name}#${pull.number}`, url, title: pull.title, body: pull.body,
+      status: { id: state, name: state }, fetchedAt: this.now().toISOString(),
+      pullRequest: { headBranch: pull.head.ref, headSha: pull.head.sha, checks: live ? await this.checks(repo, pull.head.sha, options) : null },
+    };
+  }
+
+  /** The latest run of each check on a commit, summed up. Null when the commit has none. */
+  private async checks(repo: Repository, sha: string, options?: ProviderReadOptions): Promise<PullRequestChecks | null> {
+    const { check_runs: runs } = await this.get(`repos/${repo.full_name}/commits/${sha}/check-runs?filter=latest&per_page=100`, checkRuns, options);
+    if (runs.length === 0) return null;
+    const failed = runs.filter(run => run.status === "completed" && FAILED_CONCLUSIONS.has(run.conclusion ?? ""));
+    const finished = (failed.length ? failed : runs).map(run => run.completed_at).filter((at): at is string => at !== null && Number.isFinite(Date.parse(at))).sort();
+    return {
+      state: failed.length ? "failing" : runs.some(run => run.status !== "completed") ? "pending" : "passing",
+      failing: [...new Set(failed.map(run => run.name))].slice(0, 10),
+      completedAt: finished.at(-1) ?? null,
+    };
+  }
+
   /** Returns the effective gh login, which must be the configured account. Runs before every read. */
   private async checkConnection(options?: ProviderReadOptions): Promise<string> {
     const version = await this.run({ kind: "version" }, options);
@@ -185,10 +262,12 @@ export class GitHubCliAdapter implements IntegrationAdapter {
     const kind = source.pull_request ? "pull_request" : "issue";
     const url = `${this.repoUrl(repo)}/${kind === "issue" ? "issues" : "pull"}/${source.number}`;
     if (source.html_url !== url) throw new StapleError("unavailable", "GitHub resource moved or returned an unexpected URL; resolve its current URL again");
+    // A pull request read as an issue still says whether it is a draft.
+    const state = source.pull_request?.merged_at ? "merged" : source.pull_request && source.state === "open" && source.draft ? "draft" : source.state;
     return {
       ref: { ...this.scope, containerId: String(repo.id), id: String(source.number), kind },
       key: `${repo.full_name}#${source.number}`, url, title: source.title, body: source.body,
-      status: { id: source.pull_request?.merged_at ? "merged" : source.state, name: source.pull_request?.merged_at ? "merged" : source.state }, fetchedAt: this.now().toISOString(),
+      status: { id: state, name: state }, fetchedAt: this.now().toISOString(),
     };
   }
 

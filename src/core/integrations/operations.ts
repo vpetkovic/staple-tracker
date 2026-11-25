@@ -16,9 +16,10 @@ import { ClickUpApiAdapter, discoverClickUp, type ClickUpIdentity } from "./clic
 import { LinearApiAdapter } from "./linear-api.js";
 import { externalResourceId, type ExternalResource } from "./link-store.js";
 import { IntegrationReader } from "./provider.js";
+import { discoverPullRequests, DISCOVERY_ACTOR, type DiscoveryReport } from "./pr-discovery.js";
 
 export const INTEGRATION_READ_ACTIONS = ["connections","health","containers","search","resolve","list","preview","counts","mapping","organizations"] as const;
-export const INTEGRATION_WRITE_ACTIONS = ["link","create","unlink","refresh","stack","share","map","unmap"] as const;
+export const INTEGRATION_WRITE_ACTIONS = ["link","create","unlink","refresh","stack","share","map","unmap","discover"] as const;
 export const INTEGRATION_CONFIG_ACTIONS = ["configure","remove"] as const;
 export const integrationCommandSchema = z.object({
   action:z.enum([...INTEGRATION_READ_ACTIONS,...INTEGRATION_WRITE_ACTIONS,...INTEGRATION_CONFIG_ACTIONS]),
@@ -321,11 +322,33 @@ export class IntegrationOperations {
         if(c.enabled===undefined) throw new StapleError("validation","Choose whether to share source context");
         return this.store.externalLinks().shareContext(need(c.resourceId,"resource"),c.enabled,actor());
       }
+      case "discover": return this.discover(c);
       case "stack": {
         if(c.parentResourceId===undefined || c.position===undefined) throw new StapleError("validation","Choose a PR parent or null and an order");
         return this.store.externalLinks().setStack(need(c.ref,"local ticket"),need(c.resourceId,"resource"),{parentResourceId:c.parentResourceId,position:c.position},actor());
       }
     }
+  }
+  /**
+   * Find the pull requests opened for each open ticket's branch (or `ref`'s) in the repositories
+   * mapped to this workspace, link them, and read the tickets' live linked pull requests again.
+   * A connection that is not working finds nothing and is reported, never thrown.
+   */
+  async discover(c:Pick<IntegrationCommand,"ref"|"actor">):Promise<DiscoveryReport> {
+    const live=this.options.liveReadsAvailable!==false;
+    const scope=live ? this.scope({action:"discover"}) : null;
+    const report=await discoverPullRequests({
+      store:this.store,
+      targets:scope?.mode==="workspace" ? scope.targets : [],
+      connection:id=>this.connections.resolve(id),
+      reader:config=>this.readerFor(config),
+      health:config=>this.caches.health.peek(this.healthKey(config)),
+      recordFailure:(config,health)=>this.caches.health.record(this.healthKey(config),health),
+      recordSuccess:config=>{ if (this.caches.health.peek(this.healthKey(config))?.state!=="ready") this.caches.health.delete(this.healthKey(config)); },
+      actor:c.actor?.trim() || DISCOVERY_ACTOR,
+    },c.ref ? [c.ref] : undefined);
+    if (!live && report.tickets.length) report.note="Cached-only session. Finding pull requests needs a connection on the machine running Staple.";
+    return report;
   }
   /** One page across every target in scope, each through the connection that serves it. A failed source is data. */
   private async searchTargets(c:IntegrationCommand,scope:SearchScope,kind:"issue"|"pull_request",text:string) {

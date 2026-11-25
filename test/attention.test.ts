@@ -290,6 +290,48 @@ describe("a ticket made ready by its cross-repository blockers", () => {
   });
 });
 
+describe("a linked pull request with failing checks", () => {
+  const pr = (id: number, state: string, checks: "failing" | "passing" | null) => ({
+    ref: { providerId: "github", host: "github.com", scopeId: "host", containerId: "42", id: String(id), kind: "pull_request" as const },
+    key: `team/repo#${id}`, url: `https://github.com/team/repo/pull/${id}`, title: `PR ${id}`, body: null,
+    status: { id: state, name: state }, fetchedAt: new Date().toISOString(),
+    pullRequest: { headBranch: "feat/x", headSha: "b".repeat(40), checks: checks && { state: checks, failing: checks === "failing" ? ["test", "lint"] : [], completedAt: "2026-11-25T10:00:00.000Z" } },
+  });
+
+  it("is a row per failing pull request on an open ticket, until its checks pass or it merges", () => {
+    const { store } = workspace("app");
+    const task = store.createIssue({ title: "Checks" });
+    const links = store.externalLinks();
+    links.link(task.id, pr(7, "open", "failing"), "eng-1");
+    links.link(task.id, pr(8, "open", "passing"), "eng-1");
+    links.link(task.id, pr(6, "closed", null), "eng-1");
+    const rows = workspaceAttention(store).filter((row) => row.kind === "pr_checks_failing");
+    expect(rows).toEqual([
+      expect.objectContaining({
+        key: `app/pr_checks_failing/${task.identifier}:team/repo#7`,
+        ref: task.identifier,
+        detail: "checks failing on team/repo#7: test, lint",
+        since: "2026-11-25T10:00:00.000Z",
+        action: { verb: "open", label: "Open", command: "gh pr checks https://github.com/team/repo/pull/7" },
+        dismissible: false,
+      }),
+    ]);
+    links.remember({ ...pr(7, "open", "passing"), fetchedAt: new Date(Date.now() + 1000).toISOString() });
+    expect(workspaceAttention(store).filter((row) => row.kind === "pr_checks_failing")).toEqual([]);
+    links.remember({ ...pr(7, "merged", "failing"), fetchedAt: new Date(Date.now() + 2000).toISOString() });
+    expect(workspaceAttention(store).filter((row) => row.kind === "pr_checks_failing")).toEqual([]);
+  });
+
+  it("is not a row once the ticket is finished", () => {
+    const { store } = workspace("app");
+    const task = store.createIssue({ title: "Finished" });
+    store.externalLinks().link(task.id, pr(9, "open", "failing"), "eng-1");
+    expect(workspaceAttention(store).map((row) => row.kind)).toContain("pr_checks_failing");
+    store.updateIssue(task.identifier, { status: "done" }, "eng-1");
+    expect(workspaceAttention(store).map((row) => row.kind)).not.toContain("pr_checks_failing");
+  });
+});
+
 describe("attentionList", () => {
   it("merges every workspace, each row naming its own", () => {
     const app = workspace("app");

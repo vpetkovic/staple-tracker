@@ -56,6 +56,7 @@ export class IntegrationReader {
     return {
       readPullRequests: this.adapter.pullRequests !== undefined,
       searchPullRequests: this.adapter.pullRequests?.search !== undefined,
+      discoverPullRequests: this.adapter.pullRequests?.forBranches !== undefined && this.adapter.pullRequests.details !== undefined,
     };
   }
 
@@ -131,6 +132,29 @@ export class IntegrationReader {
       item = await this.adapter.pullRequests.read(ref, options);
     }
     item = this.checkedItem(item);
+    if (externalItemKey(item.ref) !== externalItemKey(ref)) throw new StapleError("validation", "Provider read returned a different resource");
+    return item;
+  }
+
+  /** Pull requests whose head is one of these branches, in one container. Never a write at the provider. */
+  async pullRequestsForBranches(containerId: string, branches: readonly string[], options?: ProviderReadOptions): Promise<ExternalItem[]> {
+    if (!this.adapter.pullRequests?.forBranches) throw new StapleError("protocol_unsupported", "This connection does not find pull requests by branch");
+    const wanted = new Set(branches);
+    const items = await this.adapter.pullRequests.forBranches(required(containerId), [...wanted], options);
+    return items.map((raw) => {
+      const item = this.checkedItem(raw);
+      if (item.ref.kind !== "pull_request" || item.ref.containerId !== containerId || !item.pullRequest || !wanted.has(item.pullRequest.headBranch)) {
+        throw new StapleError("validation", "Provider returned a pull request outside the requested branches");
+      }
+      return item;
+    });
+  }
+
+  /** One pull request with its head and checks. */
+  async pullRequestDetails(ref: ExternalItemRef, options?: ProviderReadOptions): Promise<ExternalItem> {
+    this.checkRef(ref);
+    if (ref.kind !== "pull_request" || !this.adapter.pullRequests?.details) throw new StapleError("protocol_unsupported", "This connection does not read pull request details");
+    const item = this.checkedItem(await this.adapter.pullRequests.details(ref, options));
     if (externalItemKey(item.ref) !== externalItemKey(ref)) throw new StapleError("validation", "Provider read returned a different resource");
     return item;
   }

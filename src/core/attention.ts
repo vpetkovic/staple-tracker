@@ -249,6 +249,31 @@ export const ATTENTION_KINDS = [
         })),
   },
   {
+    /**
+     * A pull request linked to an open ticket whose head's checks fail, from the saved copy the
+     * last pull-request read left (`integrations discover`, the web UI's poll). It holds until a
+     * read sees the checks pass, or the pull request merge or close.
+     */
+    kind: "pr_checks_failing",
+    label: "Pull requests with failing checks",
+    dismissible: false,
+    collect: (context) => {
+      const pullRequests = context.store.externalLinks().pullRequests();
+      return context.issues.flatMap((issue) =>
+        (pullRequests.get(issue.id) ?? [])
+          .filter((pr) => pr.checks?.state === "failing" && (pr.state === "open" || pr.state === "draft"))
+          .map((pr) => ({
+            id: `${issue.identifier}:${pr.key}`,
+            ref: issue.identifier,
+            title: issue.title,
+            detail: `checks failing on ${pr.key}${pr.checks!.failing.length ? `: ${pr.checks!.failing.join(", ")}` : ""}`,
+            since: pr.checks!.completedAt ?? pr.fetchedAt ?? pr.linkedAt,
+            action: { verb: "open" as const, label: "Open", command: `gh pr checks ${pr.url}` },
+          })),
+      );
+    },
+  },
+  {
     /** A ticket made ready because its cross-repository blockers closed (`cross_blockers_resolved`). */
     kind: "unblocked",
     label: "Ready again: blockers in other workspaces closed",
