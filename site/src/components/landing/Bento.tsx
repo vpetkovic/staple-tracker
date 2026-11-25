@@ -293,7 +293,7 @@ export default function Bento(): ReactNode {
               </p>
               <p className={styles.plannedNote}>
                 <Planned />
-                ClickUp and Azure DevOps, and sync that writes back to your tracker, are planned, not shipped.
+                ClickUp and Azure DevOps, and writing back to your tracker, are planned, not shipped.
               </p>
             </div>
             <div className={styles.compare}>

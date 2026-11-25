@@ -13,11 +13,11 @@ const TRACKERS = [
   {name: 'Azure DevOps', shipped: false},
 ];
 
-/** staple next to a team's tracker: read-only links where they exist, sync marked as planned. */
+/** staple next to a team's tracker: what it reads today, and writing back marked as planned. */
 export default function TrackerSync({fade = 'bottom', ...options}: SceneOptions): ReactNode {
   return (
     <Scene
-      label="staple, the local execution layer, beside a team's tracker. Read-only links to GitHub and Linear are shipped. ClickUp, Azure DevOps and sync that writes back are planned, and each is marked Planned."
+      label="staple, the local execution layer, beside a team's tracker. staple reads from GitHub and Linear today, marked Shipped. ClickUp, Azure DevOps and writing back to the tracker are planned, each marked Planned."
       title="Next to your team's tracker"
       meta="read-only"
       timeline={[350, 700, 1050, 1400, 2150, 2950]}
@@ -44,9 +44,12 @@ export default function TrackerSync({fade = 'bottom', ...options}: SceneOptions)
           <div className={clsx(styles.bridge, step >= 5 && styles.bridgeOn)}>
             <span className={styles.dash} />
             <Reveal on={step >= 6} from="none" className={styles.bridgeLabels}>
-              <span className={styles.bridgeLabel}>Read-only links</span>
               <span className={styles.bridgeLabel}>
-                <span>Sync</span>
+                <span>Reads</span>
+                <Chip tone="accent">Shipped</Chip>
+              </span>
+              <span className={styles.bridgeLabel}>
+                <span>Writes back</span>
                 <Chip tone="planned">Planned</Chip>
               </span>
             </Reveal>

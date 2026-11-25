@@ -644,7 +644,7 @@ export default function Blend(): ReactNode {
               </p>
               <p>
                 <Planned />
-                ClickUp and Azure DevOps, and sync that writes back to your tracker, are planned, not shipped.
+                ClickUp and Azure DevOps, and writing back to your tracker, are planned, not shipped.
               </p>
             </div>
             <div className={styles.figure}>

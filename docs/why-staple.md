@@ -116,7 +116,7 @@ The link is read-only: staple never changes anything in your tracker.
 [Provider integrations](integrations.md) covers connecting, choosing what each
 workspace searches, and linking.
 
-ClickUp and Azure DevOps, and sync that writes back to your tracker, are
+ClickUp and Azure DevOps, and writing back to your tracker, are
 **planned, not shipped**.
 
 ## When staple fits, and when it doesn't

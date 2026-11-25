@@ -215,7 +215,7 @@ export const FAQ: {question: string; answer: ReactNode; link: {to: string; label
       <>
         No. staple is the execution layer: the place where agents do the work, locally, ticket by ticket. Your team’s
         board stays where people plan, discuss and report. A ticket can link to a GitHub issue or pull request or a
-        Linear issue and keep a read-only copy beside it. ClickUp, Azure DevOps and sync that writes back are planned,
+        Linear issue and keep a read-only copy beside it. ClickUp, Azure DevOps and writing back to your tracker are planned,
         not shipped.
       </>
     ),
