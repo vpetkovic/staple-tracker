@@ -59,6 +59,9 @@ export default defineConfig({
      * if the operator's real hub was created, migrated or written with scratch
      * workspaces (`test/setup/isolated-home.ts`). A test that forgets its own
      * STAPLE_HOME lands in the temp home instead of the live one.
+     * Both scrub every inherited STAPLE_* variable first (`test/setup/scrub-env.ts`),
+     * so a run started from an agent shell cannot open the tracker its STAPLE_DB names.
+     * `isolate-env.ts` stays first in this list for that reason.
      *
      * Every test starts after one turn of the worker's event loop, so a file of
      * `spawnSync` tests cannot starve vitest's RPC for longer than one test
