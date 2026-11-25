@@ -168,10 +168,11 @@ describe("a fresh repo-local `staple init`", () => {
       // 014-attempt-role, to "15" by 015-autopilot-runs, to "16" by
       // 016-milestone-goals, to "17" by 017-derived-status, to "18" by
       // 018-attachments, to "19" by 019-instruction-documents, to "20" by 020-plan-fields and to
-      // "21" by 021-plan-delivered, then "22" by 022-external-links; the TEXT
+      // "21" by 021-plan-delivered, then "22" by 022-external-links, "23" by 023 and "24" by
+      // 024-ticket-branch; the TEXT
       // typing is the characterization, the number
       // just tracks the migration list.
-      { key: "schema_version", value: "23" },
+      { key: "schema_version", value: "24" },
       { key: "slug", value: "metarepo" },
     ]);
   }, 30_000);
@@ -511,9 +512,9 @@ describe("global workspaces", () => {
     ]);
     expect(metaRows(join(home, "workspaces", "solo.db"))).toEqual([
       { key: "prefix", value: "SOL" },
-      // WORKSPACE_SCHEMA_VERSION — 21 since 021-plan-delivered. The hub beside it
+      // WORKSPACE_SCHEMA_VERSION — 24 since 024-ticket-branch. The hub beside it
       // is still 8; the two databases version independently.
-      { key: "schema_version", value: "23" },
+      { key: "schema_version", value: "24" },
       { key: "slug", value: "solo" },
     ]);
   }, 30_000);

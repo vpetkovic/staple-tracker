@@ -69,11 +69,13 @@ describe("workspace migration 017", () => {
     db.exec("DROP TABLE IF EXISTS plan_links");
     db.exec("DROP TABLE IF EXISTS plan_rows");
     for (const table of ["external_links", "external_private_cache", "external_resources"]) db.exec(`DROP TABLE IF EXISTS ${table}`);
+    // 024's columns. Dropped so the walk from 16 can add them again.
+    for (const column of ["branch", "base_commit"]) db.exec(`ALTER TABLE issues DROP COLUMN ${column}`);
     db.prepare("UPDATE meta SET value = '16' WHERE key = 'schema_version'").run();
-    expect(describeSchema(db, WORKSPACE_TARGET).pending).toEqual([17, 18, 19, 20, 21, 22, 23]);
+    expect(describeSchema(db, WORKSPACE_TARGET).pending).toEqual([17, 18, 19, 20, 21, 22, 23, 24]);
 
     migrateWorkspace(db);
-    expect(describeSchema(db, WORKSPACE_TARGET)).toMatchObject({ current: 23, pending: [] });
+    expect(describeSchema(db, WORKSPACE_TARGET)).toMatchObject({ current: 24, pending: [] });
     expect(owned()).toEqual(recorded);
     expect(db.prepare("SELECT value FROM meta WHERE key = 'derived_status_publish_owed'").get()).toEqual({ value: "1" });
     expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name").all()).toEqual([
@@ -104,6 +106,8 @@ describe("workspace migration 017", () => {
     db.exec("DROP TABLE IF EXISTS plan_links");
     db.exec("DROP TABLE IF EXISTS plan_rows");
     for (const table of ["external_links", "external_private_cache", "external_resources"]) db.exec(`DROP TABLE IF EXISTS ${table}`);
+    // 024's columns. Dropped so the walk from 16 can add them again.
+    for (const column of ["branch", "base_commit"]) db.exec(`ALTER TABLE issues DROP COLUMN ${column}`);
     db.prepare("UPDATE meta SET value = '16' WHERE key = 'schema_version'").run();
     migrateWorkspace(db);
     expect(db.prepare("SELECT value FROM meta WHERE key = 'derived_status_publish_owed'").get()).toBeUndefined();

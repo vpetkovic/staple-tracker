@@ -434,6 +434,8 @@ describe("schema migration against a live database", () => {
       legacyDb.exec("DROP TABLE IF EXISTS plan_links");
       legacyDb.exec("DROP TABLE IF EXISTS plan_rows");
       for (const table of ["external_links", "external_private_cache", "external_resources"]) legacyDb.exec(`DROP TABLE IF EXISTS ${table}`);
+      // Migration 024 (the ticket branch): two columns, which come back off for the same reason.
+      for (const column of ["branch", "base_commit"]) legacyDb.exec(`ALTER TABLE issues DROP COLUMN ${column}`);
       legacyDb.prepare("UPDATE meta SET value = '1' WHERE key = 'schema_version'").run();
       legacyDb.close();
 
