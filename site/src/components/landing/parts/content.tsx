@@ -210,12 +210,13 @@ export const FACTS: {value: string; label: string}[] = [
 // Every answer says what the docs say, and ends at the page that says it.
 export const FAQ: {question: string; answer: ReactNode; link: {to: string; label: string}}[] = [
   {
-    question: 'Does staple replace Linear, GitHub Issues or ClickUp?',
+    question: 'Does staple replace GitHub Issues, Linear, ClickUp or Azure DevOps?',
     answer: (
       <>
         No. staple is the execution layer: the place where agents do the work, locally, ticket by ticket. Your team’s
-        board stays where people plan, discuss and report. Integrations that keep the two in sync are planned, not
-        shipped: today staple does not read from or write to any of them.
+        board stays where people plan, discuss and report. A ticket can link to a GitHub issue or pull request or a
+        Linear issue and keep a read-only copy beside it. ClickUp, Azure DevOps and writing back to your tracker are planned,
+        not shipped.
       </>
     ),
     link: {to: '/docs/why-staple#next-to-linear-github-and-clickup', label: 'Next to Linear, GitHub and ClickUp'},

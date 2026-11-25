@@ -110,9 +110,14 @@ people plan, discuss and report.
 | Runs | Hosted, over the network | Locally, one file per repository |
 | Holds | Features, priorities, discussion | Epics, tickets, plans, worklogs, claims |
 
-Integrations that keep the two in sync are **planned, not shipped**: GitHub Issues,
-ClickUp and Linear. Today staple does not read from or write to any of them. You use
-it alongside them and carry items across yourself.
+A ticket can link to a GitHub issue or pull request, or to a Linear issue. staple
+keeps a copy of its title and state beside the ticket and refreshes it when you ask.
+The link is read-only: staple never changes anything in your tracker.
+[Provider integrations](integrations.md) covers connecting, choosing what each
+workspace searches, and linking.
+
+ClickUp and Azure DevOps, and writing back to your tracker, are
+**planned, not shipped**.
 
 ## When staple fits, and when it doesn't
 
@@ -129,7 +134,7 @@ It is less of a fit when:
 - a single short session finishes each task, so the harness's own to-do list is
   enough;
 - your team needs agents to write straight into a shared hosted board today, since
-  the GitHub Issues, ClickUp and Linear integrations are not built yet;
+  staple only reads from GitHub and Linear and writes to no tracker yet;
 - you are looking for a hosted tracker for people, with notifications, permissions
   and reporting. That is what Linear, GitHub and ClickUp are for.
 

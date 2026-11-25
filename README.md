@@ -5,8 +5,8 @@
 Markdown plans point at each other, drift, and die with the session that held them.
 staple turns a plan into an epic and tickets that carry the whole context: agents know
 what comes next, a new session resumes where a dead one stopped, and new work lands
-under the same epic. Local-first, one file per repository, next to Linear, GitHub or
-ClickUp (integrations planned). [Why staple](https://github.com/vpetkovic/staple-tracker/blob/master/docs/why-staple.md) tells the whole story.
+under the same epic. Local-first, one file per repository, next to GitHub, Linear,
+ClickUp or Azure DevOps (read-only links to GitHub and Linear today; the rest planned). [Why staple](https://github.com/vpetkovic/staple-tracker/blob/master/docs/why-staple.md) tells the whole story.
 
 ## Quick start
 

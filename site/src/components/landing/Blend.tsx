@@ -625,7 +625,7 @@ export default function Blend(): ReactNode {
 
           <section className={clsx(styles.band, styles.split, styles.alongside)} aria-labelledby="blend-alongside">
             <div className={styles.legend}>
-              <p className={styles.eyebrow}>Next to Linear, GitHub and ClickUp</p>
+              <p className={styles.eyebrow}>Next to GitHub, Linear, ClickUp and Azure DevOps</p>
               <h2 id="blend-alongside" className={clsx(styles.title, styles.tick)}>
                 <span className={styles.line}>Keep your team’s board.</span>{' '}
                 <span className={styles.line}>
@@ -639,10 +639,12 @@ export default function Blend(): ReactNode {
                 work, locally, ticket by ticket. Your team’s board stays where people plan, discuss and report.
               </p>
               <p>
+                Link a ticket to a GitHub issue or pull request, or to a Linear issue, and its title and state stay
+                beside the work. The link is read-only: staple never changes anything in your tracker.
+              </p>
+              <p>
                 <Planned />
-                Integrations that keep the two in sync, with GitHub Issues, ClickUp and Linear, are planned, not
-                shipped. Today staple does not read from or write to any of them: use it alongside them and carry
-                items across yourself.
+                ClickUp and Azure DevOps, and writing back to your tracker, are planned, not shipped.
               </p>
             </div>
             <div className={styles.figure}>

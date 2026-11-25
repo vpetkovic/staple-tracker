@@ -46,7 +46,8 @@
   color: var(--st-fg-subtle);
 }
 
-/* The bridge: a dashed line, because nothing crosses it yet. Stacked, it runs down. */
+/* The bridge: a dashed line, because staple reads across it and nothing is written back yet.
+   Stacked, it runs down. */
 .bridge {
   display: flex;
   flex-direction: column;
@@ -70,6 +71,14 @@
   clip-path: inset(0);
 }
 
+/* What crosses the bridge today, then what is still planned. */
+.bridgeLabels {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--st-space-1);
+}
+
 .bridgeLabel {
   display: flex;
   align-items: center;
@@ -80,16 +89,11 @@
   white-space: nowrap;
 }
 
-/* A mid-width cell sets the three trackers in a row, which keeps the stack short; the
-   names take the room of the icons. */
+/* A mid-width cell sets the four trackers two by two, which keeps the stack short. */
 @container scene (min-width: 40rem) and (max-width: 43.99rem) {
   .trackers {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--st-space-2);
-  }
-
-  .tracker .board {
-    display: none;
   }
 }
 
@@ -119,6 +123,10 @@
 
   .bridgeOn .dash {
     clip-path: inset(-1px 0 -1px 0);
+  }
+
+  .bridgeLabels {
+    gap: var(--st-space-2);
   }
 
   .bridgeLabel {
