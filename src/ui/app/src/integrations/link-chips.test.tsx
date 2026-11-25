@@ -111,15 +111,23 @@ describe("the property grid", () => {
 // ─────────────────────────────────────────────────────────────────── the chips
 
 describe("link chips", () => {
-  it("shows at most four chips with the repository-local key, then +N more and the +", () => {
-    const html = summary(withLinks(Array.from({ length: 6 }, (_, i) => link(i + 1))), "pull_request");
+  it("shows at most four issue chips with the repository-local key, then +N more and the +", () => {
+    const html = summary(withLinks(Array.from({ length: 6 }, (_, i) => link(i + 1, { kind: "issue" }))), "issue");
     expect(chips(html)).toEqual(["#1", "#2", "#3", "#4"]);
     expect(html).toContain(">+2 more<");
-    expect(html).toContain('aria-label="Link pull request"');
-    expect(html).toContain('class="sr-only">6 pull requests<');
+    expect(html).toContain('aria-label="Link issue"');
+    expect(html).toContain('class="sr-only">6 linked issues<');
     expect(html).not.toContain("#5");
     // The + comes last, after the "+N more".
-    expect(html.indexOf("+2 more")).toBeLessThan(html.indexOf('aria-label="Link pull request"'));
+    expect(html.indexOf("+2 more")).toBeLessThan(html.indexOf('aria-label="Link issue"'));
+  });
+
+  it("lists every pull request, replaced and stacked ones included, then the +", () => {
+    const html = summary(withLinks(Array.from({ length: 6 }, (_, i) => link(i + 1))), "pull_request");
+    expect(chips(html)).toEqual(["#1", "#2", "#3", "#4", "#5", "#6"]);
+    expect(html).not.toContain("more<");
+    expect(html).toContain('class="sr-only">6 pull requests<');
+    expect(html.indexOf("#6")).toBeLessThan(html.indexOf('aria-label="Link pull request"'));
   });
 
   it("names the repository when links span two", () => {
