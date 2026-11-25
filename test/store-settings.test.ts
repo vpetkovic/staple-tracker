@@ -546,6 +546,7 @@ describe("registered workspace settings", () => {
       { key: "kinds.default", scope: "workspace", value: "task", source: "default", version: 1 },
       { key: "kinds.appearance", scope: "workspace", value: {}, source: "default", version: 1 },
       { key: "queue.policy", scope: "workspace", value: "advisory", source: "default", version: 1 },
+      { key: "queue.silentClaimMinutes", scope: "workspace", value: 30, source: "default", version: 1 },
       { key: "features.planning", scope: "workspace", value: false, source: "default", version: 1 },
     ]);
     // Nothing is written by a read — the fresh-workspace meta table stays exactly as seeded.
@@ -605,6 +606,7 @@ describe("registered workspace settings", () => {
       "kinds.default",
       "kinds.appearance",
       "queue.policy",
+      "queue.silentClaimMinutes",
       "features.planning",
     ]);
     store.setSetting("kinds.default", "bug");
@@ -708,6 +710,7 @@ describe("registered workspace settings", () => {
       { key: "kinds.default", scope: "workspace", value: "spike", source: "workspace", version: 1 },
       { key: "kinds.appearance", scope: "workspace", value: {}, source: "default", version: 1 },
       { key: "queue.policy", scope: "workspace", value: "advisory", source: "default", version: 1 },
+      { key: "queue.silentClaimMinutes", scope: "workspace", value: 30, source: "default", version: 1 },
       { key: "features.planning", scope: "workspace", value: false, source: "default", version: 1 },
     ]);
     expect(() => store.applySettingOps([{ op: "bogus", key: "kinds.default" } as never])).toThrow(
