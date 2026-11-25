@@ -1733,6 +1733,14 @@ ordered tail — the operation's actor and time for an edge it added — and tha
 journals the edges as it now holds them, so the fold carries them to a device that
 hydrates, which has no operation to take them from (`test/cloud-relation-provenance.test.ts`).
 
+**An edge a create adds to another issue's set is an addition, never a set.** A child made
+to block its parent until done, and a blocker finding (`foundInBlocks`, the scope it was filed
+to block), carry their one edge in their own create; every applier adds it to the target's set
+and never journals or replaces that set. Two devices filing blockers against one ticket offline
+both keep their edges. A set written to the target earlier in the log does not drop the edge
+(`keepChildEdgeAgainstEarlierSet`, and `keepChildEdgesInLogOrder` for a device that hydrates);
+one written later does (`test/cloud-finding-sync.test.ts`).
+
 **Every field travels in one spelling, and every write of a status move travels whole.**
 The journal names each field once, by its field name (`oneSpelling`), and the fold treats
 `updated_at` and `updatedAt` as one field, keeping the one written last; a device reading

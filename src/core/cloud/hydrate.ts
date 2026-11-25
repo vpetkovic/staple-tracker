@@ -364,20 +364,27 @@ function keepChildEdgesInLogOrder(db: DatabaseSync, entities: readonly SnapshotE
     const state = entity.state;
     const parentId = typeof state.parentId === "string" ? state.parentId : typeof state.parent_id === "string" ? state.parent_id : null;
     const blocks = state.blockParentUntilDone === true || state.blockParentUntilDone === 1 || state.block_parent_until_done === 1 || state.block_parent_until_done === true;
-    const set = parentId === null ? undefined : sets.get(parentId);
-    if (!blocks || parentId === null || set === undefined) continue;
-    const setSeq = set.fieldWrites?.blockedBy?.seq ?? set.createdSeq;
-    if (typeof entity.createdSeq !== "number" || typeof setSeq !== "number" || entity.createdSeq < setSeq) continue;
-    const child = db.prepare("SELECT created_by, created_at FROM issues WHERE id = ? AND parent_id = ?").get(entity.entityId, parentId) as
-      | { created_by: string | null; created_at: string }
-      | undefined;
-    if (!child) continue;
-    db.prepare(`INSERT OR IGNORE INTO relations (blocker_id, blocked_id, type, created_by, created_at) VALUES (?, ?, 'blocks', ?, ?)`).run(
-      entity.entityId,
-      parentId,
-      child.created_by,
-      child.created_at,
-    );
+    // A blocker finding's scope, which its create carried, is kept the same way (`createdEdgesOf`, `apply.ts`).
+    const scope = typeof state.foundInBlocks === "string" ? state.foundInBlocks : typeof state.found_in_blocks === "string" ? state.found_in_blocks : null;
+    const targets = [...new Set([...(blocks && parentId !== null ? [parentId] : []), ...(scope !== null ? [scope] : [])])];
+    for (const blockedId of targets) {
+      const set = sets.get(blockedId);
+      if (set === undefined) continue;
+      const setSeq = set.fieldWrites?.blockedBy?.seq ?? set.createdSeq;
+      if (typeof entity.createdSeq !== "number" || typeof setSeq !== "number" || entity.createdSeq < setSeq) continue;
+      const made = db.prepare("SELECT created_by, created_at FROM issues WHERE id = ?").get(entity.entityId) as
+        | { created_by: string | null; created_at: string }
+        | undefined;
+      if (!made || db.prepare("SELECT 1 AS hit FROM issues WHERE id = ?").get(blockedId) === undefined) continue;
+      // The child's edge needs it still under that parent; a moved child's create no longer speaks for it.
+      if (blockedId === parentId && blockedId !== scope && db.prepare("SELECT 1 AS hit FROM issues WHERE id = ? AND parent_id = ?").get(entity.entityId, parentId) === undefined) continue;
+      db.prepare(`INSERT OR IGNORE INTO relations (blocker_id, blocked_id, type, created_by, created_at) VALUES (?, ?, 'blocks', ?, ?)`).run(
+        entity.entityId,
+        blockedId,
+        made.created_by,
+        made.created_at,
+      );
+    }
   }
 }
 
