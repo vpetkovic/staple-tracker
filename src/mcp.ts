@@ -1415,7 +1415,12 @@ server.registerTool(
       status: z.array(statusEnum).optional(),
       kind: z.array(kindSchema).optional().describe("Restrict to these kinds, e.g. [\"epic\"]"),
       assignee: z.string().optional(),
-      q: z.string().optional().describe("Substring match on title/identifier/description"),
+      q: z
+        .string()
+        .optional()
+        .describe(
+          "Case-insensitive substring match on what is written on a ticket: title, identifier, description, assignee, labels, acceptance criteria, comments and current documents (plan, worklog, ...)",
+        ),
       include_resolved: z.boolean().optional(),
       mine: z
         .boolean()

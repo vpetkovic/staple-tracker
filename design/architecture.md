@@ -164,7 +164,11 @@ guessed at — see [migration.md](migration.md).
 Gaps in the current build, so nobody discovers them the hard way:
 
 - Plain SQL in the store modules rather than a query builder, and SQLite only.
-- Labels are a JSON column and search is `LIKE`; there is no full-text index.
+- Labels are a JSON column. Search (`staple ls -q`, the toolbar) is `LIKE` over
+  everything written on a ticket: title, description, assignee, labels, acceptance
+  criteria, comments and the current revision of each document. There is no
+  full-text index, so there is no stemming or ranking, and a large workspace pays
+  a scan per query.
 - Holistic reads open one connection per workspace file rather than one
   `ATTACH` union.
 - There are no connectors to other trackers (GitHub Issues, ClickUp) and no

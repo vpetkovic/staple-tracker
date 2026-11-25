@@ -4047,6 +4047,21 @@ export function startUiServer(options: UiOptions): UiHandle {
         return;
       }
 
+      /**
+       * The toolbar search, answered by the same `listIssues({ q })` that `staple ls -q`
+       * asks, so a word in a plan, worklog, comment or criterion finds the row the way the
+       * CLI finds it. Only ids go back: the rows are already on the page from `/api/issues`,
+       * and the client keeps every other filter. Scoped like `/api/issues`.
+       */
+      if (url.pathname === "/api/search") {
+        const q = (url.searchParams.get("q") ?? "").trim();
+        const wanted = url.searchParams.get("ws") ?? undefined;
+        const targets = options.hub && !wanted ? allHandles() : [handleFor(wanted)];
+        const ids = q ? targets.flatMap((h) => h.store.listIssues({ q, includeResolved: true }).map((issue) => issue.id)) : [];
+        json(res, 200, { q, ids });
+        return;
+      }
+
       if (url.pathname === "/api/inbox") {
         const assignee = url.searchParams.get("assignee") ?? undefined;
         const out = allHandles().map((h) => {

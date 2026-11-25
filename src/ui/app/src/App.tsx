@@ -43,6 +43,7 @@ import {
   getProjects,
   getRuns,
   hasToken,
+  searchIssues,
 } from "@/lib/api";
 import { buildRunsState, RunsContext } from "@/lib/runs";
 import { RunHistoryMount } from "@/components/autopilot/RunHistoryMount";
@@ -275,6 +276,27 @@ export function App() {
   const issues = useResource(loadIssues, [ws, version], onAuthError);
 
   /**
+   * The toolbar text, asked of the store too (`/api/search`, the match `staple ls -q`
+   * uses), because a plan, worklog, comment or criterion is not on the rows above. The
+   * answer carries the text it answered, so `applyFilters` ignores one that went stale.
+   */
+  const [searchText, setSearchText] = useState(() => filters.text.trim());
+  useEffect(() => {
+    // Ask once the typing pauses, not per keystroke; the local match narrows meanwhile.
+    const timer = window.setTimeout(() => setSearchText(filters.text.trim()), 200);
+    return () => window.clearTimeout(timer);
+  }, [filters.text]);
+  const loadSearch = useCallback(
+    () => (searchText ? searchIssues({ ws, q: searchText }) : Promise.resolve({ q: "", ids: [] })),
+    [ws, searchText],
+  );
+  const search = useResource(loadSearch, [ws, searchText, version], onAuthError);
+  const textMatches = useMemo(
+    () => (search.data ? { q: search.data.q, ids: new Set(search.data.ids) } : null),
+    [search.data],
+  );
+
+  /**
    * THE WORKSPACE VOCABULARY — O7b (STA-141). Fetched HERE, once, for the whole page.
    *
    * It has to be at the root and it took a browser to prove it. While this hook lived
@@ -445,8 +467,8 @@ export function App() {
    * epic still name its children's epic. See lib/filter-dimensions.ts.
    */
   const filterContext = useMemo(
-    () => buildFilterContext(issues.data ?? [], milestoneFacts, projectFacts),
-    [issues.data, milestoneFacts, projectFacts],
+    () => buildFilterContext(issues.data ?? [], milestoneFacts, projectFacts, textMatches),
+    [issues.data, milestoneFacts, projectFacts, textMatches],
   );
 
   /** The palette's single-assignee view over the assignee dimension. See session.ts. */
