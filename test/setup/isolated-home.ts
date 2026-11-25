@@ -12,7 +12,9 @@
  *   1. The real staple home is recorded and SNAPSHOTTED: whether its hub exists, the
  *      hub's schema version, tables, scratch registrations and budget-table rowids, the
  *      global workspace databases, and the content hash of `config.json`.
- *   2. `HOME`, `STAPLE_HOME` and the locator variables are pointed at a directory private
+ *   2. Every inherited `STAPLE_*` variable is removed (`test/setup/scrub-env.ts`), so a
+ *      run started from an agent shell cannot reach the tracker its `STAPLE_DB` names.
+ *      `HOME`, `STAPLE_HOME` and the locator variables are pointed at a directory private
  *      to this run, and handed to every worker (`isolatedHome`, applied again per file by
  *      `test/setup/isolate-env.ts`, so a worker that did not inherit the environment
  *      still cannot reach the real home).
@@ -46,6 +48,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { TestProject } from "vitest/node";
+import { scrubInheritedStapleEnv } from "./scrub-env.js";
 import { sessionRefOf } from "../../src/core/telemetry/formats.js";
 import { FIXTURE_SESSION_IDS } from "../fixtures/budget-support.js";
 
@@ -310,6 +313,9 @@ function realCollectAgent(): string | null {
 export default function setup(project: TestProject): () => void {
   const realHome = homedir();
   const watched = realStapleHomes(process.env, realHome);
+  // After the real homes are recorded: from here the run has no STAPLE_DB, STAPLE_WS,
+  // STAPLE_AGENT, STAPLE_RUN* or integration token from the shell that started it.
+  scrubInheritedStapleEnv();
 
   const root = realpathSync(mkdtempSync(join(tmpdir(), `staple-test-home-${process.pid}-`)));
   const home = join(root, "home");

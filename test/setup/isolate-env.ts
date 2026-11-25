@@ -1,11 +1,15 @@
 /**
  * Vitest setupFiles: apply the run's isolated home in every worker, before any test file
  * loads (see `test/setup/isolated-home.ts`). A worker that did not inherit the
- * environment globalSetup changed still cannot resolve the operator's real home, or reach
- * the machine's launchd.
+ * environment globalSetup changed still cannot resolve the operator's real home, reach
+ * the machine's launchd, or open the tracker an inherited STAPLE_DB names
+ * (`test/setup/scrub-env.ts`).
  */
 import { join } from "node:path";
 import { inject } from "vitest";
+import { scrubInheritedStapleEnv } from "./scrub-env.js";
+
+scrubInheritedStapleEnv();
 
 const { home, stapleHome, fakeBin } = inject("isolatedHome");
 process.env.HOME = home;

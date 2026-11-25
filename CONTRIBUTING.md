@@ -129,6 +129,13 @@ no build tools — available to the installed binary.
 real artifact get a payload the test run builds for itself, from the current
 source, before any test file loads (`test/setup/package-payload.ts`).
 
+`npm test` is safe to start from an agent shell. The run removes every inherited
+`STAPLE_*` variable (`STAPLE_DB`, `STAPLE_WS`, `STAPLE_AGENT`, `STAPLE_RUN*`,
+integration tokens) before any test loads, and gives itself a private `HOME` and
+`STAPLE_HOME`, so no test can reach your tracker. It keeps only `STAPLE_TEST_*` and
+the documented opt-ins `STAPLE_LIVE_SYNC`, `STAPLE_LIVE_ENDPOINT` and
+`STAPLE_WRITE_EMITTED_PAYLOADS` (`test/setup/scrub-env.ts`).
+
 To try the packaged binary directly:
 
 ```bash
