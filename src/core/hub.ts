@@ -10,6 +10,7 @@ import { openWorkspace } from "./open.js";
 import { readWorkspaceManifest } from "./repo-identity.js";
 import { RESOLVED_STATUSES, StapleError, nowIso } from "./types.js";
 import { crossLinkEntityId, type CrossLinkIdentity } from "./cloud/cross-link-key.js";
+import { assertNoHubCycle } from "./hub-cross-blockers.js";
 
 /** Best-effort cross-workspace fan-out after a resolution; never throws. */
 export function notifyHubResolvedSafe(workspaceSlug: string, identifier: string): void {
@@ -1001,9 +1002,7 @@ export class Hub {
         ws.store.db.close();
       }
     }) as [typeof typed[0], typeof typed[1]];
-    // Cross-file cycle guard over the hub edges (workspace-local edges cannot
-    // close a cross-file loop unless a hub edge participates in it too — a
-    // documented prototype simplification).
+    // Cross-file cycle guard over the hub edges and the local edges they join.
     this.assertNoCrossCycle(blocker.identifier, blocked.identifier);
     return { blocker, blocked };
   }
@@ -1276,26 +1275,12 @@ export class Hub {
     });
   }
 
+  /**
+   * The new link may not close a loop, through the hub's links alone or through them and the
+   * local `blocks` edges of the workspaces they name (`assertNoHubCycle`).
+   */
   private assertNoCrossCycle(newBlocker: string, newBlocked: string): void {
-    const edges = this.listCrossLinks();
-    const adjacency = new Map<string, string[]>();
-    for (const edge of edges) {
-      const list = adjacency.get(edge.blockerIdentifier) ?? [];
-      list.push(edge.blockedIdentifier);
-      adjacency.set(edge.blockerIdentifier, list);
-    }
-    // Path from newBlocked back to newBlocker would close a loop.
-    const queue = [newBlocked];
-    const visited = new Set<string>();
-    while (queue.length > 0) {
-      const current = queue.shift()!;
-      if (current === newBlocker) {
-        throw new StapleError("cycle", "Cross-workspace blocking relations cannot contain cycles");
-      }
-      if (visited.has(current)) continue;
-      visited.add(current);
-      queue.push(...(adjacency.get(current) ?? []));
-    }
+    assertNoHubCycle([[newBlocker, newBlocked]], { hub: this.db });
   }
 
   /**
@@ -1517,6 +1502,27 @@ export class Hub {
           `cross_blockers_resolved:${dependent.blocked_identifier}:${digest}`,
           nowIso(),
         );
+      this.recordResolvedInWorkspace(dependent.blocked_ws, dependent.blocked_identifier, states, digest);
+    }
+  }
+
+  /**
+   * The same fact, on the waiting ticket in its own workspace, where a person's attention
+   * list reads it and where `staple wait` notices it. Best effort: the waiting workspace may
+   * not be on this machine, and the hub event above stands either way.
+   */
+  private recordResolvedInWorkspace(slug: string, identifier: string, states: CrossBlockerState[], digest: string): void {
+    const entry = this.get(slug);
+    if (!entry?.available) return;
+    try {
+      const ws = openWorkspace(entry.path);
+      try {
+        ws.store.recordCrossBlockersResolved(identifier, states, `cross_blockers_resolved:${identifier}:${digest}`);
+      } finally {
+        ws.store.db.close();
+      }
+    } catch {
+      // The workspace could not be opened or no longer has the ticket: nothing to record on.
     }
   }
 

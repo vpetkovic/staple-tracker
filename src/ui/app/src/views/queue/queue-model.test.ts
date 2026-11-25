@@ -109,7 +109,11 @@ describe("what a row is waiting on", () => {
         effective({
           identifier: "A",
           eligibility: "blocked",
-          detail: { blockers: ["STA-35", "STA-67"], crossBlockers: ["WOR-9"] },
+          // The shape the store writes (`queue-store.ts`): identifiers locally, objects across workspaces.
+          detail: {
+            blockers: ["STA-35", "STA-67"],
+            crossBlockers: [{ identifier: "WOR-9", workspace: "worker", unresolvable: false }],
+          },
         }),
       ),
     ).toEqual(["STA-35", "STA-67", "WOR-9"]);
@@ -119,6 +123,7 @@ describe("what a row is waiting on", () => {
     expect(blockersOf(null)).toEqual([]);
     expect(blockersOf(effective({ identifier: "A" }))).toEqual([]);
     expect(blockersOf(effective({ identifier: "A", detail: { blockers: "nonsense" } }))).toEqual([]);
+    expect(blockersOf(effective({ identifier: "A", detail: { crossBlockers: [null, 7, { workspace: "w" }] } }))).toEqual([]);
   });
 });
 

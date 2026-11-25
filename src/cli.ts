@@ -60,6 +60,7 @@ import {
 } from "./core/settings-registry.js";
 import { GENERIC_KIND_FALLBACK } from "./core/kind-appearance.js";
 import { Hub, notifyHubResolvedSafe } from "./core/hub.js";
+import { describeCrossBlocker, holdingCrossBlockers } from "./core/hub-cross-blockers.js";
 import { runInstallCommand } from "./install/index.js";
 import { dataVersion } from "./core/db.js";
 import { acknowledgeRenumbers, takeRenumberNotices } from "./core/identifier-moves.js";
@@ -1093,9 +1094,10 @@ Flow
   start|checkout <ref> [--agent A] [--steal-if-stale <dur>] [--override -m <why>]
               atomic checkout -> in_progress; --steal-if-stale ALSO takes over an
               issue held by another agent that has been silent at least <dur>;
-              --override takes a row out of turn under queue.policy = strict and
-              records who did it and why (the reason is mandatory). It never
-              bypasses a blocker, a gate or a live claim
+              --override takes a row out of turn under queue.policy = strict, or
+              steps over a cross-repository blocker (staple link), and records
+              who did it and why (the reason is mandatory). It never bypasses a
+              local blocker, a gate or a live claim
   done <ref> [--agent A] [-m comment]   complete (+ cross-workspace fan-out)
   cancel <ref> [--agent A] [-m comment]
   status <ref> <status> [--agent A] [--estimate <dur>|--no-estimate]
@@ -1605,6 +1607,8 @@ function main() {
            * over and over.
            */
           kindAppearance: store.kindAppearance(ctx.issue.kind),
+          // The hub's links into this ticket (`staple link`), as get_task names them.
+          crossBlockers: (store.crossBlockers().get(ctx.issue.identifier) ?? []).map(({ missing: _missing, ...blocker }) => blocker),
           gate: store.gate(ctx.issue.id),
           queuedBy: store.queuedBy(ctx.issue.id),
           ...store.detailTiming(ctx.issue.id),
@@ -1739,6 +1743,15 @@ function main() {
       }
       if (ctx.blockedBy.length) {
         console.log(`\nblocked by: ${ctx.blockedBy.map((b) => `${b.identifier}(${b.status})`).join(", ")}`);
+      }
+      const crossBlockers = store.crossBlockers().get(i.identifier) ?? [];
+      if (crossBlockers.length) {
+        const holding = holdingCrossBlockers(crossBlockers);
+        console.log(
+          `${ctx.blockedBy.length ? "" : "\n"}blocked across repositories by: ${crossBlockers
+            .map((b) => (b.unresolvable ? describeCrossBlocker(b) : `${describeCrossBlocker(b)} (${b.status})`))
+            .join(", ")}${holding.length ? " — checkout is refused until they resolve" : ""}`,
+        );
       }
       if (ctx.blocks.length) {
         console.log(`blocks:     ${ctx.blocks.map((b) => `${b.identifier}(${b.status})`).join(", ")}`);
@@ -2140,7 +2153,14 @@ function main() {
        */
       const probe = () => {
         const issue = store.getIssue(ref);
-        const unresolvedBlockers = store.unresolvedBlockersOf(issue.id).map((b) => b.identifier);
+        /**
+         * Cross-repository blockers count as the inbox counts them. Their closing wakes this
+         * loop: the hub's fan-out records `cross_blockers_resolved` in this workspace.
+         */
+        const unresolvedBlockers = [
+          ...store.unresolvedBlockersOf(issue.id).map((b) => b.identifier),
+          ...holdingCrossBlockers(store.crossBlockers().get(issue.identifier) ?? []).map((b) => b.identifier),
+        ];
         const finished = store.isResolvedStatus(issue.status);
         /**
          * A gate is a human gate, so it counts here exactly as `blocked` does

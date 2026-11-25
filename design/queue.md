@@ -45,11 +45,13 @@ status categories; local `blocks` edges and hub `cross_links`; gates
 milestone membership order; and the configured checkout statuses. The
 optional actor remains accepted for caller compatibility; a held row is never
 a fresh pickup, even for its holder.
-Cross-workspace blockers are the one input the resolver takes INJECTED rather
-than fetched — they live in the hub, and `Hub.crossBlockersOf` opens a workspace
-file per link, which is not a cost an inbox can pay per row — so a caller that
-already has a hub open hands them in. Same inputs, same output, on every surface
-and after a restart. (Pinned by `queue-surfaces.test.ts` — *"CLI, MCP, HTTP and
+Cross-workspace blockers live in the hub, not in the workspace file, so the
+resolver reads them from this machine's hub once per answer
+(`WorkspaceStore.crossBlockers`, `core/hub-cross-blockers.ts`): one read-only
+query for the links that end in this workspace, then one read-only open per
+blocker workspace, never one per row. Every surface therefore sees a link
+without remembering to inject it; a caller that already holds them may still
+hand them in. Same inputs, same output, on every surface and after a restart. (Pinned by `queue-surfaces.test.ts` — *"CLI, MCP, HTTP and
 inbox return the same revision and the same order"*; `store-queue.test.ts` —
 *"survives restart with a stable total order"*.)
 
@@ -289,11 +291,22 @@ is the distinction. `staple checkout <ref> --override -m "<reason>"` (MCP
 `checkout_task {override_reason}`, HTTP `/api/action` with `overrideReason`)
 skips **only** the `out_of_order` check. The web UI offers no override: its
 checkout shows the `out_of_order` refusal and leaves the choice to the CLI or
-MCP. The reason is mandatory, as it is for `request-changes`. Blockers, gates
-and conflicts still refuse — an override is "take this out of turn", never
+MCP. The reason is mandatory, as it is for `request-changes`. Local blockers,
+gates and conflicts still refuse — an override is "take this out of turn", never
 "take this regardless". (Pinned by `store-queue-resolver.test.ts` — *"override
 takes a later row and records why"*, *"override requires a reason"*, *"override
 does not bypass a gate, a blocker or a live claim"*.)
+
+The one blocker it does step over is a **cross-repository** one (`staple link`).
+Checkout refuses a ticket whose hub blocker is unresolved, or cannot be read on
+this machine, naming the link; that refusal is a `conflict` like a local
+blocker's. Unlike a local edge, the hub is this machine's view of another
+repository and can be stale or absent, so a person may take the ticket anyway
+with the same flag, and the step is recorded as **`cross_blocker_overridden`**
+with the reason and the blockers it stepped over. (Pinned by
+`hub-cross-blocker-holds.test.ts` — *"checkout refuses it, and a recorded
+override is the only way through"*, *"an override never steps over a local
+blocker"*.)
 
 Every override emits **`queue_overridden`** on the checked-out issue, with
 `actor`, `reason`, `policy`, `expected` (the identifiers it stepped over),

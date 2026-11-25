@@ -32,6 +32,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { insertEvent } from "./event-log.js";
 import type { Journal } from "./journal.js";
 import type { MemberLens } from "./cloud/member-lens.js";
+import { describeCrossBlocker, holdingCrossBlockers } from "./hub-cross-blockers.js";
 import { parseIdentifier } from "./ids.js";
 import { milestoneDateBounds, MILESTONE_KIND, nearestMilestone, rankBetween, renumberedRanks } from "./milestones.js";
 import { isPlanKind, planKindRefusal } from "./plan.js";
@@ -828,6 +829,8 @@ export class QueueStore {
      */
     const ids = raw.map((row) => row.node.id);
     const blockers = this.store.unresolvedBlockersFor(ids);
+    // Injected by a caller that already holds them; otherwise read from this machine's hub.
+    const crossBlockers = opts.crossBlockers ?? this.store.crossBlockers();
     const gates = this.store.queuedByFor(ids);
     const claims = this.store.claimActivityFor(ids);
     const checkoutStatuses = new Set(this.store.checkoutExpectedStatuses());
@@ -864,9 +867,7 @@ export class QueueStore {
         .reverse();
       const category = this.store.categoryOf(node.status);
       const local = blockers.get(node.id) ?? [];
-      const cross = (opts.crossBlockers?.get(node.identifier) ?? []).filter(
-        (blocker) => !blocker.resolved || blocker.unresolvable,
-      );
+      const cross = holdingCrossBlockers(crossBlockers.get(node.identifier) ?? []);
       const gate = gates.get(node.id) ?? null;
       const claim = claims.get(node.id) ?? null;
       let eligibility: QueueEligibility = "eligible";
@@ -886,7 +887,7 @@ export class QueueStore {
         detail = gate ? { queuedBy: { identifier: gate.identifier, owner: gate.owner } } : { status: node.status };
       } else if (local.length > 0 || cross.length > 0 || category === "blocked") {
         eligibility = "blocked";
-        const named = [...local, ...cross.map((blocker) => blocker.identifier)];
+        const named = [...local, ...cross.map(describeCrossBlocker)];
         reason =
           named.length > 0
             ? `${node.identifier} is blocked by ${named.join(", ")}.`
@@ -895,6 +896,7 @@ export class QueueStore {
           blockers: local,
           crossBlockers: cross.map((blocker) => ({
             identifier: blocker.identifier,
+            ...(blocker.workspace === undefined ? {} : { workspace: blocker.workspace }),
             unresolvable: blocker.unresolvable,
           })),
         };
@@ -1235,14 +1237,16 @@ export interface QueueMutationInput extends QueuePosition {
 }
 
 /**
- * A cross-workspace blocker as the hub reports it. The resolver takes these
- * INJECTED rather than fetching them: `cross_links` live in the hub database,
- * and `Hub.crossBlockersOf` opens one workspace file per link, which is not a
- * cost the inbox can pay per row. `unresolvable` (the blocker's file is not on
- * this machine) reads as blocked, exactly as it does everywhere else.
+ * A cross-workspace blocker as the hub reports it. The resolver reads them from
+ * this machine's hub once per answer (`WorkspaceStore.crossBlockers`, one
+ * read-only open per blocker workspace, never one per row), unless a caller
+ * injects them. `unresolvable` (the blocker cannot be read on this machine)
+ * reads as blocked, exactly as it does everywhere else.
  */
 export interface CrossBlockerLite {
   identifier: string;
+  /** The blocker's workspace slug, named in the row's reason when known. */
+  workspace?: string;
   resolved: boolean;
   unresolvable: boolean;
 }
@@ -1250,7 +1254,7 @@ export interface CrossBlockerLite {
 export interface EffectiveQueueOptions {
   /** Accepted for caller compatibility; held rows remain claimed, including the actor's own. */
   actor?: string | null;
-  /** Cross-workspace blockers by issue identifier; absent means none are known. */
+  /** Cross-workspace blockers by issue identifier; absent means read them from the hub. */
   crossBlockers?: ReadonlyMap<string, readonly CrossBlockerLite[]>;
   /**
    * Limit the answer to one container's work: an epic, a milestone, or any issue
