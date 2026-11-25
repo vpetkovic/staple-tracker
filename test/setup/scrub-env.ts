@@ -15,7 +15,8 @@
  * child, and that keeps working: the scrub runs once, before the test.
  *
  * What survives is what a person exports to steer the SUITE, never the tracker:
- *   - `STAPLE_TEST_*`, the suite's own seams and probes (`STAPLE_TEST_STALL_LOG`);
+ *   - `STAPLE_TEST_*`, the suite's own seams and probes (`STAPLE_TEST_STALL_LOG`, and
+ *     `STAPLE_TEST_SANDBOX`, which the isolated home sets again to the run's own);
  *   - the opt-ins the suite documents: `STAPLE_LIVE_SYNC` and `STAPLE_LIVE_ENDPOINT`
  *     (`cloud-sync-live.test.ts`), `STAPLE_WRITE_EMITTED_PAYLOADS`
  *     (`cloud-emitter-payloads.test.ts`).

@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { stapleHome } from "../config/home.js";
 import { RESOLVED_CATEGORIES, RESOLVED_STATUSES, StapleError } from "./types.js";
+import { assertInTestSandbox } from "./test-sandbox.js";
 
 /**
  * The hub's cross-repository blockers, read for the pickup and checkout paths of ONE
@@ -39,6 +40,7 @@ interface LinkRow {
 function openReadOnly(path: string): DatabaseSync | null {
   if (path === "" || !existsSync(path)) return null;
   try {
+    assertInTestSandbox(path, "workspace database");
     return new DatabaseSync(path, { readOnly: true });
   } catch {
     return null;

@@ -42,6 +42,7 @@ import { readMeta } from "./open.js";
 import { WorkspaceStore } from "./store.js";
 import { DatabaseSync } from "node:sqlite";
 import { StapleError } from "./types.js";
+import { assertInTestSandbox } from "./test-sandbox.js";
 
 /**
  * Directories a scan never enters.
@@ -123,6 +124,7 @@ function identityOf(dbPath: string): { slug: string | null; prefix: string | nul
   try {
     // Read-only: discovery must not convert a stranger's database to WAL, and
     // must not migrate one. A candidate is something to REPORT, not to touch.
+    assertInTestSandbox(dbPath, "workspace database");
     const db = new DatabaseSync(dbPath, { readOnly: true });
     try {
       const probe = new WorkspaceStore(db, "", "");

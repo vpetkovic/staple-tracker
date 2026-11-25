@@ -110,6 +110,7 @@ import { DatabaseSync } from "node:sqlite";
 import { Hub, absentRowRefusal, isAbsentRow, type WorkspaceEntry } from "./hub.js";
 import { LEGACY_WORKSPACE_DIRNAME, WORKSPACE_DIRNAME, normalizePath } from "./path-migration.js";
 import { findRepositoryIdCollisions, readWorkspaceManifest } from "./repo-identity.js";
+import { assertInTestSandbox } from "./test-sandbox.js";
 
 export type HubRepairOutcome =
   | "current" // the row already points here; nothing written
@@ -268,6 +269,7 @@ type SlugProbe = { read: true; slug: string | null } | { read: false; reason: st
 function probeSlugAt(dbPath: string): SlugProbe {
   let db: DatabaseSync | null = null;
   try {
+    assertInTestSandbox(dbPath, "workspace database");
     db = new DatabaseSync(dbPath, { readOnly: true });
     // Armed FIRST, like `openDb`, so the read queues instead of erroring.
     db.exec(`PRAGMA busy_timeout=${BUSY_TIMEOUT_MS}`);

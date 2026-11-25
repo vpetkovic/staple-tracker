@@ -136,6 +136,16 @@ integration tokens) before any test loads, and gives itself a private `HOME` and
 the documented opt-ins `STAPLE_LIVE_SYNC`, `STAPLE_LIVE_ENDPOINT` and
 `STAPLE_WRITE_EMITTED_PAYLOADS` (`test/setup/scrub-env.ts`).
 
+The working directory cannot reach your tracker either. A test that runs the CLI
+from inside a checkout (this repository's linked worktree, say) without `--db`
+would otherwise walk up to the main checkout's `.staple/staple.db`. The run sets
+`STAPLE_TEST_SANDBOX` to its scratch root, every worker and child inherits it, and
+while it is set staple refuses, with a `forbidden` error naming the path, to
+resolve or open any database outside that root or the temp directory
+(`src/core/test-sandbox.ts`). A test that needs a workspace makes it under the
+temp directory and passes `--db` or `--ws`. Outside the suite the variable is
+unset and nothing changes.
+
 To try the packaged binary directly:
 
 ```bash
