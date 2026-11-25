@@ -101,7 +101,7 @@ goal     1/3 met
 members
    1. APP-10    backlog     Login test is flaky on CI · bug
    2. APP-1     backlog     Password reset · epic
-next     APP-10 (member 1)
+next     APP-10 (queue position 1)
 ```
 
 - **progress** counts the tickets that do the work, each once; epics are not counted
@@ -110,7 +110,8 @@ next     APP-10 (member 1)
   tickets to get `on_track` or `behind` instead of `no_estimate`.
 - **state** is `planned`, `active`, `overdue` (the day after the target), `done` or
   `cancelled`.
-- **next** is the ticket an agent would take first inside this milestone.
+- **next** is the ticket an agent would take first inside this milestone, with its
+  position in the pickup queue (`staple queue`), not its place among the members.
 
 `staple milestone ls` lists every open milestone on one line each. In the web UI, the
 **Milestones** view shows the same, and a milestone's detail shows the goal with its
