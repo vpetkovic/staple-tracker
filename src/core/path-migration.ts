@@ -64,6 +64,7 @@ import { WorkspaceStore } from "./store.js";
 import { openWorkspace, readMeta } from "./open.js";
 import { Hub } from "./hub.js";
 import { linkedWorktreeMainCheckout } from "./git-worktree.js";
+import { assertInTestSandbox } from "./test-sandbox.js";
 import { StapleError, nowIso } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -327,6 +328,8 @@ export function findMigrationRoot(startDir: string): string | null {
       existsSync(legacyDbPathFor(dir)) ||
       existsSync(journalPathFor(dir))
     ) {
+      // Like `findWorkspace`: a worktree's walk-up can reach a real checkout (`./test-sandbox.ts`).
+      assertInTestSandbox(currentDbPathFor(dir), "workspace database");
       return dir;
     }
     const main = linkedWorktreeMainCheckout(dir);
@@ -559,6 +562,7 @@ function columnSets(db: DatabaseSync): Record<string, string[]> {
 }
 
 function assertIntegrity(dbPath: string, label: string): void {
+  assertInTestSandbox(dbPath);
   const db = new DatabaseSync(dbPath);
   try {
     const rows = db.prepare("PRAGMA integrity_check").all() as Array<{ integrity_check: string }>;

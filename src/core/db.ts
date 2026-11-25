@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { assertInTestSandbox } from "./test-sandbox.js";
 
 /**
  * SQLite wrapper: WAL for multi-process safety on one machine, busy_timeout so
@@ -60,6 +61,8 @@ function enableWal(db: DatabaseSync): void {
 }
 
 export function openDb(path: string): DatabaseSync {
+  // Before the directory is made: under the test suite, nothing outside its sandbox (`./test-sandbox.ts`).
+  assertInTestSandbox(path);
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
   // busy_timeout FIRST so every later statement queues instead of erroring.

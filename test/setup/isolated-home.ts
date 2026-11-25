@@ -18,7 +18,12 @@
  *      to this run, and handed to every worker (`isolatedHome`, applied again per file by
  *      `test/setup/isolate-env.ts`, so a worker that did not inherit the environment
  *      still cannot reach the real home).
- *   3. At teardown the snapshot is taken again, and the run FAILS if, in the real staple
+ *   3. `STAPLE_TEST_SANDBOX` names the run's scratch root. While it is set, resolving or
+ *      opening a database under neither it nor the temp directory fails with a
+ *      `forbidden` error (`src/core/test-sandbox.ts`), so a test whose working
+ *      directory is inside a real checkout (this repository's linked worktree, say)
+ *      cannot walk up into the tracker there. Children inherit it like any variable.
+ *   4. At teardown the snapshot is taken again, and the run FAILS if, in the real staple
  *      home, the hub was created or migrated, registered a workspace under the temp
  *      directory (either spelling of it), or gained budget rows a test wrote; a global
  *      workspace database appeared; or `config.json` was created or changed.
@@ -54,7 +59,7 @@ import { FIXTURE_SESSION_IDS } from "../fixtures/budget-support.js";
 
 declare module "vitest" {
   export interface ProvidedContext {
-    isolatedHome: { home: string; stapleHome: string; fakeBin: string };
+    isolatedHome: { home: string; stapleHome: string; fakeBin: string; sandbox: string };
   }
 }
 
@@ -336,7 +341,10 @@ export default function setup(project: TestProject): () => void {
   const fakeBin = installFakeLaunchctl(root);
   process.env.PATH = `${fakeBin}:${process.env.PATH ?? ""}`;
   process.env.STAPLE_TEST_LAUNCHCTL = join(fakeBin, "launchctl");
-  project.provide("isolatedHome", { home, stapleHome, fakeBin });
+  // No database outside this root or the temp directory opens, in a worker or a child it
+  // spawns, wherever its working directory is (`src/core/test-sandbox.ts`).
+  process.env.STAPLE_TEST_SANDBOX = root;
+  project.provide("isolatedHome", { home, stapleHome, fakeBin, sandbox: root });
 
   return () => {
     live.endedAt = new Date().toISOString();
