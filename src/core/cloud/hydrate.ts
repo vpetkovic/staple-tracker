@@ -371,7 +371,10 @@ function keepChildEdgesInLogOrder(db: DatabaseSync, entities: readonly SnapshotE
       const set = sets.get(blockedId);
       if (set === undefined) continue;
       const setSeq = set.fieldWrites?.blockedBy?.seq ?? set.createdSeq;
-      if (typeof entity.createdSeq !== "number" || typeof setSeq !== "number" || entity.createdSeq < setSeq) continue;
+      // The child's word on its parent edge is its create, or the move that put it under this parent.
+      const moved = entity.fieldWrites?.parentId?.seq ?? entity.fieldWrites?.parent_id?.seq;
+      const childSeq = typeof moved === "number" && typeof entity.createdSeq === "number" ? Math.max(moved, entity.createdSeq) : entity.createdSeq;
+      if (typeof childSeq !== "number" || typeof setSeq !== "number" || childSeq < setSeq) continue;
       const made = db.prepare("SELECT created_by, created_at FROM issues WHERE id = ?").get(entity.entityId) as
         | { created_by: string | null; created_at: string }
         | undefined;

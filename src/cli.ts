@@ -423,10 +423,10 @@ function blockedByVerbList(raw: string | undefined, extra: readonly string[], no
 /**
  * The edit `staple criteria` asks for, or null when it names none (it then prints the list).
  * `--set "a;b"` replaces the list and `--clear` empties it; `--rm 2,3` (positions as the list
- * stands) and `--add "c"` (repeatable, `;` splits) edit it in place. A replace with nothing in it
+ * stands; repeatable) and `--add "c"` (repeatable, `;` splits) edit it in place. A replace with nothing in it
  * is refused rather than read as a clear, as `blocked-by` refuses an empty list.
  */
-function criteriaVerbEdit(values: { set?: string; add?: string[]; rm?: string; clear?: boolean }): Pick<
+function criteriaVerbEdit(values: { set?: string; add?: string[]; rm?: string[]; clear?: boolean }): Pick<
   UpdateIssueInput,
   "acceptanceCriteria" | "addCriteria" | "removeCriteria"
 > | null {
@@ -444,7 +444,7 @@ function criteriaVerbEdit(values: { set?: string; add?: string[]; rm?: string; c
   }
   const add = (values.add ?? []).flatMap(split);
   if (values.add !== undefined && add.length === 0) throw new StapleError("validation", "staple criteria --add needs a criterion.");
-  const removeCriteria = values.rm === undefined ? undefined : values.rm.split(",").map((s) => s.trim()).filter(Boolean).map((s) => {
+  const removeCriteria = values.rm === undefined ? undefined : values.rm.join(",").split(",").map((s) => s.trim()).filter(Boolean).map((s) => {
     if (!/^\d+$/.test(s)) throw new StapleError("validation", `staple criteria --rm takes positions such as 2,3; got "${s}".`);
     return Number(s);
   });
@@ -2169,7 +2169,7 @@ function main() {
           agent: { type: "string" },
           set: { type: "string" },
           add: { type: "string", multiple: true },
-          rm: { type: "string" },
+          rm: { type: "string", multiple: true },
           clear: { type: "boolean" },
         },
       });

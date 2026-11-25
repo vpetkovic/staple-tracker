@@ -142,21 +142,40 @@ describe("editing a ticket's acceptance criteria", () => {
       });
       expect(verdicts()[2]).toEqual(["C, reworded", "unknown", "the"]);
 
-      // B removed: its mark goes, and the change says so.
+      // B removed: its mark goes, and the change says so. The reworded one moves up with its criterion.
       result = store.updateIssueResult(m, { removeCriteria: [2] }, "eve");
-      expect(result.criteriaChange?.marks.cleared).toEqual([
-        { criterion: "B", verdict: "met", position: 2 },
-        { criterion: "C", verdict: "unmet", position: 3 },
-      ]);
+      expect(result.criteriaChange?.marks).toEqual({
+        kept: [],
+        reworded: [{ criterion: "C", verdict: "unmet", position: 2, now: "C, reworded" }],
+        cleared: [{ criterion: "B", verdict: "met", position: 2 }],
+      });
       expect(verdicts()).toEqual([
         ["A", "unknown", "not"],
-        ["C, reworded", "unknown", "not"],
+        ["C, reworded", "unknown", "the"],
       ]);
+      // Replaced whole, the reworded criterion's words are gone and its position holds other words now.
+      result = store.updateIssueResult(m, { acceptanceCriteria: ["C, reworded"] }, "eve");
+      expect(result.criteriaChange?.marks.cleared).toEqual([{ criterion: "C", verdict: "unmet", position: 2 }]);
       expect(store.db.prepare("SELECT COUNT(*) AS n FROM milestone_criterion_marks").get()).toEqual({ n: 0 });
       expect(events("criteria_changed").at(-1)).toEqual({
         actor: "eve",
         payload: expect.objectContaining({ marks: expect.objectContaining({ cleared: result.criteriaChange?.marks.cleared }) }),
       });
+    });
+
+    it("a removal by position clears the mark on that position, even when another criterion reads the same", () => {
+      const created = store.milestones().create({ title: "Twins", acceptanceCriteria: ["A", "A"] }, "vp");
+      if (created.preview) throw new Error("unreachable");
+      const twins = created.milestone.identifier;
+      store.milestones().markCriterion(twins, 1, { verdict: "met", evidence: ["proof"] }, "judge");
+      store.milestones().markCriterion(twins, 2, { verdict: "unmet" }, "judge");
+      const result = store.updateIssueResult(twins, { removeCriteria: [1] }, "vp");
+      expect(result.criteriaChange?.marks).toEqual({
+        kept: [{ criterion: "A", verdict: "unmet", from: 2, to: 1 }],
+        reworded: [],
+        cleared: [{ criterion: "A", verdict: "met", position: 1 }],
+      });
+      expect(store.milestones().get(twins).goal.criteria.map((c) => [c.text, c.verdict])).toEqual([["A", "unmet"]]);
     });
 
     it("milestone set --criteria keeps marks the same way", () => {
@@ -248,6 +267,45 @@ describe("moving a ticket to another parent", () => {
     store.updateIssue(moving.id, { parent: next.id }, "vp");
     expect([status(old.id), status(next.id)]).toEqual(["done", "in_progress"]);
     expect(events("children_complete", old.id)).toHaveLength(1);
+  });
+
+  it("a parent whose last child moved away leaves the status derivation gave it", () => {
+    const epic = store.createIssue({ title: "Emptied epic", kind: "epic" });
+    const child = store.createIssue({ title: "Only child", parent: epic.id });
+    store.updateIssue(child.id, { assignee: "w", status: "in_progress" }, "w");
+    expect(status(epic.id)).toBe("in_progress");
+    store.updateIssue(child.id, { parent: null }, "vp");
+    expect(status(epic.id)).toBe("backlog");
+
+    // A status a person set stays theirs.
+    const held = store.createIssue({ title: "Held epic", kind: "epic" });
+    const leaving = store.createIssue({ title: "Leaving", parent: held.id });
+    store.updateIssue(held.id, { assignee: "vp", status: "in_progress" }, "vp");
+    store.updateIssue(leaving.id, { parent: null }, "vp");
+    expect(status(held.id)).toBe("in_progress");
+  });
+
+  it("a milestone a child leaves reports, it does not close, as a membership edit does", () => {
+    store.addKind({ id: MILESTONE_KIND, label: "Milestone" }, "vp");
+    const created = store.milestones().create({ title: "October" }, "vp");
+    if (created.preview) throw new Error("unreachable");
+    const m = created.milestone;
+    const member = store.createIssue({ title: "Landed member" });
+    store.milestones().addMember(m.identifier, member.identifier, {}, "vp");
+    store.updateIssue(member.id, { status: "done" }, "vp");
+    const child = store.createIssue({ title: "Open child", parent: m.id });
+    store.updateIssue(child.id, { assignee: "w", status: "in_progress" }, "w");
+    expect(status(m.id)).toBe("in_progress");
+    store.updateIssue(child.id, { parent: null }, "vp");
+    expect(status(m.id)).not.toBe("done");
+  });
+
+  it("a landed ticket moved under a parent with nothing else open wakes its owner before it closes", () => {
+    const epic = store.createIssue({ title: "Empty epic", kind: "epic", status: "todo" });
+    const landed = store.createIssue({ title: "Landed elsewhere" });
+    store.updateIssue(landed.id, { status: "done" }, "vp");
+    store.updateIssue(landed.id, { parent: epic.id }, "vp");
+    expect(events("children_complete", epic.id)).toHaveLength(1);
   });
 
   it("refuses to move work out of or into the tree of a pending gate", () => {

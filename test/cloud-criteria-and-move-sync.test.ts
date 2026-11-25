@@ -49,6 +49,32 @@ const marks = (machine: Machine, id: string) =>
   machine.db.prepare("SELECT position, criterion, verdict FROM milestone_criterion_marks WHERE milestone_id = ? ORDER BY position").all(id);
 
 describe("a criteria edit and a move across devices", () => {
+  it("a move keeps a blocker another device gave the new parent meanwhile, everywhere", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const a = fleet.machine("a");
+    const b = fleet.machine("b");
+    await sync(a, b);
+    a.use();
+    const old = a.store.createIssue({ title: "Old epic", kind: "epic" });
+    const next = a.store.createIssue({ title: "New epic", kind: "epic" });
+    const other = a.store.createIssue({ title: "Other work" });
+    const child = a.store.createIssue({ title: "Blocks its parent", parent: old.id, blockParentUntilDone: true });
+    await sync(a, b);
+
+    b.use();
+    b.store.setBlockedBy(next.id, [other.id], "bob");
+    await sync(b);
+    a.use();
+    a.store.updateIssue(child.id, { parent: next.id }, "alice");
+    await sync(a, b, a);
+    const fresh = fleet.machine("fresh");
+    await sync(fresh);
+    for (const machine of [a, b, fresh]) {
+      expect([blockers(machine, old.id), blockers(machine, next.id)], machine.label).toEqual([[], [child.id, other.id].sort()]);
+    }
+    converged(a, b, fresh);
+  }, 60_000);
+
   it("reach a second device and a fresh one, and a redelivered operation changes nothing", async () => {
     fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
     const a = fleet.machine("a");

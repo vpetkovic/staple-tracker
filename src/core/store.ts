@@ -3796,7 +3796,7 @@ export class WorkspaceStore {
     trigger: string,
     actor: string | null,
     selfDerive: ReadonlySet<string>,
-    options: { mayCloseStart?: boolean; mayCancel?: boolean } = {},
+    options: { mayCloseStart?: boolean; mayCancel?: boolean; childless?: boolean } = {},
   ): void {
     const now = this.journal.mutationAt();
     const order: string[] = [];
@@ -3827,7 +3827,8 @@ export class WorkspaceStore {
         const row = read.get(id) as unknown as IssueRow | undefined;
         if (!row) continue;
         const mayClose = !selfDerive.has(id) || options.mayCloseStart === true;
-        if (this.deriveOneAncestor(row, trigger, actor, now, { mayClose, mayCancel: options.mayCancel })) wrote = true;
+        const childless = selfDerive.has(id) && options.childless === true;
+        if (this.deriveOneAncestor(row, trigger, actor, now, { mayClose, mayCancel: options.mayCancel, childless })) wrote = true;
       }
       if (!wrote) break;
     }
@@ -3891,7 +3892,7 @@ export class WorkspaceStore {
     trigger: string,
     actor: string | null,
     now: string,
-    options: { mayClose?: boolean; mayCancel?: boolean } = {},
+    options: { mayClose?: boolean; mayCancel?: boolean; childless?: boolean } = {},
   ): boolean {
     /**
      * A PARKED parent is immune, in both directions (STA-143).
@@ -3915,8 +3916,15 @@ export class WorkspaceStore {
     if (this.categoryOf(ancestor.status) === "gated") return false;
 
     const inputs = this.derivationInputs(ancestor);
-    const target = this.isHorizon(ancestor.id) ? this.deriveHorizonStatus(ancestor.id, inputs) : this.deriveStatusFromChildren(inputs);
-    if (target === null) return false; // rung 0: no children, so nothing to report
+    let target = this.isHorizon(ancestor.id) ? this.deriveHorizonStatus(ancestor.id, inputs) : this.deriveStatusFromChildren(inputs);
+    /**
+     * Rung 0: no children, so nothing to report — unless the last one just moved away
+     * (`childless`, `afterMove`). Then an open status derivation gave it reported children it
+     * no longer has, and it goes back to the start of the band; the reversibility law below
+     * still keeps a status a person set, and a closed parent stays closed.
+     */
+    if (target === null && options.childless && inputs.length === 0 && !this.isResolvedStatus(ancestor.status)) target = "workable";
+    if (target === null) return false;
 
     /**
      * AN OPEN GATE OUTRANKS THE CLOSING RUNGS (STA-143 x STA-153).
@@ -5243,7 +5251,7 @@ export class WorkspaceStore {
        * The estimate has no history of its own — it is overwritten in place — so a change says
        * what it was and what it became (`design/execution-telemetry.md`, "The estimate reading").
        */
-      const marks = criteria?.changed ? this.followMarks(row, criteria.from, criteria.to, actor ?? null) : null;
+      const marks = criteria?.changed ? this.followMarks(row, criteria, actor ?? null) : null;
       if (criteria?.changed) {
         this.emitEvent({
           kind: "criteria_changed",
@@ -5317,7 +5325,10 @@ export class WorkspaceStore {
    * splits them; an added blank is refused, since it can only be a mistake. Null when the patch
    * names no criteria.
    */
-  private planCriteriaEdit(row: IssueRow, patch: UpdateIssueInput): { from: string[]; to: string[]; changed: boolean } | null {
+  private planCriteriaEdit(
+    row: IssueRow,
+    patch: UpdateIssueInput,
+  ): { from: string[]; to: string[]; changed: boolean; positions?: Map<number, number | null> } | null {
     const { acceptanceCriteria: replace, addCriteria: add, removeCriteria: remove } = patch;
     if (replace === undefined && add === undefined && remove === undefined) return null;
     if (replace !== undefined && (add !== undefined || remove !== undefined)) {
@@ -5346,6 +5357,18 @@ export class WorkspaceStore {
       const added = (add ?? []).map((criterion) => criterion.trim());
       if (added.some((criterion) => criterion === "")) throw new StapleError("validation", "An added criterion cannot be empty.");
       to = [...from.filter((_, index) => !positions.includes(index + 1)), ...added];
+      // Where each criterion went, which the marks follow exactly (`followCriterionMarks`).
+      const moved = new Map<number, number | null>();
+      let removed = 0;
+      for (let position = 1; position <= from.length; position += 1) {
+        if (positions.includes(position)) {
+          removed += 1;
+          moved.set(position, null);
+        } else {
+          moved.set(position, position - removed);
+        }
+      }
+      return { from, to, changed: JSON.stringify(from) !== JSON.stringify(to), positions: moved };
     }
     return { from, to, changed: JSON.stringify(from) !== JSON.stringify(to) };
   }
@@ -5354,8 +5377,12 @@ export class WorkspaceStore {
    * Carry the marks on an issue's criteria across an edit (only a milestone's criteria carry
    * marks, `milestone_criterion_marks`), replicated as the milestone fields a mark travels as.
    */
-  private followMarks(row: IssueRow, from: string[], to: string[], actor: string | null): CriterionMarkMoves {
-    const { moves, fields } = followMarksAcrossEdit(this.db, row.id, from, to);
+  private followMarks(
+    row: IssueRow,
+    edit: { from: string[]; to: string[]; positions?: Map<number, number | null> },
+    actor: string | null,
+  ): CriterionMarkMoves {
+    const { moves, fields } = followMarksAcrossEdit(this.db, row.id, edit.from, edit.to, edit.positions);
     if (Object.keys(fields).length > 0) {
       // A mark's move is a change to the milestone and says when, as `markCriterion` does.
       const now = this.journal.mutationAt();
@@ -5429,38 +5456,28 @@ export class WorkspaceStore {
 
   /**
    * A child made to block its parent until done blocks whichever parent it has: the edge leaves
-   * the old parent's blocker set and joins the new one's. Each set that changed is journaled
-   * whole, as `setBlockedBy` journals one, and says so (`blockers_changed`).
+   * the old parent's blocker set and joins the new one's, and each says so (`blockers_changed`).
+   * The edge travels with the move itself, as it travels with the child's create: every applier
+   * moves that one edge (`moveChildEdge`, `cloud/apply.ts`) rather than replacing either set, so
+   * a blocker another device gave either parent meanwhile stands.
    */
   private moveParentEdge(row: IssueRow, from: IssueRow | null, to: IssueRow | null, actor: string | null): void {
     if (row.block_parent_until_done !== 1) return;
     if (from !== null) {
       const dropped = this.db.prepare("DELETE FROM relations WHERE blocker_id = ? AND blocked_id = ? AND type = 'blocks'").run(row.id, from.id);
       if (Number(dropped.changes) > 0) {
-        this.journalBlockerSet(from.id, actor);
+        this.emitBlockerSet(from.id, actor);
         this.maybeEmitBlockersResolved(this.requireRow(from.id));
       }
     }
     if (to !== null) {
       this.assertNoCycle(to.id, [row.id]);
-      this.insertEdge(row.id, to.id, actor);
-      this.journalBlockerSet(to.id, actor);
+      // Dated at the child's create, by its author, as every applier and a hydrating device date it.
+      this.db
+        .prepare(`INSERT OR IGNORE INTO relations (blocker_id, blocked_id, type, created_by, created_at) VALUES (?, ?, 'blocks', ?, ?)`)
+        .run(row.id, to.id, row.created_by, row.created_at);
+      this.emitBlockerSet(to.id, actor);
     }
-  }
-
-  /** One blocker set as it stands now: its event and its replicated operation. */
-  private journalBlockerSet(blockedId: string, actor: string | null): void {
-    this.emitBlockerSet(blockedId, actor);
-    const set = this.db.prepare("SELECT blocker_id FROM relations WHERE blocked_id = ? AND type = 'blocks' ORDER BY created_at, blocker_id").all(blockedId) as Array<{
-      blocker_id: string;
-    }>;
-    this.journal.record({
-      entity: "relation",
-      entityId: blockedId,
-      verb: "update",
-      payload: { blockedBy: set.map((edge) => edge.blocker_id), edges: this.edgeFactsOf(blockedId) },
-      actor,
-    });
   }
 
   /**
@@ -5473,9 +5490,20 @@ export class WorkspaceStore {
   private afterMove(row: IssueRow, from: IssueRow | null, walkedNewChain: boolean, actor: string | null): void {
     if (from !== null) {
       this.wakeIfChildrenComplete(from.id);
-      this.deriveHolders([from.id], row.identifier, actor, new Set([from.id]), { mayCloseStart: true });
+      /**
+       * A milestone a child leaves reports and never closes, as a membership edit (`rederiveMilestones`).
+       * A parent left with no children at all goes back to the start of the band when it holds a
+       * status derivation gave it (`childless`); a status a person set stays.
+       */
+      this.deriveHolders([from.id], row.identifier, actor, new Set([from.id]), {
+        mayCloseStart: from.kind !== MILESTONE_KIND,
+        childless: true,
+      });
     }
-    if (!walkedNewChain && row.parent_id !== null) this.recomputeAncestorStatuses(row, actor);
+    if (row.parent_id === null) return;
+    // A landed ticket arriving where nothing else is open: the owner hears it before the parent closes.
+    if (this.isResolvedStatus(row.status)) this.wakeIfChildrenComplete(row.parent_id);
+    if (!walkedNewChain) this.recomputeAncestorStatuses(row, actor);
   }
 
   // ---------- claim liveness (derived, never stored) ----------

@@ -50,7 +50,7 @@ afterAll(async () => {
 describe("acceptance criteria", () => {
   it("CLI: lists, adds, removes and replaces them, and says what changed", async () => {
     const t = await cliJson("new", "Scope moved", "--criteria", "a;b;c");
-    let out = await cliJson("criteria", t.identifier, "--rm", "1,3", "--add", "d", "--add", "e;f");
+    let out = await cliJson("criteria", t.identifier, "--rm", "1", "--rm", "3", "--add", "d", "--add", "e;f");
     expect(out.acceptanceCriteria).toEqual(["b", "d", "e", "f"]);
     expect(out.criteriaChange).toMatchObject({ from: ["a", "b", "c"], to: ["b", "d", "e", "f"], changed: true });
 

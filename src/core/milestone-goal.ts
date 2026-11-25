@@ -167,13 +167,30 @@ export interface CriterionMarkMoves {
  * words): it keeps reading unknown there, as a reword always has. Otherwise — its position was
  * removed, or now holds a criterion that moved there — the mark is cleared. `placement` maps each
  * old position to its new one, or null when the mark is cleared.
+ *
+ * An edit by position (remove these, append those) knows where every criterion went, so it passes
+ * `positions` (old position to new, null for removed) and the words are not consulted: removing
+ * one of two identical criteria clears the mark on the one removed.
  */
 export function followCriterionMarks(
   before: readonly string[],
   after: readonly string[],
   marks: ReadonlyArray<Pick<CriterionMark, "position" | "criterion" | "verdict">>,
+  positions?: ReadonlyMap<number, number | null>,
 ): { moves: CriterionMarkMoves; placement: Map<number, number | null> } {
   const ordered = [...marks].sort((a, b) => a.position - b.position);
+  if (positions !== undefined) {
+    const moves: CriterionMarkMoves = { kept: [], reworded: [], cleared: [] };
+    const placement = new Map<number, number | null>();
+    for (const mark of ordered) {
+      const to = positions.get(mark.position) ?? null;
+      placement.set(mark.position, to);
+      if (to === null) moves.cleared.push({ criterion: mark.criterion, verdict: mark.verdict, position: mark.position });
+      else if (mark.criterion === before[mark.position - 1]) moves.kept.push({ criterion: mark.criterion, verdict: mark.verdict, from: mark.position, to });
+      else moves.reworded.push({ criterion: mark.criterion, verdict: mark.verdict, position: to, now: after[to - 1]! });
+    }
+    return { moves, placement };
+  }
   const claimed = new Set<number>();
   const placement = new Map<number, number | null>();
   for (const mark of ordered) {

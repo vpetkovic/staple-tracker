@@ -806,10 +806,17 @@ function applyIssue(db: DatabaseSync, input: ApplyInput): boolean {
     const values = new Map(pairs);
     settleIssueKeys(db, input, values);
     deriveIssueColumns(db, values);
+    const parentBefore = values.has("parent_id")
+      ? ((db.prepare("SELECT parent_id FROM issues WHERE id = ?").get(input.entityId) as { parent_id: string | null }).parent_id)
+      : null;
     // A settlement that lost its number to an earlier claim carries nothing else to write.
     if (values.size > 0) updateRow(db, "issues", "id", input.entityId, [...values]);
-    // A move: the subtree's depth follows the moved row's, as on the device that moved it.
-    if (values.has("depth")) rederiveSubtreeDepths(db, input.entityId);
+    if (values.has("parent_id")) {
+      // A move: the subtree's depth follows the moved row's, as on the device that moved it.
+      rederiveSubtreeDepths(db, input.entityId);
+      // Only a move carries the edge here; a create arriving over the row is `keepChildEdgeAgainstEarlierSet`'s.
+      if (input.verb === "update") moveChildEdge(db, input, parentBefore, (values.get("parent_id") as string | null) ?? null);
+    }
     const after = identifierOf(db, input.entityId);
     if (before !== null && after !== null && before !== after) {
       /**
@@ -870,18 +877,56 @@ function applyIssue(db: DatabaseSync, input: ApplyInput): boolean {
 function keepChildEdgeAgainstEarlierSet(db: DatabaseSync, input: ApplyInput): void {
   const edges = createdEdgesOf(db, input);
   for (const blockedId of edges.targets) {
-    const write = db
-      .prepare(
-        `SELECT a.seq AS seq, w.op_id AS op FROM sync_field_writes w LEFT JOIN sync_applied a ON a.op_id = w.op_id
-          WHERE w.entity = 'relation' AND w.entity_id = ? AND w.field = 'blockedBy'`,
-      )
-      .get(blockedId) as { seq: number | null; op: string } | undefined;
-    if (write !== undefined && (write.seq === null || write.seq > (input.seq as number))) continue;
+    if (setWrittenLater(db, blockedId, input)) continue;
     db.prepare(`INSERT OR IGNORE INTO relations (blocker_id, blocked_id, type, created_by, created_at) VALUES (?, ?, 'blocks', ?, ?)`).run(
       input.entityId,
       blockedId,
       edges.createdBy,
       edges.createdAt,
+    );
+  }
+}
+
+/**
+ * Whether `blockedId`'s blocker set was last written after `input` in the log: by an operation
+ * applied at a later seq, or by this device and not yet in the log at all (which puts it later
+ * than anything already there). Such a set has the last word on the edges it names. An input with
+ * no seq (a local apply) is the latest word itself.
+ */
+function setWrittenLater(db: DatabaseSync, blockedId: string, input: ApplyInput): boolean {
+  if (typeof input.seq !== "number") return false;
+  const write = db
+    .prepare(
+      `SELECT a.seq AS seq, w.op_id AS op FROM sync_field_writes w LEFT JOIN sync_applied a ON a.op_id = w.op_id
+        WHERE w.entity = 'relation' AND w.entity_id = ? AND w.field = 'blockedBy'`,
+    )
+    .get(blockedId) as { seq: number | null; op: string } | undefined;
+  return write !== undefined && (write.seq === null || write.seq > input.seq);
+}
+
+/**
+ * A move of a child made to block its parent until done carries its one edge with it, as its
+ * create did (`createdEdgesOf`): the edge to the parent it left goes, the edge to the one it
+ * joined is added — never a replacement of either set, so a blocker another device gave either
+ * parent meanwhile stands. Dated at the child's create, by its author, as every device hydrating
+ * dates it (`keepChildEdgesInLogOrder`, `hydrate.ts`). Also on the device's own move coming back, which puts the edge back
+ * after a set written earlier in the log removed it (`keepChildEdgeAgainstEarlierSet`).
+ */
+function moveChildEdge(db: DatabaseSync, input: ApplyInput, from: string | null, to: string | null): void {
+  const childId = input.entityId;
+  const row = db.prepare("SELECT block_parent_until_done, created_by, created_at FROM issues WHERE id = ?").get(childId) as
+    | { block_parent_until_done: number; created_by: string | null; created_at: string }
+    | undefined;
+  if (row === undefined || row.block_parent_until_done !== 1) return;
+  if (from !== null && from !== to && !setWrittenLater(db, from, input)) {
+    db.prepare("DELETE FROM relations WHERE blocker_id = ? AND blocked_id = ? AND type = 'blocks'").run(childId, from);
+  }
+  if (to !== null && issueExists(db, to) && !setWrittenLater(db, to, input)) {
+    db.prepare(`INSERT OR IGNORE INTO relations (blocker_id, blocked_id, type, created_by, created_at) VALUES (?, ?, 'blocks', ?, ?)`).run(
+      childId,
+      to,
+      row.created_by,
+      row.created_at,
     );
   }
 }

@@ -66,6 +66,7 @@ export function followMarksAcrossEdit(
   issueId: string,
   before: readonly string[],
   after: readonly string[],
+  positions?: ReadonlyMap<number, number | null>,
 ): { moves: CriterionMarkMoves; fields: Record<string, CriterionMarkValue | null> } {
   const held = new Map(
     Object.entries(criterionMarkFields(db, issueId)).map(([field, value]) => [criterionMarkPosition(field)!, value] as const),
@@ -74,6 +75,7 @@ export function followMarksAcrossEdit(
     before,
     after,
     [...held].map(([position, value]) => ({ position, criterion: value.criterion, verdict: value.verdict })),
+    positions,
   );
   const next = new Map<number, CriterionMarkValue>();
   for (const [from, to] of placement) if (to !== null) next.set(to, held.get(from)!);
