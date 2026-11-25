@@ -321,8 +321,12 @@ describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
       await page.goto(`${at(single)}/?issue=ALP-2&token=${single.token}`, { waitUntil: "networkidle" });
       await page.getByRole("button", { name: "Link an issue or pull request", exact: true }).click();
       const dialog = page.locator("[data-link-external]");
+      // The fixture answers every prefix with the same item, so wait for the answer to the whole
+      // text: the dialog ignores Enter on a list that answers an older query.
+      const answered = page.waitForResponse(r => r.url().includes("/api/integrations/read") && /"action":"search"/.test(r.request().postData() ?? "") && /"text":"fixture"/.test(r.request().postData() ?? ""));
       await page.keyboard.type("fixture");
-      await expect.poll(() => dialog.getByRole("option", { name: /Azure fixture work item/ }).count()).toBe(1);
+      await answered;
+      await expect.poll(() => dialog.getByRole("option", { name: /Azure fixture work item/ }).getAttribute("aria-selected")).toBe("true");
       await page.keyboard.press("Enter");
       await expect.poll(() => dialog.getByRole("option", { name: /Azure fixture work item/ }).innerText()).toContain("Linked here");
       await page.keyboard.press("Escape");
