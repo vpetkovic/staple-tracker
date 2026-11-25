@@ -975,7 +975,7 @@ try {
 
   const coldTools = await cold.rpc("tools/list", {});
   assert(
-    coldTools.tools.length === tools.tools.length && coldTools.tools.length === 87,
+    coldTools.tools.length === tools.tools.length && coldTools.tools.length === 88,
     `server connects and lists ${coldTools.tools.length} tools with no workspace anywhere above cwd`,
   );
 
