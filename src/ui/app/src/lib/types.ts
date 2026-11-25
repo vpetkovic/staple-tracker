@@ -3406,3 +3406,42 @@ export interface CloudLinkJoinStarted extends CloudJoinStarted {
   workspace: string;
   created: boolean;
 }
+
+/**
+ * The attention list: the work waiting on a person. A hand-kept mirror of
+ * `src/core/attention.ts` (`AttentionRow`, `AttentionList`), which `/api/attention`,
+ * `staple attention --json` and the `attention` MCP tool all answer.
+ */
+export const ATTENTION_KINDS = [
+  "gate_pending",
+  "gate_resubmitted",
+  "person_blocked",
+  "in_review",
+  "unblocked",
+  "run_stopped",
+  "claim_silent",
+  "cloud_conflict",
+] as const;
+export type AttentionKind = (typeof ATTENTION_KINDS)[number];
+
+export interface AttentionRow {
+  key: string;
+  workspace: string;
+  kind: AttentionKind;
+  ref: string | null;
+  runId: string | null;
+  conflictId: string | null;
+  title: string;
+  detail: string;
+  since: string;
+  ageSeconds: number;
+  action: { verb: "review" | "open" | "unblock" | "inspect" | "resolve"; label: string; command: string };
+  dismissible: boolean;
+}
+
+export interface AttentionList {
+  rows: AttentionRow[];
+  workspaces: string[];
+  failed: Array<{ workspace: string; message: string }>;
+  now: string;
+}

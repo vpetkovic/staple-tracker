@@ -32,6 +32,7 @@ import { VIEWS, type ViewName } from "./session";
 export const VIEW_SLUGS: Record<ViewName, string> = {
   tree: "tasks",
   queue: "queue",
+  attention: "attention",
   graph: "graph",
   milestones: "milestones",
   plan: "plan",

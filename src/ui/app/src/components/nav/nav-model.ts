@@ -17,7 +17,7 @@
  * `lib/view-prefs.ts` treats the sort envelope.
  */
 import type { LucideIcon } from "lucide-react";
-import { BatteryMedium, Gauge, GitFork, Layers, Lightbulb, ListOrdered, Milestone } from "lucide-react";
+import { BatteryMedium, Gauge, GitFork, Inbox, Layers, Lightbulb, ListOrdered, Milestone } from "lucide-react";
 import { MACHINE_VIEWS, VIEWS, VIEW_LABELS, isMachineView, type ViewName } from "@/lib/session";
 
 export interface NavItem {
@@ -50,6 +50,7 @@ export interface NavGroup {
 const ICONS: Record<ViewName, LucideIcon> = {
   tree: Layers,
   queue: ListOrdered,
+  attention: Inbox,
   graph: GitFork,
   milestones: Milestone,
   plan: Lightbulb,

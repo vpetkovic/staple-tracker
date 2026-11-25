@@ -104,6 +104,7 @@ import { GraphView } from "@/views/GraphView";
 import { MilestonesView } from "@/views/milestones/MilestonesView";
 import { PlanView } from "@/views/plan/PlanView";
 import { QueueView } from "@/views/queue/QueueView";
+import { AttentionView } from "@/views/attention/AttentionView";
 import { TreeView } from "@/views/TreeView";
 import { LoadingState, ProblemState } from "@/components/plain/States";
 
@@ -119,6 +120,7 @@ const VIEW_COMPONENTS: Record<ViewName, typeof TreeView | typeof PlanView> = {
   milestones: MilestonesView,
   plan: PlanView,
   queue: QueueView,
+  attention: AttentionView,
   calibration: CalibrationView,
   budget: BudgetView,
 };
