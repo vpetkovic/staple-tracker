@@ -25,7 +25,9 @@ export function SourcePicker({ workspace, targets, connections, onChange }: {
 }) {
   const [open, setOpen] = useState(false);
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    // modal: the list portals outside the Settings dialog, whose scroll lock would otherwise
+    // swallow wheel and touch over it. A modal popover takes the lock over while it is open.
+    <Popover modal open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
           type="button"
