@@ -5,11 +5,13 @@ import {
   chipLabel,
   CONNECTION_CHOICES,
   linearIdProblem,
+  clickupIdProblem,
   commandIn,
   connectionMeta,
   needsAttention,
   offeredDetections,
   orderWorkspaces,
+  pickerPlaceholder,
   pickerSections,
   unmappedSentence,
   type MappedTarget,
@@ -129,6 +131,38 @@ describe("linearIdProblem", () => {
   });
 });
 
+describe("clickupIdProblem", () => {
+  it("accepts the workspace number from a ClickUp address and stays quiet while empty", () => {
+    expect(clickupIdProblem("9012345")).toBeNull();
+    expect(clickupIdProblem(" 9012345 ")).toBeNull();
+    expect(clickupIdProblem("")).toBeNull();
+  });
+  it("says where the number is when given anything else", () => {
+    expect(clickupIdProblem("https://app.clickup.com/9012345/home")).toBe("Workspace ID is the number after app.clickup.com/ in any ClickUp page's address, like 9012345.");
+    expect(clickupIdProblem("acme")).not.toBeNull();
+  });
+});
+
+describe("a ClickUp connection row", () => {
+  const clickup = (h: ConnectionHealthSnapshot | null) =>
+    ({ id: "cu", providerId: "clickup", mode: "api", host: "app.clickup.com", scopeId: "9012345", credentialEnv: "STAPLE_CLICKUP_API_TOKEN", health: h }) as ConnectionView;
+  it("names the user and workspace once checked, and the workspace number and token variable before", () => {
+    expect(connectionMeta(clickup(null))).toBe("Workspace 9012345 · API token in STAPLE_CLICKUP_API_TOKEN");
+    expect(connectionMeta(clickup(health("ready", { identity: { login: "ada", organization: "Acme" } })))).toBe("ada · Acme · API token in STAPLE_CLICKUP_API_TOKEN");
+    expect(connectionMeta(clickup(health("ready", { identity: { login: "Ada", organization: "Ada" } })))).toBe("Ada · API token in STAPLE_CLICKUP_API_TOKEN");
+  });
+});
+
+describe("pickerPlaceholder", () => {
+  it("names only what the readable connections list", () => {
+    expect(pickerPlaceholder(["github", "linear"])).toBe("Find a repository, team or project");
+    expect(pickerPlaceholder([])).toBe("Find a repository, team or project");
+    expect(pickerPlaceholder(["github"])).toBe("Find a repository");
+    expect(pickerPlaceholder(["clickup"])).toBe("Find a space or list");
+    expect(pickerPlaceholder(["github", "clickup"])).toBe("Find a repository, space or list");
+  });
+});
+
 describe("pickerSections", () => {
   const item = (over: Partial<PickerItem>): PickerItem => ({ id: "1", name: "x", url: "", kind: "repository", scopeId: "host", key: "github.com/1", ...over });
   it("marks items already mapped to the workspace by key", () => {
@@ -150,15 +184,29 @@ describe("pickerSections", () => {
       ["Projects", "project", null],
     ]);
   });
+  it("splits a ClickUp connection into Spaces and Lists", () => {
+    const sections = pickerSections(
+      "clickup",
+      {
+        space: { items: [item({ kind: "space", key: "app.clickup.com/1/space/2" })], nextCursor: null },
+        list: { items: [item({ kind: "list", key: "app.clickup.com/1/list/3" })], nextCursor: "next space" },
+      },
+      [target({ key: "app.clickup.com/1/list/3", providerId: "clickup", kind: "list" })],
+    );
+    expect(sections.map((s) => [s.label, s.kind, s.nextCursor, s.items.map((i) => i.mapped)])).toEqual([
+      ["Spaces", "space", null, [false]],
+      ["Lists", "list", "next space", [true]],
+    ]);
+  });
 });
 
 describe("what Add connection offers", () => {
-  it("lists the providers that work first, then the planned ones as not yet available", () => {
+  it("lists every provider, each one available", () => {
     expect(CONNECTION_CHOICES.map((c) => [c.providerId, c.label, c.available])).toEqual([
       ["github", "GitHub account or Enterprise host", true],
       ["linear", "Linear workspace", true],
       ["azure_devops", "Azure DevOps organization", true],
-      ["clickup", "ClickUp", false],
+      ["clickup", "ClickUp workspace", true],
     ]);
   });
 });

@@ -62,7 +62,9 @@ export interface ResultGroup {
  * hits under the mapped target they belong to (after its live hits), else under their
  * repository or team key; each group keeps the server's order.
  */
-export function groupResults(answers: ReadonlyArray<Pick<MixedResults, "cached" | "remote">>, targets: readonly MappingTarget[]): ResultGroup[] {
+export function groupResults(answers: ReadonlyArray<Pick<MixedResults, "cached" | "remote">>, targets: readonly MappingTarget[],
+  /** ClickUp workspace names by id, so two workspaces' saved copies are told apart. */
+  workspaces?: ReadonlyMap<string, string>): ResultGroup[] {
   const remote = answers.flatMap((a) => a.remote);
   const live = new Set(remote.map((h) => resourceKey(h.item)));
   const merged = uniqueHits(answers.flatMap((a) => a.cached), remote);
@@ -74,22 +76,32 @@ export function groupResults(answers: ReadonlyArray<Pick<MixedResults, "cached" 
   };
   for (const hit of remote) {
     const target = targets.find((t) => t.key === hit.targetKey);
-    add(`target:${hit.targetKey}`, target?.name ?? containerLabel(hit.item), hit.item.ref.providerId, hit);
+    add(`target:${hit.targetKey}`, target?.name ?? containerLabel(hit.item, workspaces), hit.item.ref.providerId, hit);
   }
   for (const hit of merged) {
     if (live.has(resourceKey(hit.item))) continue;
     const ref = hit.item.ref;
-    // A Linear project is a filter across teams; every other target is the item's own container.
-    const mapped = targets.find((t) => !(t.providerId === "linear" && t.kind === "project") && t.providerId === ref.providerId && t.host === ref.host
-      && t.scopeId === ref.scopeId && t.containerId.toLowerCase() === ref.containerId.toLowerCase());
+    const mapped = targets.find((t) => t.providerId === ref.providerId && t.host === ref.host && t.scopeId === ref.scopeId && holds(t, hit.item));
     if (mapped) {
-      add(`target:${mapped.key}`, mapped.name ?? containerLabel(hit.item), ref.providerId, hit);
+      add(`target:${mapped.key}`, mapped.name ?? containerLabel(hit.item, workspaces), ref.providerId, hit);
       continue;
     }
-    const label = containerLabel(hit.item);
-    add(`saved:${hit.item.ref.providerId}:${label}`, label, hit.item.ref.providerId, hit);
+    const label = containerLabel(hit.item, workspaces);
+    add(`saved:${ref.providerId}:${ref.scopeId}:${label}`, label, ref.providerId, hit);
   }
   return [...groups.values()];
+}
+
+/**
+ * Whether a saved copy belongs to a mapped target: its repository, team or Azure DevOps project, or
+ * for ClickUp the space or one of the lists it sat in when read. A Linear project is not known from a saved copy.
+ */
+function holds(target: MappingTarget, item: SearchHit["item"]): boolean {
+  // A Linear project is a filter across teams; an Azure DevOps project is the item's own container.
+  if (target.providerId === "linear" && target.kind === "project") return false;
+  if (target.kind === "space") return "spaceId" in item && item.spaceId === target.containerId;
+  if (target.kind === "list") return "listIds" in item && !!item.listIds?.includes(target.containerId);
+  return target.containerId.toLowerCase() === item.ref.containerId.toLowerCase();
 }
 
 export type LinkTag = { kind: "here" } | { kind: "elsewhere"; label: string } | null;

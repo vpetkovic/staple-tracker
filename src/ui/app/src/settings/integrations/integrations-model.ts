@@ -28,14 +28,14 @@ export interface PickerPage {
 }
 
 /**
- * What Add connection lists. The planned providers are shown so the list reads as a roadmap,
- * and cannot be chosen until their adapter exists.
+ * What Add connection lists. Every provider here has an adapter. A future one can be listed with
+ * `available: false`: it shows as Soon and cannot be chosen until its adapter exists.
  */
 export const CONNECTION_CHOICES: ReadonlyArray<{ providerId: string; label: string; available: boolean }> = [
   { providerId: "github", label: "GitHub account or Enterprise host", available: true },
   { providerId: "linear", label: "Linear workspace", available: true },
   { providerId: "azure_devops", label: "Azure DevOps organization", available: true },
-  { providerId: "clickup", label: "ClickUp", available: false },
+  { providerId: "clickup", label: "ClickUp workspace", available: true },
 ];
 
 /**
@@ -51,6 +51,11 @@ export function commandIn(action: string | null): string | null {
 export function connectionMeta(connection: ConnectionView): string {
   if (connection.providerId === "linear")
     return [connection.health?.identity?.login ?? "Linear account", connection.health?.identity?.organization, `API key in ${connection.credentialEnv}`].filter(Boolean).join(" · ");
+  if (connection.providerId === "clickup") {
+    const { login, organization } = connection.health?.identity ?? {};
+    // A personal workspace is often named after its owner: say the name once.
+    return [login !== organization ? login : null, organization ?? `Workspace ${connection.scopeId}`, `API token in ${connection.credentialEnv}`].filter(Boolean).join(" · ");
+  }
   if (connection.providerId === "azure_devops")
     return [connection.health?.identity?.login ?? "Azure DevOps account", azurePlaceName(connection), `token in ${connection.credentialEnv}`].filter(Boolean).join(" · ");
   return [connection.account, connection.host === "github.com" ? null : connection.host, "through GitHub CLI"].filter(Boolean).join(" · ");
@@ -96,6 +101,19 @@ export function linearIdProblem(organization: string, user: string): string | nu
   return field ? `${field} should be the 36-character id Linear shows, like 123e4567-e89b-12d3-a456-426614174000.` : null;
 }
 
+/** What is wrong with the ClickUp form's workspace id, before the server is asked; null while it is empty or right. */
+export function clickupIdProblem(workspace: string): string | null {
+  return workspace.trim() !== "" && !/^[1-9][0-9]{0,19}$/.test(workspace.trim())
+    ? "Workspace ID is the number after app.clickup.com/ in any ClickUp page's address, like 9012345."
+    : null;
+}
+
+/** The picker's search hint, naming only what the connections here can list. */
+export function pickerPlaceholder(providerIds: readonly string[]): string {
+  const nouns = [...new Set((providerIds.length ? providerIds : ["github", "linear"]).flatMap((p) => containerKinds(p)))];
+  return `Find a ${nouns.length > 1 ? `${nouns.slice(0, -1).join(", ")} or ${nouns.at(-1)}` : nouns[0]}`;
+}
+
 /**
  * What is wrong with the Azure DevOps form before the server is asked: the optional Server host,
  * then the organization (or collection). Null while the fields are empty or right.
@@ -121,12 +139,12 @@ export function azureOrganizationHint(found: readonly { name: string }[] | null,
 
 /** The kinds of source a connection offers, in picker order. */
 export function containerKinds(providerId: string): ContainerKind[] {
-  return providerId === "linear" ? ["team", "project"] : providerId === "azure_devops" ? ["project"] : ["repository"];
+  return providerId === "linear" ? ["team", "project"] : providerId === "azure_devops" ? ["project"] : providerId === "clickup" ? ["space", "list"] : ["repository"];
 }
 
 export interface PickerSection {
   kind: ContainerKind;
-  /** "Teams" / "Projects" under a Linear connection; null for a connection's one list. */
+  /** "Teams" / "Projects" under Linear, "Spaces" / "Lists" under ClickUp; null for a connection's one list. */
   label: string | null;
   items: Array<PickerItem & { mapped: boolean }>;
   nextCursor: string | null;
@@ -139,7 +157,10 @@ export function pickerSections(
   targets: readonly MappedTarget[],
 ): PickerSection[] {
   const mapped = new Set(targets.map((t) => t.key));
-  const kinds: Array<[ContainerKind, string | null]> = providerId === "linear" ? [["team", "Teams"], ["project", "Projects"]] : containerKinds(providerId).map((kind) => [kind, null]);
+  const kinds: Array<[ContainerKind, string | null]> =
+    providerId === "linear" ? [["team", "Teams"], ["project", "Projects"]]
+    : providerId === "clickup" ? [["space", "Spaces"], ["list", "Lists"]]
+    : containerKinds(providerId).map((kind) => [kind, null]);
   return kinds.flatMap(([kind, label]) => {
     const page = pages[kind];
     if (!page) return [];

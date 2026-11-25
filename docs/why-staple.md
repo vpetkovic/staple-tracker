@@ -1,6 +1,6 @@
 ---
 title: Why staple
-description: The problem staple solves for development with coding agents, where it came from, and where it fits next to Linear, GitHub and ClickUp.
+description: The problem staple solves for development with coding agents, where it came from, and where it fits next to GitHub, Linear, Azure DevOps and ClickUp.
 ---
 
 # Why staple
@@ -98,7 +98,7 @@ claiming work on their own matters less than the tickets themselves being
 first-class, so that each one carries the complete context an agent needs to move
 the work forward.
 
-## Next to Linear, GitHub and ClickUp
+## Next to GitHub, Linear, Azure DevOps and ClickUp
 
 staple does not replace your team's tracker. It is the execution layer: the place
 where agents do the work, locally, ticket by ticket. Your team's board stays where
@@ -110,13 +110,14 @@ people plan, discuss and report.
 | Runs | Hosted, over the network | Locally, one file per repository |
 | Holds | Features, priorities, discussion | Epics, tickets, plans, worklogs, claims |
 
-A ticket can link to a GitHub issue or pull request, a Linear issue or an Azure DevOps work item. staple
-keeps a copy of its title and state beside the ticket and refreshes it when you ask.
+A ticket can link to a GitHub issue or pull request, a Linear issue, an Azure DevOps work
+item or a ClickUp task. staple keeps a copy of its title and state beside the ticket and
+refreshes it when you ask.
 The link is read-only: staple never changes anything in your tracker.
 [Provider integrations](integrations.md) covers connecting, choosing what each
 workspace searches, and linking.
 
-ClickUp, and writing back to your tracker, are
+Writing back to your tracker is
 **planned, not shipped**.
 
 ## When staple fits, and when it doesn't
@@ -134,9 +135,9 @@ It is less of a fit when:
 - a single short session finishes each task, so the harness's own to-do list is
   enough;
 - your team needs agents to write straight into a shared hosted board today, since
-  staple only reads from GitHub and Linear and writes to no tracker yet;
+  staple reads from GitHub, Linear, Azure DevOps and ClickUp and writes to no tracker yet;
 - you are looking for a hosted tracker for people, with notifications, permissions
-  and reporting. That is what Linear, GitHub and ClickUp are for.
+  and reporting. That is what GitHub, Linear, Azure DevOps and ClickUp are for.
 
 To try it, [Install and first workspace](getting-started.md) takes one repository
 from nothing to an agent working a ticket in a few minutes.

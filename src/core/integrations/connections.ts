@@ -7,18 +7,19 @@ import { stapleHome } from "../../config/home.js";
 import { StapleError } from "../types.js";
 import { azureDevOpsConnectionSchema } from "./azure-devops-api.js";
 import { placeProblem } from "./azure-devops-url.js";
+import { clickupConnectionSchema } from "./clickup-api.js";
 import { linearConnectionSchema } from "./linear-api.js";
 
 const githubConnectionSchema = z.object({
   id: z.string().regex(/^[A-Za-z0-9_-]{1,80}$/), providerId: z.literal("github"), mode: z.literal("cli"),
   host: z.string().regex(/^[a-z0-9][a-z0-9.-]*(?::[0-9]+)?$/i).max(255), account: z.string().regex(/^[A-Za-z0-9-]+$/).max(80),
 }).strict();
-export const connectionSchema = z.discriminatedUnion("providerId", [githubConnectionSchema, linearConnectionSchema, azureDevOpsConnectionSchema])
+export const connectionSchema = z.discriminatedUnion("providerId", [githubConnectionSchema, linearConnectionSchema, azureDevOpsConnectionSchema, clickupConnectionSchema])
   // An Azure DevOps host and organization (or Server collection) must form a real address.
   .superRefine((c, ctx) => { if (c.providerId === "azure_devops" && placeProblem(c)) ctx.addIssue({ code: "custom", message: placeProblem(c)! }); });
 export type ProviderConnection = z.infer<typeof connectionSchema>;
 type ConnectionInput = (Omit<z.infer<typeof githubConnectionSchema>, "id"> | Omit<z.infer<typeof linearConnectionSchema>, "id">
-  | Omit<z.infer<typeof azureDevOpsConnectionSchema>, "id">) & { id?: string };
+  | Omit<z.infer<typeof azureDevOpsConnectionSchema>, "id"> | Omit<z.infer<typeof clickupConnectionSchema>, "id">) & { id?: string };
 const ALIAS = z.object({ id: z.string().regex(/^[A-Za-z0-9_-]{1,80}$/) }).strict();
 /** Directories #215–#226 wrote: one per workspace, named by a SHA-256 of its identity. */
 const LEGACY_DIRECTORY = /^[0-9a-f]{64}$/;

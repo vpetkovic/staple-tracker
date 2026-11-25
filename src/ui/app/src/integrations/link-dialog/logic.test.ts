@@ -105,6 +105,29 @@ describe("merging and grouping", () => {
     ]);
     expect(groups[0]!.hits.map((h) => h.item.key)).toEqual(["old-owner/old-name#1", "old-owner/old-name#3"]);
   });
+  it("puts a saved ClickUp copy under the mapped space or list it sat in, and names other saved copies by workspace", () => {
+    const space: MappingTarget = { key: "app.clickup.com/1/space/10", providerId: "clickup", host: "app.clickup.com", scopeId: "1", kind: "space", containerId: "10", name: "Engineering", url: null, connectionId: "cu" };
+    const list: MappingTarget = { key: "app.clickup.com/1/list/20", providerId: "clickup", host: "app.clickup.com", scopeId: "1", kind: "list", containerId: "20", name: "Engineering / Sprint 12", url: null, connectionId: "cu" };
+    const saved = (id: string, scopeId: string, spaceId?: string, listIds?: string[]): SearchHit => ({
+      item: { ref: { providerId: "clickup", host: "app.clickup.com", scopeId, containerId: scopeId, id, kind: "issue" }, key: id, url: `https://app.clickup.com/t/${id}`,
+        title: `Task ${id}`, body: null, status: null, fetchedAt: null, createdAt: "", updatedAt: "", contextShared: false, id: `r${id}`, spaceId, listIds } as SearchHit["item"],
+      associations: [],
+    });
+    const groups = groupResults(
+      [{ cached: [saved("86a", "1", "10", ["99"]), saved("86b", "1", "11", ["20"]), saved("86c", "1", "11", ["21"]), saved("86d", "2", "30", ["31"]), saved("86e", "3")], remote: [] }],
+      [space, list],
+      new Map([["1", "Acme"], ["2", "Side project"]]),
+    );
+    expect(groups.map((g) => [g.label, g.hits.map((h) => h.item.key)])).toEqual([
+      ["Engineering", ["86a"]],
+      ["Engineering / Sprint 12", ["86b"]],
+      ["Acme", ["86c"]],
+      ["Side project", ["86d"]],
+      ["ClickUp", ["86e"]],
+    ]);
+    // Without names, two workspaces' saved copies still stay apart.
+    expect(groupResults([{ cached: [saved("86d", "2"), saved("86e", "3")], remote: [] }], []).map((g) => g.hits.length)).toEqual([1, 1]);
+  });
   it("puts a saved-only hit from a mapped repository under that repository's heading, after the live ones", () => {
     const groups = groupResults([{ cached: [hit("7")], remote: [{ ...hit("1"), targetKey: repo.key }] }], [repo]);
     expect(groups.map((g) => [g.label, g.hits.map((h) => h.item.key)])).toEqual([

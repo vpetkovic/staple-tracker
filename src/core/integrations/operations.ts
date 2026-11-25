@@ -12,6 +12,7 @@ import { IntegrationConnections, type ProviderConnection } from "./connections.j
 import { present, resolveScope, storedMapping, TargetNames, writeMapping, type MappingTarget, type SearchScope, type WorkspaceHandle } from "./mapping.js";
 import { MAPPING_LIMIT, targetKey, type StoredTarget } from "./mapping-format.js";
 import { ExternalWork } from "./external-work.js";
+import { ClickUpApiAdapter, discoverClickUp, type ClickUpIdentity } from "./clickup-api.js";
 import { LinearApiAdapter } from "./linear-api.js";
 import { externalResourceId, type ExternalResource } from "./link-store.js";
 import { IntegrationReader } from "./provider.js";
@@ -21,11 +22,11 @@ export const INTEGRATION_WRITE_ACTIONS = ["link","create","unlink","refresh","st
 export const INTEGRATION_CONFIG_ACTIONS = ["configure","remove"] as const;
 export const integrationCommandSchema = z.object({
   action:z.enum([...INTEGRATION_READ_ACTIONS,...INTEGRATION_WRITE_ACTIONS,...INTEGRATION_CONFIG_ACTIONS]),
-  providerId:z.enum(["github","linear","azure_devops"]).optional(),organization:z.string().max(64).optional(),scopeId:z.string().uuid().optional(),credentialEnv:z.string().max(128).optional(),key:z.string().max(128).optional(),
+  providerId:z.enum(["github","linear","azure_devops","clickup"]).optional(),organization:z.string().max(64).optional(),scopeId:z.string().max(128).optional(),credentialEnv:z.string().max(128).optional(),key:z.string().max(128).optional(),
   connectionId:z.string().max(80).optional(),host:z.string().max(255).optional(),account:z.string().max(80).optional(),
   url:z.string().max(8192).optional(),resourceId:z.string().max(128).optional(),ref:z.string().max(512).optional(),
   text:z.string().max(2048).optional(),kind:z.enum(["issue","pull_request"]).optional(),containerId:z.string().max(512).optional(),cursor:z.string().max(8192).optional(),
-  confirmed:z.boolean().optional(),force:z.boolean().optional(),allWorkspaces:z.boolean().optional(),containerKind:z.enum(["repository","team","project"]).optional(),
+  confirmed:z.boolean().optional(),force:z.boolean().optional(),allWorkspaces:z.boolean().optional(),containerKind:z.enum(["repository","team","project","space","list"]).optional(),
   targetKey:z.string().max(300).optional(),containerKey:z.string().max(300).optional(),additionalWork:z.boolean().optional(),requestKey:z.string().max(512).optional(),title:z.string().max(8192).optional(),
   parentResourceId:z.string().max(128).nullable().optional(),position:z.number().int().nonnegative().safe().optional(),enabled:z.boolean().optional(),actor:z.string().max(512).optional(),
 }).strict();
@@ -35,9 +36,10 @@ const DEFAULT_FACTORIES: ReadonlyMap<string,AdapterFactory> = new Map<string,Ada
   ["github:cli",c=> { if(c.providerId!=="github") throw new StapleError("validation","Expected a GitHub connection"); return new GitHubCliAdapter(c); }],
   ["linear:api",c=> { if(c.providerId!=="linear") throw new StapleError("validation","Expected a Linear connection"); return new LinearApiAdapter(c); }],
   ["azure_devops:api",c=> { if(c.providerId!=="azure_devops") throw new StapleError("validation","Expected an Azure DevOps connection"); return new AzureDevOpsApiAdapter(c); }],
+  ["clickup:api",c=> { if(c.providerId!=="clickup") throw new StapleError("validation","Expected a ClickUp connection"); return new ClickUpApiAdapter(c); }],
 ]);
-/** The one kind of container each provider maps by default; Linear can also map projects. */
-const CONTAINER_KIND:Record<ProviderConnection["providerId"],ContainerKind>={github:"repository",linear:"team",azure_devops:"project"};
+/** What each provider's connection lists and maps; the first is what an unqualified request means. */
+const CONTAINER_KINDS:Record<ProviderConnection["providerId"],ContainerKind[]>={github:["repository"],linear:["team","project"],azure_devops:["project"],clickup:["space","list"]};
 
 const DETECTION_RUNNER=createGhRunner({timeoutMs:10_000});
 
@@ -55,7 +57,9 @@ export class IntegrationOperations {
     /** Lists the Azure DevOps organizations (or Server collections) a token can reach, for the connection form. */
     listAzureDevOpsOrganizations?:(credentialEnv:string,host:string)=>Promise<AzureDevOpsOrganization[]>;
     /** Every workspace on this machine, for All workspaces and for unmapped workspaces. Defaults to this one. */
-    workspaces?:()=>WorkspaceHandle[]}={}) {
+    workspaces?:()=>WorkspaceHandle[];
+    /** Reads which ClickUp user a token belongs to and that it sees the workspace, for configure to bind. */
+    discoverClickUp?:(scopeId:string,credentialEnv:string)=>Promise<ClickUpIdentity>}={}) {
     this.connections = new IntegrationConnections(options.home);
     this.names = new TargetNames(`${this.connections.directory}/names`);
     this.caches = options.caches ?? processCaches;
@@ -125,9 +129,10 @@ export class IntegrationOperations {
     if ("id" in item) return item;
     const scope=this.scope(c);
     if (scope.mode==="none" || scope.targets.some(t=>contains(t,item))) return item;
-    const target=outsideTarget(item,this.connections.list());
+    // A ClickUp item knows its space only by id; name it for the person when a connection can.
+    const [target]=await this.named([outsideTarget(item,this.connections.list())]);
     const names=scope.targets.map(t=>t.name ?? t.key).join(", ");
-    throw new StapleError("validation",`${item.key} is outside ${scope.mode==="workspace" ? `this workspace's mapping` : "the mapped repositories and projects"} (${names}). Map ${target.name ?? target.key} first.`,
+    throw new StapleError("validation",`${item.key} is outside ${scope.mode==="workspace" ? `this workspace's mapping` : "the mapped sources"} (${names}). Map ${target!.name ?? target!.key} first.`,
       {reason:"outside_scope",target});
   }
   private async resolveSource(c:IntegrationCommand):Promise<ExternalResource|ExternalItem|ResolvedExternalItem> {
@@ -148,10 +153,35 @@ export class IntegrationOperations {
     // A pasted cached URL remains usable without a machine connection.
     if(cached.length>1 && !c.connectionId) throw new StapleError("conflict","Several scoped resources use this URL. Choose a resource or connection explicitly.");
     if (cached.length===1 && !c.connectionId) return storedSource(this.store.externalLinks().resource(cached[0]!.id));
+    if (parsed.host==="app.clickup.com") return this.clickupSource(c,parsed);
     const reader=this.reader(this.select(c,parsed.host,undefined,undefined,parsed.href));
     const resolved=await reader.resolve({url:parsed.href});
     if (!resolved) throw new StapleError("not_found","No accessible issue or PR was found at this URL");
     return resolved.ref.kind==="pull_request" && !reader.capabilities.readPullRequests ? resolved:reader.read(resolved.ref);
+  }
+  /**
+   * A ClickUp task URL may name no workspace, and this computer may have several ClickUp connections:
+   * the one the URL names, else the one asked for and then the others, until one can read the task.
+   */
+  private async clickupSource(c:IntegrationCommand,url:URL):Promise<ExternalItem> {
+    const named=/^\/t\/([0-9]+)\//.exec(url.pathname)?.[1];
+    const clickup=this.connections.list().filter(x=>x.providerId==="clickup" && (!named || x.scopeId===named));
+    const asked=c.connectionId ? this.connections.resolve(c.connectionId) : null;
+    const order=asked?.providerId==="clickup" && (!named || asked.scopeId===named) ? [asked,...clickup.filter(x=>x.id!==asked.id)] : clickup;
+    if (!order.length) throw new StapleError("unavailable","Cached-only session. Configure a connection for live reads in Settings > Integrations.");
+    let elsewhere:StapleError|null=null;
+    for (const connection of order) {
+      const reader=this.reader(connection.id);
+      try {
+        const resolved=await reader.resolve({url:url.href});
+        if (resolved) return reader.read(resolved.ref);
+      } catch (error) {
+        if (!(error instanceof StapleError && error.detail?.reason==="other_workspace")) throw error;
+        elsewhere=error;
+      }
+    }
+    // Every connection could see the task but none is for its workspace: say so, not "not found".
+    throw elsewhere ?? new StapleError("not_found","No ClickUp workspace connected here has a task at this URL");
   }
   counts():Record<string,{issues:number;pullRequests:number}> {
     const rows=this.store.db.prepare(`SELECT l.issue_id,r.kind,COUNT(*) AS n FROM external_links l
@@ -207,6 +237,14 @@ export class IntegrationOperations {
         }
         if(c.providerId === "linear") return this.connections.save({id:c.connectionId,providerId:"linear",mode:"api",host:"linear.app",
           account:need(c.account,"expected Linear user UUID"),scopeId:need(c.scopeId,"Linear organization UUID"),credentialEnv:need(c.credentialEnv,"credential environment variable name")});
+        if(c.providerId === "clickup") {
+          const scopeId=need(c.scopeId,"ClickUp workspace id"),credentialEnv=need(c.credentialEnv,"credential environment variable name");
+          if (this.options.liveReadsAvailable===false) throw new StapleError("unavailable","Cached-only session. Connect ClickUp on the machine running Staple.");
+          // The token says whose it is; the person never types a ClickUp user id.
+          const found=await (this.options.discoverClickUp ?? discoverClickUp)(scopeId,credentialEnv);
+          if (c.account && c.account!==found.account) throw new StapleError("auth",`The token in ${credentialEnv} belongs to ${found.login ?? "a different ClickUp user"}, not the user this connection expects.`,{reason:"account_mismatch",...(found.login ? {login:found.login} : {})});
+          return this.connections.save({id:c.connectionId,providerId:"clickup",mode:"api",host:"app.clickup.com",account:found.account,scopeId,credentialEnv});
+        }
         return this.connections.save({id:c.connectionId,providerId:"github",mode:"cli",host:need(c.host,"GitHub host").toLowerCase(),account:need(c.account,"expected gh account")});
       case "remove": this.connections.remove(need(c.connectionId,"connection")); return {removed:true};
       case "organizations": {
@@ -234,12 +272,12 @@ export class IntegrationOperations {
       case "map": {
         const connection=this.connections.resolve(need(c.connectionId,"connection"));
         if (!connection) throw new StapleError("not_found","Configure this provider connection on the machine running Staple");
-        const kind:ContainerKind=c.containerKind ?? CONTAINER_KIND[connection.providerId];
+        const kind=containerKind(connection,c.containerKind);
         const container=await this.reader(connection.id).readContainer(need(c.containerId,"container"),kind);
-        if (!container) throw new StapleError("not_found","That repository, team or project is not accessible through this connection");
+        if (!container) throw new StapleError("not_found","That source is not accessible through this connection");
         const target=storedTarget(connection,kind,container);
         const current=storedMapping(this.store,this.names).filter(t=>targetKey(t)!==targetKey(target));
-        if (current.length>=MAPPING_LIMIT) throw new StapleError("validation",`A workspace maps at most ${MAPPING_LIMIT} repositories, teams or projects`);
+        if (current.length>=MAPPING_LIMIT) throw new StapleError("validation",`A workspace maps at most ${MAPPING_LIMIT} sources`);
         writeMapping(this.store,[...current,target],actor());
         this.names.set(targetKey(target),{name:container.name,url:container.url});
         return {workspace:this.store.slug,targets:storedMapping(this.store,this.names).map(t=>present(t,this.connections.list()))};
@@ -294,7 +332,7 @@ export class IntegrationOperations {
     const narrowed=scope.targets.filter(t=>(kind==="issue" || t.providerId==="github")
       && (!c.containerKey || t.key===c.containerKey) && (!c.containerId || t.containerId===c.containerId)
       && (!c.connectionId || t.connectionId===this.connections.resolve(c.connectionId)?.id));
-    if ((c.containerKey || c.containerId) && !narrowed.length) throw new StapleError("validation","That repository, team or project is not in this search's scope");
+    if ((c.containerKey || c.containerId) && !narrowed.length) throw new StapleError("validation","That source is not in this search's scope");
     const binding=JSON.stringify([kind,text,narrowed.map(t=>t.key)]);
     const parts=decodeCursor(c.cursor,binding);
     const pending=narrowed.filter(t=>!parts || parts[t.key]);
@@ -313,7 +351,8 @@ export class IntegrationOperations {
         const reader=readers.get(connection.id) ?? this.readerFor(connection);
         readers.set(connection.id,reader);
         const page:ExternalPage<ExternalItem>=await reader.search(kind,{text,cursor:parts?.[target.key],
-          ...(linearProject(target) ? {projectId:target.containerId} : {containerId:target.containerId})});
+          ...(linearProject(target) ? {projectId:target.containerId} : target.kind==="space" ? {spaceId:target.containerId}
+            : target.kind==="list" ? {listId:target.containerId} : {containerId:target.containerId})});
         if (this.caches.health.peek(this.healthKey(connection))?.state!=="ready") this.caches.health.delete(this.healthKey(connection));
         return {target,page};
       } catch (error) {
@@ -336,10 +375,8 @@ export class IntegrationOperations {
     const connection=this.connections.resolve(need(c.connectionId,"connection"));
     if (!connection) throw new StapleError("not_found","Configure this provider connection on the machine running Staple");
     const reader=this.reader(connection.id);
-    const kind:ContainerKind=c.containerKind ?? CONTAINER_KIND[connection.providerId];
-    const projects=linearProject({providerId:connection.providerId,kind});
-    if (!projects && kind!==CONTAINER_KIND[connection.providerId]) throw new StapleError("validation",`This connection lists ${CONTAINER_KIND[connection.providerId]==="repository" ? "repositories" : `${CONTAINER_KIND[connection.providerId]}s`}, not that`);
-    const page=(cursor?:string)=>projects ? reader.listProjects(cursor) : reader.listContainers(cursor);
+    const kind=containerKind(connection,c.containerKind);
+    const page=(cursor?:string)=>linearProject({providerId:connection.providerId,kind}) ? reader.listProjects(cursor) : kind==="list" ? reader.listLists(cursor) : reader.listContainers(cursor);
     const needle=c.text?.trim().toLowerCase() ?? "";
     let cursor=c.cursor, items:ExternalContainer[]=[], scanned=0;
     do {
@@ -382,7 +419,17 @@ function storedSource(resource: ExternalResource): ExternalResource | (ResolvedE
     : resource;
 }
 
+const PLURAL:Record<ContainerKind,string>={repository:"repositories",team:"teams",project:"projects",space:"spaces",list:"lists"};
+/** The kind a request names, refused when this provider has no such thing. */
+function containerKind(connection:ProviderConnection,requested:ContainerKind|undefined):ContainerKind {
+  const kinds=CONTAINER_KINDS[connection.providerId];
+  if (requested===undefined) return kinds[0]!;
+  if (!kinds.includes(requested)) throw new StapleError("validation",`This connection lists ${kinds.map(k=>PLURAL[k]).join(" or ")}, not that`);
+  return requested;
+}
+
 function storedTarget(connection:ProviderConnection,kind:ContainerKind,container:ExternalContainer):StoredTarget {
+  if (connection.providerId==="clickup") return {providerId:"clickup",host:"app.clickup.com",scopeId:connection.scopeId,kind:kind==="list" ? "list":"space",containerId:container.id,name:container.name,url:container.url};
   if (connection.providerId==="azure_devops") return {providerId:"azure_devops",host:connection.host,scopeId:connection.scopeId,kind:"project",containerId:container.id.toLowerCase(),name:container.name,url:container.url};
   return connection.providerId==="github"
     ? {providerId:"github",host:connection.host,scopeId:"host",kind:"repository",containerId:container.id,name:container.name,url:container.url}
@@ -398,18 +445,29 @@ function linearProject(target:{providerId:string;kind:ContainerKind}):boolean {
 function contains(target:MappingTarget,item:ResolvedExternalItem):boolean {
   const ref=item.ref;
   if (ref.providerId!==target.providerId || ref.host!==target.host || ref.scopeId!==target.scopeId) return false;
+  if (target.kind==="space") return (item as ExternalItem).spaceId===target.containerId;
+  if (target.kind==="list") return (item as ExternalItem).listIds?.includes(target.containerId)===true;
   return linearProject(target) ? (item as ExternalItem).projectId===target.containerId : ref.containerId===target.containerId;
 }
 
-/** What to offer mapping when an item is outside scope: its repository or team. */
+/** What to offer mapping when an item is outside scope: its repository, team or ClickUp space. */
 function outsideTarget(item:ResolvedExternalItem,connections:ProviderConnection[]):MappingTarget {
   const r=item.ref;
-  const stored:StoredTarget=r.providerId==="github"
+  const stored:StoredTarget=r.providerId==="clickup"
+    ? {providerId:"clickup",host:"app.clickup.com",scopeId:r.scopeId,kind:"space",containerId:clickupSpace(item),name:null,url:null}
+    : r.providerId==="github"
     ? {providerId:"github",host:r.host,scopeId:"host",kind:"repository",containerId:r.containerId,name:item.key.replace(/#[0-9]+$/,""),url:item.url.replace(/\/(issues|pull)\/[0-9]+$/,"")}
     : r.providerId==="azure_devops"
     ? {providerId:"azure_devops",host:r.host,scopeId:r.scopeId,kind:"project",containerId:r.containerId,name:item.key.replace(/#[0-9]+$/,""),url:item.url.replace(/\/_workitems\/edit\/[0-9]+$/,"")}
     : {providerId:"linear",host:"linear.app",scopeId:r.scopeId,kind:"team",containerId:r.containerId,name:item.key.replace(/-[0-9]+$/,""),url:null};
   return present(stored,connections);
+}
+
+/** A live ClickUp read always says which space a task is in; without it there is nothing honest to offer. */
+function clickupSpace(item:ResolvedExternalItem):string {
+  const space=(item as ExternalItem).spaceId;
+  if (!space) throw new StapleError("unavailable","ClickUp did not say which space this task is in; refresh it and try again");
+  return space;
 }
 
 function encodeCursor(binding:string,parts:Record<string,string>):string {

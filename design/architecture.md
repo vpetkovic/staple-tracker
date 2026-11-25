@@ -171,9 +171,10 @@ Gaps in the current build, so nobody discovers them the hard way:
   a scan per query.
 - Holistic reads open one connection per workspace file rather than one
   `ATTACH` union.
-- There are no connectors to other trackers (GitHub Issues, ClickUp) and no
-  harness connectors: `staple doctor` reports its `harnesses` check as `skip`
-  for that reason. Cloud sync between staple workspaces is built; see
+- Connectors to other trackers (GitHub, Linear, Azure DevOps, ClickUp) only
+  read: they link and cache provider items and write nothing back; see
+  [integrations](../docs/integrations.md). There are no harness connectors:
+  `staple doctor` reports its `harnesses` check as `skip` for that reason. Cloud sync between staple workspaces is built; see
   [sync.md](sync.md).
 - A dependency cycle that mixes workspace-local and cross-workspace edges is
   not detected: the hub checks cycles over its own edges, and each workspace

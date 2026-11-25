@@ -125,14 +125,12 @@ describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
     // No workspace named: the screen is the computer's.
     await page.goto(`${at(single)}/?settings=integrations&token=${single.token}`, { waitUntil: "networkidle" });
     const settings = page.getByRole("dialog", { name: "Settings" });
-    // Planned providers are listed and cannot be chosen yet.
+    // Every provider can be chosen; none is marked Soon.
     await page.getByRole("button", { name: "Add connection", exact: true }).click();
-    for (const planned of ["ClickUp"]) {
-      const item = page.getByRole("menuitem", { name: new RegExp(`^${planned}`) });
-      expect(await item.getAttribute("aria-disabled")).toBe("true");
-      expect(await item.innerText()).toContain("Soon");
+    for (const available of [/^Linear workspace/, /^Azure DevOps organization/, /^ClickUp workspace/]) {
+      expect(await page.getByRole("menuitem", { name: available }).getAttribute("aria-disabled")).toBeNull();
     }
-    expect(await page.getByRole("menuitem", { name: /^Linear workspace/ }).getAttribute("aria-disabled")).toBeNull();
+    expect(await page.getByRole("menu").innerText()).not.toContain("Soon");
     // Azure DevOps asks for the organization and the token variable, and sends no token and no ids.
     let azure: unknown = null;
     const recordAzure = (route: Route) => { azure = route.request().postDataJSON(); return route.fulfill({ json: { id: "test-ado" } }); };
@@ -143,6 +141,17 @@ describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
     await page.getByRole("button", { name: "Save", exact: true }).click();
     await expect.poll(() => azure).toEqual({ action: "configure", providerId: "azure_devops", organization: "fabrikam", credentialEnv: "STAPLE_AZURE_DEVOPS_PAT" });
     await page.unroute("**/api/integrations/configure", recordAzure);
+    // ClickUp asks for the token variable and the workspace number; the server reads the user from the token.
+    let clickup: unknown = null;
+    const recordClickUp = (route: Route) => { clickup = route.request().postDataJSON(); return route.fulfill({ json: { id: "test-cu" } }); };
+    await page.route("**/api/integrations/configure", recordClickUp);
+    await page.getByRole("button", { name: "Add connection", exact: true }).click();
+    await page.getByRole("menuitem", { name: /^ClickUp workspace/ }).click();
+    expect(await page.getByLabel("API key variable", { exact: true }).inputValue()).toBe("STAPLE_CLICKUP_API_TOKEN");
+    await page.getByLabel("Workspace ID", { exact: true }).fill("9012345");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect.poll(() => clickup).toEqual({ action: "configure", providerId: "clickup", scopeId: "9012345", credentialEnv: "STAPLE_CLICKUP_API_TOKEN" });
+    await page.unroute("**/api/integrations/configure", recordClickUp);
     await page.getByRole("button", { name: "Add connection", exact: true }).click();
     await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "Add account", exact: true }).click();
@@ -187,6 +196,21 @@ describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
     await page.getByRole("tab", { name: /^External links/ }).click();
     await page.getByRole("tabpanel").getByRole("button", { name: "Link", exact: true }).first().click();
     await expect.poll(() => pressed("Issues")).toBe("true");
+    expect(errors).toEqual([]);
+    await context.close();
+  }, 30_000);
+
+  it("survives a long link typed with no delay between keys", async () => {
+    // Each keystroke used to leave a synchronous "searching" update behind; past 50 in a row React
+    // stopped with error #185 (maximum update depth), so a long link typed fast crashed the dialog.
+    const { page, context, errors } = await open(single, "/?issue=ALP-1");
+    await page.getByRole("button", { name: "Link pull request", exact: true }).click();
+    const field = page.getByRole("combobox", { name: "Search issues and pull requests, or paste a link" });
+    await field.waitFor();
+    const url = `https://dev.azure.com/contoso/Web%20Platform/_workitems/edit/123456?tracking=${"a".repeat(80)}`;
+    await page.keyboard.type(url);
+    await expect.poll(() => field.inputValue()).toBe(url);
+    await page.waitForTimeout(500);
     expect(errors).toEqual([]);
     await context.close();
   }, 30_000);

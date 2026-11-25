@@ -25,6 +25,11 @@ export const storedTargetSchema = z.discriminatedUnion("providerId", [
     kind: z.literal("project"), containerId: z.string().regex(uuid),
     name: z.string().min(1).max(512).nullable(), url: z.string().url().max(2048).nullable(),
   }).strict(),
+  z.object({
+    providerId: z.literal("clickup"), host: z.literal("app.clickup.com"), scopeId: z.string().regex(/^[1-9][0-9]{0,19}$/),
+    kind: z.enum(["space", "list"]), containerId: z.string().regex(/^[1-9][0-9]{0,19}$/),
+    name: z.string().min(1).max(512).nullable(), url: z.string().url().max(2048).nullable(),
+  }).strict(),
 ]);
 export type StoredTarget = z.infer<typeof storedTargetSchema>;
 
@@ -32,6 +37,7 @@ export type StoredTarget = z.infer<typeof storedTargetSchema>;
 export function targetKey(t: Pick<StoredTarget, "providerId" | "host" | "scopeId" | "kind" | "containerId">): string {
   if (t.providerId === "github") return `${t.host}/${t.containerId}`;
   if (t.providerId === "azure_devops") return `${t.host}/${t.scopeId}/project/${t.containerId}`;
+  if (t.providerId === "clickup") return `app.clickup.com/${t.scopeId}/${t.kind}/${t.containerId}`;
   return t.kind === "project" ? `linear.app/${t.scopeId}/project/${t.containerId}` : `linear.app/${t.scopeId}/${t.containerId}`;
 }
 
@@ -46,7 +52,7 @@ export function parseMapping(value: string): StoredTarget[] {
 /** Settings validation hook: why a stored mapping is unacceptable, or null. */
 export function mappingProblem(value: string): string | null {
   try { parseMapping(value); return null; }
-  catch { return `a JSON list of at most ${MAPPING_LIMIT} distinct mapped repositories, teams or projects`; }
+  catch { return `a JSON list of at most ${MAPPING_LIMIT} distinct mapped repositories, teams, projects, spaces or lists`; }
 }
 
 /** Entries of the legacy comma-separated setting, without names. */

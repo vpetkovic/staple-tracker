@@ -15,7 +15,7 @@ import type { ConnectionView } from "@/integrations/connection-status";
 import { ConnectionStatusPill, ProviderMark } from "@/integrations/parts";
 import type { ContainerKind } from "../../../../../core/integrations/contracts";
 import { InlineError } from "../form/primitives";
-import { azurePlaceName, containerKinds, pickerSections, type MappedTarget, type PickerPage } from "./integrations-model";
+import { azurePlaceName, containerKinds, pickerPlaceholder, pickerSections, type MappedTarget, type PickerPage } from "./integrations-model";
 
 export function SourcePicker({ workspace, targets, connections, onChange }: {
   workspace: string;
@@ -54,6 +54,7 @@ const groupName = (c: ConnectionView) =>
   c.providerId === "linear"
     ? (c.health?.identity?.organization ?? c.health?.identity?.login ?? "Linear")
     : c.providerId === "azure_devops" ? azurePlaceName(c)
+    : c.providerId === "clickup" ? (c.health?.identity?.organization ?? "ClickUp")
     : c.host === "github.com" ? c.account : `${c.account} · ${c.host}`;
 
 function PickerBody({ workspace, targets, connections, onChange }: {
@@ -78,7 +79,8 @@ function PickerBody({ workspace, targets, connections, onChange }: {
       action: "containers",
       connectionId: connection.id,
       text: query || undefined,
-      containerKind: kind === "project" ? "project" : undefined,
+      // The connection's first kind is its default and is left unnamed.
+      containerKind: kind === containerKinds(connection.providerId)[0] ? undefined : kind,
       cursor: cursor ?? undefined,
     })
       .then((page) => {
@@ -130,7 +132,7 @@ function PickerBody({ workspace, targets, connections, onChange }: {
 
   return (
     <Command shouldFilter={false} loop value={active} onValueChange={setActive} className="min-h-0 flex-1 rounded-lg">
-      <CommandInput autoFocus value={text} onValueChange={setText} placeholder="Find a repository, team or project" className="pointer-coarse:h-11 pointer-coarse:text-base" />
+      <CommandInput autoFocus value={text} onValueChange={setText} placeholder={pickerPlaceholder(readable.map((c) => c.providerId))} className="pointer-coarse:h-11 pointer-coarse:text-base" />
       {writeError ? (
         <div className="border-b px-3 py-2">
           <InlineError>{writeError}</InlineError>
@@ -138,7 +140,7 @@ function PickerBody({ workspace, targets, connections, onChange }: {
       ) : null}
       <CommandList className="max-h-none min-h-0 flex-1 overscroll-contain">
         {connections.length === 0 ? (
-          <p className="px-3 py-6 text-center text-label text-muted-foreground">Connect GitHub, Linear or Azure DevOps above to choose sources.</p>
+          <p className="px-3 py-6 text-center text-label text-muted-foreground">Connect GitHub, Linear, Azure DevOps or ClickUp above to choose sources.</p>
         ) : null}
         {connections.map((connection) => {
           const ready = readable.includes(connection);

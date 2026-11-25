@@ -47,15 +47,33 @@ export function providerName(providerId: string): string {
   if (providerId === "github") return "GitHub";
   if (providerId === "linear") return "Linear";
   if (providerId === "azure_devops") return "Azure DevOps";
+  if (providerId === "clickup") return "ClickUp";
   return providerId.charAt(0).toUpperCase() + providerId.slice(1);
 }
 
-/** `owner/repo` for a GitHub key, the project for an Azure DevOps one, the team key for a Linear one (`ENG-4` → `ENG`). */
-export function containerLabel(item: SourceItem): string {
+/**
+ * `owner/repo` for a GitHub key, the project for an Azure DevOps one, the team key for a Linear one
+ * (`ENG-4` → `ENG`). A ClickUp task's container is its whole workspace, which its key does not name:
+ * the workspace's name when a connection here has read it, else "ClickUp".
+ */
+export function containerLabel(item: SourceItem, workspaces?: ReadonlyMap<string, string>): string {
+  if (item.ref.providerId === "clickup") return workspaces?.get(item.ref.scopeId) ?? providerName("clickup");
   const hash = item.key.lastIndexOf("#");
   if (hash > 0) return item.key.slice(0, hash);
   const dash = item.key.lastIndexOf("-");
   return dash > 0 ? item.key.slice(0, dash) : item.key;
+}
+
+/** ClickUp workspace names by workspace id, from what each connection's last check read. */
+export function clickupWorkspaces(
+  connections: ReadonlyArray<{ providerId: string; scopeId?: string; health?: { identity?: { organization?: string } | null } | null }>,
+): Map<string, string> {
+  const names = new Map<string, string>();
+  for (const c of connections) {
+    const name = c.health?.identity?.organization;
+    if (c.providerId === "clickup" && c.scopeId && name) names.set(c.scopeId, name);
+  }
+  return names;
 }
 
 /**
@@ -68,7 +86,7 @@ export function shortKey(item: SourceItem, peers: readonly SourceItem[]): string
   if (hash <= 0) return item.key;
   const container = item.key.slice(0, hash);
   const number = item.key.slice(hash);
-  const containers = new Set(peers.map(containerLabel));
+  const containers = new Set(peers.map((p) => containerLabel(p)));
   containers.add(container);
   if (containers.size === 1) return number;
   const repo = container.slice(container.lastIndexOf("/") + 1);

@@ -59,10 +59,10 @@ describe("machine-wide integration connections", () => {
     legacy(root, B, { id: "gh", providerId: "github", mode: "cli", host: "ghe.example.com", account: "bob" });
     const connections = new IntegrationConnections(root);
     const listed = connections.list();
-    expect(listed.map(c => `${c.host}:${c.account}`).sort()).toEqual(["ghe.example.com:bob", "github.com:alice"]);
+    expect(listed.map(c => `${c.host}:${"account" in c ? c.account : ""}`).sort()).toEqual(["ghe.example.com:bob", "github.com:alice"]);
     // The id keeps the connection migrated first (legacy directories in name order); the other gets a derived id.
     expect(connections.resolve("gh")).toMatchObject({ host: "github.com", account: "alice" });
-    expect(listed.find(c => c.account === "bob")!.id).toMatch(/^gh-[0-9a-f]{8}$/);
+    expect(listed.find(c => "account" in c && c.account === "bob")!.id).toMatch(/^gh-[0-9a-f]{8}$/);
     expect(readdirSync(join(root, "integrations")).sort()).toEqual(["machine"]);
     expect(new IntegrationConnections(root).list()).toEqual(listed);
   });

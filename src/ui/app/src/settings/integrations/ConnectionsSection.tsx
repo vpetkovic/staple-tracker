@@ -24,9 +24,9 @@ import type { Connections } from "@/integrations/useConnections";
 import type { DetectedConnection } from "../../../../../core/integrations/contracts";
 import { ConfirmDialog } from "../form/ConfirmDialog";
 import { InlineError, Section } from "../form/primitives";
-import { azureOrganizationHint, azureOrganizationProblem, commandIn, CONNECTION_CHOICES, connectionMeta, linearIdProblem, offeredDetections } from "./integrations-model";
+import { azureOrganizationHint, azureOrganizationProblem, clickupIdProblem, commandIn, CONNECTION_CHOICES, connectionMeta, linearIdProblem, offeredDetections } from "./integrations-model";
 
-type Provider = "github" | "linear" | "azure_devops";
+type Provider = "github" | "linear" | "azure_devops" | "clickup";
 const message = (caught: unknown) => (caught instanceof Error ? caught.message : String(caught));
 
 /** Icon buttons at the end of a row: 32px, 44px under a finger. */
@@ -228,6 +228,7 @@ export function ConnectionsSection({ state, ws, onDirtyChange, now: fixedNow }: 
           {form === "github" && !empty ? formRow("github") : null}
           {form === "linear" && hasLinear ? formRow("linear") : null}
           {form === "azure_devops" ? formRow("azure_devops") : null}
+          {form === "clickup" ? formRow("clickup") : null}
         </ListFrame>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -477,7 +478,7 @@ function DetectedRow({ detected: d, ws, reload }: { detected: DetectedConnection
   );
 }
 
-const DEFAULT_ENV: Record<Exclude<Provider, "github">, string> = { linear: "STAPLE_LINEAR_API_KEY", azure_devops: "STAPLE_AZURE_DEVOPS_PAT" };
+const DEFAULT_ENV: Record<Exclude<Provider, "github">, string> = { linear: "STAPLE_LINEAR_API_KEY", azure_devops: "STAPLE_AZURE_DEVOPS_PAT", clickup: "STAPLE_CLICKUP_API_TOKEN" };
 
 /**
  * An add form, as a row of the list. Save stays off until the required fields are filled; a
@@ -550,11 +551,14 @@ export function ConnectionForm({ provider, ws, onCancel, onSaved, onDirtyChange 
     };
   }, [provider, credentialEnv, server, ws]);
 
-  const idProblem = provider === "linear" ? linearIdProblem(organization, user) : provider === "azure_devops" ? azureOrganizationProblem(organization, server) : null;
+  const idProblem =
+    provider === "linear" ? linearIdProblem(organization, user)
+    : provider === "azure_devops" ? azureOrganizationProblem(organization, server)
+    : provider === "clickup" ? clickupIdProblem(organization) : null;
   const complete =
     provider === "github"
       ? host.trim() !== "" && account.trim() !== ""
-      : credentialEnv.trim() !== "" && organization.trim() !== "" && (provider === "azure_devops" || user.trim() !== "") && !idProblem;
+      : credentialEnv.trim() !== "" && organization.trim() !== "" && (provider === "azure_devops" || provider === "clickup" || user.trim() !== "") && !idProblem;
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!complete || pending) return;
@@ -566,6 +570,8 @@ export function ConnectionForm({ provider, ws, onCancel, onSaved, onDirtyChange 
           ? { action: "configure", host: host.trim(), account: account.trim() }
           : provider === "azure_devops"
             ? { action: "configure", providerId: "azure_devops", organization: organization.trim(), credentialEnv: credentialEnv.trim(), ...(server.trim() ? { host: server.trim() } : {}) }
+          : provider === "clickup"
+            ? { action: "configure", providerId: "clickup", scopeId: organization.trim(), credentialEnv: credentialEnv.trim() }
             : { action: "configure", providerId: "linear", account: user.trim(), scopeId: organization.trim(), credentialEnv: credentialEnv.trim() },
         ws,
       );
@@ -582,7 +588,7 @@ export function ConnectionForm({ provider, ws, onCancel, onSaved, onDirtyChange 
       <div className="flex items-center gap-3">
         <ProviderTile providerId={provider} />
         <p id={`${id}-title`} className="mt-1 text-body font-medium">
-          {provider === "github" ? "Add a GitHub account" : provider === "azure_devops" ? "Connect Azure DevOps" : "Connect Linear"}
+          {provider === "github" ? "Add a GitHub account" : provider === "azure_devops" ? "Connect Azure DevOps" : provider === "clickup" ? "Connect ClickUp" : "Connect Linear"}
         </p>
       </div>
       <div className={cn(TEXT_INDENT, "space-y-3 @max-[30rem]:ml-0")}>
@@ -650,10 +656,28 @@ export function ConnectionForm({ provider, ws, onCancel, onSaved, onDirtyChange 
             <FormField
               id={`${id}-env`}
               label="API key variable"
-              help="The name of the environment variable that holds a read-only personal API key, in the environment Staple runs in. Restart Staple after setting it."
+              help={
+                provider === "clickup"
+                  ? "The name of the environment variable that holds a ClickUp personal API token (pk_…), in the environment Staple runs in. Staple only reads with it. Restart Staple after setting it."
+                  : "The name of the environment variable that holds a read-only personal API key, in the environment Staple runs in. Restart Staple after setting it."
+              }
             >
               <Input id={`${id}-env`} value={credentialEnv} onChange={(e) => setCredentialEnv(e.target.value)} autoComplete="off" spellCheck={false} aria-describedby={`${id}-env-help`} className="pointer-coarse:h-11" />
             </FormField>
+            {provider === "clickup" ? (
+              <div className="space-y-1.5">
+                <FormField id={`${id}-workspace`} label="Workspace ID">
+                  <Input id={`${id}-workspace`} value={organization} onChange={(e) => setOrganization(e.target.value)} inputMode="numeric" autoComplete="off" spellCheck={false} autoFocus aria-describedby={`${id}-ids-help`} className="pointer-coarse:h-11" />
+                </FormField>
+                {idProblem ? (
+                  <InlineError id={`${id}-ids-help`}>{idProblem}</InlineError>
+                ) : (
+                  <p id={`${id}-ids-help`} className="text-label text-muted-foreground">
+                    The number after app.clickup.com/ in any ClickUp page's address.
+                  </p>
+                )}
+              </div>
+            ) : (
             <div className="space-y-1.5">
               <div className="grid gap-3 @min-[30rem]:grid-cols-2">
                 <FormField id={`${id}-org`} label="Organization ID">
@@ -671,6 +695,7 @@ export function ConnectionForm({ provider, ws, onCancel, onSaved, onDirtyChange 
                 </p>
               )}
             </div>
+            )}
           </>
         )}
         {formError ? <InlineError>{formError}</InlineError> : null}

@@ -24,7 +24,7 @@ import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "@/settings/form/ConfirmDialog";
 import { InlineError } from "@/settings/form/primitives";
 import type { ConnectionView } from "./connection-status";
-import { containerLabel, providerName, savedAge, shortKey, stateLabel } from "./link-state";
+import { clickupWorkspaces, containerLabel, providerName, savedAge, shortKey, stateLabel } from "./link-state";
 import { countWords, openLabel, refreshConnection, stackIndent } from "./links-view";
 import { groupLinks, type ExternalLink } from "./model";
 import { ItemGlyph, LINK_PROSE, LinkStatePill, ProviderMark } from "./parts";
@@ -67,6 +67,7 @@ export function LinkGroups({
       else copy.delete(id);
       return copy;
     });
+  const workspaces = clickupWorkspaces(connections);
   return (
     <div className="space-y-4">
       {groupLinks(links).map((group) => {
@@ -77,8 +78,8 @@ export function LinkGroups({
           <section key={group.key} className="min-w-0 space-y-1">
             <h3 className="flex h-7 min-w-0 items-center gap-2 text-label">
               <ProviderMark providerId={first.ref.providerId} className="text-muted-foreground" />
-              <span className="min-w-0 truncate font-medium text-foreground">{containerLabel(first)}</span>
-              {first.ref.providerId !== "github" ? (
+              <span className="min-w-0 truncate font-medium text-foreground">{containerLabel(first, workspaces)}</span>
+              {first.ref.providerId !== "github" && containerLabel(first, workspaces) !== providerName(first.ref.providerId) ? (
                 <span className="shrink-0 text-text-tertiary">{providerName(first.ref.providerId)}</span>
               ) : null}
               <span className="ml-auto shrink-0 pl-2 font-normal text-text-tertiary">{countWords(group.links)}</span>

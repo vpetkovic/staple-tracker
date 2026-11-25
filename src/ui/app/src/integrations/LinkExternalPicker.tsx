@@ -27,6 +27,7 @@ import {
   type SearchHit,
   type SearchScope,
 } from "./model";
+import { clickupWorkspaces } from "./link-state";
 import { loadKindFilter, saveKindFilter, type KindFilter } from "./link-dialog/last-kind";
 import {
   answerFor,
@@ -227,8 +228,10 @@ export function PickerBody({
     const asked = answerFor(text, kind, containerKey);
     const delay = firstSearch.current ? 0 : 250;
     firstSearch.current = false;
-    setSearching(true);
     const timer = setTimeout(async () => {
+      // Set from the timer, not the effect: the effect of a keystroke runs synchronously in its commit,
+      // so a state update here chained one commit per key and fast typing hit React's update limit (#185).
+      setSearching(true);
       const query = text.trim();
       try {
         if (queryKind(query) === "preview") {
@@ -302,12 +305,12 @@ export function PickerBody({
     if (answer.mode === "paste") {
       if (!answer.preview) return [];
       const { item, associations } = answer.preview;
-      return groupResults([{ cached: [{ item, associations }], remote: [] }], targets);
+      return groupResults([{ cached: [{ item, associations }], remote: [] }], targets, clickupWorkspaces(connections.connections));
     }
     // Nothing mapped: the empty state, not saved copies (the keyboard must not reach them either).
-    return scope?.mode === "none" ? [] : groupResults(answers, targets);
+    return scope?.mode === "none" ? [] : groupResults(answers, targets, clickupWorkspaces(connections.connections));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [answer, targets, scope?.mode]);
+  }, [answer, targets, scope?.mode, connections.connections]);
   const hits = groups?.flatMap((g) => g.hits) ?? [];
   const keys = hits.map((h) => resourceKey(h.item));
   const selected = keepSelection(keys, chosen);
