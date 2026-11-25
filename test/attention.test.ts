@@ -312,7 +312,7 @@ describe("a linked pull request with failing checks", () => {
         ref: task.identifier,
         detail: "checks failing on team/repo#7: test, lint",
         since: "2026-11-25T10:00:00.000Z",
-        action: { verb: "open", label: "Open", command: "gh pr checks https://github.com/team/repo/pull/7" },
+        action: { verb: "open", label: "Open", command: "gh pr checks 7 --repo team/repo" },
         dismissible: false,
       }),
     ]);

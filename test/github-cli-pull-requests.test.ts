@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { GitHubCliAdapter } from "../src/core/integrations/github-cli.js";
 import type { GhRunner } from "../src/core/integrations/gh-process.js";
 import { IntegrationReader } from "../src/core/integrations/provider.js";
+import { StapleError } from "../src/core/types.js";
 
 const repo = { id: 42, full_name: "team/project", html_url: "https://github.com/team/project" };
 const sha = (n: number) => String(n).repeat(40).slice(0, 40);
@@ -25,6 +26,7 @@ function fixture(pulls: unknown[], runs: Record<string, unknown[]> = {}) {
     const one = /^repos\/team\/project\/pulls\/(\d+)$/.exec(path!);
     if (one) return response(pulls.find((p) => (p as { number: number }).number === Number(one[1])));
     const checks = /^repos\/team\/project\/commits\/([0-9a-f]+)\/check-runs$/.exec(path!);
+    if (checks && runs.forbidden) throw new StapleError("forbidden", "GitHub denied access; check repository permissions and organization SSO");
     if (checks) return response({ total_count: (runs[checks[1]!] ?? []).length, check_runs: runs[checks[1]!] ?? [] });
     if (path === "repos/team/project/issues/7") return response({ number: 7, title: "Draft", body: null, state: "open", draft: true, html_url: `${repo.html_url}/pull/7`, pull_request: { merged_at: null } });
     throw new Error(`Unexpected endpoint ${command.endpoint}`);
@@ -81,5 +83,11 @@ describe("GitHub pull requests by branch", () => {
     const { reader } = fixture([]);
     const item = await reader.read({ providerId: "github", host: "github.com", scopeId: "host", containerId: "42", id: "7", kind: "pull_request" });
     expect(item.status).toEqual({ id: "draft", name: "draft" });
+  });
+
+  it("still reads the pull requests when the account may not read their checks", async () => {
+    const { reader } = fixture([pull(3)], { forbidden: [] });
+    const items = await reader.pullRequestsForBranches("42", ["feat/x"]);
+    expect(items.map((i) => [i.key, i.pullRequest?.checks])).toEqual([["team/project#3", null]]);
   });
 });

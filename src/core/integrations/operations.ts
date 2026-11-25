@@ -14,7 +14,8 @@ import { MAPPING_LIMIT, targetKey, type StoredTarget } from "./mapping-format.js
 import { ExternalWork } from "./external-work.js";
 import { ClickUpApiAdapter, discoverClickUp, type ClickUpIdentity } from "./clickup-api.js";
 import { LinearApiAdapter } from "./linear-api.js";
-import { externalResourceId, type ExternalResource } from "./link-store.js";
+import { EXTERNAL_UNLINKED_EVENT, externalResourceId, type ExternalResource } from "./link-store.js";
+import { insertEvent } from "../event-log.js";
 import { IntegrationReader } from "./provider.js";
 import { discoverPullRequests, DISCOVERY_ACTOR, type DiscoveryReport } from "./pr-discovery.js";
 
@@ -312,7 +313,13 @@ export class IntegrationOperations {
         if (!("title" in item) || item.title===null || item.fetchedAt===null) throw new StapleError("unavailable","Read source context before creating local work");
         return new ExternalWork(this.store).create(item as ExternalItem,{requestKey:need(c.requestKey,"retry request key"),actor:actor(),additionalWork:c.additionalWork,title:c.title});
       }
-      case "unlink": this.store.externalLinks().unlink(need(c.ref,"local ticket"),need(c.resourceId,"resource"),actor()); return {unlinked:true};
+      case "unlink": {
+        const resourceId=need(c.resourceId,"resource");
+        // Recorded so discovery never links this pull request to this ticket again by itself.
+        this.store.externalLinks().unlink(need(c.ref,"local ticket"),resourceId,actor(),
+          issueId=>insertEvent(this.store.db,{kind:EXTERNAL_UNLINKED_EVENT,issueId,actor:actor(),payload:{resourceId}}));
+        return {unlinked:true};
+      }
       case "refresh": {
         const held=this.store.externalLinks().resource(need(c.resourceId,"resource"));
         const item=await this.reader(this.select(c,held.ref.host,held.ref.providerId,held.ref.scopeId)).read(held.ref);

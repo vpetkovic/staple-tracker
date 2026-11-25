@@ -20,7 +20,12 @@
  * the detail say the same thing about the same pull request, and all four survive greyscale.
  */
 import type { PullRequestRef } from "@/lib/types";
+import type { LinkTone } from "@/integrations/link-state";
 import { LinkGlyph } from "@/integrations/parts";
+
+/** A state never read draws neutral, as the integrations draw any state they cannot name. */
+const toneOf = (state: PullRequestRef["state"]): LinkTone => (state === "unknown" ? "neutral" : state);
+const word = (state: PullRequestRef["state"]) => (state === "unknown" ? "state unknown" : state);
 
 /** Glyphs drawn before the rest are counted: the lead one and three more. */
 const MAX_GLYPHS = 4;
@@ -39,7 +44,7 @@ export function PrBadge({
   const pr = prs[0]!;
   const shown = prs.slice(1, MAX_GLYPHS);
   const extra = prs.length - 1 - shown.length;
-  const names = prs.map((p) => `#${p.number} ${p.state}`).join(", ");
+  const names = prs.map((p) => `#${p.number} ${word(p.state)}`).join(", ");
 
   return (
     <a
@@ -52,14 +57,14 @@ export function PrBadge({
       // Without this the click opens the PR AND the detail drawer — the one interaction
       // bug this element would otherwise ship with.
       onClick={(event) => event.stopPropagation()}
-      aria-label={prs.length === 1 ? `Pull request #${pr.number}, ${pr.state}` : `${prs.length} pull requests: ${names}`}
-      title={prs.map((p) => (p.title ? `#${p.number} ${p.title} (${p.state})` : `#${p.number} (${p.state})`)).join("\n")}
+      aria-label={prs.length === 1 ? `Pull request #${pr.number}, ${word(pr.state)}` : `${prs.length} pull requests: ${names}`}
+      title={prs.map((p) => (p.title ? `#${p.number} ${p.title} (${word(p.state)})` : `#${p.number} (${word(p.state)})`)).join("\n")}
     >
-      <LinkGlyph kind="pull_request" tone={pr.state} className="size-3" />
+      <LinkGlyph kind="pull_request" tone={toneOf(pr.state)} className="size-3" />
       {showNumber ? <span className="staple-pr-number">#{pr.number}</span> : null}
       {shown.map((other) => (
         <span key={other.url} className="staple-pr-also" data-state={other.state}>
-          <LinkGlyph kind="pull_request" tone={other.state} className="size-3" />
+          <LinkGlyph kind="pull_request" tone={toneOf(other.state)} className="size-3" />
         </span>
       ))}
       {extra > 0 ? <span className="staple-pr-more">+{extra}</span> : null}

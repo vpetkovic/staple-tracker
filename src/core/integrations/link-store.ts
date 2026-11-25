@@ -4,6 +4,9 @@ import { StapleError, nowIso } from "../types.js";
 import type { ExternalItem, ExternalItemRef, PullRequestChecks, PullRequestDetails, ResolvedExternalItem } from "./contracts.js";
 import { externalItemKey } from "./provider.js";
 
+/** The event an unlink records, so `integrations discover` never links the same pull request to the ticket again. */
+export const EXTERNAL_UNLINKED_EVENT = "external_unlinked";
+
 export interface ExternalResource extends ResolvedExternalItem {
   id: string;
   title: string | null;
@@ -107,8 +110,9 @@ const CHECK_STATES = new Set(["passing", "failing", "pending"]);
 /** Whether a value is well-formed pull request details, within their size limits. */
 function pullRequestDetails(value: unknown): value is PullRequestDetails {
   if (!value || typeof value !== "object") return false;
-  const { headBranch, headSha, checks } = value as Record<string, unknown>;
+  const { headBranch, headSha, checks, createdAt } = value as Record<string, unknown>;
   if (typeof headBranch !== "string" || !headBranch || headBranch.length > 255 || typeof headSha !== "string" || !/^[0-9a-f]{7,64}$/.test(headSha)) return false;
+  if (createdAt !== undefined && createdAt !== null && (typeof createdAt !== "string" || createdAt.length > 64)) return false;
   if (checks === null) return true;
   if (!checks || typeof checks !== "object") return false;
   const { state, failing, completedAt } = checks as Record<string, unknown>;
@@ -181,7 +185,12 @@ export class ExternalLinkStore {
         this.db.prepare(`INSERT INTO external_private_cache (resource_id,title,body,status_json,fetched_at) VALUES (?,?,?,?,?)
           ON CONFLICT(resource_id) DO UPDATE SET title=excluded.title,body=excluded.body,status_json=excluded.status_json,fetched_at=excluded.fetched_at`)
           .run(id,input.title,input.body,status,fetchedAt!.toISOString());
-        if (shared) this.db.prepare("UPDATE external_resources SET title=?,body=?,status_json=?,fetched_at=? WHERE id=?")
+        // A read that changed nothing others see leaves the shared copy as it was: a poll re-reading
+        // an unchanged pull request must not send a sync operation every time.
+        const sharedRow = shared ? this.db.prepare("SELECT title, body, status_json FROM external_resources WHERE id=?").get(id) as Pick<ResourceRow,"title"|"body"|"status_json"> : null;
+        const unchanged = sharedRow !== null && sharedRow.title === input.title && sharedRow.body === input.body
+          && JSON.stringify(readStatus(sharedRow.status_json)) === JSON.stringify(readStatus(status));
+        if (shared && !unchanged) this.db.prepare("UPDATE external_resources SET title=?,body=?,status_json=?,fetched_at=? WHERE id=?")
           .run(input.title,input.body,status,fetchedAt!.toISOString(),id);
       }
       const after = resourcePayload(this.db.prepare("SELECT * FROM external_resources WHERE id=?").get(id) as unknown as ResourceRow);
@@ -235,7 +244,12 @@ export class ExternalLinkStore {
     });
   }
 
-  unlink(ref: string, resourceId: string, actor: string): void {
+  /**
+   * Remove the association. `remember` records that a person did (an `external_unlinked` event),
+   * so discovery never links the same pull request to this ticket again by itself; `insertEvent`
+   * comes in from the caller because this module sits below the event log in the import graph.
+   */
+  unlink(ref: string, resourceId: string, actor: string, remember?: (issueId: string) => void): void {
     if (!actor.trim()) throw new StapleError("validation", "Unlinking needs an actor");
     this.store.journaled(() => {
       const issue = this.store.getIssue(ref);
@@ -244,8 +258,15 @@ export class ExternalLinkStore {
       if (Number(removed.changes) > 0) {
         this.store.journal.record({ entity: "externalLink", entityId: id, verb: "delete", actor });
         this.recordStack(issue.id, actor);
+        remember?.(issue.id);
       }
     });
+  }
+
+  /** Whether a person unlinked this resource from this ticket: discovery then leaves it unlinked. */
+  wasUnlinked(issueId: string, resourceId: string): boolean {
+    return this.db.prepare(`SELECT 1 AS hit FROM events WHERE kind = ? AND issue_id = ? AND json_extract(payload, '$.resourceId') = ? LIMIT 1`)
+      .get(EXTERNAL_UNLINKED_EVENT, issueId, resourceId) !== undefined;
   }
 
   /** Two bounded local queries for the entire list; never read provider context per row. */

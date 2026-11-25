@@ -31,9 +31,11 @@ export interface TicketBranch {
   setAt: string | null;
 }
 
-const POINTER_LINE = /^\s*(?:branch pointer\s*:|working on branch\s)/i;
-const BRANCH_NAME = /\bbranch\s+`?([^\s,;()`]+)`?/i;
+/** A pointer line, possibly bolded or italicised in markdown (`**Branch pointer:** ...`). */
+const POINTER_LINE = /^\s*[*_]*\s*(?:branch pointer\s*:|working on branch\s)/i;
 const BRANCH_BASE = /\b(?:base|off)\s+(.+)$/i;
+/** Words a sentence puts where a branch name would go: never a branch somebody is working on. */
+const NOT_A_BRANCH = /^(?:none|n\/a|tbd|head|not|no|yet|deleted|created|protected|pending|unknown)$/i;
 
 /** The base as written: up to the first `)`, `,`, `;` or sentence end, without backticks. */
 function baseOf(rest: string): string | null {
@@ -43,19 +45,41 @@ function baseOf(rest: string): string | null {
   return cut === "" ? null : cut;
 }
 
-/** The newest comment that records the branch a ticket is worked on, read apart. `base` is as written. */
+/**
+ * Where the name sits in each written form, and only there, so a later "branch" in the prose
+ * ("branch created from develop") is never taken for it:
+ *
+ *   Branch pointer: branch feat/x, base 3f2a1bc.            after the leading "branch"
+ *   Branch pointer: worktree /wt on branch feat/x, base ... after "on branch"
+ *   Branch pointer: feat/x off main 3f2a1bc                  the first word
+ *   working on branch feat/x (off main 3f2a1bc)              after "working on branch"
+ */
+function nameIn(line: string): { name: string; rest: string } | null {
+  const text = line.replace(/^\s*[*_]*\s*/, "").replace(/\*\*|__/g, "");
+  const said = /^working on branch\s+`?([^\s,;()`]+)`?/i.exec(text)
+    ?? /^branch pointer\s*:\s*branch\s+`?([^\s,;()`]+)`?/i.exec(text)
+    ?? /^branch pointer\s*:\s*worktree\s+\S+\s+on\s+branch\s+`?([^\s,;()`]+)`?/i.exec(text);
+  // A bare first word is a branch only when it looks like one (feat/x, fix-12), not a word of prose ("PR merged").
+  const bare = said ? null : /^branch pointer\s*:\s*`?([^\s,;()`]+)`?/i.exec(text);
+  const match = said ?? (bare && /[/_\d-]/.test(bare[1]!) ? bare : null);
+  const name = match?.[1]?.replace(/\.+$/, "");
+  if (!match || !name || NOT_A_BRANCH.test(name) || /^(?:branch|worktree)$/i.test(name)) return null;
+  return { name, rest: text.slice(match.index + match[0].length) };
+}
+
+/**
+ * The newest comment that records the branch a ticket is worked on, read apart. `base` is as
+ * written. A newer pointer that names no branch ("PR merged, branch deleted") is passed over
+ * for the one before it.
+ */
 export function branchPointer(comments: readonly IssueComment[]): { name: string; base: string | null; author: string; at: string } | null {
   for (let i = comments.length - 1; i >= 0; i--) {
     const comment = comments[i]!;
-    const line = comment.body.split("\n", 1)[0]!;
+    const line = comment.body.trimStart().split("\n", 1)[0]!;
     if (!POINTER_LINE.test(line)) continue;
-    const pointer = line.replace(/^\s*branch pointer\s*:\s*/i, "");
-    // "Branch pointer: branch feat/x, ..." names it after "branch"; "Branch pointer: feat/x ..." first.
-    const named = BRANCH_NAME.exec(pointer) ?? /^`?([^\s,;()`]+)`?/.exec(pointer);
-    const name = named?.[1]?.replace(/\.+$/, "");
-    if (!name || /^(?:none|n\/a|tbd)$/i.test(name)) continue;
-    const base = baseOf(pointer.slice(named!.index + named![0].length));
-    return { name, base, author: comment.author, at: comment.createdAt };
+    const named = nameIn(line);
+    if (!named) continue;
+    return { name: named.name, base: baseOf(named.rest), author: comment.author, at: comment.createdAt };
   }
   return null;
 }
@@ -118,7 +142,7 @@ export function ticketBranches(store: WorkspaceStore, issueIds: readonly string[
       .prepare(
         `SELECT issue_id, author, body, created_at FROM comments
           WHERE deleted_at IS NULL AND issue_id IN (${unset.map(() => "?").join(", ")})
-            AND (ltrim(lower(body)) LIKE 'branch pointer%' OR ltrim(lower(body)) LIKE 'working on branch%')
+            AND (ltrim(lower(body), ' *_' || char(9, 10, 13)) LIKE 'branch pointer%' OR ltrim(lower(body), ' *_' || char(9, 10, 13)) LIKE 'working on branch%')
           ORDER BY created_at, rowid`,
       )
       .all(...unset) as Array<{ issue_id: string; author: string; body: string; created_at: string }>;
@@ -129,15 +153,20 @@ export function ticketBranches(store: WorkspaceStore, issueIds: readonly string[
       byIssue.set(row.issue_id, list);
     }
     for (const [issueId, list] of byIssue) {
-      const pointer = branchPointer(list);
-      if (!pointer) continue;
-      let name: string;
-      try {
-        name = checkBranchName(pointer.name);
-      } catch {
-        continue; // A comment that names no usable branch fills nothing.
+      // The newest pointer naming a branch git would accept; one that does not falls back to the one before.
+      for (let end = list.length; end > 0; end--) {
+        const pointer = branchPointer(list.slice(0, end));
+        if (!pointer) break;
+        let index = end - 1;
+        while (index >= 0 && !(list[index]!.createdAt === pointer.at && list[index]!.author === pointer.author)) index--;
+        try {
+          const name = checkBranchName(pointer.name);
+          result.set(issueId, { name, base: commitIn(pointer.base), source: "comment", setBy: pointer.author, setAt: pointer.at });
+          break;
+        } catch {
+          end = index + 1; // this one names no usable branch: look before it
+        }
       }
-      result.set(issueId, { name, base: commitIn(pointer.base), source: "comment", setBy: pointer.author, setAt: pointer.at });
     }
   }
   return result;

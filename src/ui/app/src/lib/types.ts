@@ -842,8 +842,8 @@ export interface Poll {
 /**
  * A pull request linked to an issue, as the row's PR slot (V5 §9) draws it. `/api/issues`
  * builds these from the integrations link store (`rowPullRequests`, core/integrations/
- * pr-discovery.ts): every linked pull request, when each is a GitHub pull request with a
- * known state. The row renders nothing at all when the array is absent or empty.
+ * pr-discovery.ts): every linked GitHub pull request, one whose state was never read drawn as
+ * `unknown`. The row renders nothing at all when the array is absent or empty.
  */
 export interface PullRequestRef {
   provider: "github" | "gitlab" | "bitbucket";
@@ -851,7 +851,8 @@ export interface PullRequestRef {
   number: number;
   /** Absolute URL to the PR. Opened in a new tab; never fetched by the UI. */
   url: string;
-  state: "draft" | "open" | "merged" | "closed";
+  /** `unknown` while no state was read on this machine or shared (linked by URL, or synced without context). */
+  state: "draft" | "open" | "merged" | "closed" | "unknown";
   /** Optional; tooltip only. */
   title?: string | null;
   /** ISO-8601. Optional; tooltip only. */
@@ -941,9 +942,8 @@ export interface IssueRow {
    */
   horizon?: RowHorizon | null;
   /**
-   * Linked pull requests, the ones still moving first (open, draft, merged, closed), newest
-   * first within a state. Absent when the row has none, or one the badge cannot draw — see
-   * `PullRequestRef`.
+   * Linked pull requests, the ones still moving first (open, draft, unknown, merged, closed),
+   * newest first within a state. Absent when the row has none — see `PullRequestRef`.
    *
    * A SIBLING of `issue` rather than a field on it, for the same reason `claim` is one:
    * this is externally sourced and refreshed on a different clock than the issue, and

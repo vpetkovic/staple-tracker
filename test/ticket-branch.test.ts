@@ -84,3 +84,34 @@ describe("the ticket branch", () => {
     store.db.close();
   });
 });
+
+describe("reading a branch-pointer comment", () => {
+  const read = (...bodies: string[]) => {
+    const home = mkdtempSync(join(tmpdir(), "staple-ticket-branch-"));
+    dirs.push(home);
+    process.env.STAPLE_HOME = home;
+    const store = initWorkspace({ global: true, slug: "pointer-tests" }).store;
+    const task = store.createIssue({ title: "Pointer" });
+    for (const body of bodies) store.addComment(task.id, body, "eng-1");
+    const answer = ticketBranch(store, task.id);
+    store.db.close();
+    return answer?.name ?? null;
+  };
+
+  it("takes the name from where each written form puts it, never from later prose", () => {
+    expect(read("Branch pointer: feat/x, base abc1234 (branch created from develop)")).toBe("feat/x");
+    expect(read("Branch pointer: feat/x off main abc1234; branch protected")).toBe("feat/x");
+    expect(read("Branch pointer: `feat/x` — the release branch develop is the base")).toBe("feat/x");
+    expect(read("Branch pointer: worktree /w on branch feat/wt, base 4b7d2ac.")).toBe("feat/wt");
+    expect(read("**Branch pointer:** branch feat/bold, base 3f2a1bc.")).toBe("feat/bold");
+    expect(read("\nBranch pointer: branch feat/newline, base 3f2a1bc.")).toBe("feat/newline");
+    expect(read("working on branch fix/retry (off main 3f2a1bc)")).toBe("fix/retry");
+  });
+
+  it("passes over a pointer that names no branch for the one before it", () => {
+    expect(read("Branch pointer: not created yet")).toBeNull();
+    expect(read("Branch pointer: worktree /w on branch HEAD (detached), base 4b7d2ac.")).toBeNull();
+    expect(read("Branch pointer: branch feat/real, base 3f2a1bc.", "Branch pointer: PR merged, branch deleted.")).toBe("feat/real");
+    expect(read("Branch pointer: branch feat/real, base 3f2a1bc.", "Branch pointer: branch has..dots")).toBe("feat/real");
+  });
+});

@@ -129,7 +129,7 @@ describe("a ticket's branch and pull requests", () => {
   it("puts the failing check on the attention list, on the CLI and over HTTP", async () => {
     const fromCli = await cliJson("attention");
     const rows = fromCli.rows.filter((r: { kind: string }) => r.kind === "pr_checks_failing");
-    expect(rows).toEqual([expect.objectContaining({ ref, detail: "checks failing on team/repo#12: test", action: expect.objectContaining({ command: "gh pr checks https://github.com/team/repo/pull/12" }) })]);
+    expect(rows).toEqual([expect.objectContaining({ ref, detail: "checks failing on team/repo#12: test", action: expect.objectContaining({ command: "gh pr checks 12 --repo team/repo" }) })]);
     const fromHttp = await http("/api/attention?ws=app");
     expect(fromHttp.rows.filter((r: { kind: string }) => r.kind === "pr_checks_failing").map((r: { key: string }) => r.key)).toEqual(rows.map((r: { key: string }) => r.key));
   });

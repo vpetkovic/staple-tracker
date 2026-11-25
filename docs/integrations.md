@@ -65,11 +65,15 @@ worked before this existed is read from its newest `Branch pointer: ... branch <
 The pull requests opened for that branch then link themselves. While the web UI is open, its
 poll asks the local `gh` every two minutes, per workspace, for the most recently updated pull
 requests of each GitHub repository mapped to the workspace (one request per repository), and
-links every one whose head is an open ticket's branch in that repository. A replaced pull
+links every one whose head is an open ticket's branch in that repository and that was opened
+after the ticket was filed (an older pull request on a reused name such as `fix/typo` is
+somebody else's work). A pull request you unlink stays unlinked. A replaced pull
 request and its successor are both linked; a stacked one on another branch is linked by hand
 (**Link pull request**, `staple integrations link`) and kept current the same way, with
 **Stacked on** to draw the stack. For an open or draft pull request it also reads the checks on
-the head commit. `staple branch ABC-12 --discover`, `staple integrations discover` and
+the head commit, and it reads every open ticket's open and draft linked pull requests again,
+branch or not, so a failing check clears once it passes. A repository the account cannot read is
+reported and the others are still read. `staple branch ABC-12 --discover`, `staple integrations discover` and
 `integration_write` `discover` run the same lookup on demand.
 
 It only reads. It never unlinks, never writes to GitHub, and never changes a ticket's status:

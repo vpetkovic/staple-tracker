@@ -59,7 +59,9 @@ export interface PullRequestChecks {
 export interface PullRequestDetails {
   headBranch: string;
   headSha: string;
-  /** Null for a merged or closed pull request, and for a head commit with no checks. */
+  /** When the pull request was opened; null when the provider did not say. */
+  createdAt?: string | null;
+  /** Null for a merged or closed pull request, for a head commit with no checks, and when the checks could not be read. */
   checks: PullRequestChecks | null;
 }
 

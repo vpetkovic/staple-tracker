@@ -16,7 +16,7 @@ const sourceIssue = z.object({
 /** A pull request as `repos/{repo}/pulls` answers it: what an issue read lacks is the head. */
 const sourcePull = z.object({
   number: identifier, title: z.string(), body: z.string().nullable(), state: z.enum(["open", "closed"]), draft: z.boolean().optional(),
-  merged_at: z.string().nullable().optional(), html_url: z.string(),
+  merged_at: z.string().nullable().optional(), html_url: z.string(), created_at: z.string().max(64).optional(),
   head: z.object({ ref: z.string().min(1).max(255), sha: z.string().regex(/^[0-9a-f]{40,64}$/), repo: z.object({ id: identifier }).nullable() }),
 });
 const checkRuns = z.object({
@@ -180,9 +180,10 @@ export class GitHubCliAdapter implements IntegrationAdapter {
     this.numeric(containerId);
     const wanted = new Set(branches);
     if (wanted.size === 0) return [];
-    await this.checkConnection(options);
+    await this.recentlyChecked(options);
     const repo = await this.get(`repositories/${containerId}`, repository, options);
     if (String(repo.id) !== containerId) throw new StapleError("unavailable", "GitHub returned a different repository");
+    this.repositories.set(containerId, repo);
     const pulls = await this.get(`repos/${repo.full_name}/pulls?state=all&sort=updated&direction=desc&per_page=${PULL_WINDOW}`, z.array(sourcePull), options);
     const items: ExternalItem[] = [];
     for (const pull of pulls) {
@@ -197,9 +198,10 @@ export class GitHubCliAdapter implements IntegrationAdapter {
       throw new StapleError("validation", "Reference belongs to a different GitHub resource scope");
     }
     this.numeric(ref.containerId); this.numeric(ref.id);
-    await this.checkConnection(options);
-    const repo = await this.get(`repositories/${ref.containerId}`, repository, options);
+    await this.recentlyChecked(options);
+    const repo = this.repositories.get(ref.containerId) ?? await this.get(`repositories/${ref.containerId}`, repository, options);
     if (String(repo.id) !== ref.containerId) throw new StapleError("unavailable", "GitHub returned a different repository");
+    this.repositories.set(ref.containerId, repo);
     const result = await this.pullItem(repo, await this.get(`repos/${repo.full_name}/pulls/${ref.id}`, sourcePull, options), options);
     if (result.ref.id !== ref.id) throw new StapleError("unavailable", "GitHub returned a different pull request");
     return result;
@@ -215,13 +217,21 @@ export class GitHubCliAdapter implements IntegrationAdapter {
       ref: { ...this.scope, containerId: String(repo.id), id: String(pull.number), kind: "pull_request" },
       key: `${repo.full_name}#${pull.number}`, url, title: pull.title, body: pull.body,
       status: { id: state, name: state }, fetchedAt: this.now().toISOString(),
-      pullRequest: { headBranch: pull.head.ref, headSha: pull.head.sha, checks: live ? await this.checks(repo, pull.head.sha, options) : null },
+      pullRequest: { headBranch: pull.head.ref, headSha: pull.head.sha, createdAt: pull.created_at ?? null, checks: live ? await this.checks(repo, pull.head.sha, options) : null },
     };
   }
 
   /** The latest run of each check on a commit, summed up. Null when the commit has none. */
   private async checks(repo: Repository, sha: string, options?: ProviderReadOptions): Promise<PullRequestChecks | null> {
-    const { check_runs: runs } = await this.get(`repos/${repo.full_name}/commits/${sha}/check-runs?filter=latest&per_page=100`, checkRuns, options);
+    let runs: z.infer<typeof checkRuns>["check_runs"];
+    try {
+      runs = (await this.get(`repos/${repo.full_name}/commits/${sha}/check-runs?filter=latest&per_page=100`, checkRuns, options)).check_runs;
+    } catch (error) {
+      // An account that may read the pull request but not its checks (a token without Checks: read)
+      // still reads the pull request; its checks are unknown. Rate limits and sign-in still fail the read.
+      if (error instanceof StapleError && (error.code === "forbidden" || error.code === "not_found" || error.code === "unavailable")) return null;
+      throw error;
+    }
     if (runs.length === 0) return null;
     const failed = runs.filter(run => run.status === "completed" && FAILED_CONCLUSIONS.has(run.conclusion ?? ""));
     const finished = (failed.length ? failed : runs).map(run => run.completed_at).filter((at): at is string => at !== null && Number.isFinite(Date.parse(at))).sort();
@@ -230,6 +240,18 @@ export class GitHubCliAdapter implements IntegrationAdapter {
       failing: [...new Set(failed.map(run => run.name))].slice(0, 10),
       completedAt: finished.at(-1) ?? null,
     };
+  }
+
+  /**
+   * Discovery's account check: one per minute for this adapter, which lives for one discovery
+   * run, instead of `gh --version` and GET /user before each of its pull request reads.
+   */
+  private checkedAt = -Infinity;
+  private readonly repositories = new Map<string, Repository>();
+  private async recentlyChecked(options?: ProviderReadOptions): Promise<void> {
+    if (this.now().getTime() - this.checkedAt < 60_000) return;
+    await this.checkConnection(options);
+    this.checkedAt = this.now().getTime();
   }
 
   /** Returns the effective gh login, which must be the configured account. Runs before every read. */

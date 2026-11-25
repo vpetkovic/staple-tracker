@@ -22,7 +22,7 @@ import { StapleError } from "../types.js";
 import type { ConnectionHealthSnapshot, ConnectionState, ExternalItem } from "./contracts.js";
 import type { ProviderConnection } from "./connections.js";
 import { healthFromError, isConnectionFailure, ProbeCache, snapshot } from "./health.js";
-import type { LinkedPullRequest } from "./link-store.js";
+import { externalResourceId, type LinkedPullRequest } from "./link-store.js";
 import type { MappingTarget } from "./mapping.js";
 import type { IntegrationReader } from "./provider.js";
 
@@ -90,7 +90,10 @@ export async function discoverPullRequests(deps: DiscoveryDependencies, refs?: r
     report.tickets = working.map((issue) => ({ ref: issue.identifier, branch: branches.get(issue.id)!, pullRequests: all.get(issue.id) ?? [] }));
     return report;
   };
-  if (working.length === 0) {
+  // Every open ticket's live linked pull requests are read again, branch or not; only the branch lookup needs one.
+  const live = (pr: LinkedPullRequest) => pr.providerId === "github" && (pr.state === null || pr.state === "open" || pr.state === "draft");
+  const linkedBefore = links.pullRequests();
+  if (working.length === 0 && !issues.some((issue) => (linkedBefore.get(issue.id) ?? []).some(live))) {
     report.note = refs ? "This ticket has no branch. Record one with staple branch <ref> <branch>." : null;
     return finish();
   }
@@ -138,7 +141,9 @@ export async function discoverPullRequests(deps: DiscoveryDependencies, refs?: r
     } catch (error) {
       if (!(error instanceof StapleError)) throw error;
       const health = snapshot(connection, healthFromError(error), new Date(now()));
-      if (isConnectionFailure(error)) {
+      // A repository this account cannot read is that repository's answer, not the connection's:
+      // the other mapped repositories are still read.
+      if (isConnectionFailure(error) && error.code !== "forbidden") {
         deps.recordFailure(connection, health);
         readers.set(connection.id, null);
       }
@@ -163,19 +168,31 @@ export async function discoverPullRequests(deps: DiscoveryDependencies, refs?: r
     for (const item of found ?? []) {
       remember(item);
       for (const issue of byBranch.get(item.pullRequest!.headBranch) ?? []) {
-        const before = links.list(issue.id).some((link) => link.resource.ref.kind === "pull_request" && link.resource.url === item.url);
+        const resourceId = externalResourceId(item.ref);
+        const before = links.list(issue.id).some((link) => link.resource.id === resourceId);
+        if (before) {
+          links.remember(item, deps.actor);
+          continue;
+        }
+        // A branch name used before this ticket existed (fix/typo, develop) names somebody else's
+        // work: only a pull request opened since the ticket was filed is its own. And one a person
+        // unlinked from this ticket stays unlinked.
+        const opened = item.pullRequest!.createdAt;
+        if (opened !== null && opened !== undefined && opened < issue.createdAt) continue;
+        if (links.wasUnlinked(issue.id, resourceId)) continue;
         links.link(issue.id, item, deps.actor);
-        if (!before) report.linked.push({ ref: issue.identifier, key: item.key, url: item.url });
+        report.linked.push({ ref: issue.identifier, key: item.key, url: item.url });
       }
     }
   }
 
-  // The tickets' other linked pull requests that can still change: stacked ones on another
-  // branch, ones linked by hand. Only in mapped repositories, oldest saved copy first.
+  // Every open ticket's other linked pull requests that can still change: stacked ones on another
+  // branch, ones linked by hand, ones on a ticket with no branch. Only in mapped repositories,
+  // oldest saved copy first, so a failing check is read again until it passes.
   const linkedNow = links.pullRequests();
-  const stale = working
+  const stale = issues
     .flatMap((issue) => linkedNow.get(issue.id) ?? [])
-    .filter((pr) => pr.providerId === "github" && (pr.state === null || pr.state === "open" || pr.state === "draft"))
+    .filter(live)
     .map((pr) => ({ pr, resource: links.resource(pr.resourceId) }))
     .filter(({ resource }) => !seen.has(`${resource.ref.host}/${resource.ref.containerId}#${resource.ref.id}`))
     .filter((entry, index, all) => all.findIndex((other) => other.resource.id === entry.resource.id) === index)
@@ -201,7 +218,7 @@ export async function discoverPullRequests(deps: DiscoveryDependencies, refs?: r
  */
 export const discoveryRuns = new ProbeCache<number>();
 
-const ROW_STATES = ["open", "draft", "merged", "closed"] as const;
+const ROW_STATES = ["open", "draft", "unknown", "merged", "closed"] as const;
 type RowState = (typeof ROW_STATES)[number];
 
 /** The row badge's pull requests, as `/api/issues` sends them (`PullRequestRef`, ui lib/types.ts). */
@@ -209,6 +226,7 @@ export interface RowPullRequest {
   provider: "github";
   number: number;
   url: string;
+  /** `unknown` while no state was read on this machine or shared: linked by URL, or synced without context. */
   state: RowState;
   title: string | null;
   updatedAt: string | null;
@@ -216,18 +234,16 @@ export interface RowPullRequest {
 
 /**
  * A row's `pullRequests`: every linked pull request, the ones still moving first (open, draft,
- * then merged and closed), newest first within a state. Sent only when every one of them is a
- * GitHub pull request with a known state, because the badge draws each one; a row with one it
- * cannot draw keeps the counted link badge instead, so no pull request is shown twice or lost.
+ * unknown, then merged and closed), newest first within a state. A GitHub pull request is all
+ * a link can be, so every one is drawn: one with no state read yet draws as unknown.
  */
 export function rowPullRequests(linked: readonly LinkedPullRequest[] | undefined): { pullRequests?: RowPullRequest[] } {
-  if (!linked?.length) return {};
-  const drawable = linked.every((pr) => pr.providerId === "github" && pr.number !== null && ROW_STATES.includes(pr.state as RowState));
-  if (!drawable) return {};
-  const rank = (state: string | null) => ROW_STATES.indexOf(state as RowState);
+  const drawable = (linked ?? []).filter((pr) => pr.providerId === "github" && pr.number !== null);
+  if (!drawable.length) return {};
+  const stateOf = (pr: LinkedPullRequest): RowState => (ROW_STATES.includes(pr.state as RowState) && pr.state !== "unknown" ? (pr.state as RowState) : "unknown");
   return {
-    pullRequests: [...linked]
-      .sort((a, b) => rank(a.state) - rank(b.state) || b.number! - a.number!)
-      .map((pr) => ({ provider: "github", number: pr.number!, url: pr.url, state: pr.state as RowState, title: pr.title, updatedAt: pr.fetchedAt })),
+    pullRequests: [...drawable]
+      .sort((a, b) => ROW_STATES.indexOf(stateOf(a)) - ROW_STATES.indexOf(stateOf(b)) || b.number! - a.number!)
+      .map((pr) => ({ provider: "github", number: pr.number!, url: pr.url, state: stateOf(pr), title: pr.title, updatedAt: pr.fetchedAt })),
   };
 }

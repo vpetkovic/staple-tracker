@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExternalItem, ExternalItemRef, IntegrationAdapter } from "../src/core/integrations/contracts.js";
 import { ProbeCache } from "../src/core/integrations/health.js";
 import { IntegrationOperations } from "../src/core/integrations/operations.js";
+import { rowPullRequests } from "../src/core/integrations/pr-discovery.js";
 import { setTicketBranch } from "../src/core/ticket-branch.js";
 import { StapleError } from "../src/core/types.js";
 import { initWorkspace } from "../src/core/workspace.js";
@@ -114,6 +115,80 @@ describe("finding the pull requests opened for a ticket's branch", () => {
     const held = (await service.execute({ action: "discover" })) as { failures: Array<{ state: string }> };
     expect(held.failures).toEqual([expect.objectContaining({ state: "unauthenticated" })]);
     expect(forBranches).toHaveBeenCalledTimes(1);
+    store.db.close();
+  });
+
+  it("leaves a pull request a person unlinked, and one opened before the ticket existed, unlinked", async () => {
+    let created: string | null = null;
+    const { store, service } = await setup(() => [
+      { ...pr(4, "open"), pullRequest: { ...pr(4, "open").pullRequest!, createdAt: created } },
+      { ...pr(70, "merged"), pullRequest: { ...pr(70, "merged").pullRequest!, createdAt: "2020-01-01T00:00:00Z" } },
+    ]);
+    await service.execute({ action: "map", connectionId: "work", containerId: "42", actor: "ada" });
+    const task = store.createIssue({ title: "Reused branch name" });
+    setTicketBranch(store, task.id, { branch: "feat/x" }, "ada");
+    created = new Date(Date.now() + 1000).toISOString();
+    await service.execute({ action: "discover" });
+    // #70 merged in 2020 on a branch of the same name: somebody else's work.
+    expect(store.externalLinks().pullRequests().get(task.id)!.map((p) => p.key)).toEqual(["team/repo#4"]);
+    const resource = store.externalLinks().list(task.id)[0]!.resource.id;
+    await service.execute({ action: "unlink", ref: task.id, resourceId: resource, actor: "ada" });
+    const again = (await service.execute({ action: "discover" })) as { linked: unknown[] };
+    expect(again.linked).toEqual([]);
+    expect(store.externalLinks().pullRequests().get(task.id)).toBeUndefined();
+    store.db.close();
+  });
+
+  it("still reads the other repositories when one is forbidden", async () => {
+    const { store, service, forBranches } = await setup(() => [pr(4, "open")]);
+    await service.execute({ action: "map", connectionId: "work", containerId: "41", actor: "ada" });
+    await service.execute({ action: "map", connectionId: "work", containerId: "42", actor: "ada" });
+    const task = store.createIssue({ title: "Two repositories" });
+    setTicketBranch(store, task.id, { branch: "feat/x" }, "ada");
+    forBranches.mockImplementation(async (container: string) => {
+      if (container === "41") throw new StapleError("forbidden", "GitHub denied access; check repository permissions and organization SSO");
+      return [pr(4, "open")];
+    });
+    const report = (await service.execute({ action: "discover" })) as { failures: Array<{ state: string }>; linked: unknown[] };
+    expect(report.failures).toEqual([expect.objectContaining({ state: "forbidden" })]);
+    expect(report.linked).toHaveLength(1);
+    const next = (await service.execute({ action: "discover" })) as { failures: Array<{ state: string }> };
+    expect(forBranches).toHaveBeenCalledTimes(4);
+    expect(next.failures).toEqual([expect.objectContaining({ state: "forbidden" })]);
+    store.db.close();
+  });
+
+  it("reads a linked pull request again on a ticket with no branch, so a failing check clears", async () => {
+    const { store, service, details } = await setup(() => []);
+    await service.execute({ action: "map", connectionId: "work", containerId: "42", actor: "ada" });
+    const task = store.createIssue({ title: "No branch" });
+    store.externalLinks().link(task.id, pr(80, "open", "feat/y", { state: "failing", failing: ["ci"], completedAt: "2026-11-25T11:00:00Z" }), "ada");
+    details.mockResolvedValueOnce({ ...pr(80, "open", "feat/y", { state: "passing", failing: [], completedAt: "2026-11-25T12:00:00Z" }), fetchedAt: new Date(Date.now() + 1000).toISOString() });
+    await service.execute({ action: "discover" });
+    expect(details).toHaveBeenCalledTimes(1);
+    expect(store.externalLinks().pullRequests().get(task.id)![0]!.checks?.state).toBe("passing");
+    store.db.close();
+  });
+});
+
+describe("the row's pull requests", () => {
+  it("draws every pull request, one never read as unknown, the ones still moving first", () => {
+    const linked = (n: number, state: string | null) => ({ resourceId: String(n), providerId: "github", key: `t/r#${n}`, url: `https://github.com/t/r/pull/${n}`, number: n, state, title: null, checks: null, fetchedAt: null, linkedAt: "" });
+    expect(rowPullRequests([linked(1, "merged"), linked(2, null), linked(3, "open")]).pullRequests!.map((p) => [p.number, p.state])).toEqual([[3, "open"], [2, "unknown"], [1, "merged"]]);
+    expect(rowPullRequests([])).toEqual({});
+  });
+
+  it("sends no sync operation for a shared pull request a read finds unchanged", async () => {
+    const { store } = await setup(() => []);
+    const task = store.createIssue({ title: "Shared" });
+    const links = store.externalLinks();
+    const first = links.link(task.id, pr(90, "merged"), "ada");
+    links.shareContext(first.resource.id, true, "ada");
+    const record = vi.spyOn(store.journal, "record");
+    links.remember({ ...pr(90, "merged"), fetchedAt: new Date(Date.now() + 5000).toISOString() }, "staple");
+    expect(record.mock.calls.filter(([op]) => op.entity === "externalResource")).toEqual([]);
+    links.remember({ ...pr(90, "merged"), title: "Renamed", fetchedAt: new Date(Date.now() + 9000).toISOString() }, "staple");
+    expect(record.mock.calls.filter(([op]) => op.entity === "externalResource")).toHaveLength(1);
     store.db.close();
   });
 });
