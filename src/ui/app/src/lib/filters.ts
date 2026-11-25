@@ -628,7 +628,6 @@ export function dimensionOptions(id: string, rows: readonly IssueRow[]): FilterO
 
 // ---------------------------------------------------------------- applying
 
-/** Everything the text box searches. Identifier first: it is what people paste. */
 /**
  * The ids the server found for a query — `/api/search`, the store's `q` match that `staple
  * ls -q` uses, which also reads criteria, comments and documents the page never loads. A
@@ -640,6 +639,7 @@ export interface TextMatches {
   ids: ReadonlySet<string>;
 }
 
+/** Everything the text box searches locally. Identifier first: it is what people paste. */
 function searchable(row: IssueRow): string {
   const { identifier, title, assignee, labels } = row.issue;
   return `${identifier} ${title} ${assignee ?? ""} ${labels.join(" ")}`.toLowerCase();

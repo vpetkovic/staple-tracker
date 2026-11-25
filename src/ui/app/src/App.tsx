@@ -280,7 +280,12 @@ export function App() {
    * uses), because a plan, worklog, comment or criterion is not on the rows above. The
    * answer carries the text it answered, so `applyFilters` ignores one that went stale.
    */
-  const searchText = filters.text.trim();
+  const [searchText, setSearchText] = useState(() => filters.text.trim());
+  useEffect(() => {
+    // Ask once the typing pauses, not per keystroke; the local match narrows meanwhile.
+    const timer = window.setTimeout(() => setSearchText(filters.text.trim()), 200);
+    return () => window.clearTimeout(timer);
+  }, [filters.text]);
   const loadSearch = useCallback(
     () => (searchText ? searchIssues({ ws, q: searchText }) : Promise.resolve({ q: "", ids: [] })),
     [ws, searchText],

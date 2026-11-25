@@ -77,6 +77,20 @@ describe("text search over what is written on a ticket", () => {
     expect(found("iBiS")).toEqual(["Ibis everywhere"]);
   });
 
+  it("treats % and _ as literal characters, not wildcards", () => {
+    const issue = store.createIssue({ title: "Literal holder" });
+    store.addComment(issue.identifier, "coverage is at 100% for a_b");
+    store.addComment(store.createIssue({ title: "Wildcard bait" }).identifier, "1000 runs of axb");
+    expect(found("100%")).toEqual(["Literal holder"]);
+    expect(found("a_b")).toEqual(["Literal holder"]);
+  });
+
+  it("ignores surrounding whitespace, as the toolbar does", () => {
+    const issue = store.createIssue({ title: "Spaced holder" });
+    store.putDocument(issue.identifier, "plan", "ocelot");
+    expect(found("  ocelot ")).toEqual(["Spaced holder"]);
+  });
+
   it("still finds nothing for a word written nowhere", () => {
     expect(found("unwritten-word")).toEqual([]);
   });
