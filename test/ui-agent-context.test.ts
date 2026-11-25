@@ -119,6 +119,9 @@ describe("the pane cannot drift from the tool", () => {
       "comments",
       "crossBlockers",
       "documents",
+      // The found-in relation, on both ends: get_task grew it, so this pane grew it in lockstep.
+      "findings",
+      "foundIn",
       /**
        * STA-143, and the third instance of the same lockstep story as `claim`
        * and `timing`: `get_task` grew the gate pair, so this pane grew it in the

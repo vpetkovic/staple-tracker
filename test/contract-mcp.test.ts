@@ -1431,6 +1431,9 @@ describe("tool response shapes (31/31)", () => {
       children: [issueGolden({ identifier: "CON-4", title: "Contract child", parentId: UUID, depth: 1 })],
       blockedBy: [],
       blocks: [],
+      // Not filed for a finding, and none filed against it.
+      foundIn: null,
+      findings: [],
       comments: [commentGolden({ body: "contract comment", idempotencyKey: "c-1" })],
       documents: [
         { issueId: UUID, key: "plan", currentRevision: 1, title: "Plan", updatedAt: ISO, instructions: false, body: "# plan v1\n" },

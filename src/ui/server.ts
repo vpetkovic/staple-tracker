@@ -4901,6 +4901,13 @@ export function startUiServer(options: UiOptions): UiHandle {
               parent: body.parent ? local(body.parent as string) : null,
               labels: stringList(body.labels),
               blockedBy: blockedBy.local,
+              /**
+               * A review finding: the ticket it was found in, and with `blocks` (true, or a scope
+               * ref) the scope it blocks, written by the store in the same create. Same workspace
+               * only; the store refuses what it cannot find or may not block, in its own words.
+               */
+              foundIn: typeof body.foundIn === "string" && body.foundIn.trim() !== "" ? local(body.foundIn) : undefined,
+              blocks: body.blocks === true ? true : typeof body.blocks === "string" && body.blocks.trim() !== "" ? local(body.blocks) : undefined,
               estimatedSeconds: optionalEstimate(body.estimateSeconds),
               // Absent or empty means "no project"; an unknown one is the project
               // store's `not_found`, in its own words, before an issue number is spent.

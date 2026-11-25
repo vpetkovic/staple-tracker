@@ -1079,6 +1079,8 @@ const taskSummaryShape = {
 };
 
 const issueRefShape = { identifier: issueIdentifierSchema, draft: draftSchema, title: z.string(), status: statusEnum };
+/** A finding and the ticket it was found in: a blocker while it blocks that ticket or a scope above it, else a follow-up. */
+const findingRefShape = { ...issueRefShape, disposition: z.enum(["blocker", "follow-up"]) };
 
 const documentMetaShape = {
   issueId: z.string(),
@@ -1495,6 +1497,13 @@ server.registerTool(
       children: z.array(z.object(issueShape)),
       blockedBy: z.array(z.object(issueRefShape)),
       blocks: z.array(z.object(issueRefShape)),
+      foundIn: z
+        .object(findingRefShape)
+        .nullable()
+        .describe("The ticket this one was filed from as a finding, with its disposition; null when it is not a finding"),
+      findings: z
+        .array(z.object(findingRefShape))
+        .describe("Tickets filed for findings in this one, oldest first, each a blocker or a follow-up"),
       comments: z.array(z.object(commentShape)),
       documents: z.array(z.object(documentMetaShape)),
       attachments: z
@@ -1685,7 +1694,7 @@ server.registerTool(
   "create_task",
   {
     description:
-      "Create an issue. Defaults: status todo when assigned, backlog otherwise; medium priority. Duplicate open titles are rejected unless allow_duplicate; pass idempotency_key for safe retries (same key replays the original). Use parent for subtasks and blocked_by for dependencies.",
+      "Create an issue. Defaults: status todo when assigned, backlog otherwise; medium priority. Duplicate open titles are rejected unless allow_duplicate; pass idempotency_key for safe retries (same key replays the original). Use parent for subtasks and blocked_by for dependencies. For a review finding pass found_in (and blocks for a blocker).",
     inputSchema: {
       title: z.string(),
       description: z.string().optional(),
@@ -1698,6 +1707,15 @@ server.registerTool(
       acceptance_criteria: z.array(z.string()).max(20).optional(),
       blocked_by: z.array(refSchema).optional(),
       block_parent_until_done: z.boolean().optional(),
+      found_in: refSchema
+        .optional()
+        .describe("File this as a finding: the ticket it was found in (same workspace). Recorded on the new ticket; the origin lists it under findings."),
+      blocks: z
+        .union([z.boolean(), refSchema])
+        .optional()
+        .describe(
+          "With found_in, make the finding a blocker: true blocks the found-in ticket; a ref blocks that scope instead (an ancestor or the milestone of the found-in ticket). Added to the scope's blockers in the same write. A resolved scope is refused, naming the open scope to block instead.",
+        ),
       estimate_seconds: estimateSchema,
       idempotency_key: z.string().optional(),
       allow_duplicate: z.boolean().optional(),
@@ -1727,6 +1745,8 @@ server.registerTool(
         acceptanceCriteria: input.acceptance_criteria,
         blockedBy: input.blocked_by,
         blockParentUntilDone: input.block_parent_until_done,
+        foundIn: input.found_in,
+        blocks: input.blocks,
         estimatedSeconds: input.estimate_seconds,
         idempotencyKey: input.idempotency_key,
         allowDuplicate: input.allow_duplicate,

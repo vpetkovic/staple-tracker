@@ -37,8 +37,8 @@ The loop an agent follows, described in
 |---|---|---|---|
 | `inbox` | What is ready, waiting on a person, or blocked, in pickup order | `staple inbox` | no |
 | `list_tasks` | List tickets by status, kind, assignee or text | `staple ls` | no |
-| `get_task` | One ticket in full: claim, time, gate, blockers, attempts, and file metadata | `staple show` | no |
-| `create_task` | File a ticket, with parent, blockers and estimate | `staple new` | yes |
+| `get_task` | One ticket in full: claim, time, gate, blockers, attempts, and file metadata. `foundIn` names the ticket a finding was filed from, and `findings` lists what was found in this one; each carries `disposition`, `blocker` or `follow-up` | `staple show` | no |
+| `create_task` | File a ticket, with parent, blockers and estimate. For a review finding, `found_in` names the ticket it was found in, and `blocks` (`true`, or a parent, ancestor or milestone of that ticket) blocks it in the same write | `staple new --found-in` | yes |
 | `update_task` | Change status or fields; `status: "done"` finishes it | `staple status`, `staple done` | yes |
 | `checkout_task` | Claim a ticket and start it | `staple start` | yes |
 | `release_task` | Give a claim back | `staple release` | yes |

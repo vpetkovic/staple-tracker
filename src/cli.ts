@@ -466,6 +466,18 @@ function instructionRunId(store: WorkspaceStore, ref: string, run: string | unde
 }
 
 /** Every line of `text` led by `prefix`; blank lines stay blank. */
+/**
+ * `new`'s `--blocks` takes an optional scope: bare, it blocks the found-in ticket. parseArgs has
+ * no optional values, so a bare one (last, or followed by another flag) is spelled `--blocks=`
+ * before parsing, which reads back as "".
+ */
+function findingBlocksArgs(args: readonly string[]): string[] {
+  return args.map((arg, index) => {
+    const next = args[index + 1];
+    return arg === "--blocks" && (next === undefined || next.startsWith("-")) ? "--blocks=" : arg;
+  });
+}
+
 function indentBlock(text: string, prefix: string): string {
   return text
     .split("\n")
@@ -1008,6 +1020,9 @@ Cloud (optional, off until you turn it on — see staple cloud --help)
 Tasks
   new <title> [-d text] [-p prio] [--parent REF] [--assignee A]
               [--blocked-by R1,R2] [--status S] [--criteria "a;b"]
+              [--found-in REF [--blocks [SCOPE]]]  file a review finding: record the
+              ticket it was found in; --blocks makes it a blocker of that ticket, or of
+              SCOPE (its parent chain or milestone) in the same write
               [--kind K]                epic|task|bug|chore|spike (default task),
               or whatever "staple kinds ls" shows for this workspace
               [--estimate <dur>]        record the plan-time estimate AT PLAN TIME
@@ -1421,7 +1436,7 @@ function main() {
 
     case "new": {
       const { values, positionals } = parseArgs({
-        args: rest,
+        args: findingBlocksArgs(rest),
         allowPositionals: true,
         options: {
           ...common,
@@ -1436,11 +1451,16 @@ function main() {
           estimate: { type: "string" },
           "no-estimate": { type: "boolean" },
           "allow-duplicate": { type: "boolean" },
+          "found-in": { type: "string" },
+          blocks: { type: "string" },
         },
       });
       const title = positionals.join(" ");
       const { store } = getStore(values);
       const issue = store.createIssue({
+        foundIn: values["found-in"],
+        // A bare `--blocks` arrives as "" (findingBlocksArgs): the found-in ticket itself.
+        blocks: values.blocks === undefined ? undefined : values.blocks === "" ? true : values.blocks,
         title,
         description: values.description,
         estimatedSeconds: estimateOption(values.estimate, values["no-estimate"]) ?? null,
@@ -1694,6 +1714,12 @@ function main() {
       }
       if (ctx.blocks.length) {
         console.log(`blocks:     ${ctx.blocks.map((b) => `${b.identifier}(${b.status})`).join(", ")}`);
+      }
+      if (ctx.foundIn) {
+        console.log(`found in:   ${ctx.foundIn.identifier}(${ctx.foundIn.status}) as a ${ctx.foundIn.disposition}`);
+      }
+      if (ctx.findings.length) {
+        console.log(`findings:   ${ctx.findings.map((f) => `${f.identifier}(${f.status}, ${f.disposition})`).join(", ")}`);
       }
       if (ctx.children.length) {
         console.log("\nchildren:");

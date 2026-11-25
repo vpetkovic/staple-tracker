@@ -84,8 +84,9 @@ Guides: [How an agent works a ticket](working-a-ticket.md),
 | Command | What it does |
 |---|---|
 | `staple new <title>` | File a ticket. `-d text`, `-p priority`, `--parent R`, `--kind K`, `--blocked-by R1,R2`, `--estimate 2h`, `--criteria "a;b"`, `--assignee A`. |
+| `staple new <title> --found-in R [--blocks [S]]` | File a review finding. `--found-in R` records the ticket it was found in: `staple show` lists it under that ticket's findings and names R as its found-in ticket. `--blocks` also makes it a blocker of R, in the same write; `--blocks S` blocks S instead, which must be R's parent, an ancestor or its milestone. A finding is a blocker while it blocks one of those, and a follow-up otherwise. Blocking a finished ticket is refused, naming the open parent or milestone to block instead. |
 | `staple ls` | List open tickets. `--status s1,s2`, `--kind k`, `--assignee A`, `-q text`; `--all` includes finished ones. |
-| `staple show <ref>` | One ticket in full: status, claim, time, parents, blockers, comments, documents and files. |
+| `staple show <ref>` | One ticket in full: status, claim, time, parents, blockers, findings, comments, documents and files. |
 | `staple tree [ref]` | Tickets as a tree under their epics. |
 | `staple board` | A kanban board in the terminal. |
 | `staple inbox` | What is ready to take, what waits on a person, and what is blocked, in pickup order. `--hub` covers every workspace. |
