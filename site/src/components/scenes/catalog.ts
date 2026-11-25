@@ -33,7 +33,7 @@ export const SCENES: SceneEntry[] = [
   {name: 'AutopilotRun', feature: 'Autopilot run', story: 'Tickets go done one after another, then the budget stops the run.', Component: AutopilotRun},
   {name: 'MilestoneGoal', feature: 'Milestone goal', story: 'Goal criteria are marked met with evidence and the progress fills.', Component: MilestoneGoal},
   {name: 'IdeaToShipped', feature: 'Planning (experimental)', story: 'An idea is shaped, scheduled on a horizon, scaffolded into an epic and its tasks, and ships.', Component: IdeaToShipped},
-  {name: 'TrackerSync', feature: 'Tracker links', story: 'staple beside GitHub and Linear, which it reads, with ClickUp, Azure DevOps and writing back marked planned.', Component: TrackerSync},
+  {name: 'TrackerSync', feature: 'Tracker links', story: 'staple beside GitHub, Linear and Azure DevOps, which it reads, with ClickUp and writing back marked planned.', Component: TrackerSync},
   {name: 'Budget', feature: 'Budget', story: 'Provider limits as gauges with the reserve, and an estimate against what the work took.', Component: Budget},
   {name: 'OneStore', feature: 'One store', story: 'A command in the terminal changes the same ticket in the web UI and over MCP.', Component: OneStore},
 ];

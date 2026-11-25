@@ -288,12 +288,12 @@ export default function Bento(): ReactNode {
                 work, locally, ticket by ticket. Your team’s board stays where people plan, discuss and report.
               </p>
               <p>
-                Link a ticket to a GitHub issue or pull request, or to a Linear issue, and its title and state stay
-                beside the work. The link is read-only: staple never changes anything in your tracker.
+                Link a ticket to a GitHub issue or pull request, a Linear issue or an Azure DevOps work item, and its
+                title and state stay beside the work. The link is read-only: staple never changes anything in your tracker.
               </p>
               <p className={styles.plannedNote}>
                 <Planned />
-                ClickUp and Azure DevOps, and writing back to your tracker, are planned, not shipped.
+                ClickUp, and writing back to your tracker, are planned, not shipped.
               </p>
             </div>
             <div className={styles.compare}>

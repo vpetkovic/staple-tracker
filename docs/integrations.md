@@ -4,7 +4,7 @@ Staple links existing provider issues and pull requests to local tickets. A link
 provider URL and scoped identity; it does not merge tickets. Multiple tickets can reference the
 same source, and one ticket can reference sources from several providers.
 
-GitHub CLI and the Linear GraphQL API support live reads. Azure DevOps and ClickUp adapters follow later.
+GitHub CLI, the Linear GraphQL API and the Azure DevOps REST API support live reads. A ClickUp adapter follows later.
 
 ## Connect GitHub
 
@@ -24,7 +24,7 @@ with the command to copy where there is one. Checking a connection does not chan
 ## Choose what each workspace searches
 
 Under **Workspaces** on the same screen, each workspace lists its sources: GitHub repositories,
-Linear teams and Linear projects. **Add** opens a searchable list of what your connections can
+Linear teams and Linear projects, and Azure DevOps projects. **Add** opens a searchable list of what your connections can
 read; adding or removing a source saves at once and syncs with that workspace. Search and linking
 follow these sources:
 
@@ -101,6 +101,61 @@ permission, rate-limit and GraphQL failures return redacted messages. No provide
 synchronization or outbound projection are included.
 
 Sources: [GraphQL API](https://linear.app/developers/graphql), [TypeScript SDK](https://linear.app/developers/sdk).
+
+## Connect Azure DevOps
+
+Create a personal access token in Azure DevOps (**User settings → Personal access tokens**) for
+the organization, with the **Work Items (Read)** and **Project and Team (Read)** scopes. Set it in
+the environment of the process running Staple, then restart that process. Never pass the token as
+a CLI argument or paste it into a connection form.
+
+In **Settings → Integrations**, choose **Add connection → Azure DevOps organization**, enter the
+organization name from `dev.azure.com/<organization>` and the environment variable name, and save.
+Staple reads the token once to learn your user id and the organization's id and binds the
+connection to both. Every later command checks them again, so a token for another user or
+organization fails with **Wrong account** or **No access** instead of reading through it. Then add
+projects to a workspace under **Workspaces**. One connection serves one organization; add another
+connection, with its own variable if it needs another token, for each further organization.
+
+The token stays server-side. Only the organization name, the variable name and the two ids are
+saved in a machine-local connection file.
+
+```sh
+# Staple reads the user and organization ids with the token in this process's environment.
+staple integrations configure --provider azure_devops --organization fabrikam \
+  --credential-env STAPLE_AZURE_DEVOPS_PAT --json
+# Or name them, when the token is only in the Staple service's environment.
+staple integrations configure --provider azure_devops --organization fabrikam \
+  --account USER_GUID --scope ORGANIZATION_GUID --credential-env STAPLE_AZURE_DEVOPS_PAT --json
+staple integrations containers --connection CONNECTION_ID --json                          # projects
+staple integrations map --ws my-workspace --connection CONNECTION_ID --container PROJECT_GUID --json
+staple integrations search --ws my-workspace --text login --json
+staple integrations preview --ws my-workspace --connection CONNECTION_ID --container PROJECT_GUID --key 123 --json
+staple integrations link --ws my-workspace --ref ABC-12 \
+  --url https://dev.azure.com/fabrikam/Fabrikam%20Web/_workitems/edit/123 --confirmed --json
+```
+
+Paste a work item URL (`https://dev.azure.com/<organization>/<project>/_workitems/edit/<id>`) in
+the link dialog, or type to search the mapped projects: titles containing the words, and a work
+item by number when the text is one (`123` or `#123`). An empty field lists the newest work items.
+Results come newest first, 50 at a time, with **Show more** for further pages. Identity is the
+organization id, the project id and the work item number; organization and project names are
+display context, so a renamed project keeps its links. A work item moved to another project fails
+to refresh with a message to resolve its current URL again. States are Azure DevOps's own words
+(`Active`, `Resolved`); HTML descriptions are saved as text. Azure DevOps has no PR capability
+here; the **Pull requests** filter skips Azure DevOps sources.
+
+Requests go to `https://dev.azure.com/<organization>` with REST API version 7.1, a 15-second
+timeout and a 2 MB response limit. Search is WIQL scoped to the project, paged by work item id;
+cursors are bound to the connection and search. A rate limit reports how long Azure DevOps asked
+to wait. Authentication, permission, rate-limit and server failures return redacted messages. Not
+included: listing the organizations a token can reach, legacy `*.visualstudio.com` URLs, Azure
+DevOps Server (on-premises), custom WIQL, provider writes and automatic synchronization.
+
+Sources: [WIQL query](https://learn.microsoft.com/en-us/rest/api/azure/devops/wit/wiql/query-by-wiql?view=azure-devops-rest-7.1),
+[work items batch](https://learn.microsoft.com/en-us/rest/api/azure/devops/wit/work-items/get-work-items-batch?view=azure-devops-rest-7.1),
+[projects](https://learn.microsoft.com/en-us/rest/api/azure/devops/core/projects/list?view=azure-devops-rest-7.1),
+[rate limits](https://learn.microsoft.com/en-us/azure/devops/integrate/concepts/rate-limits).
 
 ## Local execution and cached context
 

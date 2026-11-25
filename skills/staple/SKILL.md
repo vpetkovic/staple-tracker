@@ -74,7 +74,7 @@ does not authorize claiming work. Do not fetch a whole workspace tree for one ti
 
 ## Link provider issues and pull requests
 
-Staple can link a ticket to a GitHub issue or pull request or a Linear issue and keep
+Staple can link a ticket to a GitHub issue or pull request, a Linear issue or an Azure DevOps work item and keep
 a read-only copy of its title and state beside the ticket. It never writes to the
 provider, and a link never changes the ticket's status.
 
