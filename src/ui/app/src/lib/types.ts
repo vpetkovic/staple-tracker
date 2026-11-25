@@ -800,6 +800,11 @@ export interface IssueRef {
   status: IssueStatus;
 }
 
+/** A finding and the ticket it was found in: a blocker while it blocks that ticket or a scope above it. */
+export interface FindingRef extends IssueRef {
+  disposition: "blocker" | "follow-up";
+}
+
 /** A blocker living in another workspace file, resolved through the hub. */
 export interface CrossBlocker {
   identifier: string;
@@ -1108,6 +1113,10 @@ export interface IssueDetail {
   children: Issue[];
   blockedBy: IssueRef[];
   blocks: IssueRef[];
+  /** The ticket this one was filed from as a finding. Absent from an older server. */
+  foundIn?: FindingRef | null;
+  /** Tickets filed for findings in this one, oldest first. Absent from an older server. */
+  findings?: FindingRef[];
   comments: IssueComment[];
   documents: IssueDocumentMeta[];
   /** File metadata. Empty when the ticket has no files. The bytes are a separate request. */

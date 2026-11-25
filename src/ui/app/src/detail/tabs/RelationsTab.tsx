@@ -50,7 +50,7 @@ import { buildLineageIndex, lineageFrom, type Lineage } from "@/lib/graph-lineag
 import { relationContext, type RelationContext } from "@/lib/relation-context";
 import { useSession } from "@/lib/session";
 import { isResolvedStatus, statusLabel } from "@/lib/settings";
-import type { CrossBlocker, Graph, IssueDetail } from "@/lib/types";
+import type { CrossBlocker, FindingRef, Graph, IssueDetail } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
 import {
   canvasDimmed,
@@ -324,6 +324,11 @@ function Group({ title, action, children }: { title: string; action?: React.Reac
   );
 }
 
+/** How a finding stands toward where it was found, in the row's quiet note. */
+function findingNote(disposition: FindingRef["disposition"]): string {
+  return disposition === "blocker" ? "Blocker" : "Follow-up";
+}
+
 /** Sub-tasks finished, as a thin bar beside the words. */
 function Progress({ done, total }: { done: number; total: number }) {
   const share = total === 0 ? 0 : done / total;
@@ -457,9 +462,13 @@ export function RelationsTab({ detail, workspace, onAuthError }: TabProps) {
     (a, b) => Number(isResolvedStatus(a.status)) - Number(isResolvedStatus(b.status)),
   );
   const milestone = detail.milestone ?? null;
+  const foundIn = detail.foundIn ?? null;
+  const findings = detail.findings ?? [];
   const nothing =
     !parent &&
     !milestone &&
+    !foundIn &&
+    findings.length === 0 &&
     detail.children.length === 0 &&
     detail.blockedBy.length === 0 &&
     detail.blocks.length === 0 &&
@@ -500,6 +509,34 @@ export function RelationsTab({ detail, workspace, onAuthError }: TabProps) {
               onOpen={() => open(parent.identifier, detail.workspace)}
             />
           ) : null}
+        </Group>
+      ) : null}
+
+      {/* A finding names the ticket it was found in; the origin lists what was found in it. */}
+      {foundIn ? (
+        <Group title="Found in">
+          <TaskRow
+            identifier={foundIn.identifier}
+            title={foundIn.title}
+            status={foundIn.status}
+            note={findingNote(foundIn.disposition)}
+            onOpen={() => open(foundIn.identifier, detail.workspace)}
+          />
+        </Group>
+      ) : null}
+
+      {findings.length > 0 ? (
+        <Group title="Findings">
+          {findings.map((finding) => (
+            <TaskRow
+              key={finding.identifier}
+              identifier={finding.identifier}
+              title={finding.title}
+              status={finding.status}
+              note={findingNote(finding.disposition)}
+              onOpen={() => open(finding.identifier, detail.workspace)}
+            />
+          ))}
         </Group>
       ) : null}
 
