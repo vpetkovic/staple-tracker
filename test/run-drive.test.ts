@@ -254,6 +254,15 @@ describe("run drive outcomes", () => {
     expect(String(ended[0]!.reason)).toMatch(/^no_review: /);
   }, 60_000);
 
+  it("a reviewed ticket without a current worklog fails instead of counting as handed on", async () => {
+    const { dir } = await workspace(["skips checkpoint"]);
+    const drove = await cli(dir, ["run", "drive", "--scope", "queue", ...fake("uncheckpointed"), "--max-tickets", "1", "--poll", "0.2", "--json"]);
+    expect(drove.status, drove.stderr).toBe(0);
+    const ended = lines(drove.stdout).find((e) => e.event === "session_ended");
+    expect(ended).toMatchObject({ outcome: "failed" });
+    expect(String(ended!.reason)).toMatch(/^no_worklog: /);
+  }, 60_000);
+
   it("the review is found however many comments came before the session", async () => {
     const { dir, refs } = await workspace(["long history"]);
     const opened = openWorkspace(join(dir, ".staple", "staple.db"));

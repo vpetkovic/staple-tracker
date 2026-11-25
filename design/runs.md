@@ -344,7 +344,8 @@ staple run drive [--run <id> | --scope <queue|ref> [--max-tickets N] [--until T]
   |---|---|
   | exit 0, ticket moved on (review, done, gated) | nothing stated: the tracker reads the attempt or status (`done`) |
   | exit 0, ticket still held in an active status | `failed`, `session exited 0 but left … and still held` |
-  | exit 0, ticket moved on, no `review: …` comment since the session began | `failed`, `no_review: …` — the brief's review step is the one part of it the tracker checks |
+  | exit 0, ticket moved on, no `review: …` comment since the session began | `failed`, `no_review: …` |
+  | exit 0, reviewed, latest `worklog` missing, older than the session, or incomplete | `failed`, `no_worklog: …`; Done, Next, and Files touched headings each need content |
   | non-zero exit or a signal | `failed`, `session exited N` |
   | past `--ticket-timeout` | `failed`, `timed out: …`; the process group is ended |
   | the run ended while it worked | `failed`, `stopped_by_human: …` (or the reason the run ended) |
@@ -480,6 +481,7 @@ a sub-agent, and for a run a live driver has since attached to.
 |---|---|
 | the run's current ticket is still held by its actor, in an active status | keep going: finish it, or state the failure (`run continue --outcome failed --reason …`); nothing is recorded |
 | it was handed on (review, done, gated) with no `review: …` comment since the run took it | keep going: review it adversarially and record the review. The rule `run drive` enforces as `no_review`, reached the interactive way: the session is asked to do it, not failed |
+| it was handed on and reviewed, but its latest worklog is missing, older than the current ticket tenure, or incomplete | keep going: write a current worklog with content under Done, Next, and Files touched. The same loop-limit escapes apply |
 | otherwise, `run continue` answers `take` | keep going: "next ticket REF "title"", already checked out to the run's actor, with the steps (read it, branch, plan and worklog, gates, adversarial review, `in_review`), the environment to act as the actor (`STAPLE_AGENT=… STAPLE_DB=…`), never merge to master or main. A goal check gets the goal-check steps instead |
 | `wait` | the session may stop, with the reason shown: a wait can last hours, and a session held in a loop burns its turn budget for nothing. Ask again later, or bind again |
 | `stop` | the session may stop, with the stop reason (and who stopped it, and why) shown; the binding is removed |

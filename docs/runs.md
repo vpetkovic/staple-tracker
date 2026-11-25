@@ -48,6 +48,12 @@ the run goes, or pass `--finish done` to let sessions close their own.
 
 Each session is told to work on its own branch, keep a plan and worklog on the ticket,
 run the repository's checks, and record an adversarial review before handing on.
+The driver also checks the latest `worklog`: it must be written during that session
+and contain Markdown headings **Done**, **Next**, and **Files touched**, each with
+content. Write "none" when appropriate. Comments do not substitute for a worklog.
+A missing, older or incomplete checkpoint fails the session as `no_worklog`.
+Interactive run hooks ask for the same checkpoint before advancing, using the
+current ticket tenure as the cutoff. Human stop and loop-limit escapes still apply.
 `--instructions <file>` adds your repository's rules. Sessions get the permissions your
 Claude Code or Codex setup allows, no more. `--dry-run` prints the next ticket, the
 command and the brief, and starts nothing.
