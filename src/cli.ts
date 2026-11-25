@@ -468,13 +468,17 @@ function instructionRunId(store: WorkspaceStore, ref: string, run: string | unde
 /** Every line of `text` led by `prefix`; blank lines stay blank. */
 /**
  * `new`'s `--blocks` takes an optional scope: bare, it blocks the found-in ticket. parseArgs has
- * no optional values, so a bare one (last, or followed by another flag) is spelled `--blocks=`
- * before parsing, which reads back as "".
+ * no optional values, so a bare one is spelled `--blocks=` before parsing, which reads back as "".
+ * Only a word shaped like a ticket (an identifier or an id) is taken as the scope, so a title
+ * after a bare `--blocks` stays the title; nothing after `--` is rewritten.
  */
 function findingBlocksArgs(args: readonly string[]): string[] {
+  const end = args.indexOf("--");
+  const scopeLike = /^(?:[A-Za-z][A-Za-z0-9]*-\d+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
   return args.map((arg, index) => {
+    if (arg !== "--blocks" || (end >= 0 && index > end)) return arg;
     const next = args[index + 1];
-    return arg === "--blocks" && (next === undefined || next.startsWith("-")) ? "--blocks=" : arg;
+    return next !== undefined && scopeLike.test(next) ? arg : "--blocks=";
   });
 }
 
@@ -1022,7 +1026,7 @@ Tasks
               [--blocked-by R1,R2] [--status S] [--criteria "a;b"]
               [--found-in REF [--blocks [SCOPE]]]  file a review finding: record the
               ticket it was found in; --blocks makes it a blocker of that ticket, or of
-              SCOPE (its parent chain or milestone) in the same write
+              SCOPE (its parent chain or milestone, by identifier) in the same write
               [--kind K]                epic|task|bug|chore|spike (default task),
               or whatever "staple kinds ls" shows for this workspace
               [--estimate <dur>]        record the plan-time estimate AT PLAN TIME

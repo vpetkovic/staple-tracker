@@ -897,7 +897,7 @@ function createdEdgesOf(db: DatabaseSync, input: ApplyInput): { targets: string[
   const targets: string[] = [];
   if (row.parent_id !== null && row.block_parent_until_done === 1) targets.push(row.parent_id);
   const scope = input.verb === "create" ? input.payload.foundInBlocks : undefined;
-  if (typeof scope === "string" && scope !== row.parent_id && issueExists(db, scope)) targets.push(scope);
+  if (typeof scope === "string" && !targets.includes(scope) && issueExists(db, scope)) targets.push(scope);
   return { targets, createdBy: row.created_by, createdAt: row.created_at };
 }
 

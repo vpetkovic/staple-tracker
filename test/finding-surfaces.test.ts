@@ -128,22 +128,35 @@ describe("a finding filed through one door reads the same through the others", (
   });
 });
 
+describe("a bare --blocks before the title", () => {
+  it("takes only a ticket identifier as its scope, so the title's first word stays the title's", async () => {
+    const made = await cli("new", "--found-in", "CON-2", "--blocks", "1", "tidy", "up", "--ws", WS, "--json");
+    expect(made.status, made.stderr).toBe(0);
+    const issue = JSON.parse(made.stdout) as { identifier: string; title: string };
+    expect(issue.title).toBe("1 tidy up");
+    expect((await cliShow(issue.identifier)).foundIn.disposition).toBe("blocker");
+    expect(await blockers("CON-2")).toContain(issue.identifier);
+    expect(await blockers("CON-1")).not.toContain(issue.identifier);
+  });
+});
+
 describe("refusals read the same wherever they arrive", () => {
   it("blocking a resolved origin names the open parent to block instead", async () => {
-    expect((await cli("new", "Merged", "--parent", "CON-1", "--ws", WS)).status).toBe(0);
-    expect((await cli("status", "CON-11", "done", "--ws", WS)).status).toBe(0);
+    const merged = await cli("new", "Merged", "--parent", "CON-1", "--ws", WS, "--json");
+    const ref = (JSON.parse(merged.stdout) as { identifier: string }).identifier;
+    expect((await cli("status", ref, "done", "--ws", WS)).status).toBe(0);
 
-    const viaCli = await cli("new", "Late", "--found-in", "CON-11", "--blocks", "--ws", WS, "--json");
+    const viaCli = await cli("new", "Late", "--found-in", ref, "--blocks", "--ws", WS, "--json");
     expect(viaCli.status).not.toBe(0);
     const envelope = { error: cliEnvelope(viaCli) as { code: string; message: string } };
     expect(envelope.error.code).toBe("validation");
-    expect(envelope.error.message).toContain("CON-11 is done");
+    expect(envelope.error.message).toContain(`${ref} is done`);
     expect(envelope.error.message).toContain("--blocks CON-1");
 
-    const viaMcp = mcpEnvelope(await mcp.call("create_task", { title: "Late", found_in: "CON-11", blocks: true, ws: WS }));
+    const viaMcp = mcpEnvelope(await mcp.call("create_task", { title: "Late", found_in: ref, blocks: true, ws: WS }));
     expect(viaMcp.message).toBe(envelope.error.message);
 
-    const viaHttp = await httpAction({ type: "create", title: "Late", foundIn: "CON-11", blocks: true });
+    const viaHttp = await httpAction({ type: "create", title: "Late", foundIn: ref, blocks: true });
     expect(viaHttp.status).toBe(409);
     expect(viaHttp.body.message).toBe(envelope.error.message);
   });

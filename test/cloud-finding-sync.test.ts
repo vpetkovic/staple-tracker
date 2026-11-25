@@ -153,4 +153,26 @@ describe("a finding across devices", () => {
     }
     converged(a, b, fresh);
   }, 60_000);
+
+  it("a blocker filed as a child of the ticket it blocks keeps its edge everywhere, against a set cleared earlier", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const a = fleet.machine("a");
+    const b = fleet.machine("b");
+    await sync(a, b);
+    a.use();
+    const origin = a.store.createIssue({ title: "Origin" });
+    const earlier = a.store.createIssue({ title: "Earlier blocker" });
+    a.store.setBlockedBy(origin.id, [earlier.id], "vp");
+    await sync(a, b);
+    b.use();
+    b.store.setBlockedBy(origin.id, [], "vp");
+    await sync(b);
+    a.use();
+    const finding = a.store.createIssue({ title: "Filed under the origin", parent: origin.id, foundIn: origin.id, blocks: true });
+    await sync(a, b);
+    const fresh = fleet.machine("fresh");
+    await sync(fresh);
+    for (const machine of [a, b, fresh]) expect(blockers(machine, origin.id), machine.label).toEqual([finding.id]);
+    converged(a, b, fresh);
+  }, 60_000);
 });
