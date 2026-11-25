@@ -1,4 +1,5 @@
 import type { ExternalLink, ExternalRowSummary } from "../../../../core/integrations/link-store.js";
+import type { TicketBranch } from "../../../../core/ticket-branch.js";
 import type { HorizonData, IdeaData, IdeaDetailData, PlanStepData } from "./plan-types.js";
 /**
  * The wire vocabulary — one mirror of src/core/types.ts plus the envelopes
@@ -839,12 +840,10 @@ export interface Poll {
 }
 
 /**
- * A pull/merge request linked to an issue. Populated by a future git integration (V5 §9).
- *
- * There is no git integration, no column, and no endpoint that produces one of these today.
- * The type exists so the row's PR slot has a contract to be built against, and so turning
- * the badge on later is a SERVER-only change: the row renders nothing at all when the array
- * is absent or empty, which is exactly what it does now.
+ * A pull request linked to an issue, as the row's PR slot (V5 §9) draws it. `/api/issues`
+ * builds these from the integrations link store (`rowPullRequests`, core/integrations/
+ * pr-discovery.ts): every linked pull request, when each is a GitHub pull request with a
+ * known state. The row renders nothing at all when the array is absent or empty.
  */
 export interface PullRequestRef {
   provider: "github" | "gitlab" | "bitbucket";
@@ -942,7 +941,9 @@ export interface IssueRow {
    */
   horizon?: RowHorizon | null;
   /**
-   * Linked pull requests, newest-first. OPTIONAL and absent today — see `PullRequestRef`.
+   * Linked pull requests, the ones still moving first (open, draft, merged, closed), newest
+   * first within a state. Absent when the row has none, or one the badge cannot draw — see
+   * `PullRequestRef`.
    *
    * A SIBLING of `issue` rather than a field on it, for the same reason `claim` is one:
    * this is externally sourced and refreshed on a different clock than the issue, and
@@ -1107,6 +1108,8 @@ export interface IssueAttachment {
 /** GET /api/issue */
 export interface IssueDetail {
   externalLinks?: ExternalLink[];
+  /** The branch the work lives on (`staple branch`), else the newest branch-pointer comment; null when neither. */
+  branch?: TicketBranch | null;
   workspace: string;
   issue: Issue;
   ancestors: Issue[];

@@ -33,6 +33,7 @@ import { ideaPlanHref } from "./PlannedIdeaLinks";
  *            thumb reach, above the home indicator.
  */
 import { AutopilotNotice } from "@/components/autopilot/AutopilotBadge";
+import { MergedPullRequestNotice } from "@/integrations/MergedPullRequestNotice";
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Maximize2, Minimize2, SearchX, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { flushSync } from "react-dom";
@@ -550,6 +551,9 @@ export function DetailContent({
         {/* A live autopilot run is working on this task: which one, and the way to it. */}
         <AutopilotNotice workspace={detail.workspace} issueId={issue.id} className="mt-3" />
 
+        {/* A merged pull request offers Mark done; the status never moves on its own. */}
+        <MergedPullRequestNotice detail={detail} controller={controller} className="mt-3" />
+
         {/* On a desk the refusal sits right under the controls that caused it. */}
         {sheet ? null : <ActionRefusal controller={controller} className="mt-4" />}
 
@@ -753,6 +757,15 @@ function Properties({
         <PropertyRow label="Created">
           <RelativeTime iso={issue.createdAt} inSentence />
         </PropertyRow>
+        {detail.branch ? (
+          <PropertyRow label="Branch" span>
+            <span className="min-w-0 wrap-anywhere" data-branch={detail.branch.source}>
+              {detail.branch.name}
+              {detail.branch.base ? <span className="text-text-tertiary">{` · base ${detail.branch.base}`}</span> : null}
+              {detail.branch.source === "comment" ? <span className="text-text-tertiary"> · from a comment</span> : null}
+            </span>
+          </PropertyRow>
+        ) : null}
         {!phone ? (
           <>
             <PropertyRow label="Linked issues" span>

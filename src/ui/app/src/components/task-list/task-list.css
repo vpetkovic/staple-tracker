@@ -949,6 +949,12 @@
   color: var(--text-tertiary);
 }
 
+/* A further pull request: its glyph alone, a little apart from the lead one's number. */
+.staple-pr-also {
+  display: inline-flex;
+  margin-left: 2px;
+}
+
 /*
  * ── Worklog freshness cue — W4 (STA-116) ───────────────────────────────────────────
  *

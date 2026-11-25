@@ -195,17 +195,22 @@ describe("PR badge slot", () => {
     expect(markup).toContain('rel="noreferrer noopener"');
   });
 
-  it("shows the newest and counts the rest", () => {
+  it("draws every pull request: the lead one with its number, a glyph for each other, then a count", () => {
     const prs: PullRequestRef[] = [
-      { provider: "github", number: 9, url: "https://example.test/9", state: "merged" },
-      { provider: "github", number: 8, url: "https://example.test/8", state: "closed" },
-      { provider: "github", number: 7, url: "https://example.test/7", state: "draft" },
+      { provider: "github", number: 9, url: "https://example.test/9", state: "open" },
+      { provider: "github", number: 8, url: "https://example.test/8", state: "draft" },
+      { provider: "github", number: 7, url: "https://example.test/7", state: "merged" },
+      { provider: "github", number: 6, url: "https://example.test/6", state: "closed" },
     ];
-    const markup = renderRow({}, null, prs);
+    const four = renderRow({}, null, prs);
+    expect(four).toContain("#9");
+    expect(four).not.toContain(">#8<");
+    expect(four).toContain('aria-label="4 pull requests: #9 open, #8 draft, #7 merged, #6 closed"');
+    for (const tone of ["open", "draft", "merged", "closed"]) expect(four).toContain(`data-link-tone="${tone}"`);
+    expect(four).not.toContain("staple-pr-more");
 
-    expect(markup).toContain("#9");
-    expect(markup).toContain("+2");
-    expect(markup).not.toContain("#8");
+    const six = renderRow({}, null, [...prs, { provider: "github", number: 5, url: "https://example.test/5", state: "closed" }, { provider: "github", number: 4, url: "https://example.test/4", state: "closed" }]);
+    expect(six).toContain("+2");
   });
 });
 

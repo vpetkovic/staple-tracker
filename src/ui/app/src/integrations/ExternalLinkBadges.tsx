@@ -6,23 +6,29 @@ import { leadingTone } from "./link-state";
 import { LinkGlyph } from "./parts";
 import { LinkHoverCard, LinkListCard, previewTones } from "./LinkHoverCard";
 
-/** A task row's linked issues and pull requests: a glyph and a count each, the list on hover, focus or tap. */
+/**
+ * A task row's linked issues and pull requests: a glyph and a count each, the list on hover, focus or tap.
+ * `withoutPullRequests` when the row's pull request badge (PrBadge) already draws them, so a pull
+ * request is never on the row twice.
+ */
 export function ExternalLinkBadges({
   summary,
   workspace,
   issueId,
   issueRef,
+  withoutPullRequests = false,
 }: {
   summary?: ExternalRowSummary;
   workspace: string;
   issueId: string;
   issueRef?: string;
+  withoutPullRequests?: boolean;
 }) {
-  if (!summary || (!summary.issues.count && !summary.pullRequests.count)) return null;
+  if (!summary || (!summary.issues.count && (withoutPullRequests || !summary.pullRequests.count))) return null;
   return (
     <span className="inline-flex shrink-0 items-center gap-0.5" data-external-link-badges>
       <Badge group={summary.issues} kind="issue" workspace={workspace} issueId={issueId} issueRef={issueRef} />
-      <Badge group={summary.pullRequests} kind="pull_request" workspace={workspace} issueId={issueId} issueRef={issueRef} />
+      {withoutPullRequests ? null : <Badge group={summary.pullRequests} kind="pull_request" workspace={workspace} issueId={issueId} issueRef={issueRef} />}
     </span>
   );
 }

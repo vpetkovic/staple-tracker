@@ -315,6 +315,8 @@ export function TaskRowLine({
    * never shows a date"), the plan is the width's ("not at 390px").
    */
   const plan = config.plan ?? FULL_ROW_PLAN;
+  /** The pull request badge draws this row's pull requests; the counted link badge then leaves them out. */
+  const prBadge = Boolean(columns.pr && plan.prBadge && row.pullRequests?.length);
   /**
    * On a compact row the claim is an avatar, and when the holder IS the assignee the second
    * avatar would repeat the same initials beside it. One is drawn; the claim's carries more.
@@ -641,8 +643,8 @@ export function TaskRowLine({
               <WorklogCue worklog={row.worklog} claim={claim} checkoutAgent={issue.checkoutAgent} now={now} />
             ) : null}
             {/* Last of the signals, so the who slot and the trailing slot after them stay clean columns. */}
-            <ExternalLinkBadges summary={row.externalLinks} workspace={row.workspace} issueId={issue.id} issueRef={issue.identifier} />
-            {columns.pr && plan.prBadge ? <PrBadge pullRequests={row.pullRequests} showNumber={plan.prNumber} /> : null}
+            <ExternalLinkBadges summary={row.externalLinks} workspace={row.workspace} issueId={issue.id} issueRef={issue.identifier} withoutPullRequests={prBadge} />
+            {prBadge ? <PrBadge pullRequests={row.pullRequests} showNumber={plan.prNumber} /> : null}
           </span>
           {columns.claim || columns.assignee ? (
             <WhoCue
@@ -764,8 +766,8 @@ export function TaskRowLine({
         {columns.assignee && issue.assignee && !(plan.claim === "avatar" && claimHolder === issue.assignee) ? (
           <Avatar name={issue.assignee} kind="human" size={20} className="staple-row-assignee" />
         ) : null}
-        <ExternalLinkBadges summary={row.externalLinks} workspace={row.workspace} issueId={issue.id} issueRef={issue.identifier} />
-        {columns.pr && plan.prBadge ? <PrBadge pullRequests={row.pullRequests} showNumber={plan.prNumber} /> : null}
+        <ExternalLinkBadges summary={row.externalLinks} workspace={row.workspace} issueId={issue.id} issueRef={issue.identifier} withoutPullRequests={prBadge} />
+        {prBadge ? <PrBadge pullRequests={row.pullRequests} showNumber={plan.prNumber} /> : null}
         {columns.date && plan.date ? (
           <time className="staple-row-date" dateTime={issue.updatedAt} title={issue.updatedAt}>
             {formatRowDate(issue.updatedAt, now)}

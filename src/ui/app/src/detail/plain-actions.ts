@@ -304,7 +304,7 @@ function takeOverItem(ctx: ActionContext, holder: string): ActionItem {
   };
 }
 
-function doneItem(ctx: ActionContext): ActionItem | null {
+export function doneItem(ctx: ActionContext): ActionItem | null {
   const status = firstStatusIn(ctx.order, ctx.categoryOf, ["done"]);
   return status ? { id: "done", label: ACTION_WORDS.done, call: statusCall(ctx, status) } : null;
 }
