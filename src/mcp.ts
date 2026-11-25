@@ -1919,7 +1919,7 @@ server.registerTool(
         .string()
         .optional()
         .describe(
-          "HUMAN OVERRIDE — do not send this on your own initiative. Takes a row out of turn under queue.policy = strict, recording who did it and why in a `queue_overridden` event. The reason is mandatory (an empty one is refused), it skips ONLY the out_of_order check, and it never bypasses a blocker, a gate or a live claim. If you hit out_of_order, take `detail.expected[0]` instead and let a human decide to override.",
+          "HUMAN OVERRIDE — do not send this on your own initiative. Takes a row out of turn under queue.policy = strict, recording who did it and why in a `queue_overridden` event. The reason is mandatory (an empty one is refused), it skips the out_of_order check and steps over a cross-repository blocker (`staple link`, recorded as `cross_blocker_overridden`), and it never bypasses a local blocker, a gate or a live claim. If you hit out_of_order, take `detail.expected[0]` instead; if a cross-repository blocker refuses you, pick a different task; either way let a human decide to override.",
         ),
       ...attemptOpenFields,
       ws: wsSchema,

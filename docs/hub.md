@@ -111,9 +111,45 @@ app/APP-3 blocks web/WEB-1
 APP-3 blocks WEB-1  (app → web)
 ```
 
-The link shows up where people and agents look before starting: in the task
-detail in the web UI, in `get_task` over MCP (as `crossBlockers`), and in the
-Graph, drawn dashed. When APP-3 is done, the hub records it:
+The link holds WEB-1 back in `web` the way a local blocker would. `staple queue
+next` and MCP `next_task` skip it and name the link, `staple inbox` lists it under
+BLOCKED, and `staple show WEB-1` names it:
+
+```text
+skipped  WEB-1     blocked   WEB-1 is blocked by APP-3 in app.
+```
+
+```text
+blocked across repositories by: APP-3 in app (todo) — checkout is refused until they resolve
+```
+
+Checkout refuses it, on the CLI and over MCP (`checkout_task`):
+
+```text
+error(conflict): Checkout refused: WEB-1 is blocked across repositories by APP-3 in app. Pick a different task, or ask a person to step over it with --override -m "<why>".
+```
+
+A blocker this machine cannot read, because its repository is not here or the
+ticket is gone, holds the ticket too, and the message says it `cannot be resolved
+on this machine`. If a person decides the work goes ahead anyway, they take it
+with a reason, and the step is recorded on the ticket as `cross_blocker_overridden`.
+Taking over a stale claim with `--steal-if-stale` does not step over the link on
+its own; it needs the override too:
+
+```bash
+staple checkout WEB-1 --override -m "the email is live in staging"
+```
+
+The link also shows in the task detail in the web UI, in `get_task` over MCP (as
+`crossBlockers`), and in the Graph, drawn dashed. A link that would close a loop,
+through other links or through either repository's own `--blocked-by` edges, is
+refused, and so is a local edge that would close one through a link. The local
+edges of a repository that is not on this machine cannot be seen, so a loop
+through one is only caught on a machine that has both.
+
+When APP-3 is done, or moved to any status `app` files under done or cancelled,
+WEB-1 is ready again. The hub records it, in the hub and as
+`cross_blockers_resolved` on WEB-1 in `web` (`staple events`):
 
 ```bash
 staple hub events
@@ -122,14 +158,6 @@ staple hub events
 ```text
    1  2026-09-29T14:58:41  cross_blockers_resolved  {"workspace":"web","identifier":"WEB-1","blockers":["APP-3"]}
 ```
-
-> [!NOTE]
-> A link across repositories informs; it does not refuse. `staple inbox` in `web`
-> still lists WEB-1 as ready and a checkout goes through, and `staple show WEB-1`
-> does not mention the link. At the terminal, check `staple hub links` before
-> taking a ticket; agents see it in `get_task`. Within one repository, use
-> `--blocked-by` ([Epics and dependencies](epics-and-dependencies.md)), which does
-> hold work back.
 
 ## 6. Tidy the list
 
