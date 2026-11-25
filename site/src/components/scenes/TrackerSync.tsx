@@ -9,7 +9,7 @@ import styles from './TrackerSync.module.css';
 const TRACKERS = [
   {name: 'GitHub', shipped: true},
   {name: 'Linear', shipped: true},
-  {name: 'ClickUp', shipped: false},
+  {name: 'ClickUp', shipped: true},
   {name: 'Azure DevOps', shipped: false},
 ];
 
@@ -17,7 +17,7 @@ const TRACKERS = [
 export default function TrackerSync({fade = 'bottom', ...options}: SceneOptions): ReactNode {
   return (
     <Scene
-      label="staple, the local execution layer, beside a team's tracker. staple reads from GitHub and Linear today, marked Shipped. ClickUp, Azure DevOps and writing back to the tracker are planned, each marked Planned."
+      label="staple, the local execution layer, beside a team's tracker. staple reads from GitHub, Linear and ClickUp today, marked Shipped. Azure DevOps and writing back to the tracker are planned, each marked Planned."
       title="Next to your team's tracker"
       meta="read-only"
       timeline={[350, 700, 1050, 1400, 2150, 2950]}
