@@ -30,7 +30,9 @@ import { recordInheritedFieldWrites, type Journal } from "../journal.js";
 import {
   ReferentMissing,
   applyToDatabase,
+  detachFromLoop,
   localEntityVersion,
+  parentWritePosition,
   noteLoggedOriginClaim,
   setEntityVersion,
   settleRevisionsAfterRead,
@@ -43,6 +45,7 @@ import { withoutOpenContests } from "./conflicts.js";
 import { quarantineSnapshotEntity } from "./quarantine.js";
 import { noteRewindVocabulary } from "./sync-state.js";
 import type { SnapshotEntity } from "./wire.js";
+import { MAX_TREE_DEPTH } from "../types.js";
 
 /** The sentinel entity the vocabulary order travels on. Mirrors `store.ts` and `apply.ts`. */
 export const VOCABULARY_ORDER_ID = "@order";
@@ -313,6 +316,9 @@ export function hydrate(
   rewind = true,
 ): HydrateOutcome {
   let applied = 0;
+  const loops = breakSnapshotParentLoops(db, [...entities, ...parked]);
+  entities = entities.map((entity) => loops.replaced.get(entity) ?? entity);
+  parked = parked.map((entity) => loops.replaced.get(entity) ?? entity);
   let pending = orderForHydration([...entities, ...parked]);
   const missing = new Map<SnapshotEntity, ReferentMissing>();
 
@@ -339,6 +345,14 @@ export function hydrate(
   }
 
   keepChildEdgesInLogOrder(db, entities);
+  // Each loop broken above, said on the ticket and written to the log once it has landed.
+  for (const broken of loops.broken) {
+    const held = db.prepare("SELECT 1 AS hit FROM issues WHERE id = ?");
+    if (held.get(broken.victim) === undefined || held.get(broken.from) === undefined) continue;
+    // The link it had, put back only to name it: the event and the settlement read it off the row.
+    db.prepare("UPDATE issues SET parent_id = ? WHERE id = ?").run(broken.from, broken.victim);
+    detachFromLoop(db, broken.victim, broken.loop, { actor: null, deviceId: null, at, seq: cutoffSeq });
+  }
 
   if (final) {
     for (const entity of pending) {
@@ -371,7 +385,10 @@ function keepChildEdgesInLogOrder(db: DatabaseSync, entities: readonly SnapshotE
       const set = sets.get(blockedId);
       if (set === undefined) continue;
       const setSeq = set.fieldWrites?.blockedBy?.seq ?? set.createdSeq;
-      if (typeof entity.createdSeq !== "number" || typeof setSeq !== "number" || entity.createdSeq < setSeq) continue;
+      // The child's word on its parent edge is its create, or the move that put it under this parent.
+      const moved = entity.fieldWrites?.parentId?.seq ?? entity.fieldWrites?.parent_id?.seq;
+      const childSeq = typeof moved === "number" && typeof entity.createdSeq === "number" ? Math.max(moved, entity.createdSeq) : entity.createdSeq;
+      if (typeof childSeq !== "number" || typeof setSeq !== "number" || childSeq < setSeq) continue;
       const made = db.prepare("SELECT created_by, created_at FROM issues WHERE id = ?").get(entity.entityId) as
         | { created_by: string | null; created_at: string }
         | undefined;
@@ -386,6 +403,69 @@ function keepChildEdgesInLogOrder(db: DatabaseSync, entities: readonly SnapshotE
       );
     }
   }
+}
+
+/**
+ * A snapshot whose fold holds a parent loop — two devices moved tickets under each other and
+ * none has written the break yet — could never land: each ticket waits on the other's insert.
+ * Broken here by the rule every device reading the tail applies (`breakParentLoop`, `apply.ts`):
+ * the loop's ticket whose parent write is latest in the log goes to the top level. Positions come
+ * from the fold's per-field seqs, and for a ticket this device already holds and the snapshot
+ * does not carry, from what this device knows of it. The replaced entities carry no parent; the
+ * break is recorded once they have landed.
+ */
+function breakSnapshotParentLoops(
+  db: DatabaseSync,
+  entities: readonly SnapshotEntity[],
+): { replaced: Map<SnapshotEntity, SnapshotEntity>; broken: Array<{ victim: string; from: string; loop: string[] }> } {
+  const replaced = new Map<SnapshotEntity, SnapshotEntity>();
+  const broken: Array<{ victim: string; from: string; loop: string[] }> = [];
+  const parentKey = (state: Record<string, unknown>): "parentId" | "parent_id" | null =>
+    "parentId" in state ? "parentId" : "parent_id" in state ? "parent_id" : null;
+  const carried = new Map<string, SnapshotEntity>();
+  for (const entity of entities) {
+    if (entity.entity === "issue" && entity.deletedAt === null && parentKey(entity.state) !== null) carried.set(entity.entityId, entity);
+  }
+  if (carried.size === 0) return { replaced, broken };
+  const parents = new Map<string, string | null>(
+    (db.prepare("SELECT id, parent_id FROM issues").all() as Array<{ id: string; parent_id: string | null }>).map((row) => [row.id, row.parent_id]),
+  );
+  for (const [id, entity] of carried) {
+    const value = entity.state[parentKey(entity.state)!];
+    parents.set(id, typeof value === "string" ? value : null);
+  }
+  const position = (id: string): number => {
+    const entity = carried.get(id);
+    if (entity === undefined) return parentWritePosition(db, id);
+    return entity.fieldWrites?.parentId?.seq ?? entity.fieldWrites?.parent_id?.seq ?? entity.createdSeq ?? 0;
+  };
+  const settled = new Set<string>();
+  for (const start of carried.keys()) {
+    const path: string[] = [];
+    let cursor: string | null = start;
+    while (cursor !== null && !settled.has(cursor) && !path.includes(cursor) && path.length <= MAX_TREE_DEPTH) {
+      path.push(cursor);
+      cursor = parents.get(cursor) ?? null;
+    }
+    if (cursor !== null && path.includes(cursor)) {
+      const loop = path.slice(path.indexOf(cursor));
+      const victim = loop.reduce((best, next) => {
+        const [a, b] = [position(best), position(next)];
+        return b > a || (b === a && next > best) ? next : best;
+      });
+      const from = parents.get(victim)!;
+      parents.set(victim, null);
+      broken.push({ victim, from, loop });
+      const entity = carried.get(victim);
+      if (entity !== undefined) {
+        replaced.set(entity, { ...entity, state: { ...entity.state, [parentKey(entity.state)!]: null } });
+      } else {
+        db.prepare("UPDATE issues SET parent_id = NULL WHERE id = ?").run(victim);
+      }
+    }
+    for (const id of path) settled.add(id);
+  }
+  return { replaced, broken };
 }
 
 function isVocabularyOrder(entity: SnapshotEntity): boolean {

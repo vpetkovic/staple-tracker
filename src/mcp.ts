@@ -1760,17 +1760,30 @@ server.registerTool(
   "update_task",
   {
     description:
-      "Patch an issue. Guards: in_progress needs an assignee and zero unresolved blockers; unblock_owner/unblock_action only with status blocked; pass expected_status_version for optimistic concurrency. Optional comment lands in the same transaction. After you hand a ticket on for review (in_review), show_ticket shows the person what waits on them.",
+      "Patch an issue. Guards: in_progress needs an assignee and zero unresolved blockers; unblock_owner/unblock_action only with status blocked; pass expected_status_version for optimistic concurrency. Optional comment lands in the same transaction. When scope changes, edit the ticket rather than recreating it: acceptance_criteria replaces the criteria whole, or remove_criteria (1-based positions) then add_criteria edit them in place (criteriaChange {from, to, changed, marks} says what changed; a milestone criterion's met/unmet mark follows its words, and marks.cleared names any the change removed); parent moves the ticket and its subtree under another parent, or to the top level with null (parentChange {from, to, changed}); a loop, the depth cap, an idea and the tree of a pending gate are refused. After you hand a ticket on for review (in_review), show_ticket shows the person what waits on them.",
     inputSchema: {
       ref: refSchema,
       title: z.string().optional(),
       description: z.string().optional(),
       status: statusEnum.optional(),
       kind: kindSchema.optional().describe("Re-declare the kind. Omit to leave unchanged."),
-      parent: refSchema.nullable().optional().describe("Validated explicitly; changing parent through update_task is refused."),
+      parent: refSchema
+        .nullable()
+        .optional()
+        .describe("Move the ticket, with everything under it, under this parent; null makes it top-level. Omit to leave it."),
       priority: priorityEnum.optional(),
       assignee: z.string().nullable().optional(),
       labels: z.array(z.string()).optional(),
+      acceptance_criteria: z
+        .array(z.string())
+        .max(20)
+        .optional()
+        .describe("Replace the acceptance criteria whole; [] clears them. Not with add_criteria or remove_criteria."),
+      add_criteria: z.array(z.string()).max(20).optional().describe("Append criteria, after any remove_criteria in the same write."),
+      remove_criteria: z
+        .array(z.number().int().positive())
+        .optional()
+        .describe("Remove criteria by 1-based position in the list as it stands now."),
       unblock_owner: z.string().nullable().optional(),
       unblock_action: z.string().nullable().optional(),
       /**
@@ -1799,7 +1812,7 @@ server.registerTool(
     run(() => {
       const actor = requireActor(input.actor);
       const store = storeFor(input.ws);
-      const updated = store.updateIssue(
+      const { issue: updated, criteriaChange, parentChange } = store.updateIssueResult(
         input.ref,
         {
           title: input.title,
@@ -1810,6 +1823,9 @@ server.registerTool(
           priority: input.priority,
           assignee: input.assignee,
           labels: input.labels,
+          acceptanceCriteria: input.acceptance_criteria,
+          addCriteria: input.add_criteria,
+          removeCriteria: input.remove_criteria,
           unblockOwner: input.unblock_owner,
           unblockAction: input.unblock_action,
           estimatedSeconds: input.estimate_seconds,
@@ -1820,7 +1836,11 @@ server.registerTool(
         attemptOptionsFromInput(input),
       );
       notifyHubIfResolved(store, input.ref, input.status);
-      return withAttemptResult(store, updated);
+      return withAttemptResult(store, {
+        ...updated,
+        ...(criteriaChange === null ? {} : { criteriaChange }),
+        ...(parentChange === null ? {} : { parentChange }),
+      });
     }),
 );
 

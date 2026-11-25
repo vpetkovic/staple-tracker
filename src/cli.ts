@@ -79,7 +79,7 @@ import {
   type QueuedBy,
   type StapleEvent,
 } from "./core/types.js";
-import type { WorkspaceStore } from "./core/store.js";
+import type { UpdateIssueInput, WorkspaceStore } from "./core/store.js";
 import { requireMineLens, splitMine } from "./core/cloud/member-lens.js";
 import { sharedLine, sharedStatus } from "./core/cloud/shared-status.js";
 import { readConnection } from "./core/cloud/connection.js";
@@ -419,6 +419,43 @@ function blockedByVerbList(raw: string | undefined, extra: readonly string[], no
     );
   }
   return refs;
+}
+
+/**
+ * The edit `staple criteria` asks for, or null when it names none (it then prints the list).
+ * `--set "a;b"` replaces the list and `--clear` empties it; `--rm 2,3` (positions as the list
+ * stands; repeatable) and `--add "c"` (repeatable, `;` splits) edit it in place. A replace with nothing in it
+ * is refused rather than read as a clear, as `blocked-by` refuses an empty list.
+ */
+function criteriaVerbEdit(values: { set?: string; add?: string[]; rm?: string[]; clear?: boolean }): Pick<
+  UpdateIssueInput,
+  "acceptanceCriteria" | "addCriteria" | "removeCriteria"
+> | null {
+  const replacing = values.set !== undefined || values.clear === true;
+  const editing = values.add !== undefined || values.rm !== undefined;
+  if (!replacing && !editing) return null;
+  if (values.set !== undefined && values.clear) throw new StapleError("validation", "--set and --clear cannot be used together.");
+  if (replacing && editing) throw new StapleError("validation", "--set/--clear replace the list whole; edit it with --rm and --add instead, not both.");
+  if (values.clear) return { acceptanceCriteria: [] };
+  const split = (raw: string) => raw.split(";").map((s) => s.trim()).filter(Boolean);
+  if (values.set !== undefined) {
+    const criteria = split(values.set);
+    if (criteria.length === 0) throw new StapleError("validation", 'staple criteria --set needs at least one criterion ("a;b"); --clear removes them all.');
+    return { acceptanceCriteria: criteria };
+  }
+  const add = (values.add ?? []).flatMap(split);
+  if (values.add !== undefined && add.length === 0) throw new StapleError("validation", "staple criteria --add needs a criterion.");
+  const removeCriteria = values.rm === undefined ? undefined : values.rm.join(",").split(",").map((s) => s.trim()).filter(Boolean).map((s) => {
+    if (!/^\d+$/.test(s)) throw new StapleError("validation", `staple criteria --rm takes positions such as 2,3; got "${s}".`);
+    return Number(s);
+  });
+  if (removeCriteria !== undefined && removeCriteria.length === 0) throw new StapleError("validation", "staple criteria --rm needs a position.");
+  return { ...(add.length > 0 ? { addCriteria: add } : {}), ...(removeCriteria === undefined ? {} : { removeCriteria }) };
+}
+
+/** Criteria numbered as `staple criteria --rm` names them. */
+function criteriaLines(criteria: readonly string[]): string[] {
+  return criteria.map((criterion, index) => `  ${index + 1}. ${criterion}`);
 }
 
 /**
@@ -1129,6 +1166,17 @@ Execution attempts (one agent's tenure on one issue; opened and ended by the ver
   block <ref> --owner O --action TEXT   mark blocked with an unblock descriptor
   blocked-by <ref> R1,R2 | --none       replace the dependency set; only --none clears
               it, and a missing or empty list is refused (exit 2)
+  criteria <ref> [--set "a;b" | --clear | --rm 2,3 --add "c"] [--agent A]
+              edit the acceptance criteria instead of recreating the ticket: --set
+              replaces them, --rm removes by position (as listed now), then --add
+              appends (repeatable; ";" splits). No flag lists them numbered. A
+              milestone criterion's mark follows its words; one removed is cleared,
+              and the output says so
+  move <ref> --parent REF | --none [--agent A]
+              move a ticket and everything under it to another parent, or to the
+              top level; a loop, the depth cap, an idea and the tree of a pending
+              gate are refused. Both parents re-derive their status; a child made
+              to block its parent until done now blocks the new one
   wait <ref> [--timeout S] [--interval MS]
               block until <ref> is ready (no unresolved blockers) or finished;
               --interval default 500ms, no --timeout means wait forever
@@ -2123,6 +2171,77 @@ function main() {
         break;
       }
       console.log(line(issue, blockers.length ? `  [waiting on ${blockers.map((b) => b.identifier).join(", ")}]` : "  [no unresolved blockers]"));
+      break;
+    }
+
+    case "criteria": {
+      const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: {
+          ...common,
+          agent: { type: "string" },
+          set: { type: "string" },
+          add: { type: "string", multiple: true },
+          rm: { type: "string", multiple: true },
+          clear: { type: "boolean" },
+        },
+      });
+      const ref = requireRef(positionals[0], "criteria");
+      if (positionals.length > 1) {
+        throw new StapleError("validation", `usage: staple criteria <ref> [--set "a;b" | --clear | --rm 2,3 --add "c"] (unexpected argument "${positionals[1]}")`);
+      }
+      const { store } = getStore(values);
+      const edit = criteriaVerbEdit(values);
+      if (edit === null) {
+        // No edit: the list as it stands, numbered as --rm names it.
+        const issue = store.getIssue(ref);
+        if (values.json) {
+          outJson({ identifier: issue.identifier, acceptanceCriteria: issue.acceptanceCriteria ?? [] });
+          break;
+        }
+        console.log(criteriaLines(issue.acceptanceCriteria ?? []).join("\n") || `${issue.identifier} has no acceptance criteria.`);
+        break;
+      }
+      const { issue, criteriaChange } = store.updateIssueResult(ref, edit, agentName(values.agent));
+      if (values.json) {
+        outJson({ ...issue, criteriaChange });
+        break;
+      }
+      const change = criteriaChange!;
+      console.log(line(issue, change.changed ? `  criteria ${change.from.length} -> ${change.to.length}` : "  criteria unchanged"));
+      for (const text of criteriaLines(change.to)) console.log(text);
+      for (const mark of change.marks.kept.filter((kept) => kept.from !== kept.to)) {
+        console.log(`  mark kept: "${mark.criterion}" (${mark.verdict}) moved ${mark.from} -> ${mark.to}`);
+      }
+      for (const mark of change.marks.reworded) {
+        console.log(`  mark no longer stands: ${mark.position} was "${mark.criterion}" (${mark.verdict}), now reworded`);
+      }
+      for (const mark of change.marks.cleared) console.log(`  mark cleared: "${mark.criterion}" (${mark.verdict}, was ${mark.position})`);
+      break;
+    }
+
+    case "move": {
+      const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: { ...common, agent: { type: "string" }, parent: { type: "string" }, none: { type: "boolean" } },
+      });
+      const ref = requireRef(positionals[0], "move");
+      const usage = "usage: staple move <ref> --parent <ref> | staple move <ref> --none";
+      if (positionals.length > 1) throw new StapleError("validation", `${usage} (unexpected argument "${positionals[1]}")`);
+      if (values.none && values.parent !== undefined) throw new StapleError("validation", `--parent and --none cannot be used together; ${usage}`);
+      const parent = values.none ? null : values.parent?.trim();
+      if (parent === undefined || parent === "") throw new StapleError("validation", `staple move needs --parent <ref>, or --none for the top level; ${usage}`);
+      const { store } = getStore(values);
+      const { issue, parentChange } = store.updateIssueResult(ref, { parent }, agentName(values.agent));
+      if (values.json) {
+        outJson({ ...issue, parentChange });
+        break;
+      }
+      const change = parentChange!;
+      const said = (identifier: string | null) => identifier ?? "top level";
+      console.log(line(issue, change.changed ? `  parent ${said(change.from)} -> ${said(change.to)}` : `  parent ${said(change.to)} (unchanged)`));
       break;
     }
 

@@ -51,6 +51,8 @@ import { planLinkFromValue, planLinkIssue, writePlanLink } from "../plan-links.j
 import { planRowFromValue, planRowId, writePlanRow } from "../plan-rows.js";
 import { isDraftIdentifier } from "../plan.js";
 import { writeCriterionMark } from "../milestone-marks.js";
+import { rederiveSubtreeDepths } from "../tree-depth.js";
+import { MAX_TREE_DEPTH } from "../types.js";
 import {
   SETTING_DEFINITIONS,
   encodeStoredSetting,
@@ -805,8 +807,18 @@ function applyIssue(db: DatabaseSync, input: ApplyInput): boolean {
     const values = new Map(pairs);
     settleIssueKeys(db, input, values);
     deriveIssueColumns(db, values);
+    const parentBefore = values.has("parent_id")
+      ? ((db.prepare("SELECT parent_id FROM issues WHERE id = ?").get(input.entityId) as { parent_id: string | null }).parent_id)
+      : null;
     // A settlement that lost its number to an earlier claim carries nothing else to write.
     if (values.size > 0) updateRow(db, "issues", "id", input.entityId, [...values]);
+    if (values.has("parent_id")) {
+      // A move: the subtree's depth follows the moved row's, as on the device that moved it.
+      rederiveSubtreeDepths(db, input.entityId);
+      // Only a move carries the edge here; a create arriving over the row is `keepChildEdgeAgainstEarlierSet`'s.
+      if (input.verb === "update") moveChildEdge(db, input, parentBefore, (values.get("parent_id") as string | null) ?? null);
+      breakParentLoop(db, input);
+    }
     const after = identifierOf(db, input.entityId);
     if (before !== null && after !== null && before !== after) {
       /**
@@ -867,18 +879,156 @@ function applyIssue(db: DatabaseSync, input: ApplyInput): boolean {
 function keepChildEdgeAgainstEarlierSet(db: DatabaseSync, input: ApplyInput): void {
   const edges = createdEdgesOf(db, input);
   for (const blockedId of edges.targets) {
-    const write = db
-      .prepare(
-        `SELECT a.seq AS seq, w.op_id AS op FROM sync_field_writes w LEFT JOIN sync_applied a ON a.op_id = w.op_id
-          WHERE w.entity = 'relation' AND w.entity_id = ? AND w.field = 'blockedBy'`,
-      )
-      .get(blockedId) as { seq: number | null; op: string } | undefined;
-    if (write !== undefined && (write.seq === null || write.seq > (input.seq as number))) continue;
+    if (setWrittenLater(db, blockedId, input)) continue;
     db.prepare(`INSERT OR IGNORE INTO relations (blocker_id, blocked_id, type, created_by, created_at) VALUES (?, ?, 'blocks', ?, ?)`).run(
       input.entityId,
       blockedId,
       edges.createdBy,
       edges.createdAt,
+    );
+  }
+}
+
+/**
+ * Where an issue's parent write sits in the log, for breaking a loop (`breakParentLoop`): this
+ * device's own unsent write is `Infinity` (it lands after everything there), its sent one the seq
+ * it was acknowledged at, the operation being applied its own seq, and a write applied from
+ * another device the seq it was applied at. A write this device cannot place (inherited with a
+ * snapshot, or from before the log) is older than anything being applied now: 0.
+ */
+export function parentWritePosition(db: DatabaseSync, issueId: string, input?: Pick<ApplyInput, "entityId" | "seq" | "fieldSeqs">): number {
+  const own = ownClaimSeq(db, "issue", issueId, ["parentId", "parent_id"]);
+  if (input !== undefined && issueId === input.entityId) {
+    const here = input.fieldSeqs?.parentId ?? input.fieldSeqs?.parent_id ?? input.seq ?? Number.POSITIVE_INFINITY;
+    return Math.max(here, own ?? Number.NEGATIVE_INFINITY);
+  }
+  const applied = db
+    .prepare(
+      `SELECT MAX(a.seq) AS seq FROM sync_field_writes w JOIN sync_applied a ON a.op_id = w.op_id
+        WHERE w.entity = 'issue' AND w.entity_id = ? AND w.field IN ('parentId', 'parent_id')`,
+    )
+    .get(issueId) as { seq: number | null } | undefined;
+  return Math.max(own ?? 0, applied?.seq ?? 0);
+}
+
+/** The loop of parents through `issueId`, starting at it, or null when its ancestry ends. */
+function parentLoopThrough(db: DatabaseSync, issueId: string): string[] | null {
+  const read = db.prepare("SELECT parent_id FROM issues WHERE id = ?");
+  const path = [issueId];
+  let cursor = (read.get(issueId) as { parent_id: string | null } | undefined)?.parent_id ?? null;
+  for (let hops = 0; cursor !== null && hops <= MAX_TREE_DEPTH; hops += 1) {
+    if (cursor === issueId) return path;
+    if (path.includes(cursor)) return null; // a loop above it, not through it: its own write broke none
+    path.push(cursor);
+    cursor = (read.get(cursor) as { parent_id: string | null } | undefined)?.parent_id ?? null;
+  }
+  return null;
+}
+
+/**
+ * Two devices that each move a ticket under the other, offline, make a loop no device could have
+ * refused: each write is fine on its own. Every device breaks it the same way, from facts the log
+ * fixes: of the loop's tickets, the one whose parent write is LATEST in the log is detached to the
+ * top level, with its subtree. A device applies the writes in log order (its own unsent write
+ * counting as latest), so whichever write closes the loop on a device, the same ticket goes; a
+ * device hydrating breaks the snapshot's loops by the same rule (`breakSnapshotParentLoops`). The
+ * device then writes the detached ticket's top-level place to the log (`settleOne`, `claims.ts`),
+ * and says so on the ticket (`parent_loop_broken`): the loop, and the move that made each link,
+ * so a person can put it where it belongs.
+ */
+function breakParentLoop(db: DatabaseSync, input: ApplyInput): void {
+  const loop = parentLoopThrough(db, input.entityId);
+  if (loop === null) return;
+  const victim = loop
+    .map((id) => ({ id, at: parentWritePosition(db, id, input) }))
+    .reduce((best, next) => (next.at > best.at || (next.at === best.at && next.id > best.id) ? next : best));
+  detachFromLoop(db, victim.id, loop, input);
+}
+
+/** Detach one ticket of a parent loop to the top level, and record it. Shared with hydration. */
+export function detachFromLoop(db: DatabaseSync, victimId: string, loop: readonly string[], input: Pick<ApplyInput, "actor" | "deviceId" | "at" | "seq">): void {
+  const identifier = (id: string | null) =>
+    id === null ? null : ((db.prepare("SELECT identifier FROM issues WHERE id = ?").get(id) as { identifier: string } | undefined)?.identifier ?? id);
+  const parentOf = (id: string) => (db.prepare("SELECT parent_id FROM issues WHERE id = ?").get(id) as { parent_id: string | null } | undefined)?.parent_id ?? null;
+  const moves = loop.map((id) => ({ identifier: identifier(id), parent: identifier(parentOf(id)), by: moveAuthor(db, id) }));
+  const from = parentOf(victimId);
+  db.prepare("UPDATE issues SET parent_id = NULL, depth = 0 WHERE id = ?").run(victimId);
+  rederiveSubtreeDepths(db, victimId);
+  moveChildEdge(db, { ...input, entityId: victimId } as ApplyInput, from, null);
+  writeEventRow(db, {
+    kind: "parent_loop_broken",
+    issueId: victimId,
+    actor: "staple",
+    payload: {
+      identifier: identifier(victimId),
+      detachedFrom: identifier(from),
+      loop: loop.map((id) => identifier(id)),
+      moves,
+      message: `Moves made on different devices put ${loop.map((id) => identifier(id)).join(", ")} under each other. ${identifier(victimId)}, the latest move, is now top-level; move it where it belongs.`,
+    },
+    createdAt: input.at,
+    originDevice: input.deviceId,
+    // The same loop broken again (its own write coming back) says it once.
+    dedupKey: `parent_loop_broken ${victimId}/${from ?? ""}/${[...loop].sort().join(",")}`,
+  });
+  oweSettlement(db, { entity: "issue", entityId: victimId, field: "parentId", from: from ?? "" });
+}
+
+/** Who made an issue's last parent write, as far as this device knows: its own outbox, else its event log. */
+function moveAuthor(db: DatabaseSync, issueId: string): string | null {
+  const own = db
+    .prepare(
+      `SELECT actor FROM sync_outbox WHERE entity = 'issue' AND entity_id = ?
+          AND (payload LIKE '%"parentId"%' OR payload LIKE '%"parent_id"%') ORDER BY client_seq DESC LIMIT 1`,
+    )
+    .get(issueId) as { actor: string | null } | undefined;
+  if (own !== undefined) return own.actor;
+  const written = db
+    .prepare("SELECT device_id FROM sync_field_writes WHERE entity = 'issue' AND entity_id = ? AND field IN ('parentId', 'parent_id')")
+    .get(issueId) as { device_id: string | null } | undefined;
+  return written?.device_id ? `device ${written.device_id}` : null;
+}
+
+/**
+ * Whether `blockedId`'s blocker set was last written after `input` in the log: by an operation
+ * applied at a later seq, or by this device and not yet in the log at all (which puts it later
+ * than anything already there). Such a set has the last word on the edges it names. An input with
+ * no seq (a local apply) is the latest word itself.
+ */
+function setWrittenLater(db: DatabaseSync, blockedId: string, input: ApplyInput): boolean {
+  if (typeof input.seq !== "number") return false;
+  const write = db
+    .prepare(
+      `SELECT a.seq AS seq, w.op_id AS op FROM sync_field_writes w LEFT JOIN sync_applied a ON a.op_id = w.op_id
+        WHERE w.entity = 'relation' AND w.entity_id = ? AND w.field = 'blockedBy'`,
+    )
+    .get(blockedId) as { seq: number | null; op: string } | undefined;
+  return write !== undefined && (write.seq === null || write.seq > input.seq);
+}
+
+/**
+ * A move of a child made to block its parent until done carries its one edge with it, as its
+ * create did (`createdEdgesOf`): the edge to the parent it left goes, the edge to the one it
+ * joined is added — never a replacement of either set, so a blocker another device gave either
+ * parent meanwhile stands. Dated at the child's create, by its author, as every device hydrating
+ * dates it (`keepChildEdgesInLogOrder`, `hydrate.ts`). Also on the device's own move coming back, which puts the edge back
+ * after a set written earlier in the log removed it (`keepChildEdgeAgainstEarlierSet`).
+ */
+function moveChildEdge(db: DatabaseSync, input: ApplyInput, from: string | null, to: string | null): void {
+  const childId = input.entityId;
+  const row = db.prepare("SELECT block_parent_until_done, created_by, created_at FROM issues WHERE id = ?").get(childId) as
+    | { block_parent_until_done: number; created_by: string | null; created_at: string }
+    | undefined;
+  if (row === undefined || row.block_parent_until_done !== 1) return;
+  if (from !== null && from !== to && !setWrittenLater(db, from, input)) {
+    db.prepare("DELETE FROM relations WHERE blocker_id = ? AND blocked_id = ? AND type = 'blocks'").run(childId, from);
+  }
+  if (to !== null && issueExists(db, to) && !setWrittenLater(db, to, input)) {
+    db.prepare(`INSERT OR IGNORE INTO relations (blocker_id, blocked_id, type, created_by, created_at) VALUES (?, ?, 'blocks', ?, ?)`).run(
+      childId,
+      to,
+      row.created_by,
+      row.created_at,
     );
   }
 }

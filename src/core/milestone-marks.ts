@@ -6,7 +6,15 @@
  * sits above the journal those appliers sit under.
  */
 import type { DatabaseSync } from "node:sqlite";
-import { type CriterionMarkValue, type CriterionVerdict, criterionMarkField, criterionMarkValue } from "./milestone-goal.js";
+import {
+  type CriterionMarkMoves,
+  type CriterionMarkValue,
+  type CriterionVerdict,
+  criterionMarkField,
+  criterionMarkPosition,
+  criterionMarkValue,
+  followCriterionMarks,
+} from "./milestone-goal.js";
 
 /**
  * Write one criterion's mark, or clear it (null): the one writer the local mark and an applied
@@ -47,3 +55,37 @@ export function criterionMarkFields(db: DatabaseSync, milestoneId: string): Reco
   );
 }
 
+
+/**
+ * Carry an issue's marks across an edit of its criteria (`followCriterionMarks` decides where each
+ * goes): the rows are rewritten here, and what changed comes back as the fields a milestone update
+ * journals (`criterion<n>`, null where a position lost its mark), so every device moves them alike.
+ */
+export function followMarksAcrossEdit(
+  db: DatabaseSync,
+  issueId: string,
+  before: readonly string[],
+  after: readonly string[],
+  positions?: ReadonlyMap<number, number | null>,
+): { moves: CriterionMarkMoves; fields: Record<string, CriterionMarkValue | null> } {
+  const held = new Map(
+    Object.entries(criterionMarkFields(db, issueId)).map(([field, value]) => [criterionMarkPosition(field)!, value] as const),
+  );
+  const { moves, placement } = followCriterionMarks(
+    before,
+    after,
+    [...held].map(([position, value]) => ({ position, criterion: value.criterion, verdict: value.verdict })),
+    positions,
+  );
+  const next = new Map<number, CriterionMarkValue>();
+  for (const [from, to] of placement) if (to !== null) next.set(to, held.get(from)!);
+  const fields: Record<string, CriterionMarkValue | null> = {};
+  for (const position of new Set([...held.keys(), ...next.keys()])) {
+    const value = next.get(position) ?? null;
+    const was = held.get(position) ?? null;
+    if (value === was) continue;
+    writeCriterionMark(db, issueId, position, value);
+    fields[criterionMarkField(position)] = value;
+  }
+  return { moves, fields };
+}
