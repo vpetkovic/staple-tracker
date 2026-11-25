@@ -81,7 +81,7 @@ describe("ClickUp through the shared integration operations", () => {
 
     // Now outside the mapped space: a live link is refused and offers the task's space by name.
     const second = ws.store.createIssue({ title: "Another" });
-    const refused = await service.execute({ action: "link", connectionId: "clickup", url: "https://app.clickup.com/t/86abc123", ref: second.id, confirmed: true, actor: "ada" }).catch(e => e);
+    const refused = (await service.execute({ action: "link", connectionId: "clickup", url: "https://app.clickup.com/t/86abc123", ref: second.id, confirmed: true, actor: "ada" }).catch((e: unknown) => e)) as Error;
     expect(refused).toMatchObject({ code: "validation", detail: { reason: "outside_scope", target: { providerId: "clickup", kind: "space", containerId: otherSpace, name: "Ops" } } });
     expect(refused.message).toContain("Map Ops first");
 

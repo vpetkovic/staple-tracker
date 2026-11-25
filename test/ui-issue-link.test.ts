@@ -127,12 +127,12 @@ describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
     const settings = page.getByRole("dialog", { name: "Settings" });
     // Planned providers are listed and cannot be chosen yet.
     await page.getByRole("button", { name: "Add connection", exact: true }).click();
-    for (const planned of ["Azure DevOps", "ClickUp"]) {
-      const item = page.getByRole("menuitem", { name: new RegExp(`^${planned}`) });
-      expect(await item.getAttribute("aria-disabled")).toBe("true");
-      expect(await item.innerText()).toContain("Soon");
+    const planned = page.getByRole("menuitem", { name: /^Azure DevOps/ });
+    expect(await planned.getAttribute("aria-disabled")).toBe("true");
+    expect(await planned.innerText()).toContain("Soon");
+    for (const available of [/^Linear workspace/, /^ClickUp workspace/]) {
+      expect(await page.getByRole("menuitem", { name: available }).getAttribute("aria-disabled")).toBeNull();
     }
-    expect(await page.getByRole("menuitem", { name: /^Linear workspace/ }).getAttribute("aria-disabled")).toBeNull();
     await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "Add account", exact: true }).click();
     await page.getByLabel("Account", { exact: true }).fill("tester");
