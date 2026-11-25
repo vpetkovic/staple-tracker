@@ -15,7 +15,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { integrationConfigure } from "@/lib/api";
+import { integrationConfigure, integrationRead } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { checkedAgo, oldestCheck, type ConnectionView } from "@/integrations/connection-status";
 import { providerName } from "@/integrations/link-state";
@@ -24,7 +24,7 @@ import type { Connections } from "@/integrations/useConnections";
 import type { DetectedConnection } from "../../../../../core/integrations/contracts";
 import { ConfirmDialog } from "../form/ConfirmDialog";
 import { InlineError, Section } from "../form/primitives";
-import { azureOrganizationProblem, commandIn, CONNECTION_CHOICES, connectionMeta, linearIdProblem, offeredDetections } from "./integrations-model";
+import { azureOrganizationHint, azureOrganizationProblem, commandIn, CONNECTION_CHOICES, connectionMeta, linearIdProblem, offeredDetections } from "./integrations-model";
 
 type Provider = "github" | "linear" | "azure_devops";
 const message = (caught: unknown) => (caught instanceof Error ? caught.message : String(caught));
@@ -497,11 +497,16 @@ export function ConnectionForm({ provider, ws, onCancel, onSaved, onDirtyChange 
   const [credentialEnv, setCredentialEnv] = useState(defaultEnv);
   const [organization, setOrganization] = useState("");
   const [user, setUser] = useState("");
+  /** Azure DevOps Server host; empty means Azure DevOps Services. */
+  const [server, setServer] = useState("");
+  /** Azure DevOps organizations (or collections) the token lists: null until asked, [] when it lists none. */
+  const [found, setFound] = useState<Array<{ name: string; id: string }> | null>(null);
+  const [finding, setFinding] = useState(false);
   const [pending, setPending] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const root = useRef<HTMLFormElement>(null);
 
-  const dirty = provider === "github" ? account !== "" || host !== "github.com" : organization !== "" || user !== "" || credentialEnv !== defaultEnv;
+  const dirty = provider === "github" ? account !== "" || host !== "github.com" : organization !== "" || user !== "" || server !== "" || credentialEnv !== defaultEnv;
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
 
   // Radix closes the dialog on Escape from a capturing listener on the document, so the form
@@ -517,7 +522,35 @@ export function ConnectionForm({ provider, ws, onCancel, onSaved, onDirtyChange 
     return () => window.removeEventListener("keydown", onKey, true);
   }, [onCancel]);
 
-  const idProblem = provider === "linear" ? linearIdProblem(organization, user) : provider === "azure_devops" ? azureOrganizationProblem(organization) : null;
+  // Azure DevOps: ask which organizations (or Server collections) the token reaches, so one can be picked.
+  useEffect(() => {
+    if (provider !== "azure_devops") return;
+    const env = credentialEnv.trim();
+    const where = server.trim().toLowerCase();
+    if (!/^[A-Z][A-Z0-9_]{0,127}$/.test(env) || (where && azureOrganizationProblem("", where))) {
+      setFound(null);
+      setFinding(false);
+      return;
+    }
+    let live = true;
+    setFinding(true);
+    const timer = setTimeout(() => {
+      integrationRead<{ organizations: Array<{ name: string; id: string }> }>({ action: "organizations", providerId: "azure_devops", credentialEnv: env, host: where || undefined }, ws)
+        .then((answer) => {
+          if (!live) return;
+          setFound(answer.organizations);
+          if (answer.organizations.length === 1) setOrganization((typed) => typed || answer.organizations[0]!.name);
+        })
+        .catch(() => live && setFound([]))
+        .finally(() => live && setFinding(false));
+    }, 400);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [provider, credentialEnv, server, ws]);
+
+  const idProblem = provider === "linear" ? linearIdProblem(organization, user) : provider === "azure_devops" ? azureOrganizationProblem(organization, server) : null;
   const complete =
     provider === "github"
       ? host.trim() !== "" && account.trim() !== ""
@@ -532,7 +565,7 @@ export function ConnectionForm({ provider, ws, onCancel, onSaved, onDirtyChange 
         provider === "github"
           ? { action: "configure", host: host.trim(), account: account.trim() }
           : provider === "azure_devops"
-            ? { action: "configure", providerId: "azure_devops", organization: organization.trim(), credentialEnv: credentialEnv.trim() }
+            ? { action: "configure", providerId: "azure_devops", organization: organization.trim(), credentialEnv: credentialEnv.trim(), ...(server.trim() ? { host: server.trim() } : {}) }
             : { action: "configure", providerId: "linear", account: user.trim(), scopeId: organization.trim(), credentialEnv: credentialEnv.trim() },
         ws,
       );
@@ -564,21 +597,46 @@ export function ConnectionForm({ provider, ws, onCancel, onSaved, onDirtyChange 
           </div>
         ) : provider === "azure_devops" ? (
           <>
-            <div className="grid gap-3 @min-[30rem]:grid-cols-2">
-              <FormField id={`${id}-org`} label="Organization">
-                <Input id={`${id}-org`} value={organization} onChange={(e) => setOrganization(e.target.value)} placeholder="The name in dev.azure.com/<organization>" autoComplete="off" spellCheck={false} autoFocus aria-describedby={`${id}-org-help`} className="pointer-coarse:h-11" />
+            <FormField
+              id={`${id}-env`}
+              label="Token variable"
+              help="The name of the environment variable that holds a personal access token with Work Items (Read) and Project and Team (Read), in the environment Staple runs in. Staple only reads with it. Restart Staple after setting it."
+            >
+              <Input id={`${id}-env`} value={credentialEnv} onChange={(e) => setCredentialEnv(e.target.value)} autoComplete="off" spellCheck={false} aria-describedby={`${id}-env-help`} className="pointer-coarse:h-11" />
+            </FormField>
+            <FormField id={`${id}-server`} label="Server (optional)" help="Leave empty for Azure DevOps Services. For Azure DevOps Server, its host name, like tfs.example.com.">
+              <Input id={`${id}-server`} value={server} onChange={(e) => setServer(e.target.value)} placeholder="dev.azure.com" autoComplete="off" spellCheck={false} aria-describedby={`${id}-server-help`} className="pointer-coarse:h-11" />
+            </FormField>
+            <div className="space-y-1.5">
+              <FormField id={`${id}-org`} label={server.trim() ? "Collection" : "Organization"}>
+                {found && found.length > 1 ? (
+                  <div role="group" aria-label={server.trim() ? "Collections this token reaches" : "Organizations this token reaches"} data-azure-organizations className="flex flex-wrap gap-1.5">
+                    {found.map((choice) => (
+                      <Button
+                        key={choice.id}
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        aria-pressed={organization.trim() === choice.name}
+                        onClick={() => setOrganization(choice.name)}
+                        className={cn("rounded-full pointer-coarse:h-11", organization.trim() === choice.name && "border-foreground bg-surface-sunken font-medium")}
+                      >
+                        {organization.trim() === choice.name ? <Check aria-hidden className="size-3.5" /> : null}
+                        {choice.name}
+                      </Button>
+                    ))}
+                  </div>
+                ) : null}
+                <Input id={`${id}-org`} value={organization} onChange={(e) => setOrganization(e.target.value)} placeholder={server.trim() ? "DefaultCollection" : "The name in dev.azure.com/<organization>"} autoComplete="off" spellCheck={false} autoFocus aria-describedby={`${id}-org-help`} className="pointer-coarse:h-11" />
               </FormField>
-              <FormField id={`${id}-env`} label="Token variable">
-                <Input id={`${id}-env`} value={credentialEnv} onChange={(e) => setCredentialEnv(e.target.value)} autoComplete="off" spellCheck={false} aria-describedby={`${id}-org-help`} className="pointer-coarse:h-11" />
-              </FormField>
+              {idProblem ? (
+                <InlineError id={`${id}-org-help`}>{idProblem}</InlineError>
+              ) : (
+                <p id={`${id}-org-help`} className="text-label text-muted-foreground" aria-live="polite">
+                  {azureOrganizationHint(found, finding, server)}
+                </p>
+              )}
             </div>
-            {idProblem ? (
-              <InlineError id={`${id}-org-help`}>{idProblem}</InlineError>
-            ) : (
-              <p id={`${id}-org-help`} className="text-label text-muted-foreground">
-                The variable holds a personal access token with Work Items (Read) and Project and Team (Read), in the environment Staple runs in. Staple reads your user and organization from it when you save.
-              </p>
-            )}
           </>
         ) : (
           <>

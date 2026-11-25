@@ -294,6 +294,11 @@ describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
       const url = new URL(String(input));
       // A Linear team mapped by an earlier test must not reach the network either.
       if (url.host === "api.linear.app") return new Response(null, { status: 401 });
+      // A token made for all accessible organizations lists them for the form.
+      if (url.host === "app.vssps.visualstudio.com") {
+        if (url.pathname === "/_apis/profile/profiles/me") return Response.json({ id: account });
+        return Response.json({ value: [{ accountId: org, accountName: "acme" }, { accountId: "99999999-9999-4999-8999-999999999999", accountName: "zeta" }] });
+      }
       if (url.host !== "dev.azure.com") return originalFetch(input, init);
       if (denied) return new Response("private fixture failure", { status: 401 });
       const path = url.pathname;
@@ -308,8 +313,12 @@ describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
       await page.goto(`${at(single)}/?settings=integrations&settings-ws=alpha&token=${single.token}`, { waitUntil: "networkidle" });
       await page.getByRole("button", { name: "Add connection", exact: true }).click();
       await page.getByRole("menuitem", { name: /^Azure DevOps organization/ }).click();
-      await page.getByLabel("Organization", { exact: true }).fill("acme");
       await page.getByLabel("Token variable", { exact: true }).fill("STAPLE_TEST_ADO_PAT");
+      // The organizations the token reaches are offered; picking one fills the field.
+      const reached = page.getByRole("group", { name: "Organizations this token reaches" });
+      await reached.getByRole("button", { name: "acme", exact: true }).click();
+      expect(await page.getByLabel("Organization", { exact: true }).inputValue()).toBe("acme");
+      expect(await reached.getByRole("button", { name: "acme", exact: true }).getAttribute("aria-pressed")).toBe("true");
       await page.getByRole("button", { name: "Save", exact: true }).click();
       await expect.poll(() => page.locator('[data-connection-row="azure_devops"] [data-connection-state="ready"]').count()).toBe(1);
       expect(await page.locator('[data-connection-row="azure_devops"]').innerText()).toContain("acme · token in STAPLE_TEST_ADO_PAT");

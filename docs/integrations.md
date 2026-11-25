@@ -104,30 +104,45 @@ Sources: [GraphQL API](https://linear.app/developers/graphql), [TypeScript SDK](
 
 ## Connect Azure DevOps
 
-Create a personal access token in Azure DevOps (**User settings → Personal access tokens**) for
-the organization, with the **Work Items (Read)** and **Project and Team (Read)** scopes. Set it in
-the environment of the process running Staple, then restart that process. Never pass the token as
-a CLI argument or paste it into a connection form.
+Create a personal access token in Azure DevOps (**User settings → Personal access tokens**) with
+the **Work Items (Read)** and **Project and Team (Read)** scopes, for one organization or for all
+accessible organizations. Set it in the environment of the process running Staple, then restart
+that process. Never pass the token as a CLI argument or paste it into a connection form.
 
-In **Settings → Integrations**, choose **Add connection → Azure DevOps organization**, enter the
-organization name from `dev.azure.com/<organization>` and the environment variable name, and save.
-Staple reads the token once to learn your user id and the organization's id and binds the
-connection to both. Every later command checks them again, so a token for another user fails
-with **Wrong account**, and a token for another organization fails with **Sign-in needed** (or
-**No access**, for a token that reaches all your organizations) instead of reading through it. Then add
-projects to a workspace under **Workspaces**. One connection serves one organization; add another
-connection, with its own variable if it needs another token, for each further organization.
+In **Settings → Integrations**, choose **Add connection → Azure DevOps organization** and enter
+the environment variable name. A token made for all accessible organizations lists them, and you
+pick one; otherwise type the organization name from `dev.azure.com/<organization>`. Save. Staple
+reads the token once to learn your user id and the organization's id and binds the connection to
+both. Every later command checks them again, so a token for another user fails with **Wrong
+account**, and a token for another organization fails with **Sign-in needed** (or **No access**,
+for a token that reaches all your organizations) instead of reading through it. An organization
+that no longer exists under that name, for example after a rename, says so and asks you to add the
+connection again with its current name. Then add projects to a workspace under **Workspaces**.
 
-The token stays server-side. Only the organization name, the variable name and the two ids are
-saved in a machine-local connection file.
+One connection serves one organization. Add another connection, with its own variable if it needs
+another token, for each further organization; they sit side by side in the list.
+
+For **Azure DevOps Server**, fill in **Server** with its host name (`tfs.example.com`, with a port
+if it has one) and **Collection** with the collection name or its path (`DefaultCollection`, or
+`tfs/DefaultCollection` behind a virtual directory). The server lists its collections the same
+way. Staple always uses HTTPS, sends the token only to that host and refuses redirects, so the
+token never goes anywhere else. Server connections bind to the collection id and your user id.
+
+The token stays server-side. Only the host, the organization or collection, the variable name and
+the two ids are saved in a machine-local connection file.
 
 ```sh
+# The organizations (or Server collections) a token reaches, as the form lists them.
+staple integrations organizations --provider azure_devops --credential-env STAPLE_AZURE_DEVOPS_PAT --json
 # Staple reads the user and organization ids with the token in this process's environment.
 staple integrations configure --provider azure_devops --organization fabrikam \
   --credential-env STAPLE_AZURE_DEVOPS_PAT --json
 # Or name them, when the token is only in the Staple service's environment.
 staple integrations configure --provider azure_devops --organization fabrikam \
   --account USER_GUID --scope ORGANIZATION_GUID --credential-env STAPLE_AZURE_DEVOPS_PAT --json
+# Azure DevOps Server: its host and collection.
+staple integrations configure --provider azure_devops --host tfs.example.com \
+  --organization tfs/DefaultCollection --credential-env STAPLE_TFS_PAT --json
 staple integrations containers --connection CONNECTION_ID --json                          # projects
 staple integrations map --ws my-workspace --connection CONNECTION_ID --container PROJECT_GUID --json
 staple integrations search --ws my-workspace --text login --json
@@ -136,22 +151,31 @@ staple integrations link --ws my-workspace --ref ABC-12 \
   --url https://dev.azure.com/fabrikam/Fabrikam%20Web/_workitems/edit/123 --confirmed --json
 ```
 
-Paste a work item URL (`https://dev.azure.com/<organization>/<project>/_workitems/edit/<id>`) in
-the link dialog, or type to search the mapped projects: titles containing the words, and a work
-item by number when the text is one (`123` or `#123`). An empty field lists the newest work items.
-Results come newest first, 50 at a time, with **Show more** for further pages. Identity is the
-organization id, the project id and the work item number; organization and project names are
-display context, so a renamed project keeps its links. A work item moved to another project fails
-to refresh with a message to resolve its current URL again. States are Azure DevOps's own words
-(`Active`, `Resolved`); HTML descriptions are saved as text. Azure DevOps has no PR capability
-here; the **Pull requests** filter skips Azure DevOps sources.
+Paste a work item URL in the link dialog: `https://dev.azure.com/<organization>/<project>/_workitems/edit/<id>`,
+its older form `https://<organization>.visualstudio.com/<project>/_workitems/edit/<id>`, or a
+Server's `https://<host>/<collection>/<project>/_workitems/edit/<id>`. The address picks the
+connection for its own organization or collection; when there is none, the message names the
+organization to add a connection for. An older address links the same work item as its
+dev.azure.com one. Or type to search the mapped projects: one text matches titles and tags, and a
+work item by number when the text is one (`123` or `#123`). An empty field lists the newest work
+items. Results come newest first, 50 at a time, with **Show more** for further pages.
 
-Requests go to `https://dev.azure.com/<organization>` with REST API version 7.1, a 15-second
-timeout and a 2 MB response limit. Search is WIQL scoped to the project, paged by work item id;
-cursors are bound to the connection and search. A rate limit reports how long Azure DevOps asked
-to wait. Authentication, permission, rate-limit and server failures return redacted messages. Not
-included: listing the organizations a token can reach, legacy `*.visualstudio.com` URLs, Azure
-DevOps Server (on-premises), custom WIQL, provider writes and automatic synchronization.
+Identity is the organization (or collection) id, the project id and the work item number;
+organization and project names are display context, so a renamed project keeps its links. A work
+item moved to another project fails to refresh with a message to resolve its current URL again.
+States are Azure DevOps's own words (`Active`, `Resolved`) and are shown without a colour, as for
+Linear and ClickUp: the task's Staple status is the one that counts. HTML descriptions, and a
+Bug's repro steps, are saved as text. Azure DevOps has no PR capability here; the **Pull
+requests** filter skips Azure DevOps sources.
+
+Requests go to `https://dev.azure.com/<organization>` with REST API version 7.1, or to
+`https://<host>/<collection>` with version 5.0 for Azure DevOps Server 2019 and later, with a
+15-second timeout and a 2 MB response limit. Listing organizations asks the Services profile
+directory, `https://app.vssps.visualstudio.com`. Search runs a fixed WIQL query scoped to the
+project and paged by work item id; there is no free-form WIQL, so every provider keeps the same
+single search box. Cursors are bound to the connection and search. A rate limit reports how long
+Azure DevOps asked to wait. Authentication, permission, rate-limit and server failures return
+redacted messages. No provider writes or automatic synchronization are included.
 
 Sources: [WIQL query](https://learn.microsoft.com/en-us/rest/api/azure/devops/wit/wiql/query-by-wiql?view=azure-devops-rest-7.1),
 [work items batch](https://learn.microsoft.com/en-us/rest/api/azure/devops/wit/work-items/get-work-items-batch?view=azure-devops-rest-7.1),

@@ -53,9 +53,9 @@ function action(connection: ProviderConnection, state: ConnectionState, health: 
       case "ready": return null;
       case "unauthenticated": return `Set ${connection.credentialEnv} to a valid Azure DevOps personal access token with Work Items (Read) and Project and Team (Read) scopes in the environment of the Staple process, then restart it.`;
       case "account_mismatch": return `Use a token for the configured Azure DevOps user, or reconnect Staple${login ? ` as ${login}` : ""}.`;
-      case "forbidden": return `Check that the token belongs to the ${connection.organization} organization and can read its projects and work items.`;
+      case "forbidden": return `Check that the token belongs to ${connection.host === "dev.azure.com" ? `the ${connection.organization} organization` : `the ${connection.organization} collection on ${connection.host}`} and can read its projects and work items.`;
       case "rate_limited": return "Wait for the Azure DevOps rate limit to reset, then check again.";
-      case "offline": return "Check that the computer running Staple can reach dev.azure.com.";
+      case "offline": return `Check that the computer running Staple can reach ${connection.host}.`;
       default: return "Check the connection again later.";
     }
   }

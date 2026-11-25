@@ -3,6 +3,7 @@
  * group, what a row's tag says, how the scope and a failed source read, and where the
  * selection goes. The component only wires these to state and requests.
  */
+import { canonicalAzureDevOpsUrl, servesUrl } from "../../../../../core/integrations/azure-devops-url";
 import type { Issue } from "@/lib/types";
 import type { ConnectionHealthSnapshot } from "../../../../../core/integrations/contracts";
 import { connectionStatus, type ConnectionView } from "../connection-status";
@@ -178,7 +179,7 @@ export function answerFor(text: string, kind: KindFilter, containerKey: string |
  * host serves several organizations (Linear, Azure DevOps), only that organization's connection fits.
  */
 export function connectionFor(
-  where: { providerId?: string; host: string; scopeId?: string; organization?: string },
+  where: { providerId?: string; host: string; scopeId?: string; url?: string },
   targetKey: string | undefined,
   targets: readonly MappingTarget[],
   connections: ReadonlyArray<Pick<ConnectionView, "id" | "providerId" | "host" | "health"> & { scopeId?: string; organization?: string }>,
@@ -187,7 +188,14 @@ export function connectionFor(
   if (served) return served;
   const ready = connections.filter((c) => (!where.providerId || c.providerId === where.providerId) && c.host === where.host && c.health?.state === "ready"
     && (where.scopeId === undefined || c.scopeId === undefined || c.scopeId === where.scopeId)
-    && (where.organization === undefined || c.organization === undefined || c.organization.toLowerCase() === where.organization.toLowerCase()));
+    // A pasted Azure DevOps address names its organization or Server collection.
+    && (where.url === undefined || c.organization === undefined || servesUrl({ host: c.host, organization: c.organization }, where.url)));
   const inScope = new Set(targets.map((t) => t.connectionId));
   return (ready.find((c) => inScope.has(c.id)) ?? ready[0])?.id;
+}
+
+/** Where a pasted link lives, for choosing its connection: its host, and for Azure DevOps its organization or collection. */
+export function pastedPlace(url: string): { host: string; url?: string } {
+  const canonical = canonicalAzureDevOpsUrl(url) ?? url;
+  return { host: new URL(canonical).host, url: canonical };
 }

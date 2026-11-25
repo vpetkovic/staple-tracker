@@ -3,24 +3,31 @@ import { z } from "zod";
 import { StapleError } from "../types.js";
 import { healthFromError } from "./health.js";
 import type { ConnectionHealth, ContainerKind, ExternalContainer, ExternalItem, ExternalItemRef, ExternalLocator, ExternalPage, ExternalSearch, IntegrationAdapter, ProviderReadOptions } from "./contracts.js";
+import { canonicalAzureDevOpsUrl, isServices, placeProblem, placeUrl, SERVICES_HOST, type AzureDevOpsPlace } from "./azure-devops-url.js";
 
 const uuid = z.string().uuid().toLowerCase();
-/** Azure DevOps organization names: letters, digits and hyphens, starting and ending with a letter or digit. */
-const ORGANIZATION = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,48}[A-Za-z0-9])?$/;
+const CREDENTIAL_ENV = /^[A-Z][A-Z0-9_]{0,127}$/;
 export const azureDevOpsConnectionSchema = z.object({
   id: z.string().regex(/^[A-Za-z0-9_-]{1,80}$/), providerId: z.literal("azure_devops"), mode: z.literal("api"),
-  host: z.literal("dev.azure.com"), organization: z.string().regex(ORGANIZATION),
-  /** The user and organization GUIDs the token was bound to; names are display context only. */
+  /** dev.azure.com for Azure DevOps Services, or an Azure DevOps Server host. Always reached over HTTPS. */
+  host: z.string().max(255).toLowerCase(),
+  /** The Services organization name, or the Server collection path. */
+  organization: z.string().max(130),
+  /** The user and organization (collection) GUIDs the token was bound to; names are display context only. */
   account: uuid, scopeId: uuid,
-  credentialEnv: z.string().regex(/^[A-Z][A-Z0-9_]{0,127}$/),
+  credentialEnv: z.string().regex(CREDENTIAL_ENV),
 }).strict();
 export type AzureDevOpsApiConnection = z.infer<typeof azureDevOpsConnectionSchema>;
 
 export interface AzureDevOpsDependencies { fetch?: typeof fetch; credential?: () => string | undefined; now?: () => Date }
 export interface AzureDevOpsIdentity { account: string; scopeId: string; login: string | null }
+/** An organization (Services) or collection (Server) a token can reach, for the connection form's picker. */
+export interface AzureDevOpsOrganization { name: string; id: string }
 
-const HOST = "dev.azure.com";
-const API_VERSION = "7.1";
+/** Services takes the current version; Azure DevOps Server 2019 and later all take 5.0. */
+const apiVersion = (host: string) => (isServices(host) ? "7.1" : "5.0");
+/** The Services profile and account directory, for listing the organizations a token can reach. */
+const DIRECTORY = "https://app.vssps.visualstudio.com";
 const PAGE_SIZE = 50;
 const PROJECT_PAGE_SIZE = 100;
 const MAX_BYTES = 2_000_000;
@@ -56,15 +63,27 @@ class AzureDevOpsClient {
   private readonly fetch: typeof fetch;
   private readonly credential: () => string | undefined;
   readonly now: () => Date;
-  constructor(readonly organization: string, private readonly credentialEnv: string, dependencies: AzureDevOpsDependencies = {}) {
+  constructor(readonly place: AzureDevOpsPlace, private readonly credentialEnv: string, dependencies: AzureDevOpsDependencies = {}) {
     this.fetch = dependencies.fetch ?? globalThis.fetch;
     this.credential = dependencies.credential ?? (() => process.env[credentialEnv]);
     this.now = dependencies.now ?? (() => new Date());
   }
 
+  /** How this place is named in a sentence. */
+  private get name() {
+    return isServices(this.place.host) ? `organization named ${this.place.organization}` : `collection named ${this.place.organization} on ${this.place.host}`;
+  }
+
   async identity(options?: ProviderReadOptions): Promise<AzureDevOpsIdentity> {
     // connectionData is unversioned; it names the token's user and the organization's GUID.
-    const { data } = await this.request("_apis/connectionData", connectionData, { versioned: false }, options);
+    let data: z.infer<typeof connectionData>;
+    try { ({ data } = await this.request("_apis/connectionData", connectionData, { versioned: false }, options)); }
+    catch (error) {
+      if (error instanceof StapleError && error.code === "not_found") {
+        throw new StapleError("not_found", `Azure DevOps has no ${this.name}, or it was renamed. Add the connection again with its current name.`);
+      }
+      throw error;
+    }
     // Never bind to, or read as, the anonymous user: a rejected token is a sign-in problem.
     if (data.authenticatedUser.id === ANONYMOUS_USER || data.authenticatedUser.descriptor?.startsWith("System:PublicAccess")) {
       throw new StapleError("auth", `Azure DevOps rejected the personal access token in ${this.credentialEnv}.`);
@@ -72,13 +91,22 @@ class AzureDevOpsClient {
     return { account: data.authenticatedUser.id, scopeId: data.instanceId, login: data.authenticatedUser.providerDisplayName?.trim() || null };
   }
 
-  async request<T>(path: string, schema: z.ZodType<T>, init: { body?: unknown; query?: Record<string, string>; versioned?: boolean }, options?: ProviderReadOptions) {
+  /** A read under the place's root: https://<host>/<organization or collection>/<path>. */
+  request<T>(path: string, schema: z.ZodType<T>, init: { body?: unknown; query?: Record<string, string>; versioned?: boolean }, options?: ProviderReadOptions) {
+    return this.read(new URL(`${placeUrl(this.place)}/${path}`), schema, init, options);
+  }
+
+  /**
+   * One HTTPS read. Only two origins are ever asked: the connection's own host, and for Services the
+   * profile directory when listing organizations. Redirects are refused, so the token goes nowhere else.
+   */
+  async read<T>(url: URL, schema: z.ZodType<T>, init: { body?: unknown; query?: Record<string, string>; versioned?: boolean }, options?: ProviderReadOptions) {
     options?.signal?.throwIfAborted();
     const key = this.credential();
     if (!key || key.length > 4096 || /\s/.test(key)) throw new StapleError("auth", `${this.credentialEnv} isn't set where Staple runs.`);
-    const url = new URL(`https://${HOST}/${encodeURIComponent(this.organization)}/${path}`);
+    if (url.protocol !== "https:" || (url.host !== this.place.host.toLowerCase() && url.origin !== DIRECTORY)) throw new StapleError("validation", "Azure DevOps reads stay on the connection's own host");
     for (const [name, value] of Object.entries(init.query ?? {})) url.searchParams.set(name, value);
-    if (init.versioned !== false) url.searchParams.set("api-version", API_VERSION);
+    if (init.versioned !== false) url.searchParams.set("api-version", url.origin === DIRECTORY ? "7.1" : apiVersion(this.place.host));
     const timeout = AbortSignal.timeout(TIMEOUT_MS);
     const signal = options?.signal ? AbortSignal.any([timeout, options.signal]) : timeout;
     try {
@@ -120,11 +148,41 @@ class AzureDevOpsClient {
   }
 }
 
-/** The organization and user a token belongs to, for binding a new connection. Reads nothing else. */
-export function discoverAzureDevOps(organization: string, credentialEnv: string, dependencies: AzureDevOpsDependencies = {}): Promise<AzureDevOpsIdentity> {
-  if (!ORGANIZATION.test(organization)) throw new StapleError("validation", "Use the Azure DevOps organization name from dev.azure.com/<organization>");
-  if (!/^[A-Z][A-Z0-9_]{0,127}$/.test(credentialEnv)) throw new StapleError("validation", "Name the environment variable that holds the personal access token, such as STAPLE_AZURE_DEVOPS_PAT");
-  return new AzureDevOpsClient(organization, credentialEnv, dependencies).identity();
+function checkCredentialEnv(credentialEnv: string) {
+  if (!CREDENTIAL_ENV.test(credentialEnv)) throw new StapleError("validation", "Name the environment variable that holds the personal access token, such as STAPLE_AZURE_DEVOPS_PAT");
+}
+
+/** The organization (or collection) and user a token belongs to, for binding a new connection. Reads nothing else. */
+export function discoverAzureDevOps(organization: string, credentialEnv: string, dependencies: AzureDevOpsDependencies = {}, host: string = SERVICES_HOST): Promise<AzureDevOpsIdentity> {
+  const problem = placeProblem({ host, organization });
+  if (problem) throw new StapleError("validation", problem);
+  checkCredentialEnv(credentialEnv);
+  return new AzureDevOpsClient({ host: host.toLowerCase(), organization }, credentialEnv, dependencies).identity();
+}
+
+const NAMED = z.object({ value: z.array(z.unknown()).max(1000) });
+/**
+ * The organizations (Services) or collections (Server) a token can reach, sorted by name. Services
+ * lists them only for a token made for all accessible organizations; an organization-scoped token
+ * is refused there, and the form falls back to a typed name.
+ */
+export async function listAzureDevOpsOrganizations(credentialEnv: string, dependencies: AzureDevOpsDependencies = {}, host: string = SERVICES_HOST): Promise<AzureDevOpsOrganization[]> {
+  checkCredentialEnv(credentialEnv);
+  // The client's place only fixes which host may be asked; listing reads no organization.
+  const place = { host: host.toLowerCase(), organization: "DefaultCollection" };
+  if (!isServices(place.host) && placeProblem(place)) throw new StapleError("validation", "Use dev.azure.com or an Azure DevOps Server host name, like tfs.example.com");
+  const client = new AzureDevOpsClient(place, credentialEnv, dependencies);
+  let entries: Array<{ name: string; id: string }>;
+  if (isServices(place.host)) {
+    const me = await client.read(new URL(`${DIRECTORY}/_apis/profile/profiles/me`), z.object({ id: uuid }), {});
+    const { data } = await client.read(new URL(`${DIRECTORY}/_apis/accounts`), NAMED, { query: { memberId: me.data.id } });
+    entries = data.value.flatMap(a => { const p = z.object({ accountId: uuid, accountName: z.string() }).safeParse(a); return p.success ? [{ name: p.data.accountName, id: p.data.accountId }] : []; });
+  } else {
+    const { data } = await client.read(new URL(`https://${place.host}/_apis/projectCollections`), NAMED, {});
+    entries = data.value.flatMap(c => { const p = z.object({ id: uuid, name: z.string() }).safeParse(c); return p.success ? [p.data] : []; });
+  }
+  // Only names a connection could be made with: anything else is not offered.
+  return entries.filter(e => !placeProblem({ host: place.host, organization: e.name })).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /**
@@ -141,11 +199,11 @@ export class AzureDevOpsApiAdapter implements IntegrationAdapter {
   private readonly projects = new Map<string, Promise<Project>>();
   constructor(private readonly config: AzureDevOpsApiConnection, dependencies: AzureDevOpsDependencies = {}) {
     const parsed = azureDevOpsConnectionSchema.safeParse(config);
-    if (!parsed.success) throw new StapleError("validation", "Configure an Azure DevOps organization, its GUID, your user GUID and a credential environment variable");
+    if (!parsed.success || placeProblem(parsed.data)) throw new StapleError("validation", "Configure an Azure DevOps organization, its GUID, your user GUID and a credential environment variable");
     this.config = parsed.data;
-    this.scope = { providerId: "azure_devops", host: HOST, scopeId: this.config.scopeId };
+    this.scope = { providerId: "azure_devops", host: this.config.host, scopeId: this.config.scopeId };
     this.connection = { id: config.id, mode: "api" };
-    this.client = new AzureDevOpsClient(this.config.organization, this.config.credentialEnv, dependencies);
+    this.client = new AzureDevOpsClient(this.config, this.config.credentialEnv, dependencies);
   }
 
   async validate(options?: ProviderReadOptions): Promise<ConnectionHealth> {
@@ -220,16 +278,19 @@ export class AzureDevOpsApiAdapter implements IntegrationAdapter {
     let id: number;
     if ("url" in locator) {
       try {
-        const u = new URL(locator.url);
-        const match = /^\/([^/]+)\/(?:[^/]+\/)?_workitems\/edit\/([1-9][0-9]{0,9})\/?$/.exec(u.pathname);
-        if (u.protocol !== "https:" || u.host !== HOST || u.username || u.password || !match) throw new Error();
-        if (decodeURIComponent(match[1]!).toLowerCase() !== this.config.organization.toLowerCase()) {
-          throw new StapleError("validation", "The Azure DevOps URL belongs to a different organization; use a connection for that organization");
+        // An older <organization>.visualstudio.com address is the same page on dev.azure.com.
+        const u = new URL(canonicalAzureDevOpsUrl(locator.url) ?? locator.url);
+        if (u.protocol !== "https:" || u.host !== this.config.host || u.username || u.password) throw new Error();
+        const root = new URL(placeUrl(this.config)).pathname.toLowerCase();
+        if (!`${u.pathname.toLowerCase()}/`.startsWith(`${root}/`)) {
+          throw new StapleError("validation", `The Azure DevOps URL belongs to a different ${isServices(this.config.host) ? "organization" : "collection"}; use a connection for it`);
         }
-        id = Number(match[2]);
+        const match = /^(?:\/[^/]+)?\/_workitems\/edit\/([1-9][0-9]{0,9})\/?$/.exec(u.pathname.slice(root.length));
+        if (!match) throw new Error();
+        id = Number(match[1]);
       } catch (error) {
         if (error instanceof StapleError) throw error;
-        throw new StapleError("validation", "Paste an exact https://dev.azure.com/organization/project/_workitems/edit/123 URL");
+        throw new StapleError("validation", `Paste an exact ${placeUrl(this.config)}/project/_workitems/edit/123 URL`);
       }
     } else {
       this.checkUuid(locator.containerId);
@@ -249,7 +310,7 @@ export class AzureDevOpsApiAdapter implements IntegrationAdapter {
   }
 
   async readIssue(ref: ExternalItemRef, options?: ProviderReadOptions): Promise<ExternalItem> {
-    if (ref.providerId !== "azure_devops" || ref.host !== HOST || ref.scopeId !== this.scope.scopeId || ref.kind !== "issue") throw new StapleError("validation", "Reference belongs to a different Azure DevOps scope");
+    if (ref.providerId !== "azure_devops" || ref.host !== this.config.host || ref.scopeId !== this.scope.scopeId || ref.kind !== "issue") throw new StapleError("validation", "Reference belongs to a different Azure DevOps scope");
     this.checkUuid(ref.containerId);
     if (!/^[1-9][0-9]{0,9}$/.test(ref.id) || Number(ref.id) > MAX_ID) throw new StapleError("validation", "Azure DevOps work item ids are numbers");
     const item = await this.readById(Number(ref.id), options);
@@ -302,14 +363,14 @@ export class AzureDevOpsApiAdapter implements IntegrationAdapter {
     return {
       ref: { ...this.scope, containerId: owner.id, id: String(source.id), kind: "issue" },
       key: `${owner.name}#${source.id}`,
-      url: `https://${HOST}/${this.config.organization}/${encodeURIComponent(owner.name)}/_workitems/edit/${source.id}`,
+      url: `${placeUrl(this.config)}/${encodeURIComponent(owner.name)}/_workitems/edit/${source.id}`,
       title: source.fields["System.Title"], body: body || null,
       status: state ? { id: state, name: state } : null, fetchedAt: this.client.now().toISOString(),
     };
   }
 
   private container(p: Project): ExternalContainer {
-    return { id: p.id, name: p.name, url: `https://${HOST}/${this.config.organization}/${encodeURIComponent(p.name)}` };
+    return { id: p.id, name: p.name, url: `${placeUrl(this.config)}/${encodeURIComponent(p.name)}` };
   }
 
   /** The token must still belong to the bound user and organization. Checked once per adapter. */
@@ -352,12 +413,13 @@ export class AzureDevOpsApiAdapter implements IntegrationAdapter {
   }
 }
 
-/** Title text, and the number itself when the text is one (`123` or `#123`). WIQL strings double their quotes. */
+/** Title or tag text, and the number itself when the text is one (`123` or `#123`). WIQL strings double their quotes. */
 function textCondition(text: string): string | null {
   if (!text) return null;
-  const title = `[System.Title] CONTAINS '${text.replace(/'/g, "''")}'`;
+  const quoted = `'${text.replace(/'/g, "''")}'`;
   const number = /^#?([1-9][0-9]{0,9})$/.exec(text);
-  return number && Number(number[1]) <= MAX_ID ? `(${title} OR [System.Id] = ${number[1]})` : title;
+  const byId = number && Number(number[1]) <= MAX_ID ? ` OR [System.Id] = ${number[1]}` : "";
+  return `([System.Title] CONTAINS ${quoted} OR [System.Tags] CONTAINS ${quoted}${byId})`;
 }
 
 /** Retry-After as seconds or an HTTP date, bounded to an hour; null when absent or unreadable. */

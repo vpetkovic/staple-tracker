@@ -5,6 +5,7 @@
  */
 import type { DetectedConnection, ContainerKind } from "../../../../../core/integrations/contracts";
 import type { MappingTarget } from "../../../../../core/integrations/mapping";
+import { isServices, placeProblem, SERVICES_HOST } from "../../../../../core/integrations/azure-devops-url";
 import type { ConnectionView } from "@/integrations/connection-status";
 
 export type MappedTarget = MappingTarget;
@@ -51,8 +52,13 @@ export function connectionMeta(connection: ConnectionView): string {
   if (connection.providerId === "linear")
     return [connection.health?.identity?.login ?? "Linear account", connection.health?.identity?.organization, `API key in ${connection.credentialEnv}`].filter(Boolean).join(" · ");
   if (connection.providerId === "azure_devops")
-    return [connection.health?.identity?.login ?? "Azure DevOps account", connection.organization, `token in ${connection.credentialEnv}`].filter(Boolean).join(" · ");
+    return [connection.health?.identity?.login ?? "Azure DevOps account", azurePlaceName(connection), `token in ${connection.credentialEnv}`].filter(Boolean).join(" · ");
   return [connection.account, connection.host === "github.com" ? null : connection.host, "through GitHub CLI"].filter(Boolean).join(" · ");
+}
+
+/** An Azure DevOps connection's place: its organization, or a Server's host and collection. */
+export function azurePlaceName(connection: { host: string; organization: string }): string {
+  return isServices(connection.host) ? connection.organization : `${connection.host}/${connection.organization}`;
 }
 
 /** Sign-ins on this computer that no connection covers yet: each gets a "Connect as" row. */
@@ -90,12 +96,27 @@ export function linearIdProblem(organization: string, user: string): string | nu
   return field ? `${field} should be the 36-character id Linear shows, like 123e4567-e89b-12d3-a456-426614174000.` : null;
 }
 
-const AZURE_ORGANIZATION = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,48}[A-Za-z0-9])?$/;
+/**
+ * What is wrong with the Azure DevOps form before the server is asked: the optional Server host,
+ * then the organization (or collection). Null while the fields are empty or right.
+ */
+export function azureOrganizationProblem(organization: string, server = ""): string | null {
+  const host = server.trim().toLowerCase() || SERVICES_HOST;
+  if (!isServices(host)) {
+    const hostProblem = placeProblem({ host, organization: "DefaultCollection" });
+    if (hostProblem) return hostProblem;
+  }
+  return organization.trim() === "" ? null : placeProblem({ host, organization: organization.trim() });
+}
 
-/** What is wrong with an Azure DevOps organization name, before the server is asked; null while it is empty or right. */
-export function azureOrganizationProblem(organization: string): string | null {
-  const value = organization.trim();
-  return value === "" || AZURE_ORGANIZATION.test(value) ? null : "Use the organization name from dev.azure.com/<organization>: letters, numbers and hyphens.";
+/** The hint under the Azure DevOps organization field, from what listing the token's organizations found. */
+export function azureOrganizationHint(found: readonly { name: string }[] | null, finding: boolean, server: string): string {
+  const noun = server.trim() && !isServices(server.trim()) ? "collection" : "organization";
+  if (finding) return `Looking for the ${noun}s this token reaches…`;
+  if (found === null) return `Staple reads your user and ${noun} from the token when you save.`;
+  if (found.length > 1) return `Choose one of the ${noun}s this token reaches, or type another. Add a connection for each ${noun} you want.`;
+  if (found.length === 1) return `This token reaches ${found[0]!.name}.`;
+  return `Type the ${noun} name. This token doesn't list ${noun}s, usually because it was made for one ${noun}.`;
 }
 
 /** The kinds of source a connection offers, in picker order. */

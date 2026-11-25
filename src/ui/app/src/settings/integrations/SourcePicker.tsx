@@ -15,7 +15,7 @@ import type { ConnectionView } from "@/integrations/connection-status";
 import { ConnectionStatusPill, ProviderMark } from "@/integrations/parts";
 import type { ContainerKind } from "../../../../../core/integrations/contracts";
 import { InlineError } from "../form/primitives";
-import { containerKinds, pickerSections, type MappedTarget, type PickerPage } from "./integrations-model";
+import { azurePlaceName, containerKinds, pickerSections, type MappedTarget, type PickerPage } from "./integrations-model";
 
 export function SourcePicker({ workspace, targets, connections, onChange }: {
   workspace: string;
@@ -53,7 +53,7 @@ type Slot = PickerPage & { loading: boolean; error: string | null };
 const groupName = (c: ConnectionView) =>
   c.providerId === "linear"
     ? (c.health?.identity?.organization ?? c.health?.identity?.login ?? "Linear")
-    : c.providerId === "azure_devops" ? c.organization
+    : c.providerId === "azure_devops" ? azurePlaceName(c)
     : c.host === "github.com" ? c.account : `${c.account} · ${c.host}`;
 
 function PickerBody({ workspace, targets, connections, onChange }: {

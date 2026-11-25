@@ -92,7 +92,7 @@ describe("read-only Azure DevOps adapter", () => {
     const wiql = calls.find(c => c.path.endsWith("/_apis/wit/wiql"))!;
     expect(wiql.path).toBe(`/acme/${projectId}/_apis/wit/wiql`);
     expect(wiql.query.get("$top")).toBe("51");
-    expect(wiql.body!.query).toBe("SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND [System.Title] CONTAINS 'O''Brien login' ORDER BY [System.Id] DESC");
+    expect(wiql.body!.query).toBe("SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND ([System.Title] CONTAINS 'O''Brien login' OR [System.Tags] CONTAINS 'O''Brien login') ORDER BY [System.Id] DESC");
     const batch = calls.find(c => c.path === "/acme/_apis/wit/workitemsbatch")!;
     expect(batch.body).toMatchObject({ ids: pageOne.slice(0, 50), errorPolicy: "omit" });
     expect(first.items).toHaveLength(50);
@@ -118,7 +118,7 @@ describe("read-only Azure DevOps adapter", () => {
       return undefined;
     });
     await reader.search("issue", { text: "#42", containerId: projectId });
-    expect(calls.at(-1)!.body!.query).toContain("([System.Title] CONTAINS '#42' OR [System.Id] = 42)");
+    expect(calls.at(-1)!.body!.query).toContain("([System.Title] CONTAINS '#42' OR [System.Tags] CONTAINS '#42' OR [System.Id] = 42)");
     await reader.search("issue", { text: "", containerId: projectId });
     expect(calls.at(-1)!.body!.query).toBe("SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project ORDER BY [System.Id] DESC");
     expect(calls.some(c => c.path.endsWith("/workitemsbatch"))).toBe(false);

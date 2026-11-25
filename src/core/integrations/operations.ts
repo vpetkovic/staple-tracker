@@ -3,7 +3,8 @@ import { z } from "zod";
 import type { WorkspaceStore } from "../store.js";
 import { StapleError } from "../types.js";
 import type { ConnectionHealthSnapshot, ConnectionState, ContainerKind, DetectedConnection, ExternalContainer, ExternalItem, ExternalPage, ResolvedExternalItem, IntegrationAdapter } from "./contracts.js";
-import { AzureDevOpsApiAdapter, discoverAzureDevOps, type AzureDevOpsIdentity } from "./azure-devops-api.js";
+import { AzureDevOpsApiAdapter, discoverAzureDevOps, listAzureDevOpsOrganizations, type AzureDevOpsIdentity, type AzureDevOpsOrganization } from "./azure-devops-api.js";
+import { canonicalAzureDevOpsUrl, isServices, isWorkItemUrl, placeNameOf, placeProblem, servesUrl, SERVICES_HOST } from "./azure-devops-url.js";
 import { createGhRunner, type GhRunner } from "./gh-process.js";
 import { GitHubCliAdapter, parseGhAuthStatus } from "./github-cli.js";
 import { HEALTH_POLL_INTERVAL_SECONDS, healthFromError, isConnectionFailure, missingSnapshot, processCaches, snapshot, type ProbeCache } from "./health.js";
@@ -15,7 +16,7 @@ import { LinearApiAdapter } from "./linear-api.js";
 import { externalResourceId, type ExternalResource } from "./link-store.js";
 import { IntegrationReader } from "./provider.js";
 
-export const INTEGRATION_READ_ACTIONS = ["connections","health","containers","search","resolve","list","preview","counts","mapping"] as const;
+export const INTEGRATION_READ_ACTIONS = ["connections","health","containers","search","resolve","list","preview","counts","mapping","organizations"] as const;
 export const INTEGRATION_WRITE_ACTIONS = ["link","create","unlink","refresh","stack","share","map","unmap"] as const;
 export const INTEGRATION_CONFIG_ACTIONS = ["configure","remove"] as const;
 export const integrationCommandSchema = z.object({
@@ -50,7 +51,9 @@ export class IntegrationOperations {
   constructor(private readonly workspaceStore:WorkspaceStore|null, private readonly options:{home?:string;factories?:ReadonlyMap<string,AdapterFactory>;liveReadsAvailable?:boolean;
     gh?:GhRunner;caches?:{health:ProbeCache<ConnectionHealthSnapshot>;detection:ProbeCache<Array<{host:string;login:string}>>};
     /** Reads which user and organization an Azure DevOps token belongs to, when configure is not told. */
-    discoverAzureDevOps?:(organization:string,credentialEnv:string)=>Promise<AzureDevOpsIdentity>;
+    discoverAzureDevOps?:(organization:string,credentialEnv:string,host:string)=>Promise<AzureDevOpsIdentity>;
+    /** Lists the Azure DevOps organizations (or Server collections) a token can reach, for the connection form. */
+    listAzureDevOpsOrganizations?:(credentialEnv:string,host:string)=>Promise<AzureDevOpsOrganization[]>;
     /** Every workspace on this machine, for All workspaces and for unmapped workspaces. Defaults to this one. */
     workspaces?:()=>WorkspaceHandle[]}={}) {
     this.connections = new IntegrationConnections(options.home);
@@ -104,10 +107,15 @@ export class IntegrationOperations {
     return accounts.map(a=>({providerId:"github" as const,host:a.host,login:a.login,
       configuredConnectionId:connections.find(c=>c.providerId==="github" && c.host===a.host && c.account.toLowerCase()===a.login.toLowerCase())?.id ?? null}));
   }
-  private select(c:IntegrationCommand, host:string,providerId?:string,scopeId?:string,organization?:string):string {
+  private select(c:IntegrationCommand, host:string,providerId?:string,scopeId?:string,href?:string):string {
     if (c.connectionId) return c.connectionId;
+    // Several Azure DevOps organizations share one host; a pasted address names its own.
     const choices=this.connections.list().filter(x=>x.host===host && (!providerId || x.providerId===providerId) && (x.providerId==="github" || !scopeId || x.scopeId===scopeId)
-      && (x.providerId!=="azure_devops" || !organization || x.organization.toLowerCase()===organization));
+      && (x.providerId!=="azure_devops" || !href || servesUrl(x,href)));
+    if (!choices.length && href && (isServices(host) || isWorkItemUrl(href))) {
+      const place=placeNameOf(href) ?? host;
+      throw new StapleError("unavailable",`No Azure DevOps connection on this computer reads ${place}. Add a connection for ${place} in Settings > Integrations.`);
+    }
     if (choices.length!==1) throw new StapleError("unavailable",choices.length ? "Choose which provider connection to use" : "Cached-only session. Configure a connection for live reads in Settings > Integrations.");
     return choices[0]!.id;
   }
@@ -132,16 +140,15 @@ export class IntegrationOperations {
     }
     const url=need(c.url,"source URL");
     let parsed:URL;
-    try { parsed=new URL(url); } catch { throw new StapleError("validation","Use an exact HTTPS issue or PR URL"); }
+    // An older <organization>.visualstudio.com address is read, cached and linked as its dev.azure.com one.
+    try { parsed=new URL(canonicalAzureDevOpsUrl(url) ?? url); } catch { throw new StapleError("validation","Use an exact HTTPS issue or PR URL"); }
     if (parsed.protocol!=="https:" || parsed.username || parsed.password) throw new StapleError("validation","Use an HTTPS source URL without credentials");
     parsed.hash="";
     const cached=this.store.db.prepare("SELECT id FROM external_resources WHERE url=? LIMIT 2").all(parsed.href) as Array<{id:string}>;
     // A pasted cached URL remains usable without a machine connection.
     if(cached.length>1 && !c.connectionId) throw new StapleError("conflict","Several scoped resources use this URL. Choose a resource or connection explicitly.");
     if (cached.length===1 && !c.connectionId) return storedSource(this.store.externalLinks().resource(cached[0]!.id));
-    // Azure DevOps names the organization in the path; pick that organization's connection.
-    const organization=parsed.host==="dev.azure.com" ? parsed.pathname.split("/")[1]?.toLowerCase() : undefined;
-    const reader=this.reader(this.select(c,parsed.host,undefined,undefined,organization));
+    const reader=this.reader(this.select(c,parsed.host,undefined,undefined,parsed.href));
     const resolved=await reader.resolve({url:parsed.href});
     if (!resolved) throw new StapleError("not_found","No accessible issue or PR was found at this URL");
     return resolved.ref.kind==="pull_request" && !reader.capabilities.readPullRequests ? resolved:reader.read(resolved.ref);
@@ -182,20 +189,33 @@ export class IntegrationOperations {
       }
       case "configure":
         if(c.providerId === "azure_devops") {
-          const organization=need(c.organization,"Azure DevOps organization name"),credentialEnv=need(c.credentialEnv,"credential environment variable name");
+          const credentialEnv=need(c.credentialEnv,"credential environment variable name");
+          // Services by default; an Azure DevOps Server host otherwise. An older <organization>.visualstudio.com host is that Services organization.
+          const legacy=/^([a-z0-9-]+)\.visualstudio\.com$/.exec(c.host?.trim().toLowerCase() ?? "");
+          const host=legacy ? SERVICES_HOST : c.host?.trim().toLowerCase() || SERVICES_HOST;
+          const organization=c.organization?.trim() || legacy?.[1] || need(undefined,isServices(host) ? "Azure DevOps organization name" : "Azure DevOps Server collection");
+          const problem=placeProblem({host,organization});
+          if (problem) throw new StapleError("validation",problem);
           if (this.options.liveReadsAvailable===false && !(c.account && c.scopeId)) throw new StapleError("unavailable","Cached-only session. Connect Azure DevOps on the machine running Staple.");
           // Binding by GUID needs one read with the token, unless the caller already knows both ids.
           const bound=c.account && c.scopeId ? {account:c.account,scopeId:c.scopeId}
-            : await (this.options.discoverAzureDevOps ?? discoverAzureDevOps)(organization,credentialEnv);
+            : await (this.options.discoverAzureDevOps ?? ((o,e,h)=>discoverAzureDevOps(o,e,{},h)))(organization,credentialEnv,host);
           // An id the caller expects is a check, never a hint to drop: refuse a token that answers for someone else.
           if (c.scopeId && c.scopeId.toLowerCase()!==bound.scopeId.toLowerCase()) throw new StapleError("forbidden",`The token in ${credentialEnv} answers for a different Azure DevOps organization than ${organization}.`);
           if (c.account && c.account.toLowerCase()!==bound.account.toLowerCase()) throw new StapleError("auth",`The token in ${credentialEnv} belongs to a different Azure DevOps user than the one expected.`,{reason:"account_mismatch"});
-          return this.connections.save({id:c.connectionId,providerId:"azure_devops",mode:"api",host:"dev.azure.com",organization,account:bound.account,scopeId:bound.scopeId,credentialEnv});
+          return this.connections.save({id:c.connectionId,providerId:"azure_devops",mode:"api",host,organization,account:bound.account,scopeId:bound.scopeId,credentialEnv});
         }
         if(c.providerId === "linear") return this.connections.save({id:c.connectionId,providerId:"linear",mode:"api",host:"linear.app",
           account:need(c.account,"expected Linear user UUID"),scopeId:need(c.scopeId,"Linear organization UUID"),credentialEnv:need(c.credentialEnv,"credential environment variable name")});
         return this.connections.save({id:c.connectionId,providerId:"github",mode:"cli",host:need(c.host,"GitHub host").toLowerCase(),account:need(c.account,"expected gh account")});
       case "remove": this.connections.remove(need(c.connectionId,"connection")); return {removed:true};
+      case "organizations": {
+        if (c.providerId!=="azure_devops") throw new StapleError("validation","Only Azure DevOps lists organizations");
+        if (this.options.liveReadsAvailable===false) throw new StapleError("unavailable","Cached-only session. Connect Azure DevOps on the machine running Staple.");
+        const host=c.host?.trim().toLowerCase() || SERVICES_HOST;
+        const list=this.options.listAzureDevOpsOrganizations ?? ((e,h)=>listAzureDevOpsOrganizations(e,{},h));
+        return {host,organizations:await list(need(c.credentialEnv,"credential environment variable name"),host)};
+      }
       case "health": return {health:await this.health(c.connectionId,c.force===true),pollIntervalSeconds:HEALTH_POLL_INTERVAL_SECONDS};
       case "containers": return this.containers(c);
       case "mapping": {
@@ -363,7 +383,7 @@ function storedSource(resource: ExternalResource): ExternalResource | (ResolvedE
 }
 
 function storedTarget(connection:ProviderConnection,kind:ContainerKind,container:ExternalContainer):StoredTarget {
-  if (connection.providerId==="azure_devops") return {providerId:"azure_devops",host:"dev.azure.com",scopeId:connection.scopeId,kind:"project",containerId:container.id.toLowerCase(),name:container.name,url:container.url};
+  if (connection.providerId==="azure_devops") return {providerId:"azure_devops",host:connection.host,scopeId:connection.scopeId,kind:"project",containerId:container.id.toLowerCase(),name:container.name,url:container.url};
   return connection.providerId==="github"
     ? {providerId:"github",host:connection.host,scopeId:"host",kind:"repository",containerId:container.id,name:container.name,url:container.url}
     : {providerId:"linear",host:"linear.app",scopeId:connection.scopeId,kind:kind==="project" ? "project":"team",containerId:container.id.toLowerCase(),name:container.name,url:container.url};
@@ -387,7 +407,7 @@ function outsideTarget(item:ResolvedExternalItem,connections:ProviderConnection[
   const stored:StoredTarget=r.providerId==="github"
     ? {providerId:"github",host:r.host,scopeId:"host",kind:"repository",containerId:r.containerId,name:item.key.replace(/#[0-9]+$/,""),url:item.url.replace(/\/(issues|pull)\/[0-9]+$/,"")}
     : r.providerId==="azure_devops"
-    ? {providerId:"azure_devops",host:"dev.azure.com",scopeId:r.scopeId,kind:"project",containerId:r.containerId,name:item.key.replace(/#[0-9]+$/,""),url:item.url.replace(/\/_workitems\/edit\/[0-9]+$/,"")}
+    ? {providerId:"azure_devops",host:r.host,scopeId:r.scopeId,kind:"project",containerId:r.containerId,name:item.key.replace(/#[0-9]+$/,""),url:item.url.replace(/\/_workitems\/edit\/[0-9]+$/,"")}
     : {providerId:"linear",host:"linear.app",scopeId:r.scopeId,kind:"team",containerId:r.containerId,name:item.key.replace(/-[0-9]+$/,""),url:null};
   return present(stored,connections);
 }

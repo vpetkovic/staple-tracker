@@ -36,6 +36,7 @@ import {
   keepSelection,
   moveSelection,
   outsideScopeTarget,
+  pastedPlace,
   queryKind,
   scopeFromMapping,
   searchKinds,
@@ -329,10 +330,7 @@ export function PickerBody({
     sourceInput(hit.item, connectionFor(hit.item.ref, (hit as Partial<RemoteHit>).targetKey, targets, connections.connections));
   function urlConnection(url: string): string | undefined {
     try {
-      const parsed = new URL(url);
-      // Azure DevOps puts the organization first in the path; it picks between organizations on one host.
-      const organization = parsed.host === "dev.azure.com" ? parsed.pathname.split("/")[1] || undefined : undefined;
-      return connectionFor({ host: parsed.host, organization }, undefined, targetsRef.current, connections.connections);
+      return connectionFor(pastedPlace(url), undefined, targetsRef.current, connections.connections);
     } catch {
       return undefined;
     }
