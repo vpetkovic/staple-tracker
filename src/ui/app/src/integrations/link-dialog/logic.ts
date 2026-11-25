@@ -3,6 +3,7 @@
  * group, what a row's tag says, how the scope and a failed source read, and where the
  * selection goes. The component only wires these to state and requests.
  */
+import { canonicalAzureDevOpsUrl, isServices, servesUrl } from "../../../../../core/integrations/azure-devops-url";
 import type { Issue } from "@/lib/types";
 import type { ConnectionHealthSnapshot } from "../../../../../core/integrations/contracts";
 import { connectionStatus, type ConnectionView } from "../connection-status";
@@ -92,11 +93,12 @@ export function groupResults(answers: ReadonlyArray<Pick<MixedResults, "cached" 
 }
 
 /**
- * Whether a saved copy belongs to a mapped target: its repository or team, or for ClickUp the
- * space or one of the lists it sat in when read. A Linear project is not known from a saved copy.
+ * Whether a saved copy belongs to a mapped target: its repository, team or Azure DevOps project, or
+ * for ClickUp the space or one of the lists it sat in when read. A Linear project is not known from a saved copy.
  */
 function holds(target: MappingTarget, item: SearchHit["item"]): boolean {
-  if (target.kind === "project") return false;
+  // A Linear project is a filter across teams; an Azure DevOps project is the item's own container.
+  if (target.providerId === "linear" && target.kind === "project") return false;
   if (target.kind === "space") return "spaceId" in item && item.spaceId === target.containerId;
   if (target.kind === "list") return "listIds" in item && !!item.listIds?.includes(target.containerId);
   return target.containerId.toLowerCase() === item.ref.containerId.toLowerCase();
@@ -185,17 +187,38 @@ export function answerFor(text: string, kind: KindFilter, containerKey: string |
 /**
  * The connection to read an item through, so the server never has to choose between two
  * accounts on one host: the one serving the source a live result came from; for a pasted
- * link, a ready connection on its host, preferring one that serves a source in scope.
+ * link, a ready connection on its host, preferring one that serves a source in scope. Where one
+ * host serves several organizations (Linear, Azure DevOps), only that organization's connection fits.
  */
 export function connectionFor(
-  where: { providerId?: string; host: string },
+  where: { providerId?: string; host: string; scopeId?: string; url?: string },
   targetKey: string | undefined,
   targets: readonly MappingTarget[],
-  connections: ReadonlyArray<Pick<ConnectionView, "id" | "providerId" | "host" | "health">>,
+  connections: ReadonlyArray<Pick<ConnectionView, "id" | "providerId" | "host" | "health"> & { scopeId?: string; organization?: string }>,
 ): string | undefined {
   const served = targets.find((t) => t.key === targetKey)?.connectionId;
   if (served) return served;
-  const ready = connections.filter((c) => (!where.providerId || c.providerId === where.providerId) && c.host === where.host && c.health?.state === "ready");
+  const ready = connections.filter((c) => (!where.providerId || c.providerId === where.providerId) && c.host === where.host && c.health?.state === "ready"
+    && (where.scopeId === undefined || c.scopeId === undefined || c.scopeId === where.scopeId)
+    // A pasted Azure DevOps address names its organization or Server collection.
+    && (where.url === undefined || c.organization === undefined || servesUrl({ host: c.host, organization: c.organization }, where.url)));
   const inScope = new Set(targets.map((t) => t.connectionId));
   return (ready.find((c) => inScope.has(c.id)) ?? ready[0])?.id;
+}
+
+/** Where a pasted link lives, for choosing its connection: its host, and for Azure DevOps its organization or collection. */
+export function pastedPlace(url: string): { host: string; url?: string } {
+  const canonical = canonicalAzureDevOpsUrl(url) ?? url;
+  return { host: new URL(canonical).host, url: canonical };
+}
+
+/** What the header calls a connection: its provider, and where two share one, which account or organization. */
+export function connectionLabel(connection: ConnectionView, all: readonly ConnectionView[]): string {
+  const name = providerName(connection.providerId);
+  if (all.filter((c) => c.providerId === connection.providerId).length < 2) return name;
+  const place =
+    connection.providerId === "azure_devops" ? (isServices(connection.host) ? connection.organization : `${connection.host}/${connection.organization}`)
+    : connection.providerId === "github" ? connection.account
+    : connection.health?.identity?.organization ?? null;
+  return place ? `${name} · ${place}` : name;
 }

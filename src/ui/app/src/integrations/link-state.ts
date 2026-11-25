@@ -46,14 +46,15 @@ export function stateLabel(item: SourceItem): string | null {
 export function providerName(providerId: string): string {
   if (providerId === "github") return "GitHub";
   if (providerId === "linear") return "Linear";
+  if (providerId === "azure_devops") return "Azure DevOps";
   if (providerId === "clickup") return "ClickUp";
   return providerId.charAt(0).toUpperCase() + providerId.slice(1);
 }
 
 /**
- * `owner/repo` for a GitHub key, the team key for a Linear one (`ENG-4` → `ENG`). A ClickUp
- * task's container is its whole workspace, which its key does not name: the workspace's name
- * when a connection here has read it, else "ClickUp".
+ * `owner/repo` for a GitHub key, the project for an Azure DevOps one, the team key for a Linear one
+ * (`ENG-4` → `ENG`). A ClickUp task's container is its whole workspace, which its key does not name:
+ * the workspace's name when a connection here has read it, else "ClickUp".
  */
 export function containerLabel(item: SourceItem, workspaces?: ReadonlyMap<string, string>): string {
   if (item.ref.providerId === "clickup") return workspaces?.get(item.ref.scopeId) ?? providerName("clickup");

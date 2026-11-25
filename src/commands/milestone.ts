@@ -96,7 +96,7 @@ function printView(view: MilestoneView): void {
     const kind = member.kind === "task" ? "" : ` · ${member.kind}`;
     console.log(`${indent}${String(member.position).padStart(2)}. ${member.identifier.padEnd(9)} ${member.status.padEnd(11)} ${member.title}${kind}`);
   }
-  if (view.next) console.log(`next     ${view.next.identifier} (member ${view.next.position})`);
+  if (view.next) console.log(`next     ${view.next.identifier} (queue position ${view.next.position})`);
 }
 
 function printGoal(view: MilestoneView): void {

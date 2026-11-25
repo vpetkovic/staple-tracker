@@ -77,7 +77,7 @@ export function writeMapping(store: WorkspaceStore, targets: StoredTarget[], act
   if (String(store.getSetting(LEGACY_MAPPING_SETTING) ?? "")) store.resetSetting(LEGACY_MAPPING_SETTING, actor);
 }
 
-/** The connection on this machine that reads a target: same provider and host, and for Linear and ClickUp the same organization or workspace. */
+/** The connection on this machine that reads a target: same provider and host, and beyond GitHub the same organization or workspace. */
 export function servingConnection(target: Pick<StoredTarget, "providerId" | "host" | "scopeId">, connections: ProviderConnection[]): ProviderConnection | null {
   return connections.find(c => c.providerId === target.providerId && c.host === target.host
     && (c.providerId === "github" || c.scopeId === target.scopeId)) ?? null;

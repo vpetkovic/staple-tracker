@@ -462,8 +462,9 @@ export function initWorkspace(options: {
 }
 
 /**
- * Resolve the workspace for a command: explicit path/env first, then walk-up
- * from cwd, then (optionally) a hub-registered workspace by slug or prefix.
+ * Resolve the workspace for a command, first match wins: `db`, then `ws` (a
+ * hub-registered slug or prefix), then STAPLE_DB, then walk-up from cwd. An
+ * explicit `ws` skips STAPLE_DB so it is never redirected into the pinned file.
  */
 export function resolveWorkspace(options: { db?: string; ws?: string } = {}): OpenedWorkspace {
   const explicit = options.db ?? (options.ws ? undefined : process.env.STAPLE_DB);

@@ -266,6 +266,29 @@ export interface SetEstimateResult {
   changed: boolean;
 }
 
+/**
+ * What a text query (`q`) matches: every place words are written on a ticket. The title,
+ * identifier, description, assignee, each label and acceptance criterion, every comment
+ * still standing, and the CURRENT revision of every document (plan, worklog, any key).
+ * One predicate, so `staple ls -q`, the MCP list tool and the toolbar search
+ * (`/api/search`) cannot disagree about what a word finds. Each `?` takes the same
+ * `%q%` pattern (text trimmed, wildcards escaped). LIKE, not an FTS index: substring and
+ * case-insensitive (ASCII), which is what the toolbar always did, and the subqueries ride
+ * the issue_id primary keys.
+ */
+const TEXT_MATCH_SQL = `(
+    issues.title LIKE ? ESCAPE '\\' OR issues.identifier LIKE ? ESCAPE '\\'
+    OR issues.description LIKE ? ESCAPE '\\' OR issues.assignee LIKE ? ESCAPE '\\'
+    OR (json_valid(issues.labels) AND EXISTS (SELECT 1 FROM json_each(issues.labels) l WHERE l.value LIKE ? ESCAPE '\\'))
+    OR (json_valid(issues.acceptance_criteria)
+        AND EXISTS (SELECT 1 FROM json_each(issues.acceptance_criteria) ac WHERE ac.value LIKE ? ESCAPE '\\'))
+    OR EXISTS (SELECT 1 FROM comments c WHERE c.issue_id = issues.id AND c.deleted_at IS NULL AND c.body LIKE ? ESCAPE '\\')
+    OR EXISTS (SELECT 1 FROM documents d JOIN document_revisions r
+                 ON r.issue_id = d.issue_id AND r.key = d.key AND r.revision = d.current_revision
+               WHERE d.issue_id = issues.id AND r.body LIKE ? ESCAPE '\\')
+)`;
+const TEXT_MATCH_PARAMS = TEXT_MATCH_SQL.split("?").length - 1;
+
 export interface IssueFilters {
   status?: IssueStatus[];
   kind?: IssueKind[];
@@ -7983,16 +8006,18 @@ export class WorkspaceStore {
         params.push(this.requireRow(filters.parent).id);
       }
     }
-    if (filters.q) {
+    const q = filters.q?.trim();
+    if (q) {
       /**
        * And the issue an identifier used to name here, when `q` is exactly one: a number an
        * issue was renumbered off, or a stand-in it held (`identifier-moves.ts`). Searching
        * for the identifier somebody wrote down finds the issue it meant, beside whichever
        * issue holds that number now.
        */
-      where.push("(title LIKE ? OR identifier LIKE ? OR description LIKE ? OR id = ?)");
-      const like = `%${filters.q}%`;
-      params.push(like, like, like, formerHolderOf(this.db, filters.q.trim().toUpperCase()));
+      where.push(`(${TEXT_MATCH_SQL} OR id = ?)`);
+      // `%`, `_` and `\` in the text are literal: a search for `100%` is not a wildcard.
+      const like = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+      params.push(...Array<string>(TEXT_MATCH_PARAMS).fill(like), formerHolderOf(this.db, q.toUpperCase()));
     }
     /**
      * The status rank is GENERATED from the workspace's configuration (STA-140)

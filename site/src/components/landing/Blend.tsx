@@ -639,12 +639,13 @@ export default function Blend(): ReactNode {
                 work, locally, ticket by ticket. Your team’s board stays where people plan, discuss and report.
               </p>
               <p>
-                Link a ticket to a GitHub issue or pull request, a Linear issue or a ClickUp task, and its title and state stay
-                beside the work. The link is read-only: staple never changes anything in your tracker.
+                Link a ticket to a GitHub issue or pull request, a Linear issue, an Azure DevOps work item or a ClickUp task,
+                and its title and state stay beside the work. The link is read-only: staple never changes anything in your
+                tracker.
               </p>
               <p>
                 <Planned />
-                Azure DevOps, and writing back to your tracker, are planned, not shipped.
+                Writing back to your tracker is planned, not shipped.
               </p>
             </div>
             <div className={styles.figure}>

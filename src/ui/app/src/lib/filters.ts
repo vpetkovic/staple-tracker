@@ -628,7 +628,18 @@ export function dimensionOptions(id: string, rows: readonly IssueRow[]): FilterO
 
 // ---------------------------------------------------------------- applying
 
-/** Everything the text box searches. Identifier first: it is what people paste. */
+/**
+ * The ids the server found for a query — `/api/search`, the store's `q` match that `staple
+ * ls -q` uses, which also reads criteria, comments and documents the page never loads. A
+ * row is in when the local text matches OR the server named it, so the list narrows at
+ * the first keystroke and gains the body-only matches when the answer lands.
+ */
+export interface TextMatches {
+  q: string;
+  ids: ReadonlySet<string>;
+}
+
+/** Everything the text box searches locally. Identifier first: it is what people paste. */
 function searchable(row: IssueRow): string {
   const { identifier, title, assignee, labels } = row.issue;
   return `${identifier} ${title} ${assignee ?? ""} ${labels.join(" ")}`.toLowerCase();
@@ -660,8 +671,14 @@ export function passesDone(row: IssueRow, state: FilterState): boolean {
  * treated as unsatisfiable. An older build reading a newer state must show more than it
  * should, never less — the alternative is a blank page with no visible explanation.
  */
-export function applyFilters(rows: readonly IssueRow[], state: FilterState): IssueRow[] {
+export function applyFilters(
+  rows: readonly IssueRow[],
+  state: FilterState,
+  served: TextMatches | null = null,
+): IssueRow[] {
   const text = state.text.trim().toLowerCase();
+  // The server's answer counts only for the text it answered; a stale one is ignored.
+  const servedIds = served && served.q === state.text.trim() ? served.ids : null;
   return rows.filter((row) => {
     if (!passesDone(row, state)) return false;
     for (const dimension of FILTER_DIMENSIONS) {
@@ -669,7 +686,7 @@ export function applyFilters(rows: readonly IssueRow[], state: FilterState): Iss
       if (!selected || selected.length === 0) continue; // no constraint, not "none match"
       if (!selected.some((value) => dimension.matches(row, value))) return false;
     }
-    if (text.length > 0 && !searchable(row).includes(text)) return false;
+    if (text.length > 0 && !searchable(row).includes(text) && !servedIds?.has(row.issue.id)) return false;
     return true;
   });
 }

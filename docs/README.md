@@ -30,7 +30,7 @@ the reference pages at the end are for looking things up.
 
 | Page | What it is for |
 |---|---|
-| [Why staple](why-staple.md) | Why staple exists and where it fits next to Linear, GitHub or ClickUp |
+| [Why staple](why-staple.md) | Why staple exists and where it fits next to GitHub, Linear, Azure DevOps or ClickUp |
 | [Install and first workspace](getting-started.md) | Install staple, set up a repository, open the web UI and file your first tickets |
 | [Connect your agent](connect-your-agent.md) | Wire Claude Code, Codex or any MCP client to staple |
 

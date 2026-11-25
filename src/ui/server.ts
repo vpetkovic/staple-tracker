@@ -4047,6 +4047,21 @@ export function startUiServer(options: UiOptions): UiHandle {
         return;
       }
 
+      /**
+       * The toolbar search, answered by the same `listIssues({ q })` that `staple ls -q`
+       * asks, so a word in a plan, worklog, comment or criterion finds the row the way the
+       * CLI finds it. Only ids go back: the rows are already on the page from `/api/issues`,
+       * and the client keeps every other filter. Scoped like `/api/issues`.
+       */
+      if (url.pathname === "/api/search") {
+        const q = (url.searchParams.get("q") ?? "").trim();
+        const wanted = url.searchParams.get("ws") ?? undefined;
+        const targets = options.hub && !wanted ? allHandles() : [handleFor(wanted)];
+        const ids = q ? targets.flatMap((h) => h.store.listIssues({ q, includeResolved: true }).map((issue) => issue.id)) : [];
+        json(res, 200, { q, ids });
+        return;
+      }
+
       if (url.pathname === "/api/inbox") {
         const assignee = url.searchParams.get("assignee") ?? undefined;
         const out = allHandles().map((h) => {
@@ -5234,8 +5249,21 @@ export function startUiServer(options: UiOptions): UiHandle {
       }
 
       if (url.pathname === "/api/milestones") {
-        const handle = handleFor(url.searchParams.get("ws") ?? undefined);
-        json(res, 200, handle.store.milestones().list({ all: url.searchParams.get("all") === "1" }));
+        const wanted = url.searchParams.get("ws") ?? undefined;
+        const all = url.searchParams.get("all") === "1";
+        if (options.hub && !wanted) {
+          // Every workspace, as /api/issues and /api/projects read them. One without the
+          // milestone kind has no milestones: it contributes nothing rather than refusing the hub.
+          json(
+            res,
+            200,
+            allHandles()
+              .filter((h) => h.store.getKinds().some((kind) => kind.id === MILESTONE_KIND))
+              .flatMap((h) => h.store.milestones().list({ all }).map((row) => ({ ...row, workspace: h.slug }))),
+          );
+          return;
+        }
+        json(res, 200, handleFor(wanted).store.milestones().list({ all }));
         return;
       }
 

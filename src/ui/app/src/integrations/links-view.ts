@@ -22,7 +22,7 @@ export function countWords(links: readonly ExternalLink[]): string {
     .join(", ");
 }
 
-/** A connection that could read this link: same provider and host, and for Linear and ClickUp the same organisation or workspace. */
+/** A connection that could read this link: same provider and host, and beyond GitHub the same organisation or workspace. */
 function serves(connection: ConnectionView, link: ExternalLink): boolean {
   const ref = link.resource.ref;
   return (

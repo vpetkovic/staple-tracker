@@ -9,7 +9,7 @@ export interface SearchHit {
   item: SourceItem;
   associations: Issue[];
 }
-/** A live hit carries the mapped repository, team or project it came from. */
+/** A live hit carries the mapped source it came from: a repository, team, project, space or list. */
 export type RemoteHit = SearchHit & { targetKey: string };
 /** A source that could not be searched; the rest of the answer still stands. */
 export interface SearchFailure {

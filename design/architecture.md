@@ -164,12 +164,17 @@ guessed at — see [migration.md](migration.md).
 Gaps in the current build, so nobody discovers them the hard way:
 
 - Plain SQL in the store modules rather than a query builder, and SQLite only.
-- Labels are a JSON column and search is `LIKE`; there is no full-text index.
+- Labels are a JSON column. Search (`staple ls -q`, the toolbar) is `LIKE` over
+  everything written on a ticket: title, description, assignee, labels, acceptance
+  criteria, comments and the current revision of each document. There is no
+  full-text index, so there is no stemming or ranking, and a large workspace pays
+  a scan per query.
 - Holistic reads open one connection per workspace file rather than one
   `ATTACH` union.
-- There are no connectors to other trackers (GitHub Issues, ClickUp) and no
-  harness connectors: `staple doctor` reports its `harnesses` check as `skip`
-  for that reason. Cloud sync between staple workspaces is built; see
+- Connectors to other trackers (GitHub, Linear, Azure DevOps, ClickUp) only
+  read: they link and cache provider items and write nothing back; see
+  [integrations](../docs/integrations.md). There are no harness connectors:
+  `staple doctor` reports its `harnesses` check as `skip` for that reason. Cloud sync between staple workspaces is built; see
   [sync.md](sync.md).
 - A dependency cycle that mixes workspace-local and cross-workspace edges is
   not detected: the hub checks cycles over its own edges, and each workspace

@@ -201,11 +201,11 @@ describe("pickerSections", () => {
 });
 
 describe("what Add connection offers", () => {
-  it("lists the providers that work first, then the planned ones as not yet available", () => {
+  it("lists every provider, each one available", () => {
     expect(CONNECTION_CHOICES.map((c) => [c.providerId, c.label, c.available])).toEqual([
       ["github", "GitHub account or Enterprise host", true],
       ["linear", "Linear workspace", true],
-      ["azure_devops", "Azure DevOps", false],
+      ["azure_devops", "Azure DevOps organization", true],
       ["clickup", "ClickUp workspace", true],
     ]);
   });

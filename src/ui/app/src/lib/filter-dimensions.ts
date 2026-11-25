@@ -51,6 +51,7 @@ import {
   type FilterChip,
   type FilterOption,
   type FilterState,
+  type TextMatches,
 } from "./filters";
 import { isResolvedStatus, statusCategory } from "./settings";
 import { PICKUP_STATES, type Issue, type IssueRow, type PickupState } from "./types";
@@ -93,6 +94,8 @@ export interface FilterContext {
   epicTitle: ReadonlyMap<string, string>;
   /** The tracked projects on the page — `/api/projects`, one row per project per workspace. */
   projects: readonly ProjectFacts[];
+  /** The server's answer to the toolbar text (lib/filters.ts `TextMatches`), or null before one. */
+  textMatches?: TextMatches | null;
 }
 
 /**
@@ -112,6 +115,7 @@ export const EMPTY_FILTER_CONTEXT: FilterContext = {
   epicOf: new Map(),
   epicTitle: new Map(),
   projects: [],
+  textMatches: null,
 };
 
 /**
@@ -126,6 +130,7 @@ export function buildFilterContext(
   rows: readonly IssueRow[],
   milestones: readonly MilestoneFacts[] = [],
   projects: readonly ProjectFacts[] = [],
+  textMatches: TextMatches | null = null,
 ): FilterContext {
   const byId = new Map<string, Issue>(rows.map((row) => [row.issue.id, row.issue]));
   const epicOf = new Map<string, string>();
@@ -140,7 +145,7 @@ export function buildFilterContext(
     epicOf.set(issue.id, top.identifier);
     epicTitle.set(top.identifier, top.title);
   }
-  return { milestones, epicOf, epicTitle, projects };
+  return { milestones, epicOf, epicTitle, projects, textMatches };
 }
 
 // ---------------------------------------------------------------- pickup state
@@ -449,7 +454,7 @@ export function applyFilterDimensions(
   state: FilterState,
   context: FilterContext = EMPTY_FILTER_CONTEXT,
 ): IssueRow[] {
-  const base = applyFilters(rows, state);
+  const base = applyFilters(rows, state, context.textMatches ?? null);
   return base.filter((row) => {
     for (const dimension of CONTEXT_FILTER_DIMENSIONS) {
       const selected = state.dims[dimension.id];

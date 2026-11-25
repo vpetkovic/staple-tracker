@@ -5,19 +5,19 @@ import {Agent, Chip, Label, List, Reveal, Row} from './parts';
 import styles from './TrackerSync.module.css';
 
 // What staple reads today and what is still to come. Nothing here is shown as shipped
-// unless it is: a tracker without a link yet says Planned, and so does writing back.
+// unless it is: every tracker listed is read today, and writing back says Planned.
 const TRACKERS = [
   {name: 'GitHub', shipped: true},
   {name: 'Linear', shipped: true},
+  {name: 'Azure DevOps', shipped: true},
   {name: 'ClickUp', shipped: true},
-  {name: 'Azure DevOps', shipped: false},
 ];
 
 /** staple next to a team's tracker: what it reads today, and writing back marked as planned. */
 export default function TrackerSync({fade = 'bottom', ...options}: SceneOptions): ReactNode {
   return (
     <Scene
-      label="staple, the local execution layer, beside a team's tracker. staple reads from GitHub, Linear and ClickUp today, marked Shipped. Azure DevOps and writing back to the tracker are planned, each marked Planned."
+      label="staple, the local execution layer, beside a team's tracker. staple reads from GitHub, Linear, Azure DevOps and ClickUp today, each marked Shipped. Writing back to the tracker is planned, marked Planned."
       title="Next to your team's tracker"
       meta="read-only"
       timeline={[350, 700, 1050, 1400, 2150, 2950]}

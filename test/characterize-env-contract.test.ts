@@ -11,8 +11,8 @@
  * The resolution order in src/core/workspace.ts `resolveWorkspace` is:
  *
  *   1. `--db <path>`
- *   2. `STAPLE_DB`
- *   3. `--ws <slug|prefix>`  (hub lookup)
+ *   2. `--ws <slug|prefix>`  (hub lookup; an MCP call's `ws` takes the same path)
+ *   3. `STAPLE_DB`
  *   4. walk up from cwd for `.staple/staple.db`, then legacy `.tasks/tasks.db`
  *
  * …and note what is NOT in that list: `STAPLE_WS`. It is documented in
@@ -23,9 +23,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import {
   bareEnv,
   CLI_ENTRY,
+  MCP_ENTRY,
   removeDir,
   runCliAt,
   tempDir,
@@ -160,6 +163,38 @@ describe("workspace selector precedence", () => {
         "Run `staple init` in the repo (or `staple init --global <slug>`).\n",
     );
   }, 30_000);
+
+  /**
+   * The MCP twin of the --ws case: a server pinned by STAPLE_DB (as every
+   * `staple run drive` session is) must still send a call that names `ws` to
+   * that workspace, and a call without `ws` to the pinned one, not the cwd's.
+   */
+  it("an MCP call's ws beats STAPLE_DB, and STAPLE_DB beats the server's cwd", async () => {
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [TSX_CLI, MCP_ENTRY],
+      cwd: nested,
+      env: bareEnv({ STAPLE_HOME: home, STAPLE_AGENT: "char-env", STAPLE_DB: globalDb }),
+      stderr: "ignore",
+    });
+    const client = new Client({ name: "characterize-env", version: "0.0.0" });
+    await client.connect(transport);
+    const titles = async (args: Record<string, string>) => {
+      const result = (await client.callTool({ name: "list_tasks", arguments: args })) as {
+        isError?: boolean;
+        content: Array<{ text?: string }>;
+      };
+      expect(result.isError, result.content[0]?.text).toBeFalsy();
+      const payload = JSON.parse(result.content[0]!.text!) as { items: Array<{ title: string }> };
+      return payload.items.map((item) => item.title);
+    };
+    try {
+      expect(await titles({ ws: "outer" })).toEqual(["repo task"]);
+      expect(await titles({})).toEqual(["global task"]);
+    } finally {
+      await client.close();
+    }
+  }, 60_000);
 
   /**
    * KNOWN divergence between surfaces. src/mcp.ts resolves with

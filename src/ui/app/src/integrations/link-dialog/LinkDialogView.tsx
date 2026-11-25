@@ -29,7 +29,7 @@ import { providerName, shortKey } from "../link-state";
 import { ConnectionDot, ItemGlyph, KindSegments, LINK_PROSE, LinkStatePill, ProviderMark } from "../parts";
 import { resourceKey, type MappingTarget, type SearchFailure, type SearchHit, type SearchScope } from "../model";
 import type { KindFilter } from "./last-kind";
-import { failureLine, freshnessLine, linkTag, scopeLabel, scopeNote, sourceName, type ResultGroup } from "./logic";
+import { connectionLabel, failureLine, freshnessLine, linkTag, scopeLabel, scopeNote, sourceName, type ResultGroup } from "./logic";
 import { TargetPicker } from "./TargetPicker";
 
 export interface CreateState {
@@ -187,7 +187,7 @@ export function LinkDialogView({
             {state.connections.map((c) => (
               <span key={c.id} className="inline-flex items-center gap-1.5 text-label text-muted-foreground">
                 <ConnectionDot health={c.health} />
-                {providerName(c.providerId)}
+                {connectionLabel(c, state.connections)}
               </span>
             ))}
           </div>
@@ -333,7 +333,7 @@ function Results({
         <div className="flex h-full flex-col items-center justify-center gap-2 px-6 py-10 text-center">
           <p className="text-body font-medium">Nothing is set up to search yet.</p>
           <p className="max-w-80 text-label text-muted-foreground">
-            Choose which repositories, teams or projects each workspace searches. You can still paste a link.
+            Choose which repositories, teams, projects, spaces or lists each workspace searches. You can still paste a link.
           </p>
           <Button variant="outline" size="sm" className="mt-2 pointer-coarse:h-11" onClick={actions.onSettings}>
             Choose sources

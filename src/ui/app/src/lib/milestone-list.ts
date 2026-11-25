@@ -1,8 +1,8 @@
 /**
  * THE MILESTONES THE FILTER MENU OFFERS — every workspace's on All workspaces.
  *
- * `/api/milestones` with no `ws` answers for the server's FIRST registered workspace, so on
- * All workspaces the menu used to offer only that workspace's milestones — the
+ * `/api/milestones` with no `ws` once answered for the server's FIRST registered workspace, so
+ * on All workspaces the menu offered only that workspace's milestones — the
  * first-workspace fallback, one level down. Each workspace is read on its own and the
  * answers joined, every row keeping the workspace it came from so its members are fetched
  * from the right place. A workspace that cannot answer (no milestone kind configured)

@@ -20,7 +20,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import type { Browser, BrowserContext, Page } from "playwright-core";
+import type { Browser, BrowserContext, Page, Route } from "playwright-core";
 import { initWorkspace } from "../src/core/workspace.js";
 import { startUiServer, uiBundleExists, type UiHandle } from "../src/ui/server.js";
 
@@ -125,14 +125,34 @@ describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
     // No workspace named: the screen is the computer's.
     await page.goto(`${at(single)}/?settings=integrations&token=${single.token}`, { waitUntil: "networkidle" });
     const settings = page.getByRole("dialog", { name: "Settings" });
-    // Planned providers are listed and cannot be chosen yet.
+    // Every provider can be chosen; none is marked Soon.
     await page.getByRole("button", { name: "Add connection", exact: true }).click();
-    const planned = page.getByRole("menuitem", { name: /^Azure DevOps/ });
-    expect(await planned.getAttribute("aria-disabled")).toBe("true");
-    expect(await planned.innerText()).toContain("Soon");
-    for (const available of [/^Linear workspace/, /^ClickUp workspace/]) {
+    for (const available of [/^Linear workspace/, /^Azure DevOps organization/, /^ClickUp workspace/]) {
       expect(await page.getByRole("menuitem", { name: available }).getAttribute("aria-disabled")).toBeNull();
     }
+    expect(await page.getByRole("menu").innerText()).not.toContain("Soon");
+    // Azure DevOps asks for the organization and the token variable, and sends no token and no ids.
+    let azure: unknown = null;
+    const recordAzure = (route: Route) => { azure = route.request().postDataJSON(); return route.fulfill({ json: { id: "test-ado" } }); };
+    await page.route("**/api/integrations/configure", recordAzure);
+    await page.getByRole("menuitem", { name: /^Azure DevOps organization/ }).click();
+    expect(await page.getByLabel("Token variable", { exact: true }).inputValue()).toBe("STAPLE_AZURE_DEVOPS_PAT");
+    await page.getByLabel("Organization", { exact: true }).fill("fabrikam");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect.poll(() => azure).toEqual({ action: "configure", providerId: "azure_devops", organization: "fabrikam", credentialEnv: "STAPLE_AZURE_DEVOPS_PAT" });
+    await page.unroute("**/api/integrations/configure", recordAzure);
+    // ClickUp asks for the token variable and the workspace number; the server reads the user from the token.
+    let clickup: unknown = null;
+    const recordClickUp = (route: Route) => { clickup = route.request().postDataJSON(); return route.fulfill({ json: { id: "test-cu" } }); };
+    await page.route("**/api/integrations/configure", recordClickUp);
+    await page.getByRole("button", { name: "Add connection", exact: true }).click();
+    await page.getByRole("menuitem", { name: /^ClickUp workspace/ }).click();
+    expect(await page.getByLabel("API key variable", { exact: true }).inputValue()).toBe("STAPLE_CLICKUP_API_TOKEN");
+    await page.getByLabel("Workspace ID", { exact: true }).fill("9012345");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect.poll(() => clickup).toEqual({ action: "configure", providerId: "clickup", scopeId: "9012345", credentialEnv: "STAPLE_CLICKUP_API_TOKEN" });
+    await page.unroute("**/api/integrations/configure", recordClickUp);
+    await page.getByRole("button", { name: "Add connection", exact: true }).click();
     await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "Add account", exact: true }).click();
     await page.getByLabel("Account", { exact: true }).fill("tester");
@@ -270,6 +290,96 @@ describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
       await context.close();
     }
   },45_000);
+
+  it("connects Azure DevOps by organization, maps a project, searches and links a work item, refreshes it and keeps it after revocation", async () => {
+    const { page, context, errors } = await open(single, "/?view=tasks", PHONE);
+    const account = "11111111-1111-4111-8111-111111111111", org = "77777777-7777-4777-8777-777777777777";
+    const project = { id: "88888888-8888-4888-8888-888888888888", name: "Fabrikam Web" };
+    const originalFetch = globalThis.fetch;
+    let title = "Azure fixture work item", denied = false;
+    const previous = process.env.STAPLE_TEST_ADO_PAT;
+    process.env.STAPLE_TEST_ADO_PAT = "fixture-pat";
+    const mock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      // A Linear team mapped by an earlier test must not reach the network either.
+      if (url.host === "api.linear.app") return new Response(null, { status: 401 });
+      // A token made for all accessible organizations lists them for the form.
+      if (url.host === "app.vssps.visualstudio.com") {
+        if (url.pathname === "/_apis/profile/profiles/me") return Response.json({ id: account });
+        return Response.json({ value: [{ accountId: org, accountName: "acme" }, { accountId: "99999999-9999-4999-8999-999999999999", accountName: "zeta" }] });
+      }
+      // An Azure DevOps Server lists its own collections.
+      if (url.host === "tfs.example.test") return Response.json({ value: [{ id: "88888888-8888-4888-8888-000000000001", name: "DefaultCollection" }] });
+      if (url.host !== "dev.azure.com") return originalFetch(input, init);
+      if (denied) return new Response("private fixture failure", { status: 401 });
+      const path = url.pathname;
+      if (path === "/acme/_apis/connectionData") return Response.json({ authenticatedUser: { id: account, providerDisplayName: "Ada Lovelace" }, instanceId: org });
+      if (path === "/acme/_apis/projects") return Response.json({ value: [project] });
+      if (path.startsWith("/acme/_apis/projects/")) return Response.json(project);
+      if (path.endsWith("/_apis/wit/wiql")) return Response.json({ workItems: [{ id: 12 }] });
+      if (path === "/acme/_apis/wit/workitemsbatch") return Response.json({ value: [{ id: 12, fields: { "System.Title": title, "System.State": "Active", "System.TeamProject": project.name, "System.Description": "<p>Azure private source context</p>" } }] });
+      return new Response(null, { status: 404 });
+    });
+    try {
+      await page.goto(`${at(single)}/?settings=integrations&settings-ws=alpha&token=${single.token}`, { waitUntil: "networkidle" });
+      await page.getByRole("button", { name: "Add connection", exact: true }).click();
+      await page.getByRole("menuitem", { name: /^Azure DevOps organization/ }).click();
+      await page.getByLabel("Token variable", { exact: true }).fill("STAPLE_TEST_ADO_PAT");
+      // The organizations the token reaches are offered; picking one fills the field.
+      const reached = page.getByRole("group", { name: "Organizations this token reaches" });
+      await reached.getByRole("button", { name: "acme", exact: true }).click();
+      expect(await page.getByLabel("Organization", { exact: true }).inputValue()).toBe("acme");
+      expect(await reached.getByRole("button", { name: "acme", exact: true }).getAttribute("aria-pressed")).toBe("true");
+      // A Server lists its collections instead, and a name picked for Services does not carry over.
+      await page.getByLabel("Server (optional)", { exact: true }).fill("tfs.example.test");
+      await expect.poll(() => page.getByLabel("Collection", { exact: true }).inputValue()).toBe("DefaultCollection");
+      await page.getByLabel("Server (optional)", { exact: true }).fill("");
+      await reached.getByRole("button", { name: "acme", exact: true }).click();
+      expect(await page.getByLabel("Organization", { exact: true }).inputValue()).toBe("acme");
+      await page.getByRole("button", { name: "Save", exact: true }).click();
+      await expect.poll(() => page.locator('[data-connection-row="azure_devops"] [data-connection-state="ready"]').count()).toBe(1);
+      expect(await page.locator('[data-connection-row="azure_devops"]').innerText()).toContain("acme · token in STAPLE_TEST_ADO_PAT");
+      await page.getByRole("button", { name: "Add a source to alpha", exact: true }).click();
+      await page.getByRole("option", { name: /Fabrikam Web/ }).click();
+      await expect.poll(() => page.getByRole("option", { name: /Fabrikam Web.*chosen/ }).count()).toBe(1);
+      await page.keyboard.press("Escape");
+      await expect.poll(() => page.getByRole("button", { name: "Remove Fabrikam Web from alpha", exact: true }).count()).toBe(1);
+      await page.goto(`${at(single)}/?issue=ALP-2&token=${single.token}`, { waitUntil: "networkidle" });
+      await page.getByRole("button", { name: "Link an issue or pull request", exact: true }).click();
+      const dialog = page.locator("[data-link-external]");
+      // The fixture answers every prefix with the same item, so wait for the answer to the whole
+      // text: the dialog ignores Enter on a list that answers an older query.
+      const answered = page.waitForResponse(r => r.url().includes("/api/integrations/read") && /"action":"search"/.test(r.request().postData() ?? "") && /"text":"fixture"/.test(r.request().postData() ?? ""));
+      await page.keyboard.type("fixture");
+      await answered;
+      await expect.poll(() => dialog.getByRole("option", { name: /Azure fixture work item/ }).getAttribute("aria-selected")).toBe("true");
+      await page.keyboard.press("Enter");
+      await expect.poll(() => dialog.getByRole("option", { name: /Azure fixture work item/ }).innerText()).toContain("Linked here");
+      await page.keyboard.press("Escape");
+      await page.getByRole("tab", { name: /^External links/ }).click();
+      const card = page.locator("[data-external-resource]");
+      await expect.poll(() => card.innerText()).toContain("Active");
+      await card.locator("[aria-expanded]").first().click();
+      await expect.poll(() => card.innerText()).toContain("Azure private source context");
+      const refresh = async () => {
+        await page.getByRole("button", { name: /^More actions for .*12$/ }).click();
+        await page.getByRole("menuitem", { name: "Refresh", exact: true }).click();
+      };
+      title = "Azure renamed work item";
+      await refresh();
+      await expect.poll(() => card.innerText()).toContain("Azure renamed work item");
+      denied = true;
+      await refresh();
+      await expect.poll(() => card.getByRole("alert").innerText()).toContain("Azure DevOps rejected the personal access token in STAPLE_TEST_ADO_PAT");
+      expect(await card.innerText()).toContain("Azure renamed work item");
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      expect(errors).toEqual([]);
+    } finally {
+      mock.mockRestore();
+      if (previous === undefined) delete process.env.STAPLE_TEST_ADO_PAT; else process.env.STAPLE_TEST_ADO_PAT = previous;
+      await context.close();
+    }
+  }, 45_000);
 
   it("loading an address with issue opens that ticket, and a reload keeps it open", async () => {
     const { page, context, errors } = await open(single, "/?issue=ALP-2");

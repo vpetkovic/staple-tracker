@@ -51,7 +51,7 @@ while you check a change.
 | `AutopilotRun` | Tickets go done one after another, then the budget stops the run. |
 | `MilestoneGoal` | Goal criteria are marked met with evidence; the progress fills. |
 | `IdeaToShipped` | Experimental planning: an idea is shaped, scheduled on a horizon, scaffolded into an epic and its tasks, and ships. |
-| `TrackerSync` | staple beside GitHub, Linear and ClickUp (Shipped) and Azure DevOps (Planned); between them, Reads is Shipped and Writes back is Planned. |
+| `TrackerSync` | staple beside GitHub, Linear, Azure DevOps and ClickUp (Shipped); between them, Reads is Shipped and Writes back is Planned. |
 | `Budget` | Provider limits as gauges with the reserve; an estimate against what the work took. |
 | `OneStore` | A command in the terminal changes the same ticket in the web UI and over MCP. |
 

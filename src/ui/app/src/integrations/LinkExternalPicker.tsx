@@ -37,6 +37,7 @@ import {
   keepSelection,
   moveSelection,
   outsideScopeTarget,
+  pastedPlace,
   queryKind,
   scopeFromMapping,
   searchKinds,
@@ -330,7 +331,7 @@ export function PickerBody({
     sourceInput(hit.item, connectionFor(hit.item.ref, (hit as Partial<RemoteHit>).targetKey, targets, connections.connections));
   function urlConnection(url: string): string | undefined {
     try {
-      return connectionFor({ host: new URL(url).host }, undefined, targetsRef.current, connections.connections);
+      return connectionFor(pastedPlace(url), undefined, targetsRef.current, connections.connections);
     } catch {
       return undefined;
     }

@@ -21,8 +21,9 @@ answer the same object the command prints with `--json`.
 
 2. Ask your agent to list its staple tools. Each has a description and typed
    arguments; the client shows them.
-3. Most tools take `ws` (a workspace slug or prefix) to reach another repository, and
-   every write that records who acted takes `actor` when `STAPLE_AGENT` is not set.
+3. Most tools take `ws` (a workspace slug or prefix) to reach another repository, even
+   when `STAPLE_DB` pins the server to one, and every write that records who acted
+   takes `actor` when `STAPLE_AGENT` is not set.
 
 The loop an agent follows, described in
 [How an agent works a ticket](working-a-ticket.md):

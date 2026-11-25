@@ -113,6 +113,13 @@ export function ProviderMark({ providerId, className }: { providerId: string; cl
         <path d="M3.2 9.6 6.4 12.8M2.6 6.2l7.2 7.2M4.4 3.6l8 8" />
       </svg>
     );
+  if (providerId === "azure_devops")
+    return (
+      <svg aria-hidden viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" data-provider="azure_devops" className={cn("size-3.5 shrink-0", className)}>
+        <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2" />
+        <path d="M6 2.75v10.5M10 2.75v10.5M3.5 5.5h1M7.5 5.5h1M11.5 5.5h1M7.5 8h1" strokeLinecap="round" />
+      </svg>
+    );
   if (providerId === "clickup")
     return (
       <svg aria-hidden viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" data-provider="clickup" className={cn("size-3.5 shrink-0", className)}>
