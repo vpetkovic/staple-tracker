@@ -286,6 +286,33 @@ describe("refusals arrive as refusals", () => {
     expect(list.every((row) => row.issue.projectId === null)).toBe(true);
   });
 
+  it("a non-string name, source or task project is a validation refusal and never a 500", async () => {
+    const before = ((await get("/api/issues?ws=alpha")).body as unknown[]).length;
+    expect((await post("/api/project/create", { ws: "alpha", name: "Typed" })).status).toBe(200);
+    const cases: Array<[string, Body, string]> = [
+      ["/api/project/create", { ws: "alpha", name: 42 }, "name"],
+      ["/api/project/create", { ws: "alpha", name: { first: "X" } }, "name"],
+      ["/api/project/create", { ws: "alpha", name: "X", source: ["/tmp"] }, "source"],
+      ["/api/project/create", { ws: "alpha", name: "X", kind: "managed", sourceKind: "local", source: 7 }, "source"],
+      ["/api/project/update", { ws: "alpha", ref: "typed", name: 42 }, "name"],
+      ["/api/project/update", { ws: "alpha", ref: "typed", source: 7 }, "source"],
+      ["/api/action", { ws: "alpha", type: "create", title: "Numbered", project: 5 }, "project"],
+      ["/api/action", { ws: "alpha", type: "create", title: "Listed", project: ["typed"] }, "project"],
+    ];
+    for (const [route, body, field] of cases) {
+      const { status, body: envelope } = await post(route, body);
+      expect(status, `${route} ${JSON.stringify(body)}`).toBe(httpStatusFor("validation"));
+      expect(envelope.code).toBe("validation");
+      expect((envelope.detail as Body | undefined)?.field).toBe(field);
+    }
+    // No refused create spent an issue number, and no project was written or renamed.
+    expect(((await get("/api/issues?ws=alpha")).body as unknown[]).length).toBe(before);
+    expect(await listed("?ws=alpha")).not.toContain("alpha/x");
+    const typed = (await get("/api/projects?ws=alpha")).body as Array<{ project: { slug: string; name: string } }>;
+    expect(typed.find((row) => row.project.slug === "typed")?.project.name).toBe("Typed");
+    expect((await post("/api/project/delete", { ws: "alpha", ref: "typed" })).status).toBe(200);
+  });
+
   it("an unknown verb under the family is a plain 404", async () => {
     expect((await post("/api/project/explode", { ws: "alpha" })).status).toBe(404);
   });
