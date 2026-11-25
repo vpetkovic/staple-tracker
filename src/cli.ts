@@ -95,6 +95,17 @@ for (const method of ["log", "error", "warn", "info"] as const) {
   console[method] = (...args: unknown[]) => print(publicOutput(format(...args)));
 }
 
+/**
+ * A reader that stops early (`staple show <ref> | head`) closes stdout while the CLI is still
+ * writing. That is a normal end, not a crash: without a listener Node turns the EPIPE into an
+ * unhandled 'error' and prints its stack trace. The rest of the output has nowhere to go, so it
+ * is dropped and the command finishes its work as if it had printed everything — exiting at the
+ * write could abandon a multi-step command halfway. Any other stdout failure is still raised.
+ */
+process.stdout.on("error", (error: NodeJS.ErrnoException) => {
+  if (error.code !== "EPIPE" && error.code !== "ERR_STREAM_DESTROYED") throw error;
+});
+
 const STATUS_GLYPHS: Record<string, string> = {
   backlog: "◌",
   todo: "○",
