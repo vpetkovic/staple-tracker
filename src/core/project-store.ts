@@ -90,6 +90,11 @@ export class ProjectStore {
   }
 
   private rowFor(ref: string): ProjectRow | undefined {
+    // A ref can come straight from a JSON body (a task create's `project`), so a
+    // non-string is a refusal by field, not a TypeError on `.trim()`.
+    if (typeof ref !== "string") {
+      throw new StapleError("validation", "project must be a project id or slug", { field: "project" });
+    }
     const key = ref.trim();
     if (!key) return undefined;
     return this.db.prepare(`SELECT ${COLUMNS} FROM projects WHERE id = ? OR slug = ?`).get(key, key) as

@@ -50,6 +50,13 @@ const isProjectKind = (value: unknown): value is ProjectKind =>
 const isSourceKind = (value: unknown): value is ProjectSourceKind =>
   typeof value === "string" && (PROJECT_SOURCE_KINDS as readonly string[]).includes(value);
 
+/** `null`/`undefined` read as absent (""); any other non-string is a validation refusal. */
+function optionalText(value: unknown, field: string, message: string): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value !== "string") throw new StapleError("validation", message, { field });
+  return value;
+}
+
 /**
  * `My Project (v2)` -> `my-project-v2`. Lower-case, runs of anything that is not a
  * letter or digit collapse to one hyphen, no leading or trailing hyphen, capped.
@@ -68,6 +75,10 @@ export function slugifyProjectName(name: string): string {
 /**
  * Validate and normalize. Throws `StapleError("validation")` naming the field.
  *
+ * The input usually arrives as parsed JSON, so the declared types are a hope, not a
+ * guarantee: a `name` or `source` that is present but not a string is refused by
+ * field rather than reaching `.trim()` and surfacing as a 500.
+ *
  * The rules, in the order they are checked:
  *   - the name is required and at most `PROJECT_NAME_MAX` characters after trimming;
  *   - `kind` defaults to `unmanaged` and must be one of `PROJECT_KINDS`;
@@ -78,7 +89,7 @@ export function slugifyProjectName(name: string): string {
  *     non-empty source; a `github` source must match `GITHUB_REPO_URL`.
  */
 export function normalizeProjectInput(input: ProjectInput): ProjectFields {
-  const name = (input.name ?? "").trim();
+  const name = optionalText(input.name, "name", "Project name must be a string").trim();
   if (!name) throw new StapleError("validation", "Project name is required", { field: "name" });
   if (name.length > PROJECT_NAME_MAX) {
     throw new StapleError("validation", `Project name is at most ${PROJECT_NAME_MAX} characters`, {
@@ -95,7 +106,7 @@ export function normalizeProjectInput(input: ProjectInput): ProjectFields {
   }
 
   const sourceKind = input.sourceKind ?? null;
-  const source = (input.source ?? "").trim() || null;
+  const source = optionalText(input.source, "source", "Project source must be a string").trim() || null;
 
   if (kind === "unmanaged") {
     if (sourceKind !== null || source !== null) {

@@ -59,6 +59,17 @@ describe("normalizeProjectInput", () => {
     expect(normalizeProjectInput({ name: "x".repeat(PROJECT_NAME_MAX) }).name).toHaveLength(PROJECT_NAME_MAX);
   });
 
+  it("refuses a name or source that is not a string, naming the field, instead of throwing a TypeError", () => {
+    for (const bad of [42, true, { a: 1 }, ["Docs"]]) {
+      refused(() => normalizeProjectInput({ name: bad as never }), "name");
+      refused(() => normalizeProjectInput({ name: "Docs", source: bad as never }), "source");
+      refused(
+        () => normalizeProjectInput({ name: "Docs", kind: "managed", sourceKind: "local", source: bad as never }),
+        "source",
+      );
+    }
+  });
+
   it("refuses a kind outside the vocabulary", () => {
     refused(() => normalizeProjectInput({ name: "Docs", kind: "hosted" as never }), "kind");
   });
