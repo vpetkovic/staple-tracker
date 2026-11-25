@@ -310,8 +310,9 @@ describe("tool inventory", () => {
   // export_file and remove_file: 65 -> 69. The MCP Apps about view added show_about: 69 -> 70.
   // The ticket card added show_ticket: 70 -> 71. The progress view added show_progress: 71 -> 72.
   // The queue view added show_queue: 72 -> 73. A person's click in a view added the app-only
-  // approve_gate_from_view and request_changes_from_view: 73 -> 75.
-  it("exposes exactly these 88 tools with these annotations and output schemas", async () => {
+  // approve_gate_from_view and request_changes_from_view: 73 -> 75. The ticket branch added
+  // set_branch: 88 -> 89.
+  it("exposes exactly these 89 tools with these annotations and output schemas", async () => {
     const tools = await harness.listTools();
     const inventory = tools.map((t) => ({
       name: t.name,
@@ -397,6 +398,12 @@ describe("tool inventory", () => {
           idempotentHint: true,
           openWorldHint: false,
         },
+        hasOutputSchema: true,
+      },
+      /** The ticket branch: an absolute set like set_estimate, idempotent by value. */
+      {
+        name: "set_branch",
+        annotations: { title: "Set branch", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
         hasOutputSchema: true,
       },
       /**
@@ -1940,6 +1947,8 @@ describe("tool response shapes (31/31)", () => {
       "create_task",
       "update_task",
       "set_estimate",
+      // Pinned in test/ticket-pull-requests-surfaces.test.ts, against `staple branch --json`.
+      "set_branch",
       "checkout_task",
       "release_task",
       "set_blocked_by",

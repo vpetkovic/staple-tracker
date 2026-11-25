@@ -21,7 +21,7 @@ import { type TicketBranch, ticketBranches } from "../ticket-branch.js";
 import { StapleError } from "../types.js";
 import type { ConnectionHealthSnapshot, ConnectionState, ExternalItem } from "./contracts.js";
 import type { ProviderConnection } from "./connections.js";
-import { healthFromError, isConnectionFailure, snapshot } from "./health.js";
+import { healthFromError, isConnectionFailure, ProbeCache, snapshot } from "./health.js";
 import type { LinkedPullRequest } from "./link-store.js";
 import type { MappingTarget } from "./mapping.js";
 import type { IntegrationReader } from "./provider.js";
@@ -193,4 +193,41 @@ export async function discoverPullRequests(deps: DiscoveryDependencies, refs?: r
     }
   }
   return finish();
+}
+
+/**
+ * When each workspace's discovery last ran in this process, keyed by its database. The web UI's
+ * poll asks every 1.5 s; this holds a run for the health poll interval and never runs two at once.
+ */
+export const discoveryRuns = new ProbeCache<number>();
+
+const ROW_STATES = ["open", "draft", "merged", "closed"] as const;
+type RowState = (typeof ROW_STATES)[number];
+
+/** The row badge's pull requests, as `/api/issues` sends them (`PullRequestRef`, ui lib/types.ts). */
+export interface RowPullRequest {
+  provider: "github";
+  number: number;
+  url: string;
+  state: RowState;
+  title: string | null;
+  updatedAt: string | null;
+}
+
+/**
+ * A row's `pullRequests`: every linked pull request, the ones still moving first (open, draft,
+ * then merged and closed), newest first within a state. Sent only when every one of them is a
+ * GitHub pull request with a known state, because the badge draws each one; a row with one it
+ * cannot draw keeps the counted link badge instead, so no pull request is shown twice or lost.
+ */
+export function rowPullRequests(linked: readonly LinkedPullRequest[] | undefined): { pullRequests?: RowPullRequest[] } {
+  if (!linked?.length) return {};
+  const drawable = linked.every((pr) => pr.providerId === "github" && pr.number !== null && ROW_STATES.includes(pr.state as RowState));
+  if (!drawable) return {};
+  const rank = (state: string | null) => ROW_STATES.indexOf(state as RowState);
+  return {
+    pullRequests: [...linked]
+      .sort((a, b) => rank(a.state) - rank(b.state) || b.number! - a.number!)
+      .map((pr) => ({ provider: "github", number: pr.number!, url: pr.url, state: pr.state as RowState, title: pr.title, updatedAt: pr.fetchedAt })),
+  };
 }
