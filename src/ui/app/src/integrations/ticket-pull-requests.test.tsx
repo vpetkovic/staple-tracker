@@ -41,7 +41,7 @@ describe("the merged pull request offer", () => {
   it("offers nothing without a merged pull request, once finished, or behind a review gate", () => {
     const open = detail({ issue: issue({ status: "in_progress" }), externalLinks: [pr(4, "open"), pr(5, "closed")] });
     expect(mergedOffer(open, ctx(open))).toBeNull();
-    for (const status of ["done", "cancelled", "awaiting_approval"]) {
+    for (const status of ["done", "cancelled", "awaiting_approval"] as const) {
       const d = detail({ issue: issue({ status }), externalLinks: [pr(3, "merged")] });
       expect(mergedOffer(d, ctx(d))).toBeNull();
     }
