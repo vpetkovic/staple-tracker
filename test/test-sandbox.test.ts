@@ -15,13 +15,14 @@
  * this worker, for the in-process cases) sees it as outside both.
  */
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, inject, it } from "vitest";
 import { openDb } from "../src/core/db.js";
 import { Hub } from "../src/core/hub.js";
+import { findMigrationRoot } from "../src/core/path-migration.js";
 import { TEST_SANDBOX_ENV, assertInTestSandbox } from "../src/core/test-sandbox.js";
 import { StapleError } from "../src/core/types.js";
 import { findWorkspace, openWorkspace, resolveWorkspace } from "../src/core/workspace.js";
@@ -144,11 +145,25 @@ describe("in-process resolution and opens", () => {
   it("refuses walk-up resolution, an explicit open and a writable open outside the sandbox", () => {
     const before = decoyState();
     refused(() => findWorkspace(decoyWorktree));
+    refused(() => findMigrationRoot(decoyWorktree));
     refused(() => openWorkspace(decoyDb));
     // Refused before anything is read: a missing file outside is the guard's error, not not_found.
     refused(() => openWorkspace(join(decoy, "missing", "staple.db")));
     refused(() => resolveWorkspace({ db: decoyDb }));
     refused(() => openDb(join(decoy, "other.db")));
+    expect(decoyState()).toEqual(before);
+  });
+
+  it("judges a path by where it lands, so a symlink inside the temp directory cannot reach outside", () => {
+    const before = decoyState();
+    const link = join(narrowTmp, "link-to-decoy");
+    symlinkSync(join(decoyMain, ".staple"), link);
+    refused(() => openWorkspace(join(link, "staple.db")));
+    refused(() => openDb(join(link, "staple.db")));
+    const repo = join(narrowTmp, "repo-with-linked-workspace");
+    mkdirSync(repo);
+    symlinkSync(join(decoyMain, ".staple"), join(repo, ".staple"));
+    refused(() => findWorkspace(repo));
     expect(decoyState()).toEqual(before);
   });
 
@@ -174,5 +189,8 @@ describe("assertInTestSandbox", () => {
     // A sibling whose name merely starts with the sandbox's is outside it.
     expect(() => assertInTestSandbox("/sandbox/run-other/x.db", "database", { [TEST_SANDBOX_ENV]: "/sandbox/run" })).toThrow(/outside/);
     expect(() => assertInTestSandbox("/sandbox/run/x.db", "database", { [TEST_SANDBOX_ENV]: "/sandbox/run" })).not.toThrow();
+    // A child whose name starts with two dots is still inside.
+    expect(() => assertInTestSandbox("/sandbox/run/..cache/x.db", "database", { [TEST_SANDBOX_ENV]: "/sandbox/run" })).not.toThrow();
+    expect(() => assertInTestSandbox("/sandbox/run/../x.db", "database", { [TEST_SANDBOX_ENV]: "/sandbox/run" })).toThrow(/outside/);
   });
 });

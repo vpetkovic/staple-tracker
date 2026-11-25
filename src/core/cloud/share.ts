@@ -25,6 +25,7 @@ import { initWorkspace, slugify } from "../workspace.js";
 import { readConnection } from "./connection.js";
 import { isSharedWorkspace, readMembersCache, selfMember } from "./members-cache.js";
 import { buildShareLink, shareJoinCommand, type ShareLink } from "./share-link.js";
+import { assertInTestSandbox } from "../test-sandbox.js";
 
 // ------------------------------------------------------------------ sharing
 
@@ -118,6 +119,7 @@ function shareMessage(args: { name: string; sharedBy: string | null; invitedAs: 
 
 /** The workspace's hub slug and prefix, as its own database records them. */
 function workspaceNameOf(dbPath: string): { slug: string; prefix: string | null } {
+  assertInTestSandbox(dbPath, "workspace database");
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
     const read = (key: string) =>

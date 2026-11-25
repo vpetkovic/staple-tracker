@@ -1,6 +1,6 @@
 import { existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { StapleError } from "./types.js";
 
 /**
@@ -16,7 +16,8 @@ import { StapleError } from "./types.js";
  * root in `STAPLE_TEST_SANDBOX`, which every worker and every child it spawns inherits,
  * and each place a database is resolved or opened asks {@link assertInTestSandbox}
  * first. A path under neither that root nor the OS temp directory is refused with a
- * `forbidden` error naming the path and this variable, before any byte of it is read.
+ * `forbidden` error naming the path and this variable, before any byte of it is read. The
+ * path is judged by where it really lands, so a symlink cannot carry it out.
  *
  * Unset (every real use of staple), the check does nothing.
  */
@@ -33,32 +34,33 @@ function spellings(dir: string): string[] {
   return [...out];
 }
 
-/** `path` as given, and through the realpath of its deepest existing ancestor (the file may not exist yet). */
-function targetSpellings(path: string): string[] {
-  const absolute = resolve(path);
-  const out = new Set([absolute]);
-  let dir = absolute;
+/**
+ * Where `path` really is: the realpath of its deepest existing ancestor, with the rest
+ * appended (the file may not exist yet). Never the spelling as given, so a symlink in
+ * the temp directory that points at a real checkout is judged by where it lands.
+ */
+function canonicalTarget(path: string): string {
+  let dir = resolve(path);
   let rest = "";
   for (;;) {
     if (existsSync(dir)) {
       try {
-        out.add(rest === "" ? realpathSync(dir) : join(realpathSync(dir), rest));
+        const real = realpathSync(dir);
+        return rest === "" ? real : join(real, rest);
       } catch {
-        // unreadable: the given spelling decides
+        return rest === "" ? dir : join(dir, rest);
       }
-      break;
     }
     const parent = dirname(dir);
-    if (parent === dir) break;
+    if (parent === dir) return rest === "" ? dir : join(dir, rest);
     rest = rest === "" ? basename(dir) : join(basename(dir), rest);
     dir = parent;
   }
-  return [...out];
 }
 
 function isWithin(root: string, path: string): boolean {
   const rel = relative(root, path);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 
 /**
@@ -70,8 +72,8 @@ export function assertInTestSandbox(path: string, what = "database", env: NodeJS
   const sandbox = env[TEST_SANDBOX_ENV];
   if (!sandbox || path === ":memory:" || path === "") return;
   const roots = [...spellings(sandbox), ...spellings(tmpdir())];
-  const targets = targetSpellings(path);
-  if (targets.some((target) => roots.some((root) => isWithin(root, target)))) return;
+  const target = canonicalTarget(path);
+  if (roots.some((root) => isWithin(root, target))) return;
   throw new StapleError(
     "forbidden",
     `Test sandbox: refusing to open the ${what} at ${resolve(path)}, which is outside ${TEST_SANDBOX_ENV} (${resolve(sandbox)}) ` +

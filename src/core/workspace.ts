@@ -97,13 +97,12 @@ export function findWorkspace(startDir: string): FoundWorkspace | null {
   for (let hops = 0; hops < 64; hops += 1) {
     const report = describeLayout(dir);
     if (report.currentPresent || report.legacyPresent) {
+      // The walk-up from a test's working directory can reach a real checkout (`./test-sandbox.ts`).
+      assertInTestSandbox(report.currentPath, "workspace database");
       assertResolvable(report);
       const layout = report.layout ?? "current";
-      const dbPath = layout === "current" ? report.currentPath : report.legacyPath;
-      // The walk-up from a test's working directory can reach a real checkout (`./test-sandbox.ts`).
-      assertInTestSandbox(dbPath, "workspace database");
       return {
-        dbPath,
+        dbPath: layout === "current" ? report.currentPath : report.legacyPath,
         layout,
         root: dir,
         report,

@@ -30,6 +30,7 @@ import { journalFor, resolveDeviceId } from "../journal.js";
 import { migrateHub } from "../schema.js";
 import { openedHereBy } from "./attempt-records.js";
 import type { PresenceCounts } from "./attempts.js";
+import { assertInTestSandbox } from "../test-sandbox.js";
 
 interface OwnAttempt {
   id: string;
@@ -174,6 +175,7 @@ export function rebuildPresence(home: string = stapleHome()): number {
       }
       let db: DatabaseSync | null = null;
       try {
+        assertInTestSandbox(workspace.path, "workspace database");
         db = new DatabaseSync(workspace.path, { readOnly: true });
         writeRows(hub, workspace.slug, ownAttempts(db, device));
         read += 1;
