@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { StapleError } from "../types.js";
 import { healthFromError } from "./health.js";
-import type { ConnectionHealth, ExternalItem, ExternalItemRef, ExternalLocator, ExternalSearch, IntegrationAdapter, ProviderReadOptions } from "./contracts.js";
+import type { ConnectionHealth, ContainerKind, ExternalContainer, ExternalItem, ExternalItemRef, ExternalLocator, ExternalSearch, IntegrationAdapter, ProviderReadOptions } from "./contracts.js";
 
 const uuid = z.string().uuid().toLowerCase();
 export const linearConnectionSchema = z.object({
@@ -12,15 +12,16 @@ export const linearConnectionSchema = z.object({
 }).strict();
 export type LinearApiConnection = z.infer<typeof linearConnectionSchema>;
 const slug = z.string().regex(/^[A-Za-z0-9_-]{1,100}$/);
-const organization = z.object({ id: uuid, urlKey: slug });
+const organization = z.object({ id: uuid, urlKey: slug, name: z.string().max(256).optional() });
 const identity = { viewer: z.object({ id: uuid, name: z.string().max(256).optional() }), organization };
 const team = z.object({ id: uuid, key: slug, name: z.string().max(8192), organization: z.object({ id: uuid }) });
 const issue = z.object({ id: uuid, identifier: z.string().regex(/^[A-Za-z][A-Za-z0-9_]*-[1-9][0-9]*$/),
   title: z.string().max(8192), description: z.string().max(1_000_000).nullable(), url: z.string().max(8192),
-  state: z.object({ id: uuid, name: z.string().max(8192) }), team });
+  state: z.object({ id: uuid, name: z.string().max(8192) }), team, project: z.object({ id: uuid }).nullable().optional() });
+const project = z.object({ id: uuid, name: z.string().max(8192), url: z.string().max(8192) });
 const pageInfo = z.object({ hasNextPage: z.boolean(), endCursor: z.string().min(1).max(2048).nullable() });
-const IDENTITY = "viewer { id name } organization { id urlKey }";
-const FIELDS = "id identifier title description url state { id name } team { id key name organization { id } }";
+const IDENTITY = "viewer { id name } organization { id urlKey name }";
+const FIELDS = "id identifier title description url state { id name } team { id key name organization { id } } project { id }";
 const PAGE_SIZE = 50;
 const MAX_BYTES = 2_000_000;
 const TIMEOUT_MS = 15_000;
@@ -47,8 +48,8 @@ export class LinearApiAdapter implements IntegrationAdapter {
   }
   async validate(options?: ProviderReadOptions): Promise<ConnectionHealth> {
     try {
-      const { viewer } = await this.query("", {}, z.object({}), options);
-      return { state: "ready", identity: viewer.name ? { login: viewer.name } : null };
+      const { viewer, organization: org } = await this.query("", {}, z.object({}), options);
+      return { state: "ready", identity: viewer.name ? { login: viewer.name, ...(org.name ? { organization: org.name } : {}) } : null };
     } catch (error) {
       if (options?.signal?.aborted) throw options.signal.reason;
       if (!(error instanceof StapleError)) throw error;
@@ -65,22 +66,49 @@ export class LinearApiAdapter implements IntegrationAdapter {
       return { id: t.id, name: `${t.name} (${t.key})`, url: `https://linear.app/${data.organization.urlKey}/team/${t.key}/all` };
     }), nextCursor: this.next(data.teams.pageInfo, binding, after) };
   }
+  async listProjects(cursor?: string, options?: ProviderReadOptions) {
+    const binding = "projects";
+    const after = this.after(cursor, binding);
+    const data = await this.query("projects(first: 50, after: $after) { nodes { id name url } pageInfo { hasNextPage endCursor } }",
+      { after }, z.object({ projects: z.object({ nodes: z.array(project).max(PAGE_SIZE), pageInfo }) }), options, "$after: String");
+    return { items: data.projects.nodes.map(p => ({ id: p.id, name: p.name, url: this.projectUrl(p.url) })), nextCursor: this.next(data.projects.pageInfo, binding, after) };
+  }
+  async readContainer(id: string, kind: ContainerKind, options?: ProviderReadOptions): Promise<ExternalContainer | null> {
+    this.checkUuid(id);
+    try {
+      if (kind === "project") {
+        const data = await this.query("project(id: $id) { id name url }", { id }, z.object({ project }), options, "$id: String!");
+        return data.project.id === id.toLowerCase() ? { id: data.project.id, name: data.project.name, url: this.projectUrl(data.project.url) } : null;
+      }
+      if (kind !== "team") throw new StapleError("validation", "Linear containers are teams or projects");
+      const data = await this.query("team(id: $id) { id key name organization { id } }", { id }, z.object({ team }), options, "$id: String!");
+      this.checkTeam(data.team);
+      return { id: data.team.id, name: `${data.team.name} (${data.team.key})`, url: `https://linear.app/${data.organization.urlKey}/team/${data.team.key}/all` };
+    } catch (error) {
+      if (error instanceof StapleError && error.code === "not_found") return null;
+      throw error;
+    }
+  }
   async searchIssues(search: ExternalSearch, options?: ProviderReadOptions) {
     if (search.text.length > 256 || /[\x00-\x1f]/.test(search.text)) throw new StapleError("validation", "Use at most 256 characters of search text");
     if (search.containerId !== undefined) this.checkUuid(search.containerId);
-    const binding = JSON.stringify(["issues", search.text, search.containerId ?? null]);
+    if (search.projectId !== undefined) this.checkUuid(search.projectId);
+    if (search.containerId !== undefined && search.projectId !== undefined) throw new StapleError("validation", "Search a Linear team or a project, not both");
+    const binding = JSON.stringify(["issues", search.text, search.containerId ?? null, search.projectId ?? null]);
     const after = this.after(search.cursor, binding);
     const text = search.text.trim();
     // Linear's search requires non-empty text; the issues connection supports browsing a team.
     const field = text ? "searchIssues" : "issues";
+    const byProject = search.projectId ? { project: { id: { eq: search.projectId } } } : null;
     const selection = text
-      ? `searchIssues(term: $text, teamId: $team, first: 50, after: $after) { nodes { ${FIELDS} } pageInfo { hasNextPage endCursor } }`
+      ? `searchIssues(term: $text, teamId: $team${byProject ? ", filter: $filter" : ""}, first: 50, after: $after) { nodes { ${FIELDS} } pageInfo { hasNextPage endCursor } }`
       : `issues(filter: $filter, orderBy: updatedAt, first: 50, after: $after) { nodes { ${FIELDS} } pageInfo { hasNextPage endCursor } }`;
-    const variables = text ? { text, team: search.containerId ?? null, after }
-      : { filter: search.containerId ? { team: { id: { eq: search.containerId } } } : {}, after };
+    const variables = text ? { text, team: search.containerId ?? null, ...(byProject ? { filter: byProject } : {}), after }
+      : { filter: byProject ?? (search.containerId ? { team: { id: { eq: search.containerId } } } : {}), after };
     const data = await this.query(selection, variables, z.object({ [field]: z.object({ nodes: z.array(issue).max(PAGE_SIZE), pageInfo }) }), options,
-      text ? "$text: String!, $team: String, $after: String" : "$filter: IssueFilter, $after: String");
+      text ? `$text: String!, $team: String${byProject ? ", $filter: IssueFilter" : ""}, $after: String` : "$filter: IssueFilter, $after: String");
     const page = data[field]!;
+    if (search.projectId && page.nodes.some(n => n.project?.id !== search.projectId)) throw new StapleError("unavailable", "Linear returned an issue outside the selected project");
     const items = page.nodes.map(i => this.item(i, data.organization));
     if (search.containerId && items.some(i => i.ref.containerId !== search.containerId)) throw new StapleError("unavailable", "Linear returned an issue outside the selected team");
     return { items, nextCursor: this.next(page.pageInfo, binding, after) };
@@ -132,7 +160,15 @@ export class LinearApiAdapter implements IntegrationAdapter {
         || !(url.pathname === prefix || new RegExp(`^${prefix}/[A-Za-z0-9_-]+/?$`).test(url.pathname))) throw new Error();
     } catch { throw new StapleError("unavailable", "Linear returned an unexpected issue URL"); }
     return { ref: { ...this.scope, containerId: source.team.id, id: source.id, kind: "issue" }, key: source.identifier,
-      url: url.href, title: source.title, body: source.description, status: source.state, fetchedAt: this.now().toISOString() };
+      url: url.href, title: source.title, body: source.description, status: source.state, fetchedAt: this.now().toISOString(),
+      ...(source.project ? { projectId: source.project.id } : {}) };
+  }
+  private projectUrl(input: string): string {
+    try {
+      const url = new URL(input);
+      if (url.protocol !== "https:" || url.host !== "linear.app" || url.username || url.password) throw new Error();
+      return url.href;
+    } catch { throw new StapleError("unavailable", "Linear returned an unexpected project URL"); }
   }
   private checkTeam(t: z.infer<typeof team>) {
     if (t.organization.id !== this.scope.scopeId) throw new StapleError("forbidden", "Linear returned a team in a different organization");
@@ -158,16 +194,16 @@ export class LinearApiAdapter implements IntegrationAdapter {
   private async query<T extends z.ZodRawShape>(selection: string, variables: object, shape: z.ZodObject<T>, options?: ProviderReadOptions, declarations = "") {
     options?.signal?.throwIfAborted();
     const key = this.credential();
-    if (!key || key.length > 4096 || /\s/.test(key)) throw new StapleError("auth", "Set the configured Linear API key environment variable on the machine running Staple");
+    if (!key || key.length > 4096 || /\s/.test(key)) throw new StapleError("auth", `${this.config.credentialEnv} isn't set where Staple runs.`);
     const timeout = AbortSignal.timeout(TIMEOUT_MS);
     const signal = options?.signal ? AbortSignal.any([timeout, options.signal]) : timeout;
     try {
       const response = await this.fetch("https://api.linear.app/graphql", { method: "POST", redirect: "error", signal,
         headers: { "content-type": "application/json", authorization: key },
         body: JSON.stringify({ query: `query StapleRead${declarations ? `(${declarations})` : ""} { ${IDENTITY} ${selection} }`, variables }) });
-      if (response.status === 401) { await response.body?.cancel(); throw new StapleError("auth", "Linear authentication failed; replace the configured API key"); }
+      if (response.status === 401) { await response.body?.cancel(); throw new StapleError("auth", `Linear rejected the API key in ${this.config.credentialEnv}.`); }
       if (response.status === 403) { await response.body?.cancel(); throw new StapleError("forbidden", "Linear denied access to this resource"); }
-      if (response.status === 429) { await response.body?.cancel(); throw new StapleError("rate_limited", "Linear rate limit reached; wait before trying again"); }
+      if (response.status === 429) { await response.body?.cancel(); throw new StapleError("rate_limited", "Linear's rate limit is reached."); }
       if (!response.ok) { await response.body?.cancel(); throw new StapleError("unavailable", "Linear API is unavailable; try again later"); }
       const reader = response.body?.getReader();
       if (!reader) throw new StapleError("unavailable", "Linear returned an empty response");
@@ -188,8 +224,8 @@ export class LinearApiAdapter implements IntegrationAdapter {
       if (!envelope.success) throw new StapleError("unavailable", "Linear returned an unsupported response");
       if (envelope.data.errors?.length) {
         const codes = envelope.data.errors.map(e => `${e.extensions?.code ?? ""} ${e.extensions?.type ?? ""}`.toUpperCase().replace(/[^A-Z0-9]+/g, "_"));
-        if (codes.some(c => /RATELIMIT|RATE_LIMIT|USAGE_LIMIT_EXCEEDED/.test(c))) throw new StapleError("rate_limited", "Linear rate limit reached; wait before trying again");
-        if (codes.some(c => /UNAUTHENTICATED|AUTHENTICATION_ERROR/.test(c))) throw new StapleError("auth", "Linear authentication failed; replace the configured API key");
+        if (codes.some(c => /RATELIMIT|RATE_LIMIT|USAGE_LIMIT_EXCEEDED/.test(c))) throw new StapleError("rate_limited", "Linear's rate limit is reached.");
+        if (codes.some(c => /UNAUTHENTICATED|AUTHENTICATION_ERROR/.test(c))) throw new StapleError("auth", `Linear rejected the API key in ${this.config.credentialEnv}.`);
         if (codes.some(c => /FORBIDDEN|AUTHORIZATION_ERROR|FEATURE_NOT_ACCESSIBLE/.test(c))) throw new StapleError("forbidden", "Linear denied access to this resource");
         if (codes.some(c => /ENTITY_NOT_FOUND|NOT_FOUND/.test(c))) throw new StapleError("not_found", "Linear issue was not found or is inaccessible");
         throw new StapleError("unavailable", "Linear could not complete the query; try again later");
@@ -198,10 +234,10 @@ export class LinearApiAdapter implements IntegrationAdapter {
       const fields = shape.safeParse(envelope.data.data);
       if (!data.success || !fields.success) throw new StapleError("unavailable", "Linear returned an unsupported response");
       if (data.data.viewer.id !== this.config.account) {
-        throw new StapleError("auth", `Linear API key belongs to ${data.data.viewer.name ?? "a different user"}, not the configured user; check the connection binding`,
+        throw new StapleError("auth", `The API key in ${this.config.credentialEnv} belongs to ${data.data.viewer.name ?? "another user"}, not the Linear user this connection expects.`,
           { reason: "account_mismatch", ...(data.data.viewer.name ? { login: data.data.viewer.name } : {}) });
       }
-      if (data.data.organization.id !== this.scope.scopeId) throw new StapleError("forbidden", "Linear API key belongs to a different organization; check the connection binding");
+      if (data.data.organization.id !== this.scope.scopeId) throw new StapleError("forbidden", `The API key in ${this.config.credentialEnv} belongs to a different Linear organization.`);
       return { ...fields.data, viewer: data.data.viewer, organization: data.data.organization };
     } catch (error) {
       if (options?.signal?.aborted) throw options.signal.reason;

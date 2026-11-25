@@ -174,6 +174,7 @@ describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
       const source={id,identifier,title,description:"Linear private source context",url:`https://linear.app/acme/issue/${identifier}/fixture`,state:{id:account,name:"In review"},team:{id:team,key:"ENG",name:"Engineering",organization:{id:org}}};
       const pageInfo={hasNextPage:false,endCursor:null};
       const fields=command.query.includes("teams(") ? {teams:{nodes:[source.team],pageInfo}}
+        : command.query.includes("team(id:") ? {team:source.team}
         : command.query.includes("searchIssues(") ? {searchIssues:command.variables.after
           ? {nodes:[{...source,id:"55555555-5555-4555-8555-555555555555",identifier:"ENG-13",url:"https://linear.app/acme/issue/ENG-13/second",title:"Second page source"}],pageInfo}
           : {nodes:[source],pageInfo:{hasNextPage:true,endCursor:"page-two"}}}
@@ -191,8 +192,10 @@ describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
       await page.getByRole("button",{name:"Check connection",exact:true}).click();
       await expect.poll(()=>page.getByText("Connected for read-only access",{exact:false}).count()).toBe(1);
       await page.getByRole("button",{name:"Find teams",exact:true}).click();
-      await page.getByRole("checkbox",{name:"Engineering (ENG)",exact:true}).check();
-      await page.getByRole("button",{name:"Save containers",exact:true}).click();
+      await page.getByLabel("Repository or team to map to alpha",{exact:true}).selectOption({label:"Engineering (ENG)"});
+      // One row per workspace on this computer; map from alpha's row.
+      await page.getByLabel("Repository or team to map to alpha",{exact:true}).locator("xpath=following-sibling::button").click();
+      await expect.poll(()=>page.getByRole("button",{name:"Unmap",exact:true}).count()).toBe(1);
       await page.getByLabel("Default container",{exact:true}).selectOption(`linear.app/${org}/${team}`);
       await page.getByRole("checkbox",{name:/Remember last-used selections/}).check();
       await page.getByRole("button",{name:"Save defaults",exact:true}).click();
@@ -221,7 +224,7 @@ describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
       await expect.poll(()=>card.innerText()).toContain("Linear renamed source");
       denied=true;
       await page.getByRole("button",{name:"Refresh context for ENG-99",exact:true}).click();
-      await expect.poll(()=>page.getByRole("alert").innerText()).toContain("Linear authentication failed");
+      await expect.poll(()=>page.getByRole("alert").innerText()).toContain("Linear rejected the API key in STAPLE_TEST_LINEAR_KEY");
       expect(await card.innerText()).toContain("Linear renamed source");
       expect(await heading(page).innerText()).toContain("Set up the repository (alpha)");
       expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);

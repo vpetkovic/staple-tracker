@@ -172,6 +172,7 @@ describe("the queue policy is the same object on every surface", () => {
     const listed = await cli("settings", "--ws", WS);
     expect(listed.stdout.trim().split("\n")).toEqual([
       "integrations.repositories =   (default)",
+      "integrations.mapping =   (default)",
       "kinds.default = task  (default)",
       // R5a's glyph map is structured, so the line prints it as JSON.
       "kinds.appearance = {}  (default)",

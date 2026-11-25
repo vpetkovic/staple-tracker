@@ -45,6 +45,7 @@
  */
 import { StapleError, VOCABULARY_ID_PATTERN, DEFAULT_ISSUE_KIND } from "./types.js";
 import { kindAppearanceMapProblem, type KindAppearanceMap } from "./kind-appearance.js";
+import { mappingProblem } from "./integrations/mapping-format.js";
 
 export type SettingScope = "workspace" | "global";
 
@@ -67,7 +68,7 @@ export type SettingSensitivity = "normal" | "sensitive";
 export type SettingSchema =
   | { type: "boolean" }
   | { type: "integer"; min?: number; max?: number }
-  | { type: "string"; pattern?: RegExp; patternHint?: string }
+  | { type: "string"; pattern?: RegExp; patternHint?: string; /** A structured string: why the value is unacceptable, or null. */ validate?: (value: string) => string | null }
   | { type: "enum"; values: readonly string[] }
   | { type: "kindAppearance" };
 
@@ -127,7 +128,7 @@ export interface SettingDefinition<T = unknown> {
  * it is `registerSettingCategory`, which also grows the index (R6f, STA-243).
  */
 const categories: SettingCategory[] = [
-  { id: "integrations", label: "Integrations", description: "Connect providers on this machine and choose repositories for this workspace.", scope: "workspace", editor: "fields", order: 35 },
+  { id: "integrations", label: "Integrations", description: "Connect GitHub and Linear on this computer and choose what each workspace searches.", scope: "workspace", editor: "fields", order: 35 },
   {
     id: "statuses",
     label: "Statuses",
@@ -196,6 +197,12 @@ const definitions: SettingDefinition[] = [
     schema: { type: "string", pattern: /^(?:(?:[a-z0-9][a-z0-9.:-]*\/[1-9][0-9]*|linear\.app\/[0-9a-f-]{36}\/[0-9a-f-]{36})(?:,(?:[a-z0-9][a-z0-9.:-]*\/[1-9][0-9]*|linear\.app\/[0-9a-f-]{36}\/[0-9a-f-]{36}))*)?$/i, patternHint: "comma-separated host/repository-id or linear.app/organization-uuid/team-uuid entries, or empty" },
     default: "", version: 1, sensitivity: "normal",
     ui: { label: "Provider containers", description: "Repository and team search preferences shared with this workspace. Account bindings stay on this computer.", control: "text", order: 10 },
+  },
+  {
+    key: "integrations.mapping", category: "integrations", scope: "workspace",
+    schema: { type: "string", validate: mappingProblem, patternHint: "a JSON list of mapped repositories, teams or projects" },
+    default: "", version: 1, sensitivity: "normal",
+    ui: { label: "Mapped repositories and projects", description: "The GitHub repositories and Linear teams or projects this workspace searches and links. Shared with the workspace; each machine reads them through its own connections.", control: "text", order: 5 },
   },
   {
     key: "kinds.default",
@@ -463,6 +470,10 @@ export function validateSettingValue<T>(
     case "string":
       if (typeof value !== "string" || (schema.pattern && !schema.pattern.test(value))) {
         refuse(schema.patternHint ?? "a string");
+      }
+      {
+        const problem = schema.validate?.(value as string);
+        if (problem) refuse(problem);
       }
       return value as T;
     case "enum":

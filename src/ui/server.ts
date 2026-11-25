@@ -14,7 +14,7 @@ import { EVENT_ORDER, EVENT_ORDER_DESC } from "../core/event-row.js";
 import { withEventMembers } from "../core/cloud/member-lens.js";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Hub, describeAbsentRow, notifyHubResolvedSafe } from "../core/hub.js";
@@ -781,6 +781,33 @@ export function startUiServer(options: UiOptions): UiHandle {
       return Hub.open();
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * The workspaces integration scope reads: every available one this machine's hub knows, even when
+   * this server shows a single workspace, so an unmapped workspace inherits what the computer maps
+   * exactly as the CLI and MCP do. The served workspace reuses its own handle.
+   */
+  const integrationStores = new Map<string, WorkspaceStore>();
+  function integrationWorkspaces(): Array<{ slug: string; store: WorkspaceStore }> {
+    if (options.hub) return allHandles().map((h) => ({ slug: h.slug, store: h.store }));
+    const current = handleFor();
+    const real = (path: string) => { try { return realpathSync(path); } catch { return path; } };
+    const served = real(current.dbPath);
+    try {
+      const hub = Hub.open();
+      let entries;
+      try { entries = hub.list().filter((e) => e.available); } finally { hub.close(); }
+      const listed = entries.map((entry) => {
+        if (real(entry.path) === served) return { slug: entry.slug, store: current.store };
+        let store = integrationStores.get(entry.path);
+        if (!store) integrationStores.set(entry.path, (store = openWorkspace(entry.path).store));
+        return { slug: entry.slug, store };
+      });
+      return listed.some((w) => w.store === current.store) ? listed : [{ slug: current.slug, store: current.store }, ...listed];
+    } catch {
+      return [{ slug: current.slug, store: current.store }]; // no hub on this machine: this workspace is all there is
     }
   }
 
@@ -3929,7 +3956,7 @@ export function startUiServer(options: UiOptions): UiHandle {
           : url.pathname==="/api/integrations/configure" ? INTEGRATION_CONFIG_ACTIONS : INTEGRATION_WRITE_ACTIONS;
         if(typeof command.action!=="string" || !allowed.includes(command.action)) throw new StapleError("validation","This operation belongs on a different integration route");
         const handle=handleFor(typeof ws==="string" ? ws:url.searchParams.get("ws") ?? undefined);
-        json(res,200,await new IntegrationOperations(handle.store).execute({...command,actor:command.actor ?? "user"}));
+        json(res,200,await new IntegrationOperations(handle.store,{workspaces:integrationWorkspaces}).execute({...command,actor:command.actor ?? "user"}));
         return;
       }
 
@@ -5578,6 +5605,14 @@ export function startUiServer(options: UiOptions): UiHandle {
         }
       }
       stores.clear();
+      for (const store of integrationStores.values()) {
+        try {
+          store.db.close();
+        } catch {
+          /* already closed */
+        }
+      }
+      integrationStores.clear();
     },
   };
 }

@@ -464,6 +464,7 @@ describe("registered settings on /api/settings", () => {
       "machine:global:fields",
     ]);
     expect(settings.registry.definitions.map((d) => `${d.key}:${d.scope}`)).toEqual([
+      "integrations.mapping:workspace",
       "features.planning:workspace",
       "integrations.repositories:workspace",
       "kinds.default:workspace",
@@ -480,6 +481,7 @@ describe("registered settings on /api/settings", () => {
     const settings = await read();
     expect(settings.values).toEqual({
       "integrations.repositories": { key: "integrations.repositories", scope: "workspace", value: "", source: "default", version: 1 },
+      "integrations.mapping": { key: "integrations.mapping", scope: "workspace", value: "", source: "default", version: 1 },
       "features.planning": { key: "features.planning", scope: "workspace", value: false, source: "default", version: 1 },
       "kinds.default": { key: "kinds.default", scope: "workspace", value: "task", source: "default", version: 1 },
       "kinds.appearance": { key: "kinds.appearance", scope: "workspace", value: {}, source: "default", version: 1 },

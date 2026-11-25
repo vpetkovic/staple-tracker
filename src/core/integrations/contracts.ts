@@ -35,6 +35,8 @@ export interface ExternalItem extends ResolvedExternalItem {
   status: { id: string; name: string } | null;
   /** When the source was actually read, not when the local ticket was modified. */
   fetchedAt: string;
+  /** Linear only, when the issue belongs to a project: the project, for project-mapped scopes. */
+  projectId?: string;
 }
 
 export interface ExternalContainer {
@@ -42,6 +44,9 @@ export interface ExternalContainer {
   name: string;
   url: string;
 }
+
+/** What a container is to its provider: a GitHub repository, a Linear team or a Linear project. */
+export type ContainerKind = "repository" | "team" | "project";
 
 export interface ExternalPage<T> {
   items: T[];
@@ -56,6 +61,8 @@ export interface ProviderReadOptions {
 export interface ExternalSearch {
   text: string;
   containerId?: string;
+  /** Linear only: issues in this project, whatever their team. Exclusive with containerId. */
+  projectId?: string;
   cursor?: string;
 }
 
@@ -63,7 +70,11 @@ export interface ExternalSearch {
 export type ExternalLocator = { url: string } | { key: string; containerId: string };
 
 /** The account a provider actually authenticated, when known. A display login, never a credential. */
-export interface ConnectionIdentity { login: string }
+export interface ConnectionIdentity {
+  login: string;
+  /** Linear: the organization the key belongs to, for naming the connection. */
+  organization?: string;
+}
 
 export type ConnectionFailureState =
   | "missing_cli" | "unsupported_version" | "unauthenticated" | "account_mismatch"
@@ -121,6 +132,10 @@ export interface IntegrationAdapter {
   readonly connection: { id: string; mode: string };
   validate(options?: ProviderReadOptions): Promise<ConnectionHealth>;
   listContainers(cursor?: string, options?: ProviderReadOptions): Promise<ExternalPage<ExternalContainer>>;
+  /** One container by id, for its current name and URL; null when it is gone or inaccessible. */
+  readContainer(id: string, kind: ContainerKind, options?: ProviderReadOptions): Promise<ExternalContainer | null>;
+  /** Linear projects. Absent for providers without projects. */
+  listProjects?(cursor?: string, options?: ProviderReadOptions): Promise<ExternalPage<ExternalContainer>>;
   searchIssues(query: ExternalSearch, options?: ProviderReadOptions): Promise<ExternalPage<ExternalItem>>;
   /** Exact lookup for issue or PR references; null is an unknown/unavailable reference. */
   resolve(locator: ExternalLocator, options?: ProviderReadOptions): Promise<ResolvedExternalItem | null>;

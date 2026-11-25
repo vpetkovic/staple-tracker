@@ -25,7 +25,7 @@ function setup(options: { liveReadsAvailable?: boolean; gh?: GhRunner } = {}) {
   const ws = initWorkspace({ global: true, slug: "health-tests" });
   let clock = 1_000_000;
   const adapter: IntegrationAdapter = { scope: { providerId: "github", host: "github.com", scopeId: "host" }, label: "GitHub", connection: { id: "work", mode: "cli" },
-    validate: vi.fn(async () => ({ state: "ready" as const, identity: { login: "vpetkovic" } })), listContainers: vi.fn(async () => ({ items: [], nextCursor: null })),
+    validate: vi.fn(async () => ({ state: "ready" as const, identity: { login: "vpetkovic" } })), listContainers: vi.fn(async () => ({ items: [], nextCursor: null })), readContainer: vi.fn(async (id: string) => ({ id, name: "team/repo", url: "https://github.com/team/repo" })),
     searchIssues: vi.fn(async () => ({ items: [item], nextCursor: null })), resolve: vi.fn(async () => item), readIssue: vi.fn(async () => item) };
   const gh = options.gh ?? vi.fn<GhRunner>(async () => AUTH_STATUS);
   const caches = { health: new ProbeCache<ConnectionHealthSnapshot>(() => clock), detection: new ProbeCache<Array<{ host: string; login: string }>>(() => clock) };
@@ -89,13 +89,15 @@ describe("integration connection status", () => {
   it("records a live read that fails on the connection, and forgets it after a read succeeds", async () => {
     const { service, adapter } = setup();
     const { id } = await service.execute({ action: "configure", host: "github.com", account: "vpetkovic" }) as { id: string };
+    await service.execute({ action: "map", connectionId: id, containerId: "42", actor: "ada" });
     vi.mocked(adapter.searchIssues).mockRejectedValueOnce(new StapleError("rate_limited", "GitHub rate limit reached; try again later", { retryAfterSeconds: 30 }));
-    await expect(service.execute({ action: "search", text: "x", connectionId: id })).rejects.toMatchObject({ code: "rate_limited" });
+    // One source failing is data, not an error; its connection's status follows it.
+    expect(await service.execute({ action: "search", text: "x" })).toMatchObject({ failures: [{ connectionId: id, state: "rate_limited" }] });
     expect((await service.execute({ action: "connections" }) as Connections).connections[0]!.health).toMatchObject({ state: "rate_limited", retryAfterSeconds: 30 });
     vi.mocked(adapter.resolve).mockRejectedValueOnce(new StapleError("not_found", "Unknown issue"));
     await expect(service.execute({ action: "preview", url: item.url, connectionId: id })).rejects.toMatchObject({ code: "not_found" });
     expect((await service.execute({ action: "connections" }) as Connections).connections[0]!.health?.state).toBe("rate_limited");
-    await service.execute({ action: "search", text: "x", connectionId: id });
+    await service.execute({ action: "search", text: "x" });
     expect((await service.execute({ action: "connections" }) as Connections).connections[0]!.health).toBeNull();
     expect(adapter.validate).not.toHaveBeenCalled();
   });
