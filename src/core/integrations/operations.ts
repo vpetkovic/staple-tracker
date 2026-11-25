@@ -187,6 +187,9 @@ export class IntegrationOperations {
           // Binding by GUID needs one read with the token, unless the caller already knows both ids.
           const bound=c.account && c.scopeId ? {account:c.account,scopeId:c.scopeId}
             : await (this.options.discoverAzureDevOps ?? discoverAzureDevOps)(organization,credentialEnv);
+          // An id the caller expects is a check, never a hint to drop: refuse a token that answers for someone else.
+          if (c.scopeId && c.scopeId.toLowerCase()!==bound.scopeId.toLowerCase()) throw new StapleError("forbidden",`The token in ${credentialEnv} answers for a different Azure DevOps organization than ${organization}.`);
+          if (c.account && c.account.toLowerCase()!==bound.account.toLowerCase()) throw new StapleError("auth",`The token in ${credentialEnv} belongs to a different Azure DevOps user than the one expected.`,{reason:"account_mismatch"});
           return this.connections.save({id:c.connectionId,providerId:"azure_devops",mode:"api",host:"dev.azure.com",organization,account:bound.account,scopeId:bound.scopeId,credentialEnv});
         }
         if(c.providerId === "linear") return this.connections.save({id:c.connectionId,providerId:"linear",mode:"api",host:"linear.app",

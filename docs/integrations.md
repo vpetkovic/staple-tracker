@@ -112,8 +112,9 @@ a CLI argument or paste it into a connection form.
 In **Settings → Integrations**, choose **Add connection → Azure DevOps organization**, enter the
 organization name from `dev.azure.com/<organization>` and the environment variable name, and save.
 Staple reads the token once to learn your user id and the organization's id and binds the
-connection to both. Every later command checks them again, so a token for another user or
-organization fails with **Wrong account** or **No access** instead of reading through it. Then add
+connection to both. Every later command checks them again, so a token for another user fails
+with **Wrong account**, and a token for another organization fails with **Sign-in needed** (or
+**No access**, for a token that reaches all your organizations) instead of reading through it. Then add
 projects to a workspace under **Workspaces**. One connection serves one organization; add another
 connection, with its own variable if it needs another token, for each further organization.
 

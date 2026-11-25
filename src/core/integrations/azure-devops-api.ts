@@ -26,7 +26,9 @@ const PROJECT_PAGE_SIZE = 100;
 const MAX_BYTES = 2_000_000;
 const TIMEOUT_MS = 15_000;
 const MAX_ID = 2_147_483_647;
-const FIELDS = ["System.Id", "System.Title", "System.State", "System.TeamProject", "System.WorkItemType", "System.Description"];
+const FIELDS = ["System.Id", "System.Title", "System.State", "System.TeamProject", "System.WorkItemType", "System.Description",
+  // Bugs in the Agile, Scrum and CMMI processes keep their text here; their form hides System.Description.
+  "Microsoft.VSTS.TCM.ReproSteps"];
 
 const project = z.object({ id: uuid, name: z.string().min(1).max(256) });
 const connectionData = z.object({ authenticatedUser: z.object({ id: uuid, descriptor: z.string().max(512).optional(), providerDisplayName: z.string().max(256).optional() }), instanceId: uuid });
@@ -39,6 +41,7 @@ const workItem = z.object({
     "System.TeamProject": z.string().min(1).max(256),
     "System.State": z.string().max(256).optional(),
     "System.Description": z.string().max(1_000_000).optional(),
+    "Microsoft.VSTS.TCM.ReproSteps": z.string().max(1_000_000).optional(),
   }),
 });
 type WorkItem = z.infer<typeof workItem>;
@@ -271,7 +274,10 @@ export class AzureDevOpsApiAdapter implements IntegrationAdapter {
   }
 
   private project(id: string, options?: ProviderReadOptions): Promise<Project> {
-    return this.cachedProject(id.toLowerCase(), `_apis/projects/${id.toLowerCase()}`, options);
+    const held = this.cachedProject(id.toLowerCase(), `_apis/projects/${id.toLowerCase()}`, options);
+    // Work items name their project, so remember it by name too and skip a second read of it.
+    void held.then(p => { if (!this.projects.has(p.name.toLowerCase())) this.projects.set(p.name.toLowerCase(), held); }, () => {});
+    return held;
   }
 
   /** A work item names its project; the project GUID is the container identity. */
@@ -291,7 +297,8 @@ export class AzureDevOpsApiAdapter implements IntegrationAdapter {
 
   private item(source: WorkItem, owner: Project): ExternalItem {
     const state = source.fields["System.State"]?.trim();
-    const body = source.fields["System.Description"] ? plainText(source.fields["System.Description"]) : "";
+    const html = source.fields["System.Description"] || source.fields["Microsoft.VSTS.TCM.ReproSteps"];
+    const body = html ? plainText(html) : "";
     return {
       ref: { ...this.scope, containerId: owner.id, id: String(source.id), kind: "issue" },
       key: `${owner.name}#${source.id}`,
