@@ -110,13 +110,13 @@ people plan, discuss and report.
 | Runs | Hosted, over the network | Locally, one file per repository |
 | Holds | Features, priorities, discussion | Epics, tickets, plans, worklogs, claims |
 
-A ticket can link to a GitHub issue or pull request, or to a Linear issue. staple
+A ticket can link to a GitHub issue or pull request, a Linear issue or an Azure DevOps work item. staple
 keeps a copy of its title and state beside the ticket and refreshes it when you ask.
 The link is read-only: staple never changes anything in your tracker.
 [Provider integrations](integrations.md) covers connecting, choosing what each
 workspace searches, and linking.
 
-ClickUp and Azure DevOps, and writing back to your tracker, are
+ClickUp, and writing back to your tracker, are
 **planned, not shipped**.
 
 ## When staple fits, and when it doesn't

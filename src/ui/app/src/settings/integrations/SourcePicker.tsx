@@ -15,7 +15,7 @@ import type { ConnectionView } from "@/integrations/connection-status";
 import { ConnectionStatusPill, ProviderMark } from "@/integrations/parts";
 import type { ContainerKind } from "../../../../../core/integrations/contracts";
 import { InlineError } from "../form/primitives";
-import { pickerSections, type MappedTarget, type PickerPage } from "./integrations-model";
+import { azurePlaceName, containerKinds, pickerSections, type MappedTarget, type PickerPage } from "./integrations-model";
 
 export function SourcePicker({ workspace, targets, connections, onChange }: {
   workspace: string;
@@ -50,10 +50,10 @@ export function SourcePicker({ workspace, targets, connections, onChange }: {
 }
 
 type Slot = PickerPage & { loading: boolean; error: string | null };
-const kindsOf = (providerId: string): ContainerKind[] => (providerId === "linear" ? ["team", "project"] : ["repository"]);
 const groupName = (c: ConnectionView) =>
   c.providerId === "linear"
     ? (c.health?.identity?.organization ?? c.health?.identity?.login ?? "Linear")
+    : c.providerId === "azure_devops" ? azurePlaceName(c)
     : c.host === "github.com" ? c.account : `${c.account} · ${c.host}`;
 
 function PickerBody({ workspace, targets, connections, onChange }: {
@@ -97,7 +97,7 @@ function PickerBody({ workspace, targets, connections, onChange }: {
     const mine = ++generation.current;
     const timer = setTimeout(
       () => {
-        for (const c of readable) for (const kind of kindsOf(c.providerId)) load(c, kind, text.trim(), null, mine);
+        for (const c of readable) for (const kind of containerKinds(c.providerId)) load(c, kind, text.trim(), null, mine);
       },
       text ? 250 : 0,
     );
@@ -124,7 +124,7 @@ function PickerBody({ workspace, targets, connections, onChange }: {
 
   // cmdk highlights nothing when results arrive after it mounted; keep the first result
   // highlighted until the person moves, so Enter works straight after typing.
-  const firstKey = readable.flatMap((c) => kindsOf(c.providerId).flatMap((kind) => slots[slotKey(c.id, kind)]?.items ?? []))[0]?.key ?? "";
+  const firstKey = readable.flatMap((c) => containerKinds(c.providerId).flatMap((kind) => slots[slotKey(c.id, kind)]?.items ?? []))[0]?.key ?? "";
   const [active, setActive] = useState("");
   useEffect(() => setActive(firstKey), [firstKey]);
 
@@ -138,11 +138,11 @@ function PickerBody({ workspace, targets, connections, onChange }: {
       ) : null}
       <CommandList className="max-h-none min-h-0 flex-1 overscroll-contain">
         {connections.length === 0 ? (
-          <p className="px-3 py-6 text-center text-label text-muted-foreground">Connect GitHub or Linear above to choose sources.</p>
+          <p className="px-3 py-6 text-center text-label text-muted-foreground">Connect GitHub, Linear or Azure DevOps above to choose sources.</p>
         ) : null}
         {connections.map((connection) => {
           const ready = readable.includes(connection);
-          const pages = Object.fromEntries(kindsOf(connection.providerId).flatMap((kind) => {
+          const pages = Object.fromEntries(containerKinds(connection.providerId).flatMap((kind) => {
             const slot = slots[slotKey(connection.id, kind)];
             return slot ? [[kind, slot]] : [];
           })) as Partial<Record<ContainerKind, PickerPage>>;

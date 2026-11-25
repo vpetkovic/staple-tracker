@@ -20,12 +20,18 @@ export const storedTargetSchema = z.discriminatedUnion("providerId", [
     kind: z.enum(["team", "project"]), containerId: z.string().regex(uuid),
     name: z.string().min(1).max(512).nullable(), url: z.string().url().max(2048).nullable(),
   }).strict(),
+  z.object({
+    providerId: z.literal("azure_devops"), host: z.string().regex(host).max(255), scopeId: z.string().regex(uuid),
+    kind: z.literal("project"), containerId: z.string().regex(uuid),
+    name: z.string().min(1).max(512).nullable(), url: z.string().url().max(2048).nullable(),
+  }).strict(),
 ]);
 export type StoredTarget = z.infer<typeof storedTargetSchema>;
 
 /** The stable identity of a target; also the entry format of the legacy `integrations.repositories`. */
 export function targetKey(t: Pick<StoredTarget, "providerId" | "host" | "scopeId" | "kind" | "containerId">): string {
   if (t.providerId === "github") return `${t.host}/${t.containerId}`;
+  if (t.providerId === "azure_devops") return `${t.host}/${t.scopeId}/project/${t.containerId}`;
   return t.kind === "project" ? `linear.app/${t.scopeId}/project/${t.containerId}` : `linear.app/${t.scopeId}/${t.containerId}`;
 }
 

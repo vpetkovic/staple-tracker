@@ -45,7 +45,7 @@ export interface ExternalContainer {
   url: string;
 }
 
-/** What a container is to its provider: a GitHub repository, a Linear team or a Linear project. */
+/** What a container is to its provider: a GitHub repository, a Linear team or project, or an Azure DevOps project. */
 export type ContainerKind = "repository" | "team" | "project";
 
 export interface ExternalPage<T> {
