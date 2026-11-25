@@ -74,7 +74,8 @@ function resetAt(value: string | null, now: number): number | null {
 function retryAfter(value: string | null, now: number): number | null {
   if (!value?.trim()) return null;
   const at = /^\d+$/.test(value.trim()) ? now + Number(value.trim()) * 1000 : Date.parse(value);
-  return Number.isFinite(at) && at > now ? Math.min(at, now + MAX_BLOCK_MS) : null;
+  // Retry-After: 0 (or a date already past) means retry now, not "fall back to a whole window".
+  return Number.isFinite(at) ? Math.min(Math.max(at, now), now + MAX_BLOCK_MS) : null;
 }
 
 const budgets = new Map<string, RequestBudget>();

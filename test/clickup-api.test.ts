@@ -179,13 +179,14 @@ describe("read-only ClickUp API adapter", () => {
     expect(bare.body).toMatch(/^\*\*ClickUp\*\*\n\n- List: Sprint 12\n- Status: in review\n/);
     await expect(reader.read({ ...ref, containerId: spaceId })).rejects.toMatchObject({ code: "validation" });
     const foreign = setup(() => json({ ...task, team_id: "1" }));
-    await expect(foreign.reader.read(ref)).rejects.toMatchObject({ code: "forbidden" });
+    await expect(foreign.reader.read(ref)).rejects.toMatchObject({ code: "validation", detail: { reason: "other_workspace" } });
   });
 
   it.each([
     [401, { err: "Token invalid", ECODE: "OAUTH_025" }, "auth"],
     [401, { err: "Oauth token not found", ECODE: "OAUTH_019" }, "auth"],
-    [401, { err: "Team not authorized", ECODE: "OAUTH_027" }, "not_found"],
+    // Spaces are read under the bound workspace, so a 401 there means the token lost that workspace.
+    [401, { err: "Team not authorized", ECODE: "OAUTH_027" }, "forbidden"],
     [403, {}, "forbidden"], [404, {}, "not_found"], [400, {}, "validation"], [500, {}, "unavailable"], [503, {}, "unavailable"],
   ])("classifies HTTP %s %j without exposing the body or token", async (status, body, code) => {
     const { adapter } = setup(() => json({ ...body, detail: `${TOKEN} private provider details` }, { status }));
@@ -253,5 +254,38 @@ describe("read-only ClickUp API adapter", () => {
     expect(() => new ClickUpApiAdapter({ ...config, scopeId: "acme" })).toThrow();
     expect(() => new ClickUpApiAdapter({ ...config, credentialEnv: "pk_secret" })).toThrow();
     expect(new IntegrationReader(new ClickUpApiAdapter(config)).capabilities).toEqual({ readPullRequests: false, searchPullRequests: false });
+  });
+
+  it("a task URL or typed id from another workspace the token can see is not a fault in this connection", async () => {
+    const other = { ...task, id: "86other1", team_id: "777" };
+    const pasted = setup(() => json(other));
+    await expect(pasted.adapter.resolve({ url: "https://app.clickup.com/t/86other1" })).rejects.toMatchObject({ code: "validation", detail: { reason: "other_workspace" } });
+    const typed = setup(url => url.pathname.endsWith(`/team/${workspace}/task`) ? json({ tasks: [task], last_page: true }) : json(other));
+    await expect(typed.adapter.searchIssues({ text: "86other1" })).resolves.toMatchObject({ items: [] });
+  });
+
+  it("losing the bound workspace reads as forbidden, and any 401 on the token's own endpoints as sign-in needed", async () => {
+    const lost = setup(() => json({ err: "Team not authorized", ECODE: "OAUTH_027" }, { status: 401 }));
+    await expect(lost.adapter.searchIssues({ text: "" })).rejects.toMatchObject({ code: "forbidden" });
+    await expect(lost.adapter.listContainers()).rejects.toMatchObject({ code: "forbidden" });
+    const expired = setup(() => json({ err: "Token expired", ECODE: "OAUTH_099" }, { status: 401 }));
+    expect(await expired.adapter.validate()).toMatchObject({ state: "unauthenticated" });
+    const bare = setup(() => new Response("nope", { status: 401 }));
+    expect(await bare.adapter.validate()).toMatchObject({ state: "unauthenticated" });
+  });
+
+  it("pages through lists reading the workspace's spaces once", async () => {
+    const spaces = Array.from({ length: 4 }, (_, i) => ({ id: `9017000${i}`, name: `Space ${i}` }));
+    const { adapter, fetch } = setup(url => url.pathname.endsWith("/space") ? json({ spaces })
+      : url.pathname.endsWith("/folder") ? json({ folders: [] }) : json({ lists: [{ id: "901700100", name: "L" }] }));
+    let cursor: string | undefined;
+    do { cursor = (await adapter.listLists(cursor)).nextCursor ?? undefined; } while (cursor);
+    expect(fetch.mock.calls.filter(([u]) => String(u).includes("/space?")).length).toBe(1);
+    expect(fetch).toHaveBeenCalledTimes(1 + 2 * spaces.length);
+  });
+
+  it("lists a task once per page even when the text matches it twice", async () => {
+    const { adapter } = setup(tasksRoute([{ tasks: [task, task], last_page: true }]));
+    expect((await adapter.searchIssues({ text: "importer" })).items.map(i => i.ref.id)).toEqual(["86abc123"]);
   });
 });

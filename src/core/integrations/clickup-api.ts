@@ -69,6 +69,7 @@ export class ClickUpApiAdapter implements IntegrationAdapter {
   private readonly credential: () => string | undefined;
   private readonly now: () => Date;
   private readonly budgetFor: (token: string) => RequestBudget;
+  private spaceList: Promise<Array<z.infer<typeof space>>> | null = null;
   constructor(config: ClickUpApiConnection, dependencies: {
     fetch?: typeof fetch; credential?: () => string | undefined; now?: () => Date; budget?: (token: string) => RequestBudget;
   } = {}) {
@@ -154,7 +155,7 @@ export class ClickUpApiAdapter implements IntegrationAdapter {
         const item = this.item(t);
         // A task in several lists can match a filter through a list that is not its home; it is
         // shown only where Staple can also link it, so the scope check at link time agrees.
-        if (inScope(item)) items.push(item);
+        if (inScope(item) && !items.some(i => i.ref.id === item.ref.id)) items.push(item);
       }
       last = data.last_page ?? data.tasks.length < PAGE_SIZE;
       page++;
@@ -230,12 +231,20 @@ export class ClickUpApiAdapter implements IntegrationAdapter {
     return found;
   }
 
-  private async spaces(options?: ProviderReadOptions) {
-    return (await this.get(`/team/${this.scope.scopeId}/space`, new URLSearchParams({ archived: "false" }), z.object({ spaces: z.array(space).max(1000) }), options)).spaces;
+  /** Read once per adapter, which is built per operation, so paging through lists does not re-read them. */
+  private spaces(options?: ProviderReadOptions): Promise<Array<z.infer<typeof space>>> {
+    if (!this.spaceList) {
+      const held = this.get(`/team/${this.scope.scopeId}/space`, new URLSearchParams({ archived: "false" }), z.object({ spaces: z.array(space).max(1000) }), options).then(r => r.spaces);
+      held.catch(() => { if (this.spaceList === held) this.spaceList = null; });
+      this.spaceList = held;
+    }
+    return this.spaceList;
   }
 
   private item(source: Task, where: ListDetail | null = null): ExternalItem {
-    if (source.team_id !== this.scope.scopeId) throw new StapleError("forbidden", "ClickUp returned a task in a different workspace");
+    // A task id or URL carries no workspace, and one token can see several. A task elsewhere is a fact
+    // about that task, not a fault in this connection, so it must not mark the connection forbidden.
+    if (source.team_id !== this.scope.scopeId) throw new StapleError("validation", "The ClickUp task belongs to a different workspace; use a connection for that workspace", { reason: "other_workspace" });
     const listIds = [...new Set([source.list.id, ...(source.locations ?? []).map(l => l.id)])];
     return {
       ref: { ...this.scope, containerId: this.scope.scopeId, id: source.id, kind: "issue" },
@@ -286,7 +295,10 @@ export class ClickUpApiAdapter implements IntegrationAdapter {
         }
         if (response.status === 401) {
           const code = errorCode(await readBounded(response, 65_536).catch(() => null));
-          if (code !== null && TOKEN_CODES.has(code)) throw new StapleError("auth", `ClickUp rejected the API token in ${this.config.credentialEnv}.`);
+          // /user and /team depend only on the token: any 401 there is the token, whatever its code.
+          if (path === "/user" || path === "/team" || (code !== null && TOKEN_CODES.has(code))) throw new StapleError("auth", `ClickUp rejected the API token in ${this.config.credentialEnv}.`);
+          // Under the bound workspace a 401 means the token lost it; only for a task or list by id is it "not there".
+          if (path.startsWith(`/team/${this.scope.scopeId}/`)) throw new StapleError("forbidden", `The API token in ${this.config.credentialEnv} cannot see ClickUp workspace ${this.scope.scopeId}.`);
           throw new StapleError("not_found", "ClickUp could not find this item, or the token cannot see it");
         }
         if (response.status === 403) { await response.body?.cancel(); throw new StapleError("forbidden", "ClickUp denied access to this resource"); }

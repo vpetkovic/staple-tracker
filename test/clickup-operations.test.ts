@@ -104,4 +104,18 @@ describe("ClickUp through the shared integration operations", () => {
     expect(sent.searchParams.has("space_ids[]")).toBe(false);
     expect(await service.execute({ action: "preview", connectionId: "clickup", url: "https://app.clickup.com/t/86abc123" })).toMatchObject({ item: { key: "DEV-42", listIds: [listId] } });
   });
+
+  it("a pasted task URL from another workspace leaves the connection healthy", async () => {
+    const { ws, service, api } = setup();
+    await service.execute({ action: "configure", providerId: "clickup", connectionId: "cu", scopeId: workspace, credentialEnv: "STAPLE_CLICKUP_API_TOKEN" });
+    api.mockImplementation(async (input: unknown) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/api/v2/task/86other1") return Response.json({ id: "86other1", name: "Elsewhere", status: { status: "open" }, team_id: "777", list: { id: "1" }, space: { id: "2" } });
+      return Response.json({ err: "unexpected" }, { status: 500 });
+    });
+    await expect(service.execute({ action: "preview", connectionId: "cu", url: "https://app.clickup.com/t/86other1" })).rejects.toMatchObject({ code: "validation" });
+    const { connections } = await service.execute({ action: "connections" }) as { connections: Array<{ health?: { state: string } | null }> };
+    expect(connections[0]!.health?.state).not.toBe("forbidden");
+    ws.store.db.close();
+  });
 });

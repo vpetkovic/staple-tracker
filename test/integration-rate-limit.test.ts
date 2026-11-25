@@ -70,4 +70,9 @@ describe("per-provider request budget", () => {
     await budget.take();
     expect(budget.observe(headers({ "retry-after": "999999" }), 429)).toBe(3_600_000);
   });
+
+  it("treats Retry-After: 0 as retry now, not a whole window", () => {
+    const budget = new RequestBudget("ClickUp", 100, { now: () => 1_000_000, sleep: async () => {} });
+    expect(budget.observe(new Headers({ "retry-after": "0" }), 429)).toBe(0);
+  });
 });
