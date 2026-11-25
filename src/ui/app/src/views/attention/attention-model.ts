@@ -1,29 +1,17 @@
 /**
  * The Attention page's model: the server's rows, in sections, worded. Pure and tested
- * (attention-model.test.ts).
+ * (attention-render.test.tsx).
  *
  * Nothing about WHICH rows are listed or in what order is decided here: `/api/attention`
  * answers with `core/attention.ts`'s rows already sorted (kind order, then the longest waiting
  * first), the same rows `staple attention` prints. This file only cuts that list into one
- * section per kind, in the order the rows arrive.
+ * section per kind, in the order the rows arrive, under the label each row carries.
  */
 import { formatAgo } from "@/lib/claim";
-import type { AttentionKind, AttentionRow } from "@/lib/types";
-
-/** The section heading over each kind. The CLI prints the same words (`attentionKindLabel`). */
-export const ATTENTION_KIND_LABELS: Readonly<Record<AttentionKind, string>> = {
-  gate_pending: "Gates waiting on approval",
-  gate_resubmitted: "Gates resubmitted",
-  person_blocked: "Blocked on a person",
-  in_review: "In review",
-  unblocked: "Ready again: blockers in other workspaces closed",
-  run_stopped: "Stopped autopilot runs",
-  claim_silent: "Silent claims",
-  cloud_conflict: "Sync conflicts",
-};
+import type { AttentionRow } from "@/lib/types";
 
 export interface AttentionSection {
-  kind: AttentionKind;
+  kind: string;
   label: string;
   rows: AttentionRow[];
 }
@@ -34,7 +22,7 @@ export function attentionSections(rows: readonly AttentionRow[]): AttentionSecti
   for (const row of rows) {
     const last = sections[sections.length - 1];
     if (last && last.kind === row.kind) last.rows.push(row);
-    else sections.push({ kind: row.kind, label: ATTENTION_KIND_LABELS[row.kind] ?? row.kind, rows: [row] });
+    else sections.push({ kind: row.kind, label: row.label, rows: [row] });
   }
   return sections;
 }

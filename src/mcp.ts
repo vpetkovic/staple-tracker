@@ -33,7 +33,7 @@ import { VIEWS, RESOURCE_MIME_TYPE, linkToolView, readViewHtml, viewToolMeta, vi
 import { ticketCard, ticketCardText, type TicketCard } from "./mcp-ticket-card.js";
 import { DECISION_VIEW_IDS, approvalComment, configuredHumanName, personFor, sendBackComment } from "./mcp-view-actions.js";
 import { queueLanes, queueText, type QueueLanes } from "./mcp-queue.js";
-import { ATTENTION_KINDS, attentionList, attentionText } from "./core/attention.js";
+import { ATTENTION_KINDS, attentionList, attentionText, hubAttentionSources } from "./core/attention.js";
 import { progressText, ticketProgress, type TicketProgress } from "./mcp-progress.js";
 import {
   attemptEndFields,
@@ -4497,6 +4497,7 @@ const attentionRowShape = {
   key: z.string().describe("Stable row key: <workspace>/<kind>/<id>"),
   workspace: z.string(),
   kind: z.enum(ATTENTION_KINDS.map((spec) => spec.kind) as [string, ...string[]]),
+  label: z.string().describe("The kind's heading, as every surface prints it"),
   ref: z.string().nullable().describe("The ticket the row is about; null for a run over the whole queue"),
   runId: z.string().nullable(),
   conflictId: z.string().nullable(),
@@ -4532,7 +4533,7 @@ server.registerTool(
   ({ hub, ws }) => {
     try {
       if (hub && ws) throw new StapleError("validation", "hub reads every workspace; it does not combine with ws.");
-      const list = hub ? attentionList(hubWorkspaces(storeFor)) : (() => { const store = storeFor(ws); return attentionList([{ slug: store.slug, store }]); })();
+      const list = hub ? attentionList(hubAttentionSources(storeFor)) : (() => { const store = storeFor(ws); return attentionList([{ slug: store.slug, store }]); })();
       return { content: [{ type: "text" as const, text: attentionText(list) }], structuredContent: { ...list } };
     } catch (error) {
       return fail(error);

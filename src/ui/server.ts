@@ -5089,13 +5089,6 @@ export function startUiServer(options: UiOptions): UiHandle {
       }
 
       /**
-       * A person stops, pauses or resumes a run: `RunStore.stop` / `setState`, the methods
-       * `staple run stop|pause|resume` and MCP `stop_run|pause_run|resume_run` call. `by` is
-       * the page's person (`actor`, else "ui"), so the run records who pressed Stop. Stopping
-       * a run that already ended changes nothing and answers it as it stands, so a second
-       * press is harmless. Every route answers the run's fresh `run status` object.
-       */
-      /**
        * The attention list (core/attention.ts): the work waiting on a person. The same
        * `attentionList` `staple attention` and the `attention` MCP tool call. Hub mode with no
        * `ws` reads every workspace; each row names its own.
@@ -5112,11 +5105,17 @@ export function startUiServer(options: UiOptions): UiHandle {
         const body = await readBody(req);
         const handle = handleFor((body.ws as string) || undefined);
         const target = typeof body.target === "string" ? body.target : "";
-        const by = (typeof body.actor === "string" && body.actor.trim()) || "ui";
-        json(res, 200, { dismissed: dismissAttention(handle.store, target, by) });
+        json(res, 200, { dismissed: dismissAttention(handle.store, target, bodyActor(body)) });
         return;
       }
 
+      /**
+       * A person stops, pauses or resumes a run: `RunStore.stop` / `setState`, the methods
+       * `staple run stop|pause|resume` and MCP `stop_run|pause_run|resume_run` call. `by` is
+       * the page's person (`actor`, else "ui"), so the run records who pressed Stop. Stopping
+       * a run that already ended changes nothing and answers it as it stands, so a second
+       * press is harmless. Every route answers the run's fresh `run status` object.
+       */
       if (url.pathname.startsWith("/api/run/")) {
         const body = await readBody(req);
         const handle = handleFor((body.ws as string) || undefined);

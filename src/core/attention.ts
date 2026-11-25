@@ -43,11 +43,16 @@
  * person dismisses it. A dismissal is an `attention_dismissed` event naming the row's key, a
  * local fact like the `cross_blockers_resolved` event it answers.
  */
+import { userInfo } from "node:os";
 import { readConfig } from "../config/file.js";
 import { stapleHome } from "../config/home.js";
 import { listConflicts } from "./cloud/conflicts.js";
 import { currentMembers } from "./cloud/members-cache.js";
 import { insertEvent } from "./event-log.js";
+import { Hub } from "./hub.js";
+import { holdingCrossBlockers } from "./hub-cross-blockers.js";
+import { isGoalRunGate } from "./milestones.js";
+import { LIVE_RUN_STATES } from "./run-store.js";
 import type { Run, RunStopReason } from "./run-store.js";
 import type { WorkspaceStore } from "./store.js";
 import { type Issue, StapleError, formatAgo, nowIso } from "./types.js";
@@ -75,6 +80,8 @@ export interface AttentionRow {
   key: string;
   workspace: string;
   kind: AttentionKind;
+  /** The kind's heading, so a surface never keeps its own copy of the words. */
+  label: string;
   /** The ticket the row is about; null for a run over the whole queue. */
   ref: string | null;
   /** Set on a stopped-run row. */
@@ -105,7 +112,7 @@ export interface AttentionContext {
   isPerson(name: string): boolean;
 }
 
-type RowDraft = Omit<AttentionRow, "key" | "workspace" | "kind" | "ageSeconds" | "dismissible" | "runId" | "conflictId"> & {
+type RowDraft = Omit<AttentionRow, "key" | "workspace" | "kind" | "label" | "ageSeconds" | "dismissible" | "runId" | "conflictId"> & {
   id: string;
   runId?: string;
   conflictId?: string;
@@ -145,10 +152,19 @@ function resubmitted(context: AttentionContext, issueId: string): boolean {
 
 function gateRows(context: AttentionContext, wantResubmitted: boolean): RowDraft[] {
   const gates = context.store.gateFor(context.issues.map((issue) => issue.id));
+  // A goal run's gate holds its milestone while the run works; it is the person's once the run ends.
+  const liveRunScopes = new Set(
+    (
+      context.store.db
+        .prepare(`SELECT scope_issue_id FROM runs WHERE scope_issue_id IS NOT NULL AND state IN (${LIVE_RUN_STATES.map(() => "?").join(", ")})`)
+        .all(...LIVE_RUN_STATES) as Array<{ scope_issue_id: string }>
+    ).map((row) => row.scope_issue_id),
+  );
   const rows: RowDraft[] = [];
   for (const issue of context.issues) {
     const gate = gates.get(issue.id);
     if (gate?.state !== "pending") continue;
+    if (isGoalRunGate(gate.requestedBy) && liveRunScopes.has(issue.id)) continue;
     if (resubmitted(context, issue.id) !== wantResubmitted) continue;
     rows.push({
       id: issue.identifier,
@@ -248,9 +264,14 @@ export const ATTENTION_KINDS = [
         )
         .all() as Array<{ seq: number; issue_id: string; created_at: string }>;
       const rows: RowDraft[] = [];
+      // Ready means ready now: no local blocker open, and no cross-workspace blocker holding it again.
+      const local = context.store.unresolvedBlockersFor(events.map((event) => event.issue_id));
+      const cross = context.store.crossBlockers(context.home);
       for (const event of events) {
         const issue = open.get(event.issue_id);
         if (!issue || issue.checkoutAgent) continue;
+        if ((local.get(issue.id) ?? []).length > 0) continue;
+        if (holdingCrossBlockers(cross.get(issue.identifier) ?? []).length > 0) continue;
         const category = context.store.categoryOf(issue.status);
         if (category !== "ready" && category !== "unstarted") continue;
         const id = `${issue.identifier}@${event.seq}`;
@@ -369,6 +390,13 @@ export function personRule(store: WorkspaceStore, home: string = stapleHome()): 
   } catch {
     // An unreadable config names nobody.
   }
+  // The person at this terminal: the CLI records a claim without STAPLE_AGENT under $USER.
+  try {
+    people.add(normalize(userInfo().username));
+  } catch {
+    // No user database entry: nobody to add.
+  }
+  if (process.env.USER) people.add(normalize(process.env.USER));
   const lens = store.members(home);
   if (lens) for (const member of currentMembers(lens.cache)) people.add(normalize(member.name));
   const names = (sql: string): string[] => (store.db.prepare(sql).all() as Array<{ name: string | null }>).flatMap((row) => (row.name ? [row.name] : []));
@@ -400,6 +428,11 @@ const secondsBetween = (from: string, to: string): number => {
   return Number.isFinite(delta) ? Math.max(0, Math.floor(delta)) : 0;
 };
 
+/** What a row is called on its first line: the ticket, the run, or nothing (a conflict on a non-ticket). */
+export function attentionSubject(row: Pick<AttentionRow, "ref" | "runId">): string | null {
+  return row.ref ?? (row.runId ? `run ${row.runId.slice(0, 8)}` : null);
+}
+
 /** One workspace's rows, in presentation order. */
 export function workspaceAttention(
   store: WorkspaceStore,
@@ -424,6 +457,7 @@ export function workspaceAttention(
         key: `${workspace}/${spec.kind}/${id}`,
         workspace,
         kind: spec.kind as AttentionKind,
+        label: spec.label,
         runId: runId ?? null,
         conflictId: conflictId ?? null,
         ...draft,
@@ -455,17 +489,31 @@ export interface AttentionList {
   now: string;
 }
 
+/** A workspace to read: its store, or how to open it (so one that cannot be opened is reported, not fatal). */
+export type AttentionSource = { slug: string; store: WorkspaceStore } | { slug: string; open: () => WorkspaceStore };
+
+/**
+ * Every available workspace this machine's hub knows, each opened only when it is read, so a
+ * workspace whose database cannot be opened lands in `failed` instead of failing the list.
+ */
+export function hubAttentionSources(open: (slug: string) => WorkspaceStore): AttentionSource[] {
+  const hub = Hub.open();
+  try {
+    return hub.list().filter((entry) => entry.available).map((entry) => ({ slug: entry.slug, open: () => open(entry.slug) }));
+  } finally {
+    hub.close();
+  }
+}
+
 /** Every given workspace's rows, merged into one list in presentation order. */
-export function attentionList(
-  sources: ReadonlyArray<{ slug: string; store: WorkspaceStore }>,
-  options: { now?: string; home?: string } = {},
-): AttentionList {
+export function attentionList(sources: ReadonlyArray<AttentionSource>, options: { now?: string; home?: string } = {}): AttentionList {
   const now = options.now ?? nowIso();
   const rows: AttentionRow[] = [];
   const failed: AttentionList["failed"] = [];
   for (const source of sources) {
     try {
-      rows.push(...workspaceAttention(source.store, source.slug, { ...options, now }));
+      const store = "store" in source ? source.store : source.open();
+      rows.push(...workspaceAttention(store, source.slug, { ...options, now }));
     } catch (error) {
       failed.push({ workspace: source.slug, message: error instanceof Error ? error.message : String(error) });
     }
@@ -512,7 +560,7 @@ export function attentionText(list: AttentionList): string {
   if (list.rows.length === 0) {
     lines.push(`Nothing is waiting on a person${list.workspaces.length > 1 ? ` in ${list.workspaces.length} workspaces` : ""}.`);
   }
-  const subjectOf = (row: AttentionRow): string => row.ref ?? `run ${row.runId!.slice(0, 8)}`;
+  const subjectOf = (row: AttentionRow): string => attentionSubject(row) ?? "-";
   const wsWidth = Math.max(0, ...list.rows.map((row) => row.workspace.length));
   const subjectWidth = Math.max(0, ...list.rows.map((row) => subjectOf(row).length));
   const indent = " ".repeat(2 + subjectWidth + 2 + wsWidth + 2 + 4 + 2);

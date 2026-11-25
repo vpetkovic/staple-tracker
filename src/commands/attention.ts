@@ -10,8 +10,7 @@
  * the one command that acts on it.
  */
 import { parseArgs } from "node:util";
-import { attentionKindLabel, attentionList, attentionText, dismissAttention, type AttentionList } from "../core/attention.js";
-import { hubWorkspaces } from "../core/integrations/mapping.js";
+import { attentionKindLabel, attentionList, attentionText, dismissAttention, hubAttentionSources, type AttentionList } from "../core/attention.js";
 import { hideDraftIdentifiers } from "../core/plan.js";
 import type { WorkspaceStore } from "../core/store.js";
 import { StapleError } from "../core/types.js";
@@ -65,7 +64,7 @@ export function runAttentionCommand(rest: string[]): void {
     const opened = new Map<string, WorkspaceStore>();
     try {
       list = attentionList(
-        hubWorkspaces((slug) => {
+        hubAttentionSources((slug) => {
           const store = resolveWorkspace({ ws: slug }).store;
           opened.set(slug, store);
           return store;

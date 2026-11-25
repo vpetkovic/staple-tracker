@@ -9,11 +9,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ATTENTION_KINDS, attentionList, dismissAttention, personRule, workspaceAttention } from "../src/core/attention.js";
+import { ATTENTION_KINDS, attentionList, attentionText, dismissAttention, personRule, workspaceAttention } from "../src/core/attention.js";
+import { MILESTONE_KIND } from "../src/core/milestones.js";
 import { Hub } from "../src/core/hub.js";
 import { initWorkspace, type OpenedWorkspace } from "../src/core/workspace.js";
 import type { WorkspaceStore } from "../src/core/store.js";
-import { ATTENTION_KINDS as PAGE_KINDS } from "../src/ui/app/src/lib/types.js";
 
 let home: string;
 const opened: OpenedWorkspace[] = [];
@@ -118,6 +118,7 @@ describe("workspaceAttention", () => {
     ]);
     for (const row of rows) {
       expect(row.workspace).toBe("app");
+      expect(row.label).toBe(ATTENTION_KINDS.find((spec) => spec.kind === row.kind)!.label);
       expect(row.action.label).not.toBe("");
     }
     const byKind = Object.fromEntries(rows.map((row) => [row.kind, row]));
@@ -189,6 +190,43 @@ describe("workspaceAttention", () => {
     expect(workspaceAttention(store)).toEqual([]);
   });
 
+  it("lists a conflict on something other than a ticket, and prints it", () => {
+    const { store } = workspace("app");
+    store.db
+      .prepare(
+        `INSERT INTO sync_conflicts (id, entity, entity_id, field, base_value, local_value, remote_value, local_op_id, remote_op_id, local_device_id, remote_device_id, local_at, remote_at, detected_at)
+         VALUES ('c-setting', 'setting', 'queue.policy', 'value', '"advisory"', '"strict"', '"advisory"', 'l', 'r', 'd1', 'd2', '2026-09-05T00:00:00.000Z', '2026-09-05T00:00:01.000Z', '2026-09-05T00:00:02.000Z')`,
+      )
+      .run();
+    const list = attentionList([{ slug: "app", store }]);
+    expect(list.rows.map((row) => [row.kind, row.ref, row.conflictId])).toEqual([["cloud_conflict", null, "c-setting"]]);
+    expect(attentionText(list)).toContain("setting queue.policy");
+  });
+
+  it("leaves out a goal run's own gate while the run works, and lists it once the run has ended", () => {
+    const { store } = workspace("app");
+    store.addKind({ id: MILESTONE_KIND, label: "Milestone" }, "vp");
+    const created = store.milestones().create({ title: "October", acceptanceCriteria: ["Docs written"] }, "vp");
+    if (created.preview) throw new Error("unreachable");
+    const m = created.milestone.identifier;
+    store.milestones().addMember(m, store.createIssue({ title: "A" }).identifier, {}, "vp");
+    const run = store.runs().start({ actor: "bot", scope: m, gateOwner: "VP" });
+    expect(store.gate(m)).toMatchObject({ state: "pending" });
+    expect(workspaceAttention(store).filter((row) => row.kind.startsWith("gate"))).toEqual([]);
+    store.runs().stop(run.id, "VP");
+    expect(workspaceAttention(store).map((row) => [row.kind, row.ref])).toContainEqual(["gate_pending", m]);
+  });
+
+  it("counts the person at this terminal as a person, even after they claimed work without STAPLE_AGENT", () => {
+    const { store } = workspace("app");
+    const me = process.env.USER ?? "dana";
+    process.env.USER = me;
+    store.checkoutIssue(store.createIssue({ title: "Mine" }).identifier, me);
+    const blocked = store.createIssue({ title: "Needs me" }).identifier;
+    store.updateIssue(blocked, { status: "blocked", unblockOwner: me, unblockAction: "sign the contract" }, "agent-a");
+    expect(workspaceAttention(store).filter((row) => row.kind === "person_blocked").map((row) => row.ref)).toEqual([blocked]);
+  });
+
   it("refuses to dismiss a row a person answers instead", () => {
     const { store } = workspace("app");
     const ref = parentWithChild(store, "Gate");
@@ -227,6 +265,23 @@ describe("a ticket made ready by its cross-repository blockers", () => {
     expect(workspaceAttention(web.store).filter((row) => row.kind === "unblocked")).toEqual([]);
   });
 
+  it("is not a row once the ticket is held again, by a new local or cross-workspace blocker", () => {
+    const { app, web, waiting } = crossSetup();
+    const local = web.store.createIssue({ title: "New local blocker" });
+    web.store.setBlockedBy(waiting, [local.identifier], "agent-a");
+    expect(workspaceAttention(web.store).filter((row) => row.kind === "unblocked")).toEqual([]);
+    web.store.setBlockedBy(waiting, [], "agent-a");
+    expect(workspaceAttention(web.store).filter((row) => row.kind === "unblocked")).toHaveLength(1);
+    const another = app.store.createIssue({ title: "Another app blocker" });
+    const hub = Hub.open();
+    try {
+      hub.addCrossLink(another.identifier, waiting);
+    } finally {
+      hub.close();
+    }
+    expect(workspaceAttention(web.store).filter((row) => row.kind === "unblocked")).toEqual([]);
+  });
+
   it("is a row until a person dismisses it", () => {
     const { web, waiting } = crossSetup();
     const row = dismissAttention(web.store, waiting, "VP");
@@ -257,7 +312,8 @@ describe("attentionList", () => {
 
   it("names a workspace it could not read rather than dropping it silently", () => {
     const app = workspace("app");
-    const broken = { slug: "gone", store: { listIssues: () => { throw new Error("database is gone"); } } as unknown as WorkspaceStore };
+    // Opened when read, so a database that cannot be opened is reported, not fatal.
+    const broken = { slug: "gone", open: (): WorkspaceStore => { throw new Error("database is gone"); } };
     const list = attentionList([{ slug: "app", store: app.store }, broken]);
     expect(list.failed).toEqual([{ workspace: "gone", message: expect.stringContaining("database is gone") }]);
   });
@@ -277,7 +333,6 @@ describe("personRule", () => {
     const kinds = ATTENTION_KINDS.map((spec) => spec.kind);
     expect(new Set(kinds).size).toBe(kinds.length);
     expect(kinds.slice(0, 3)).toEqual(["gate_pending", "gate_resubmitted", "person_blocked"]);
-    // The page's hand-kept mirror names the same kinds in the same order.
-    expect([...PAGE_KINDS]).toEqual(kinds);
+
   });
 });

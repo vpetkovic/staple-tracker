@@ -7,17 +7,30 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { AttentionList, AttentionRow } from "@/lib/types";
-import { ATTENTION_KINDS } from "@/lib/types";
 import { AttentionLists, type AttentionHandlers } from "./AttentionView";
-import { ATTENTION_KIND_LABELS, ageText, attentionGo, attentionSections } from "./attention-model";
+import { ageText, attentionGo, attentionSections } from "./attention-model";
+
+/** The core registry's kinds and labels, in its order (src/core/attention.ts). */
+const KINDS: Record<string, string> = {
+  gate_pending: "Gates waiting on approval",
+  gate_resubmitted: "Gates resubmitted",
+  person_blocked: "Blocked on a person",
+  in_review: "In review",
+  unblocked: "Ready again: blockers in other workspaces closed",
+  run_stopped: "Stopped autopilot runs",
+  claim_silent: "Silent claims",
+  cloud_conflict: "Sync conflicts",
+};
 
 const noop: AttentionHandlers = { act: () => {}, resolve: () => {}, dismiss: () => {} };
 
 function row(over: Partial<AttentionRow> & Pick<AttentionRow, "kind">): AttentionRow {
+  const label = KINDS[over.kind]!;
   const ref = over.ref === undefined ? "APP-1" : over.ref;
   return {
     key: `app/${over.kind}/${ref ?? over.runId}`,
     workspace: "app",
+    label,
     runId: null,
     conflictId: null,
     title: "Title",
@@ -48,8 +61,8 @@ describe("the Attention page", () => {
   it("draws one section per kind, in the order the rows arrive, each row with its workspace, age and action", () => {
     const html = renderToStaticMarkup(<AttentionLists list={list(EVERY_KIND)} busy={null} handlers={noop} />);
     const sections = [...html.matchAll(/data-attention-section="([a-z_]+)"/g)].map((match) => match[1]);
-    expect(sections).toEqual([...ATTENTION_KINDS]);
-    for (const kind of ATTENTION_KINDS) expect(html).toContain(ATTENTION_KIND_LABELS[kind]);
+    expect(sections).toEqual(Object.keys(KINDS));
+    for (const label of Object.values(KINDS)) expect(html).toContain(label);
     expect(html).toContain('data-attention-workspace="web"');
     expect(html.match(/waiting 2h/g)).toHaveLength(EVERY_KIND.length);
     expect(html).toContain("Approve or request changes");
