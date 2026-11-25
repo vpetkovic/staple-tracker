@@ -1333,7 +1333,7 @@ const replayedShape = {
 
 for (const spec of [
   { name: "integration_read", actions: INTEGRATION_READ_ACTIONS, readOnly: true,
-    description: "Read local provider connections, check their health, discover repositories, search provider issues/PRs, resolve exact URLs, preview migration matches, list links or get batched counts. Search never creates execution work. Without a connection, cached context remains readable. Pass connectionId for live reads." },
+    description: "Read local provider connections with their last known health and the gh accounts this machine is already signed in to (detected), check health (cached for pollIntervalSeconds; force=true probes now; a failure is a state, not an error), discover repositories, search provider issues/PRs, resolve exact URLs, preview migration matches, list links or get batched counts. Search never creates execution work. Without a connection, cached context remains readable. Pass connectionId for live reads." },
   { name: "integration_write", actions: INTEGRATION_WRITE_ACTIONS, readOnly: false,
     description: "Link or unlink provider issues and PR references, refresh cached context, create local work from an issue with a requestKey, explicitly share source context, or set an explicit PR stack. Linking needs ref and confirmed=true; create requires additionalWork=true when matches already exist. No remote writes or PR operations." },
   { name: "configure_integration", actions: INTEGRATION_CONFIG_ACTIONS, readOnly: false,

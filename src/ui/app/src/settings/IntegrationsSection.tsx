@@ -10,14 +10,17 @@ import type { WorkspaceSettingsEnvelope } from "@/lib/settings";
 import type { ApplyTo } from "./CategoryContent";
 import { Section } from "./form/primitives";
 import type { ProviderConnection } from "../../../../core/integrations/connections";
-import type { ConnectionHealth, ExternalContainer, ExternalPage } from "../../../../core/integrations/contracts";
+import type { ConnectionHealthSnapshot, DetectedConnection, ExternalContainer, ExternalPage } from "../../../../core/integrations/contracts";
 
-type Health = ConnectionHealth & { checkedAt: string };
+type Listed = { connections: Array<ProviderConnection & { health?: ConnectionHealthSnapshot | null }>; detected?: DetectedConnection[] };
+type HealthRead = { health: ConnectionHealthSnapshot[] };
 export function IntegrationsSection({ ws, settings, applyTo, onDirtyChange }: {
   ws?: string; settings: WorkspaceSettingsEnvelope; applyTo: ApplyTo; onDirtyChange: (dirty: boolean) => void;
 }) {
   const [connections, setConnections] = useState<ProviderConnection[]>([]);
-  const [health, setHealth] = useState<Record<string, Health>>({});
+  const [health, setHealth] = useState<Record<string, ConnectionHealthSnapshot>>({});
+  const [detected, setDetected] = useState<DetectedConnection[]>([]);
+  const remember = (read: HealthRead) => setHealth(old => ({ ...old, ...Object.fromEntries(read.health.map(h => [h.connectionId, h])) }));
   const [repos, setRepos] = useState<Record<string, ExternalContainer>>({});
   const [cursor, setCursor] = useState<Record<string, string | null>>({});
   const stored = String(settings.values["integrations.repositories"]?.value ?? "");
@@ -37,8 +40,14 @@ export function IntegrationsSection({ ws, settings, applyTo, onDirtyChange }: {
   useEffect(() => { setSelected(stored); }, [stored]);
   useEffect(() => {
     let active = true;
-    integrationRead<{connections: ProviderConnection[]}>({action: "connections"}, ws)
-      .then(r => { if(active) setConnections(r.connections); })
+    integrationRead<Listed>({action: "connections"}, ws)
+      .then(r => {
+        if(!active) return;
+        setConnections(r.connections); setDetected(r.detected ?? []);
+        setHealth(Object.fromEntries(r.connections.flatMap(c => c.health ? [[c.id, c.health]] : [])));
+        // Show real status on arrival; the server answers from its cache unless the last check is old.
+        if (r.connections.length) void integrationRead<HealthRead>({action: "health"}, ws).then(h => { if(active) remember(h); }).catch(() => {});
+      })
       .catch(e => { if(active) setError(String(e.message)); }).finally(() => { if(active) setLoaded(true); });
     return () => { active = false; };
   }, [ws]);
@@ -56,11 +65,12 @@ export function IntegrationsSection({ ws, settings, applyTo, onDirtyChange }: {
         <div className="flex flex-wrap items-center gap-2 text-sm"><Plug className="size-4" aria-hidden /><span className="font-medium wrap-anywhere">{c.account} · {c.host}</span><span className="text-xs text-muted-foreground">{c.mode.toUpperCase()}</span></div>
         <div role="status" className="text-xs text-muted-foreground wrap-anywhere">{health[c.id] ? <>
           <span className="font-medium text-foreground">{health[c.id]!.state.replaceAll("_", " ")}</span>
-          {health[c.id]!.state !== "ready" ? ` · ${(health[c.id] as Exclude<Health, {state: "ready"}>).message}` : " · Connected for read-only access"}
+          {health[c.id]!.state !== "ready" ? ` · ${health[c.id]!.message}` : ` · Connected for read-only access${health[c.id]!.identity ? ` as ${health[c.id]!.identity!.login}` : ""}`}
+          {health[c.id]!.action ? <span className="block mt-1">{health[c.id]!.action}</span> : null}
           <span className="block mt-1">Checked {new Date(health[c.id]!.checkedAt).toLocaleString()}</span>
-        </> : "Not checked on this visit"}</div>
+        </> : "Checking…"}</div>
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" variant="outline" disabled={busy} onClick={() => void run(async () => { const h = await integrationRead<Health>({action:"health",connectionId:c.id},ws); setHealth(old => ({...old,[c.id]:h})); })}><RefreshCw className="size-3" />Check connection</Button>
+          <Button size="sm" variant="outline" disabled={busy} onClick={() => void run(async () => { remember(await integrationRead<HealthRead>({action:"health",connectionId:c.id,force:true},ws)); })}><RefreshCw className="size-3" />Check connection</Button>
           <Button size="sm" variant="outline" disabled={busy} onClick={() => void run(async () => {
             const page = await integrationRead<ExternalPage<ExternalContainer>>({action:"containers",connectionId:c.id,cursor:cursor[c.id] ?? undefined},ws);
             setRepos(old => ({...old,...Object.fromEntries(page.items.map(repo => [`${containerPrefix(c)}${repo.id}`,repo]))}));
@@ -68,6 +78,14 @@ export function IntegrationsSection({ ws, settings, applyTo, onDirtyChange }: {
           })}>{c.providerId === "linear" ? cursor[c.id] ? "More teams" : "Find teams" : cursor[c.id] ? "More repositories" : "Find repositories"}</Button>
           <Button size="sm" variant="ghost" disabled={busy} onClick={() => void run(async () => { await integrationConfigure({action:"remove",connectionId:c.id},ws); setConnections(old => old.filter(x=>x.id!==c.id)); setNotice("Connection removed from this machine. Existing links are preserved."); })}><Trash2 className="size-3" />Remove</Button>
         </div>
+      </div>)}
+      {detected.filter(d => !d.configuredConnectionId).map(d => <div key={`${d.host}:${d.login}`} className="flex flex-wrap items-center gap-2 rounded-lg border p-3 text-sm">
+        <span className="wrap-anywhere">GitHub CLI on this machine is signed in as <span className="font-medium">{d.login}</span> · {d.host}</span>
+        <Button size="sm" disabled={busy} onClick={() => void run(async () => {
+          const c = await integrationConfigure<ProviderConnection>({action:"configure",host:d.host,account:d.login},ws);
+          setConnections(old => [...old,c]); setDetected(old => old.map(x => x === d ? {...x, configuredConnectionId: c.id} : x));
+          remember(await integrationRead<HealthRead>({action:"health",connectionId:c.id},ws));
+        })}>Connect as {d.login}</Button>
       </div>)}
       <form className="space-y-3 rounded-lg bg-surface-sunken p-3" onSubmit={e => { e.preventDefault(); void run(async () => {
         const c = await integrationConfigure<ProviderConnection>(provider === "linear"

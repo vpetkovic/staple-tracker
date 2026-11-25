@@ -7,7 +7,7 @@ const teamId = "33333333-3333-4333-8333-333333333333";
 const issueId = "44444444-4444-4444-8444-444444444444";
 const other = "55555555-5555-4555-8555-555555555555";
 const config: LinearApiConnection = { id:"linear-work", providerId:"linear", mode:"api", host:"linear.app", account, scopeId:org, credentialEnv:"STAPLE_LINEAR_API_KEY" };
-const identity = { viewer:{id:account},organization:{id:org,urlKey:"acme"} };
+const identity = { viewer:{id:account,name:"Ada Lovelace"},organization:{id:org,urlKey:"acme"} };
 const team = { id:teamId,key:"ENG",name:"Engineering",organization:{id:org} };
 const issue = { id:issueId,identifier:"ENG-12",title:"Issue title",description:"Source context",url:"https://linear.app/acme/issue/ENG-12/issue-title",state:{id:other,name:"In review"},team };
 const pageInfo = {hasNextPage:false,endCursor:null};
@@ -23,7 +23,7 @@ describe("read-only Linear API adapter",()=>{
   it("discovers teams, searches with variables, and uses immutable scoped UUIDs and native states",async()=>{
     const {reader,fetch}=setup(body=>body.query.includes("teams(") ? {teams:{nodes:[team],pageInfo}}
       : {searchIssues:{nodes:[issue],pageInfo}});
-    expect(await reader.validate()).toEqual({state:"ready"});
+    expect(await reader.validate()).toEqual({state:"ready",identity:{login:"Ada Lovelace"}});
     expect(await reader.listContainers()).toMatchObject({items:[{id:teamId,name:"Engineering (ENG)"}]});
     const result=await reader.search("issue",{text:'title "quoted"',containerId:teamId});
     expect(result.items[0]).toMatchObject({ref:{providerId:"linear",host:"linear.app",scopeId:org,containerId:teamId,id:issueId,kind:"issue"},status:{name:"In review"},body:"Source context"});
@@ -42,12 +42,13 @@ describe("read-only Linear API adapter",()=>{
     const fetch=vi.fn(async()=>Response.json({data:{viewer:{id:account},organization:{id:scopeId.toUpperCase(),urlKey:"acme"}}}));
     const adapter=new LinearApiAdapter({...config,account:account.toUpperCase(),scopeId:scopeId.toUpperCase()},{fetch,credential:()=>"fixture"});
     expect(adapter.scope.scopeId).toBe(scopeId);
-    expect(await adapter.validate()).toEqual({state:"ready"});
+    expect(await adapter.validate()).toMatchObject({state:"ready"});
   });
   it("browses issues with an empty search and team filter",async()=>{
     const {reader,fetch}=setup(()=>({issues:{nodes:[issue],pageInfo}}));
     expect((await reader.search("issue",{text:"",containerId:teamId})).items).toHaveLength(1);
     expect(JSON.parse(fetch.mock.calls[0]![1]!.body as string).variables.filter).toEqual({team:{id:{eq:teamId}}});
+    expect(JSON.parse(fetch.mock.calls[0]![1]!.body as string).query).toContain("orderBy: updatedAt");
   });
   it("resolves exact URLs and scoped identifiers, retaining UUID identity after display changes",async()=>{
     let current=issue;
@@ -62,8 +63,8 @@ describe("read-only Linear API adapter",()=>{
     await expect(reader.resolve({url:"https://linear.app/other/issue/ENG-99/renamed"})).rejects.toMatchObject({code:"validation"});
   });
   it("refuses foreign users, organizations, teams, IDs and unexpected provider URLs",async()=>{
-    const wrongUser=setup(()=>({viewer:{id:other},issue}));
-    expect(await wrongUser.adapter.validate()).toMatchObject({state:"unauthenticated"});
+    const wrongUser=setup(()=>({viewer:{id:other,name:"Grace Hopper"},issue}));
+    expect(await wrongUser.adapter.validate()).toMatchObject({state:"account_mismatch",identity:{login:"Grace Hopper"}});
     await expect(wrongUser.reader.read({...config,providerId:"linear",containerId:teamId,id:issueId,kind:"issue",scopeId:org})).rejects.toMatchObject({code:"auth"});
     const wrongOrg=setup(()=>({organization:{id:other,urlKey:"other"},issue}));
     await expect(wrongOrg.reader.resolve({url:issue.url})).rejects.toMatchObject({code:"forbidden"});
