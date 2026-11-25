@@ -8,7 +8,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { ConnectionHealthSnapshot } from "../../../../core/integrations/contracts";
 import type { ConnectionView } from "./connection-status";
 import type { Connections } from "./useConnections";
-import { connectionFor, groupResults, pastedPlace, searchKinds } from "./link-dialog/logic";
+import { connectionFor, connectionLabel, groupResults, pastedPlace, searchKinds } from "./link-dialog/logic";
 import { containerLabel, providerName, shortKey } from "./link-state";
 import { openLabel, refreshConnection } from "./links-view";
 import type { ExternalLink, MappingTarget, SearchHit } from "./model";
@@ -132,5 +132,13 @@ describe("Azure DevOps links and the link dialog", () => {
     expect(connectionFor(pastedPlace("https://tfs.example.com/tfs/Other/Web/_workitems/edit/1"), undefined, [], [...connections, server])).toBeUndefined();
     expect(connectionFor(workItem(12).ref, undefined, [], connections)).toBe("ado-acme");
     expect(connectionFor(workItem(12, CONTOSO).ref, undefined, [], connections)).toBe("ado-contoso");
+  });
+
+  it("names each connection in the dialog's header by its place when two share a provider", () => {
+    const acme = azure("ado-acme", "acme", ACME);
+    const server = { ...azure("ado-tfs", "DefaultCollection", "77777777-7777-4777-8777-777777777777"), host: "tfs.example.com" };
+    expect(connectionLabel(acme, [acme])).toBe("Azure DevOps");
+    expect(connectionLabel(acme, [acme, server])).toBe("Azure DevOps · acme");
+    expect(connectionLabel(server, [acme, server])).toBe("Azure DevOps · tfs.example.com/DefaultCollection");
   });
 });

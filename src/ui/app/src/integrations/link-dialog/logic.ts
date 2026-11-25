@@ -3,7 +3,7 @@
  * group, what a row's tag says, how the scope and a failed source read, and where the
  * selection goes. The component only wires these to state and requests.
  */
-import { canonicalAzureDevOpsUrl, servesUrl } from "../../../../../core/integrations/azure-devops-url";
+import { canonicalAzureDevOpsUrl, isServices, servesUrl } from "../../../../../core/integrations/azure-devops-url";
 import type { Issue } from "@/lib/types";
 import type { ConnectionHealthSnapshot } from "../../../../../core/integrations/contracts";
 import { connectionStatus, type ConnectionView } from "../connection-status";
@@ -198,4 +198,15 @@ export function connectionFor(
 export function pastedPlace(url: string): { host: string; url?: string } {
   const canonical = canonicalAzureDevOpsUrl(url) ?? url;
   return { host: new URL(canonical).host, url: canonical };
+}
+
+/** What the header calls a connection: its provider, and where two share one, which account or organization. */
+export function connectionLabel(connection: ConnectionView, all: readonly ConnectionView[]): string {
+  const name = providerName(connection.providerId);
+  if (all.filter((c) => c.providerId === connection.providerId).length < 2) return name;
+  const place =
+    connection.providerId === "azure_devops" ? (isServices(connection.host) ? connection.organization : `${connection.host}/${connection.organization}`)
+    : connection.providerId === "github" ? connection.account
+    : connection.health?.identity?.organization ?? null;
+  return place ? `${name} · ${place}` : name;
 }

@@ -299,6 +299,8 @@ describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
         if (url.pathname === "/_apis/profile/profiles/me") return Response.json({ id: account });
         return Response.json({ value: [{ accountId: org, accountName: "acme" }, { accountId: "99999999-9999-4999-8999-999999999999", accountName: "zeta" }] });
       }
+      // An Azure DevOps Server lists its own collections.
+      if (url.host === "tfs.example.test") return Response.json({ value: [{ id: "88888888-8888-4888-8888-000000000001", name: "DefaultCollection" }] });
       if (url.host !== "dev.azure.com") return originalFetch(input, init);
       if (denied) return new Response("private fixture failure", { status: 401 });
       const path = url.pathname;
@@ -319,6 +321,12 @@ describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
       await reached.getByRole("button", { name: "acme", exact: true }).click();
       expect(await page.getByLabel("Organization", { exact: true }).inputValue()).toBe("acme");
       expect(await reached.getByRole("button", { name: "acme", exact: true }).getAttribute("aria-pressed")).toBe("true");
+      // A Server lists its collections instead, and a name picked for Services does not carry over.
+      await page.getByLabel("Server (optional)", { exact: true }).fill("tfs.example.test");
+      await expect.poll(() => page.getByLabel("Collection", { exact: true }).inputValue()).toBe("DefaultCollection");
+      await page.getByLabel("Server (optional)", { exact: true }).fill("");
+      await reached.getByRole("button", { name: "acme", exact: true }).click();
+      expect(await page.getByLabel("Organization", { exact: true }).inputValue()).toBe("acme");
       await page.getByRole("button", { name: "Save", exact: true }).click();
       await expect.poll(() => page.locator('[data-connection-row="azure_devops"] [data-connection-state="ready"]').count()).toBe(1);
       expect(await page.locator('[data-connection-row="azure_devops"]').innerText()).toContain("acme · token in STAPLE_TEST_ADO_PAT");

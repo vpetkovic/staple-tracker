@@ -605,7 +605,14 @@ export function ConnectionForm({ provider, ws, onCancel, onSaved, onDirtyChange 
               <Input id={`${id}-env`} value={credentialEnv} onChange={(e) => setCredentialEnv(e.target.value)} autoComplete="off" spellCheck={false} aria-describedby={`${id}-env-help`} className="pointer-coarse:h-11" />
             </FormField>
             <FormField id={`${id}-server`} label="Server (optional)" help="Leave empty for Azure DevOps Services. For Azure DevOps Server, its host name, like tfs.example.com.">
-              <Input id={`${id}-server`} value={server} onChange={(e) => setServer(e.target.value)} placeholder="dev.azure.com" autoComplete="off" spellCheck={false} aria-describedby={`${id}-server-help`} className="pointer-coarse:h-11" />
+              <Input
+                id={`${id}-server`}
+                value={server}
+                onChange={(e) => {
+                  setServer(e.target.value);
+                  // A name picked from the last list belongs to that place, not to the new one.
+                  if (found?.some((f) => f.name === organization.trim())) setOrganization("");
+                }} placeholder="dev.azure.com" autoComplete="off" spellCheck={false} aria-describedby={`${id}-server-help`} className="pointer-coarse:h-11" />
             </FormField>
             <div className="space-y-1.5">
               <FormField id={`${id}-org`} label={server.trim() ? "Collection" : "Organization"}>
