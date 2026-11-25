@@ -277,15 +277,15 @@ export interface SetEstimateResult {
  * the issue_id primary keys.
  */
 const TEXT_MATCH_SQL = `(
-  issues.title LIKE ? ESCAPE '\\' OR issues.identifier LIKE ? ESCAPE '\\'
-  OR issues.description LIKE ? ESCAPE '\\' OR issues.assignee LIKE ? ESCAPE '\\'
-  OR (json_valid(issues.labels) AND EXISTS (SELECT 1 FROM json_each(issues.labels) l WHERE l.value LIKE ? ESCAPE '\\'))
-  OR (json_valid(issues.acceptance_criteria)
-      AND EXISTS (SELECT 1 FROM json_each(issues.acceptance_criteria) ac WHERE ac.value LIKE ? ESCAPE '\\'))
-  OR EXISTS (SELECT 1 FROM comments c WHERE c.issue_id = issues.id AND c.deleted_at IS NULL AND c.body LIKE ? ESCAPE '\\')
-  OR EXISTS (SELECT 1 FROM documents d JOIN document_revisions r
-               ON r.issue_id = d.issue_id AND r.key = d.key AND r.revision = d.current_revision
-             WHERE d.issue_id = issues.id AND r.body LIKE ? ESCAPE '\\')
+    issues.title LIKE ? ESCAPE '\\' OR issues.identifier LIKE ? ESCAPE '\\'
+    OR issues.description LIKE ? ESCAPE '\\' OR issues.assignee LIKE ? ESCAPE '\\'
+    OR (json_valid(issues.labels) AND EXISTS (SELECT 1 FROM json_each(issues.labels) l WHERE l.value LIKE ? ESCAPE '\\'))
+    OR (json_valid(issues.acceptance_criteria)
+        AND EXISTS (SELECT 1 FROM json_each(issues.acceptance_criteria) ac WHERE ac.value LIKE ? ESCAPE '\\'))
+    OR EXISTS (SELECT 1 FROM comments c WHERE c.issue_id = issues.id AND c.deleted_at IS NULL AND c.body LIKE ? ESCAPE '\\')
+    OR EXISTS (SELECT 1 FROM documents d JOIN document_revisions r
+                 ON r.issue_id = d.issue_id AND r.key = d.key AND r.revision = d.current_revision
+               WHERE d.issue_id = issues.id AND r.body LIKE ? ESCAPE '\\')
 )`;
 const TEXT_MATCH_PARAMS = TEXT_MATCH_SQL.split("?").length - 1;
 

@@ -848,6 +848,8 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/run/resume",
       "/api/run/stop",
       "/api/runs",
+      // Full-text search: the ids whose written words match, for the toolbar.
+      "/api/search",
       "/api/settings",
       "/api/timing/quality",
     ]);
