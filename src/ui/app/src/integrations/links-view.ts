@@ -22,13 +22,13 @@ export function countWords(links: readonly ExternalLink[]): string {
     .join(", ");
 }
 
-/** A connection that could read this link: same provider and host, and for Linear the same organisation. */
+/** A connection that could read this link: same provider and host, and for Linear and ClickUp the same organisation or workspace. */
 function serves(connection: ConnectionView, link: ExternalLink): boolean {
   const ref = link.resource.ref;
   return (
     connection.providerId === ref.providerId &&
     connection.host === ref.host &&
-    (connection.providerId !== "linear" || connection.scopeId === ref.scopeId)
+    (connection.providerId === "github" || connection.scopeId === ref.scopeId)
   );
 }
 
@@ -91,5 +91,5 @@ export const stackIndent = (depth: number): number => Math.min(depth, 3);
 
 /** "Open on GitHub", "Open in Linear". */
 export function openLabel(providerId: string): string {
-  return providerId === "linear" ? "Open in Linear" : `Open on ${providerName(providerId)}`;
+  return providerId === "github" ? "Open on GitHub" : `Open in ${providerName(providerId)}`;
 }

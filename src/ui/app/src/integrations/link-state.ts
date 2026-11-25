@@ -46,11 +46,16 @@ export function stateLabel(item: SourceItem): string | null {
 export function providerName(providerId: string): string {
   if (providerId === "github") return "GitHub";
   if (providerId === "linear") return "Linear";
+  if (providerId === "clickup") return "ClickUp";
   return providerId.charAt(0).toUpperCase() + providerId.slice(1);
 }
 
-/** `owner/repo` for a GitHub key, the team key for a Linear one (`ENG-4` → `ENG`). */
+/**
+ * `owner/repo` for a GitHub key, the team key for a Linear one (`ENG-4` → `ENG`). A ClickUp
+ * task's container is its whole workspace, which its key does not name, so it is "ClickUp".
+ */
 export function containerLabel(item: SourceItem): string {
+  if (item.ref.providerId === "clickup") return providerName("clickup");
   const hash = item.key.lastIndexOf("#");
   if (hash > 0) return item.key.slice(0, hash);
   const dash = item.key.lastIndexOf("-");

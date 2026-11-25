@@ -131,7 +131,7 @@ describe("connections", () => {
 });
 
 describe("connection forms", () => {
-  const form = (provider: "github" | "linear") =>
+  const form = (provider: "github" | "linear" | "clickup") =>
     renderToStaticMarkup(<ConnectionForm provider={provider} onCancel={() => {}} onSaved={noop} onDirtyChange={() => {}} />);
   it("asks GitHub for a host and an account, with Save off until both are filled", () => {
     const html = form("github");
@@ -149,6 +149,18 @@ describe("connection forms", () => {
     expect(html).toContain(">Your user ID<");
     expect(html).toContain("Both are in Linear under Settings → API.");
     expect(html).not.toContain("UUID");
+    expect(html).not.toMatch(NO_NATIVE);
+  });
+  it("asks ClickUp for the token variable and the workspace number only", () => {
+    const html = form("clickup");
+    expect(html).toContain("Connect ClickUp");
+    expect(html).toContain(">API key variable<");
+    expect(html).toContain('value="STAPLE_CLICKUP_API_TOKEN"');
+    expect(html).toContain("ClickUp personal API token (pk_…)");
+    expect(html).toContain(">Workspace ID<");
+    expect(html).toContain("The number after app.clickup.com/ in any ClickUp page&#x27;s address.");
+    expect(html).not.toContain(">Your user ID<");
+    expect(html).toMatch(/<button[^>]*type="submit"[^>]*disabled=""[^>]*>Save/);
     expect(html).not.toMatch(NO_NATIVE);
   });
 });

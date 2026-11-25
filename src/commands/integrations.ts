@@ -8,7 +8,7 @@ import type { WorkspaceStore } from "../core/store.js";
 /** Human and script entry point. Workspace resolution is the same as every other command. */
 export async function runIntegrationsCommand(args:string[]):Promise<void> {
   if(!args[0] || args.slice(0, args.indexOf("--") < 0 ? args.length : args.indexOf("--")).some(arg => arg === "--help" || arg === "-h")) {
-    console.log("staple integrations <connections|configure|remove|health|containers|mapping|map|unmap|search|resolve|preview|list|counts|link|create|unlink|refresh|stack|share> --ws <workspace> [--provider github|linear] [--scope <organization-uuid>] [--account <user>] [--credential-env <variable-name>] [--connection <id>] [--key <ENG-123> --container <team-uuid>] [--url <url>] [--ref <ticket>] [--resource <id>] [--all-workspaces] [--container-kind repository|team|project] [--target-key <key>] [--container-key <key>] [--force] [--confirmed] [--request-key <key>] [--additional-work] [--enabled true|false]");
+    console.log("staple integrations <connections|configure|remove|health|containers|mapping|map|unmap|search|resolve|preview|list|counts|link|create|unlink|refresh|stack|share> --ws <workspace> [--provider github|linear|clickup] [--scope <organization-uuid|clickup-workspace-id>] [--account <user>] [--credential-env <variable-name>] [--connection <id>] [--key <ENG-123|clickup-task-id> --container <team-uuid|clickup-workspace-id>] [--url <url>] [--ref <ticket>] [--resource <id>] [--all-workspaces] [--container-kind repository|team|project|space|list] [--target-key <key>] [--container-key <key>] [--force] [--confirmed] [--request-key <key>] [--additional-work] [--enabled true|false]");
     return;
   }
   const {values,positionals}=parseArgs({args,allowPositionals:true,options:{

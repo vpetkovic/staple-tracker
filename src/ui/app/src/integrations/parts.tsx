@@ -113,6 +113,13 @@ export function ProviderMark({ providerId, className }: { providerId: string; cl
         <path d="M3.2 9.6 6.4 12.8M2.6 6.2l7.2 7.2M4.4 3.6l8 8" />
       </svg>
     );
+  if (providerId === "clickup")
+    return (
+      <svg aria-hidden viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" data-provider="clickup" className={cn("size-3.5 shrink-0", className)}>
+        <path d="M3.5 7.5 8 3.5l4.5 4" />
+        <path d="M2.8 10.8c1.5 1.7 3.2 2.6 5.2 2.6s3.7-.9 5.2-2.6" />
+      </svg>
+    );
   return (
     <span aria-hidden data-provider={providerId} className={cn("inline-flex size-3.5 shrink-0 items-center justify-center rounded-[3px] bg-surface-sunken text-[9px] font-semibold uppercase", className)}>
       {providerId.charAt(0)}

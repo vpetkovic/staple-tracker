@@ -24,9 +24,9 @@ import type { Connections } from "@/integrations/useConnections";
 import type { DetectedConnection } from "../../../../../core/integrations/contracts";
 import { ConfirmDialog } from "../form/ConfirmDialog";
 import { InlineError, Section } from "../form/primitives";
-import { commandIn, CONNECTION_CHOICES, connectionMeta, linearIdProblem, offeredDetections } from "./integrations-model";
+import { clickupIdProblem, commandIn, CONNECTION_CHOICES, connectionMeta, linearIdProblem, offeredDetections } from "./integrations-model";
 
-type Provider = "github" | "linear";
+type Provider = "github" | "linear" | "clickup";
 const message = (caught: unknown) => (caught instanceof Error ? caught.message : String(caught));
 
 /** Icon buttons at the end of a row: 32px, 44px under a finger. */
@@ -227,6 +227,7 @@ export function ConnectionsSection({ state, ws, onDirtyChange, now: fixedNow }: 
           ) : null}
           {form === "github" && !empty ? formRow("github") : null}
           {form === "linear" && hasLinear ? formRow("linear") : null}
+          {form === "clickup" ? formRow("clickup") : null}
         </ListFrame>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -477,6 +478,7 @@ function DetectedRow({ detected: d, ws, reload }: { detected: DetectedConnection
 }
 
 const DEFAULT_ENV = "STAPLE_LINEAR_API_KEY";
+const CLICKUP_ENV = "STAPLE_CLICKUP_API_TOKEN";
 
 /**
  * An add form, as a row of the list. Save stays off until the required fields are filled; a
@@ -492,14 +494,15 @@ export function ConnectionForm({ provider, ws, onCancel, onSaved, onDirtyChange 
 }) {
   const [host, setHost] = useState("github.com");
   const [account, setAccount] = useState("");
-  const [credentialEnv, setCredentialEnv] = useState(DEFAULT_ENV);
+  const defaultEnv = provider === "clickup" ? CLICKUP_ENV : DEFAULT_ENV;
+  const [credentialEnv, setCredentialEnv] = useState(defaultEnv);
   const [organization, setOrganization] = useState("");
   const [user, setUser] = useState("");
   const [pending, setPending] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const root = useRef<HTMLFormElement>(null);
 
-  const dirty = provider === "github" ? account !== "" || host !== "github.com" : organization !== "" || user !== "" || credentialEnv !== DEFAULT_ENV;
+  const dirty = provider === "github" ? account !== "" || host !== "github.com" : organization !== "" || user !== "" || credentialEnv !== defaultEnv;
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
 
   // Radix closes the dialog on Escape from a capturing listener on the document, so the form
@@ -515,9 +518,11 @@ export function ConnectionForm({ provider, ws, onCancel, onSaved, onDirtyChange 
     return () => window.removeEventListener("keydown", onKey, true);
   }, [onCancel]);
 
-  const idProblem = provider === "linear" ? linearIdProblem(organization, user) : null;
+  const idProblem = provider === "linear" ? linearIdProblem(organization, user) : provider === "clickup" ? clickupIdProblem(organization) : null;
   const complete =
-    provider === "github" ? host.trim() !== "" && account.trim() !== "" : credentialEnv.trim() !== "" && organization.trim() !== "" && user.trim() !== "" && !idProblem;
+    provider === "github"
+      ? host.trim() !== "" && account.trim() !== ""
+      : credentialEnv.trim() !== "" && organization.trim() !== "" && (provider === "clickup" || user.trim() !== "") && !idProblem;
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!complete || pending) return;
@@ -527,7 +532,9 @@ export function ConnectionForm({ provider, ws, onCancel, onSaved, onDirtyChange 
       await integrationConfigure(
         provider === "github"
           ? { action: "configure", host: host.trim(), account: account.trim() }
-          : { action: "configure", providerId: "linear", account: user.trim(), scopeId: organization.trim(), credentialEnv: credentialEnv.trim() },
+          : provider === "clickup"
+            ? { action: "configure", providerId: "clickup", scopeId: organization.trim(), credentialEnv: credentialEnv.trim() }
+            : { action: "configure", providerId: "linear", account: user.trim(), scopeId: organization.trim(), credentialEnv: credentialEnv.trim() },
         ws,
       );
       await onSaved();
@@ -543,7 +550,7 @@ export function ConnectionForm({ provider, ws, onCancel, onSaved, onDirtyChange 
       <div className="flex items-center gap-3">
         <ProviderTile providerId={provider} />
         <p id={`${id}-title`} className="mt-1 text-body font-medium">
-          {provider === "github" ? "Add a GitHub account" : "Connect Linear"}
+          {provider === "github" ? "Add a GitHub account" : provider === "clickup" ? "Connect ClickUp" : "Connect Linear"}
         </p>
       </div>
       <div className={cn(TEXT_INDENT, "space-y-3 @max-[30rem]:ml-0")}>
@@ -561,10 +568,28 @@ export function ConnectionForm({ provider, ws, onCancel, onSaved, onDirtyChange 
             <FormField
               id={`${id}-env`}
               label="API key variable"
-              help="The name of the environment variable that holds a read-only personal API key, in the environment Staple runs in. Restart Staple after setting it."
+              help={
+                provider === "clickup"
+                  ? "The name of the environment variable that holds a ClickUp personal API token (pk_…), in the environment Staple runs in. Staple only reads with it. Restart Staple after setting it."
+                  : "The name of the environment variable that holds a read-only personal API key, in the environment Staple runs in. Restart Staple after setting it."
+              }
             >
               <Input id={`${id}-env`} value={credentialEnv} onChange={(e) => setCredentialEnv(e.target.value)} autoComplete="off" spellCheck={false} aria-describedby={`${id}-env-help`} className="pointer-coarse:h-11" />
             </FormField>
+            {provider === "clickup" ? (
+              <div className="space-y-1.5">
+                <FormField id={`${id}-workspace`} label="Workspace ID">
+                  <Input id={`${id}-workspace`} value={organization} onChange={(e) => setOrganization(e.target.value)} inputMode="numeric" autoComplete="off" spellCheck={false} autoFocus aria-describedby={`${id}-ids-help`} className="pointer-coarse:h-11" />
+                </FormField>
+                {idProblem ? (
+                  <InlineError id={`${id}-ids-help`}>{idProblem}</InlineError>
+                ) : (
+                  <p id={`${id}-ids-help`} className="text-label text-muted-foreground">
+                    The number after app.clickup.com/ in any ClickUp page's address.
+                  </p>
+                )}
+              </div>
+            ) : (
             <div className="space-y-1.5">
               <div className="grid gap-3 @min-[30rem]:grid-cols-2">
                 <FormField id={`${id}-org`} label="Organization ID">
@@ -582,6 +607,7 @@ export function ConnectionForm({ provider, ws, onCancel, onSaved, onDirtyChange 
                 </p>
               )}
             </div>
+            )}
           </>
         )}
         {formError ? <InlineError>{formError}</InlineError> : null}

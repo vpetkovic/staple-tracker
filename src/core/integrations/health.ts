@@ -48,6 +48,16 @@ function action(connection: ProviderConnection, state: ConnectionState, health: 
       default: return "Check the connection again; update GitHub CLI if this keeps happening.";
     }
   }
+  if (connection.providerId === "clickup") {
+    switch (state) {
+      case "ready": return null;
+      case "unauthenticated": return `Set ${connection.credentialEnv} to a valid ClickUp personal API token in the environment of the Staple process, then restart it.`;
+      case "forbidden": return `Use a token for a ClickUp user who belongs to workspace ${connection.scopeId}.`;
+      case "rate_limited": return "Wait for the ClickUp rate limit to reset, then check again.";
+      case "offline": return "Check that the computer running Staple can reach api.clickup.com.";
+      default: return "Check the connection again later.";
+    }
+  }
   switch (state) {
     case "ready": return null;
     case "unauthenticated": return `Set ${connection.credentialEnv} to a valid Linear personal API key in the environment of the Staple process, then restart it.`;

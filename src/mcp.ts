@@ -1338,7 +1338,7 @@ for (const spec of [
   { name: "integration_write", actions: INTEGRATION_WRITE_ACTIONS, readOnly: false,
     description: "Link or unlink provider issues and PR references, refresh cached context, create local work from an issue with a requestKey, explicitly share source context, or set an explicit PR stack. Linking needs ref and confirmed=true; create requires additionalWork=true when matches already exist. No remote writes or PR operations." },
   { name: "configure_integration", actions: INTEGRATION_CONFIG_ACTIONS, readOnly: false,
-    description: "Configure or remove a machine-local integration. GitHub uses host/account and existing gh authentication. Linear uses providerId linear, account user UUID, scopeId organization UUID, and credentialEnv naming a server-side personal API key environment variable. connectionId edits a binding. Never pass secret values." },
+    description: "Configure or remove a machine-local integration. GitHub uses host/account and existing gh authentication. Linear uses providerId linear, account user UUID, scopeId organization UUID, and credentialEnv naming a server-side personal API key environment variable. ClickUp uses providerId clickup, scopeId the numeric workspace id, and credentialEnv naming a server-side personal API token environment variable. connectionId edits a binding. Never pass secret values." },
 ] as const) {
   server.registerTool(spec.name, {
     description: spec.description,

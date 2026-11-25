@@ -20,12 +20,18 @@ export const storedTargetSchema = z.discriminatedUnion("providerId", [
     kind: z.enum(["team", "project"]), containerId: z.string().regex(uuid),
     name: z.string().min(1).max(512).nullable(), url: z.string().url().max(2048).nullable(),
   }).strict(),
+  z.object({
+    providerId: z.literal("clickup"), host: z.literal("app.clickup.com"), scopeId: z.string().regex(/^[1-9][0-9]{0,19}$/),
+    kind: z.enum(["space", "list"]), containerId: z.string().regex(/^[1-9][0-9]{0,19}$/),
+    name: z.string().min(1).max(512).nullable(), url: z.string().url().max(2048).nullable(),
+  }).strict(),
 ]);
 export type StoredTarget = z.infer<typeof storedTargetSchema>;
 
 /** The stable identity of a target; also the entry format of the legacy `integrations.repositories`. */
 export function targetKey(t: Pick<StoredTarget, "providerId" | "host" | "scopeId" | "kind" | "containerId">): string {
   if (t.providerId === "github") return `${t.host}/${t.containerId}`;
+  if (t.providerId === "clickup") return `app.clickup.com/${t.scopeId}/${t.kind}/${t.containerId}`;
   return t.kind === "project" ? `linear.app/${t.scopeId}/project/${t.containerId}` : `linear.app/${t.scopeId}/${t.containerId}`;
 }
 

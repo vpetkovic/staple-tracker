@@ -128,7 +128,7 @@ export interface SettingDefinition<T = unknown> {
  * it is `registerSettingCategory`, which also grows the index (R6f, STA-243).
  */
 const categories: SettingCategory[] = [
-  { id: "integrations", label: "Integrations", description: "Connect GitHub and Linear on this computer and choose what each workspace searches.", scope: "workspace", editor: "fields", order: 35 },
+  { id: "integrations", label: "Integrations", description: "Connect GitHub, Linear and ClickUp on this computer and choose what each workspace searches.", scope: "workspace", editor: "fields", order: 35 },
   {
     id: "statuses",
     label: "Statuses",
@@ -202,7 +202,7 @@ const definitions: SettingDefinition[] = [
     key: "integrations.mapping", category: "integrations", scope: "workspace",
     schema: { type: "string", validate: mappingProblem, patternHint: "a JSON list of mapped repositories, teams or projects" },
     default: "", version: 1, sensitivity: "normal",
-    ui: { label: "Mapped repositories and projects", description: "The GitHub repositories and Linear teams or projects this workspace searches and links. Shared with the workspace; each machine reads them through its own connections.", control: "text", order: 5 },
+    ui: { label: "Mapped repositories and projects", description: "The GitHub repositories, Linear teams or projects and ClickUp spaces or lists this workspace searches and links. Shared with the workspace; each machine reads them through its own connections.", control: "text", order: 5 },
   },
   {
     key: "kinds.default",

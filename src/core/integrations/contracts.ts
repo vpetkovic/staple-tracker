@@ -37,6 +37,9 @@ export interface ExternalItem extends ResolvedExternalItem {
   fetchedAt: string;
   /** Linear only, when the issue belongs to a project: the project, for project-mapped scopes. */
   projectId?: string;
+  /** ClickUp only: the task's space, and its home list followed by any other lists it is in. */
+  spaceId?: string;
+  listIds?: string[];
 }
 
 export interface ExternalContainer {
@@ -45,8 +48,8 @@ export interface ExternalContainer {
   url: string;
 }
 
-/** What a container is to its provider: a GitHub repository, a Linear team or a Linear project. */
-export type ContainerKind = "repository" | "team" | "project";
+/** What a container is to its provider: a GitHub repository, a Linear team or project, a ClickUp space or list. */
+export type ContainerKind = "repository" | "team" | "project" | "space" | "list";
 
 export interface ExternalPage<T> {
   items: T[];
@@ -63,6 +66,9 @@ export interface ExternalSearch {
   containerId?: string;
   /** Linear only: issues in this project, whatever their team. Exclusive with containerId. */
   projectId?: string;
+  /** ClickUp only: tasks in this space or this list. Exclusive with each other and containerId. */
+  spaceId?: string;
+  listId?: string;
   cursor?: string;
 }
 
@@ -72,7 +78,7 @@ export type ExternalLocator = { url: string } | { key: string; containerId: stri
 /** The account a provider actually authenticated, when known. A display login, never a credential. */
 export interface ConnectionIdentity {
   login: string;
-  /** Linear: the organization the key belongs to, for naming the connection. */
+  /** Linear: the organization the key belongs to; ClickUp: the workspace. For naming the connection. */
   organization?: string;
 }
 
@@ -136,6 +142,8 @@ export interface IntegrationAdapter {
   readContainer(id: string, kind: ContainerKind, options?: ProviderReadOptions): Promise<ExternalContainer | null>;
   /** Linear projects. Absent for providers without projects. */
   listProjects?(cursor?: string, options?: ProviderReadOptions): Promise<ExternalPage<ExternalContainer>>;
+  /** ClickUp lists. Absent for providers without lists. */
+  listLists?(cursor?: string, options?: ProviderReadOptions): Promise<ExternalPage<ExternalContainer>>;
   searchIssues(query: ExternalSearch, options?: ProviderReadOptions): Promise<ExternalPage<ExternalItem>>;
   /** Exact lookup for issue or PR references; null is an unknown/unavailable reference. */
   resolve(locator: ExternalLocator, options?: ProviderReadOptions): Promise<ResolvedExternalItem | null>;

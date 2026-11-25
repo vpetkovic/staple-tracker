@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { uniqueHits, type SearchHit } from "./model";
+import type { ExternalLink } from "../../../../core/integrations/link-store";
+import { groupLinks, uniqueHits, type SearchHit } from "./model";
 const hit: SearchHit = {
   item: {
     ref: {
@@ -31,5 +32,13 @@ describe("provider search presentation", () => {
       "old/repo#1",
       "old/repo#1",
     ]);
+  });
+});
+
+describe("link groups", () => {
+  it("groups a ClickUp workspace's tasks under ClickUp, never under one task's id", () => {
+    const link = (id: string, key: string) =>
+      ({ id, resource: { ref: { providerId: "clickup", host: "app.clickup.com", scopeId: "9012345", containerId: "9012345", id, kind: "issue" }, key } }) as unknown as ExternalLink;
+    expect(groupLinks([link("86b", "86b"), link("86a", "DEV-7")]).map((g) => [g.label, g.links.length])).toEqual([["ClickUp", 2]]);
   });
 });

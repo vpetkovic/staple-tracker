@@ -78,7 +78,7 @@ export function LinkGroups({
             <h3 className="flex h-7 min-w-0 items-center gap-2 text-label">
               <ProviderMark providerId={first.ref.providerId} className="text-muted-foreground" />
               <span className="min-w-0 truncate font-medium text-foreground">{containerLabel(first)}</span>
-              {first.ref.providerId !== "github" ? (
+              {first.ref.providerId !== "github" && containerLabel(first) !== providerName(first.ref.providerId) ? (
                 <span className="shrink-0 text-text-tertiary">{providerName(first.ref.providerId)}</span>
               ) : null}
               <span className="ml-auto shrink-0 pl-2 font-normal text-text-tertiary">{countWords(group.links)}</span>

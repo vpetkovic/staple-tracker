@@ -222,6 +222,32 @@ describe("link dialog refinements", () => {
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>\s*Show more/);
     expect(html).toContain('aria-busy="true"');
   });
+  it("shows a ClickUp task under its mapped space with its key, native status and context, opened in ClickUp", () => {
+    const space: MappingTarget = {
+      key: "app.clickup.com/9012345/space/90170001", providerId: "clickup", host: "app.clickup.com", scopeId: "9012345", kind: "space",
+      containerId: "90170001", name: "Engineering", url: null, connectionId: "cu",
+    };
+    const task: SearchHit & { targetKey: string } = {
+      item: {
+        ref: { providerId: "clickup", host: "app.clickup.com", scopeId: "9012345", containerId: "9012345", id: "86abc123", kind: "issue" },
+        key: "DEV-42", url: "https://app.clickup.com/t/86abc123", title: "Ship the importer",
+        body: "Source body\n\n---\n\n**ClickUp**\n\n- Status: in review (3 of 5 in this list: to do → in progress → in review → done → closed)\n- Waiting on: 86wait01",
+        status: { id: "sc1", name: "in review" }, fetchedAt: new Date().toISOString(),
+      },
+      associations: [],
+      targetKey: space.key,
+    };
+    const html = render(state({ scope: { mode: "workspace", workspaces: ["staple"], targets: [space] }, groups: groupResults([{ cached: [], remote: [task] }], [space]), selected: keyOf(task) }, [task]));
+    const words = text(html);
+    expect(words).toContain("Engineering");
+    expect(words).toContain("DEV-42");
+    expect(words).toContain("In review");
+    expect(words).toContain("Open in ClickUp");
+    expect(words).toContain("Waiting on: 86wait01");
+    expect(html).toContain('href="https://app.clickup.com/t/86abc123"');
+    expect(html).toContain('data-provider="clickup"');
+    expect(html).not.toContain("**ClickUp**");
+  });
   it("offers Create only when there is a workspace to create the task in", () => {
     expect(text(render(state({ canCreate: false })))).not.toContain("Create task from this");
     expect(text(render(state({ canCreate: true })))).toContain("Create task from this");

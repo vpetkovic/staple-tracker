@@ -78,6 +78,12 @@ export class IntegrationReader {
     return { ...page, items: page.items.map(p => ({ ...p, url: resourceUrl(p.url, this.adapter.scope.host) })) };
   }
 
+  async listLists(cursor?: string, options?: ProviderReadOptions) {
+    if (!this.adapter.listLists) throw new StapleError("protocol_unsupported", "This connection has no lists");
+    const page = await this.adapter.listLists(cursor, options);
+    return { ...page, items: page.items.map(l => ({ ...l, url: resourceUrl(l.url, this.adapter.scope.host) })) };
+  }
+
   async readContainer(id: string, kind: ContainerKind, options?: ProviderReadOptions) {
     const container = await this.adapter.readContainer(required(id), kind, options);
     return container && { ...container, url: resourceUrl(container.url, this.adapter.scope.host) };

@@ -10,6 +10,7 @@ import { IntegrationConnections, type ProviderConnection } from "./connections.j
 import { present, resolveScope, storedMapping, TargetNames, writeMapping, type MappingTarget, type SearchScope, type WorkspaceHandle } from "./mapping.js";
 import { MAPPING_LIMIT, targetKey, type StoredTarget } from "./mapping-format.js";
 import { ExternalWork } from "./external-work.js";
+import { ClickUpApiAdapter } from "./clickup-api.js";
 import { LinearApiAdapter } from "./linear-api.js";
 import { externalResourceId, type ExternalResource } from "./link-store.js";
 import { IntegrationReader } from "./provider.js";
@@ -19,11 +20,11 @@ export const INTEGRATION_WRITE_ACTIONS = ["link","create","unlink","refresh","st
 export const INTEGRATION_CONFIG_ACTIONS = ["configure","remove"] as const;
 export const integrationCommandSchema = z.object({
   action:z.enum([...INTEGRATION_READ_ACTIONS,...INTEGRATION_WRITE_ACTIONS,...INTEGRATION_CONFIG_ACTIONS]),
-  providerId:z.enum(["github","linear"]).optional(),scopeId:z.string().uuid().optional(),credentialEnv:z.string().max(128).optional(),key:z.string().max(128).optional(),
+  providerId:z.enum(["github","linear","clickup"]).optional(),scopeId:z.string().max(128).optional(),credentialEnv:z.string().max(128).optional(),key:z.string().max(128).optional(),
   connectionId:z.string().max(80).optional(),host:z.string().max(255).optional(),account:z.string().max(80).optional(),
   url:z.string().max(8192).optional(),resourceId:z.string().max(128).optional(),ref:z.string().max(512).optional(),
   text:z.string().max(2048).optional(),kind:z.enum(["issue","pull_request"]).optional(),containerId:z.string().max(512).optional(),cursor:z.string().max(8192).optional(),
-  confirmed:z.boolean().optional(),force:z.boolean().optional(),allWorkspaces:z.boolean().optional(),containerKind:z.enum(["repository","team","project"]).optional(),
+  confirmed:z.boolean().optional(),force:z.boolean().optional(),allWorkspaces:z.boolean().optional(),containerKind:z.enum(["repository","team","project","space","list"]).optional(),
   targetKey:z.string().max(300).optional(),containerKey:z.string().max(300).optional(),additionalWork:z.boolean().optional(),requestKey:z.string().max(512).optional(),title:z.string().max(8192).optional(),
   parentResourceId:z.string().max(128).nullable().optional(),position:z.number().int().nonnegative().safe().optional(),enabled:z.boolean().optional(),actor:z.string().max(512).optional(),
 }).strict();
@@ -32,7 +33,10 @@ export type AdapterFactory = (connection:ProviderConnection)=>IntegrationAdapter
 const DEFAULT_FACTORIES: ReadonlyMap<string,AdapterFactory> = new Map<string,AdapterFactory>([
   ["github:cli",c=> { if(c.providerId!=="github") throw new StapleError("validation","Expected a GitHub connection"); return new GitHubCliAdapter(c); }],
   ["linear:api",c=> { if(c.providerId!=="linear") throw new StapleError("validation","Expected a Linear connection"); return new LinearApiAdapter(c); }],
+  ["clickup:api",c=> { if(c.providerId!=="clickup") throw new StapleError("validation","Expected a ClickUp connection"); return new ClickUpApiAdapter(c); }],
 ]);
+/** What each provider's connection lists and maps; the first is what an unqualified request means. */
+const CONTAINER_KINDS:Record<ProviderConnection["providerId"],ContainerKind[]>={github:["repository"],linear:["team","project"],clickup:["space","list"]};
 
 const DETECTION_RUNNER=createGhRunner({timeoutMs:10_000});
 
@@ -100,7 +104,7 @@ export class IntegrationOperations {
   }
   private select(c:IntegrationCommand, host:string,providerId?:string,scopeId?:string):string {
     if (c.connectionId) return c.connectionId;
-    const choices=this.connections.list().filter(x=>x.host===host && (!providerId || x.providerId===providerId) && (x.providerId!=="linear" || !scopeId || x.scopeId===scopeId));
+    const choices=this.connections.list().filter(x=>x.host===host && (!providerId || x.providerId===providerId) && (x.providerId==="github" || !scopeId || x.scopeId===scopeId));
     if (choices.length!==1) throw new StapleError("unavailable",choices.length ? "Choose which provider connection to use" : "Cached-only session. Configure a connection for live reads in Settings > Integrations.");
     return choices[0]!.id;
   }
@@ -110,9 +114,10 @@ export class IntegrationOperations {
     if ("id" in item) return item;
     const scope=this.scope(c);
     if (scope.mode==="none" || scope.targets.some(t=>contains(t,item))) return item;
-    const target=outsideTarget(item,this.connections.list());
+    // A ClickUp item knows its space only by id; name it for the person when a connection can.
+    const [target]=await this.named([outsideTarget(item,this.connections.list())]);
     const names=scope.targets.map(t=>t.name ?? t.key).join(", ");
-    throw new StapleError("validation",`${item.key} is outside ${scope.mode==="workspace" ? `this workspace's mapping` : "the mapped repositories and projects"} (${names}). Map ${target.name ?? target.key} first.`,
+    throw new StapleError("validation",`${item.key} is outside ${scope.mode==="workspace" ? `this workspace's mapping` : "the mapped repositories and projects"} (${names}). Map ${target!.name ?? target!.key} first.`,
       {reason:"outside_scope",target});
   }
   private async resolveSource(c:IntegrationCommand):Promise<ExternalResource|ExternalItem|ResolvedExternalItem> {
@@ -174,6 +179,8 @@ export class IntegrationOperations {
       case "configure":
         if(c.providerId === "linear") return this.connections.save({id:c.connectionId,providerId:"linear",mode:"api",host:"linear.app",
           account:need(c.account,"expected Linear user UUID"),scopeId:need(c.scopeId,"Linear organization UUID"),credentialEnv:need(c.credentialEnv,"credential environment variable name")});
+        if(c.providerId === "clickup") return this.connections.save({id:c.connectionId,providerId:"clickup",mode:"api",host:"app.clickup.com",
+          scopeId:need(c.scopeId,"ClickUp workspace id"),credentialEnv:need(c.credentialEnv,"credential environment variable name")});
         return this.connections.save({id:c.connectionId,providerId:"github",mode:"cli",host:need(c.host,"GitHub host").toLowerCase(),account:need(c.account,"expected gh account")});
       case "remove": this.connections.remove(need(c.connectionId,"connection")); return {removed:true};
       case "health": return {health:await this.health(c.connectionId,c.force===true),pollIntervalSeconds:HEALTH_POLL_INTERVAL_SECONDS};
@@ -194,7 +201,7 @@ export class IntegrationOperations {
       case "map": {
         const connection=this.connections.resolve(need(c.connectionId,"connection"));
         if (!connection) throw new StapleError("not_found","Configure this provider connection on the machine running Staple");
-        const kind:ContainerKind=c.containerKind ?? (connection.providerId==="github" ? "repository":"team");
+        const kind=containerKind(connection,c.containerKind);
         const container=await this.reader(connection.id).readContainer(need(c.containerId,"container"),kind);
         if (!container) throw new StapleError("not_found","That repository, team or project is not accessible through this connection");
         const target=storedTarget(connection,kind,container);
@@ -273,7 +280,8 @@ export class IntegrationOperations {
         const reader=readers.get(connection.id) ?? this.readerFor(connection);
         readers.set(connection.id,reader);
         const page:ExternalPage<ExternalItem>=await reader.search(kind,{text,cursor:parts?.[target.key],
-          ...(target.kind==="project" ? {projectId:target.containerId} : {containerId:target.containerId})});
+          ...(target.kind==="project" ? {projectId:target.containerId} : target.kind==="space" ? {spaceId:target.containerId}
+            : target.kind==="list" ? {listId:target.containerId} : {containerId:target.containerId})});
         if (this.caches.health.peek(this.healthKey(connection))?.state!=="ready") this.caches.health.delete(this.healthKey(connection));
         return {target,page};
       } catch (error) {
@@ -296,10 +304,8 @@ export class IntegrationOperations {
     const connection=this.connections.resolve(need(c.connectionId,"connection"));
     if (!connection) throw new StapleError("not_found","Configure this provider connection on the machine running Staple");
     const reader=this.reader(connection.id);
-    const kind:ContainerKind=c.containerKind ?? (connection.providerId==="github" ? "repository":"team");
-    if (kind==="project" && connection.providerId!=="linear") throw new StapleError("validation","Only Linear has projects");
-    if (kind!=="project" && kind!==(connection.providerId==="github" ? "repository":"team")) throw new StapleError("validation","This connection lists repositories or teams, not that");
-    const page=(cursor?:string)=>kind==="project" ? reader.listProjects(cursor) : reader.listContainers(cursor);
+    const kind=containerKind(connection,c.containerKind);
+    const page=(cursor?:string)=>kind==="project" ? reader.listProjects(cursor) : kind==="list" ? reader.listLists(cursor) : reader.listContainers(cursor);
     const needle=c.text?.trim().toLowerCase() ?? "";
     let cursor=c.cursor, items:ExternalContainer[]=[], scanned=0;
     do {
@@ -342,7 +348,17 @@ function storedSource(resource: ExternalResource): ExternalResource | (ResolvedE
     : resource;
 }
 
+const PLURAL:Record<ContainerKind,string>={repository:"repositories",team:"teams",project:"projects",space:"spaces",list:"lists"};
+/** The kind a request names, refused when this provider has no such thing. */
+function containerKind(connection:ProviderConnection,requested:ContainerKind|undefined):ContainerKind {
+  const kinds=CONTAINER_KINDS[connection.providerId];
+  if (requested===undefined) return kinds[0]!;
+  if (!kinds.includes(requested)) throw new StapleError("validation",`This connection lists ${kinds.map(k=>PLURAL[k]).join(" or ")}, not that`);
+  return requested;
+}
+
 function storedTarget(connection:ProviderConnection,kind:ContainerKind,container:ExternalContainer):StoredTarget {
+  if (connection.providerId==="clickup") return {providerId:"clickup",host:"app.clickup.com",scopeId:connection.scopeId,kind:kind==="list" ? "list":"space",containerId:container.id,name:container.name,url:container.url};
   return connection.providerId==="github"
     ? {providerId:"github",host:connection.host,scopeId:"host",kind:"repository",containerId:container.id,name:container.name,url:container.url}
     : {providerId:"linear",host:"linear.app",scopeId:connection.scopeId,kind:kind==="project" ? "project":"team",containerId:container.id.toLowerCase(),name:container.name,url:container.url};
@@ -352,13 +368,17 @@ function storedTarget(connection:ProviderConnection,kind:ContainerKind,container
 function contains(target:MappingTarget,item:ResolvedExternalItem):boolean {
   const ref=item.ref;
   if (ref.providerId!==target.providerId || ref.host!==target.host || ref.scopeId!==target.scopeId) return false;
+  if (target.kind==="space") return (item as ExternalItem).spaceId===target.containerId;
+  if (target.kind==="list") return (item as ExternalItem).listIds?.includes(target.containerId)===true;
   return target.kind==="project" ? (item as ExternalItem).projectId===target.containerId : ref.containerId===target.containerId;
 }
 
-/** What to offer mapping when an item is outside scope: its repository or team. */
+/** What to offer mapping when an item is outside scope: its repository, team or ClickUp space. */
 function outsideTarget(item:ResolvedExternalItem,connections:ProviderConnection[]):MappingTarget {
   const r=item.ref;
-  const stored:StoredTarget=r.providerId==="github"
+  const stored:StoredTarget=r.providerId==="clickup"
+    ? {providerId:"clickup",host:"app.clickup.com",scopeId:r.scopeId,kind:"space",containerId:(item as ExternalItem).spaceId ?? "",name:null,url:null}
+    : r.providerId==="github"
     ? {providerId:"github",host:r.host,scopeId:"host",kind:"repository",containerId:r.containerId,name:item.key.replace(/#[0-9]+$/,""),url:item.url.replace(/\/(issues|pull)\/[0-9]+$/,"")}
     : {providerId:"linear",host:"linear.app",scopeId:r.scopeId,kind:"team",containerId:r.containerId,name:item.key.replace(/-[0-9]+$/,""),url:null};
   return present(stored,connections);

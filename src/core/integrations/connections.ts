@@ -5,15 +5,16 @@ import { z } from "zod";
 import { writeFileAtomic } from "../../config/atomic.js";
 import { stapleHome } from "../../config/home.js";
 import { StapleError } from "../types.js";
+import { clickupConnectionSchema } from "./clickup-api.js";
 import { linearConnectionSchema } from "./linear-api.js";
 
 const githubConnectionSchema = z.object({
   id: z.string().regex(/^[A-Za-z0-9_-]{1,80}$/), providerId: z.literal("github"), mode: z.literal("cli"),
   host: z.string().regex(/^[a-z0-9][a-z0-9.-]*(?::[0-9]+)?$/i).max(255), account: z.string().regex(/^[A-Za-z0-9-]+$/).max(80),
 }).strict();
-export const connectionSchema = z.discriminatedUnion("providerId", [githubConnectionSchema, linearConnectionSchema]);
+export const connectionSchema = z.discriminatedUnion("providerId", [githubConnectionSchema, linearConnectionSchema, clickupConnectionSchema]);
 export type ProviderConnection = z.infer<typeof connectionSchema>;
-type ConnectionInput = (Omit<z.infer<typeof githubConnectionSchema>, "id"> | Omit<z.infer<typeof linearConnectionSchema>, "id">) & { id?: string };
+type ConnectionInput = (Omit<z.infer<typeof githubConnectionSchema>, "id"> | Omit<z.infer<typeof linearConnectionSchema>, "id"> | Omit<z.infer<typeof clickupConnectionSchema>, "id">) & { id?: string };
 const ALIAS = z.object({ id: z.string().regex(/^[A-Za-z0-9_-]{1,80}$/) }).strict();
 /** Directories #215–#226 wrote: one per workspace, named by a SHA-256 of its identity. */
 const LEGACY_DIRECTORY = /^[0-9a-f]{64}$/;
@@ -22,6 +23,7 @@ const LEGACY_DIRECTORY = /^[0-9a-f]{64}$/;
 function identity(c: ProviderConnection): string {
   return JSON.stringify(c.providerId === "linear"
     ? [c.providerId, c.host, c.account.toLowerCase(), c.scopeId, c.credentialEnv]
+    : c.providerId === "clickup" ? [c.providerId, c.host, c.scopeId, c.credentialEnv]
     : [c.providerId, c.host.toLowerCase(), c.account.toLowerCase()]);
 }
 
