@@ -450,15 +450,23 @@ repo. The MCP tools are \`list_statuses\`, \`list_kinds\`, \`update_statuses\` a
 
 ## Branch pointer
 
-The task says what; it does not say where. **At checkout, comment where the
-physical work lives** — branch, worktree path, and the base commit:
+The task says what; it does not say where. **At checkout, record the branch and
+the base commit on the ticket, and comment where the physical work lives** —
+branch, worktree path, and the base commit:
 
 \`\`\`bash
+staple branch ${ref} feat/${prefix.toLowerCase()}-42 --base a1b2c3d
 staple comment ${ref} "Branch pointer: worktree /path/to/wt on branch feat/${prefix.toLowerCase()}-42, base a1b2c3d."
 \`\`\`
 
 Without it, the next agent has a perfect description of the work and no idea
-which of six worktrees contains it.
+which of six worktrees contains it. With the branch recorded, the pull requests
+opened for it are found through the local \`gh\` and linked to the ticket by
+themselves (the web UI's poll, or \`staple branch ${ref} --discover\`); you do
+not link them by hand, though \`staple integrations link\` still works for one on
+another branch. \`staple branch ${ref}\` lists them with their state. A merged
+pull request does not finish the ticket: mark it done when its completion rules
+are met.
 
 ## Evidence is a file, not a document
 

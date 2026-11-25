@@ -1,5 +1,7 @@
 import { attentionList, dismissAttention } from "../core/attention.js";
-import { IntegrationOperations, INTEGRATION_READ_ACTIONS, INTEGRATION_WRITE_ACTIONS, INTEGRATION_CONFIG_ACTIONS } from "../core/integrations/operations.js";
+import { IntegrationOperations, INTEGRATION_READ_ACTIONS, INTEGRATION_WRITE_ACTIONS, INTEGRATION_CONFIG_ACTIONS, type AdapterFactory } from "../core/integrations/operations.js";
+import { DISCOVERY_ACTOR, discoveryRuns, rowPullRequests } from "../core/integrations/pr-discovery.js";
+import { ticketBranch } from "../core/ticket-branch.js";
 /**
  * staple ui — tiny local web server, alive only while you use the page.
  * Serves the single-page UI plus a JSON API over the workspace file(s).
@@ -184,6 +186,13 @@ interface UiOptions {
   token?: string;
   /** Tests only: the automatic-sync timing and transport. Production passes nothing. */
   autoSync?: Pick<SurfaceAutoSyncOptions, "sessionIntervalMs" | "sharedSessionIntervalMs" | "scheduler" | "now">;
+  /**
+   * Whether the page's poll also looks for the pull requests of each open ticket's branch
+   * (`integrations discover`, at most every two minutes per workspace). On unless false.
+   */
+  discoverPullRequests?: boolean;
+  /** Tests only: the provider adapters discovery reads through. Production uses the installed gh. */
+  discoveryFactories?: ReadonlyMap<string, AdapterFactory>;
 }
 
 interface StoreHandle {
@@ -936,6 +945,26 @@ export function startUiServer(options: UiOptions): UiHandle {
     };
   }
 
+  /**
+   * The pull requests of each open ticket's branch, looked for on the poll the page already
+   * runs: in the background, never awaited, at most once per poll interval per workspace and
+   * never twice at once (`discoveryRuns`). What it links changes the database, so the next
+   * fingerprint differs and the page refetches. A failure is the connection's health, which
+   * Settings shows; nothing here can fail the poll.
+   */
+  function schedulePullRequestDiscovery(h: StoreHandle): void {
+    discoveryRuns
+      .check(h.dbPath, async () => {
+        try {
+          await new IntegrationOperations(h.store, { workspaces: integrationWorkspaces, factories: options.discoveryFactories }).discover({ actor: DISCOVERY_ACTOR });
+        } catch {
+          // A closed store or an unexpected read: the next interval tries again.
+        }
+        return Date.now();
+      })
+      .catch(() => {});
+  }
+
   function fingerprint(): string {
     return allHandles()
       .map((h) => {
@@ -1092,6 +1121,8 @@ export function startUiServer(options: UiOptions): UiHandle {
       crossBlockers,
       claim: handle.store.claimActivity(context.issue.id),
       externalLinks: handle.store.externalLinks().list(context.issue.id),
+      // The branch the work lives on (`staple branch`), or the newest branch-pointer comment.
+      branch: ticketBranch(handle.store, context.issue.id),
       gate: handle.store.gate(context.issue.id),
       queuedBy: handle.store.queuedBy(context.issue.id),
       childrenQueued,
@@ -3966,6 +3997,7 @@ export function startUiServer(options: UiOptions): UiHandle {
       }
 
       if (url.pathname === "/api/poll") {
+        if (options.discoverPullRequests !== false) for (const h of allHandles()) schedulePullRequestDiscovery(h);
         json(res, 200, { fingerprint: fingerprint() });
         return;
       }
@@ -4000,6 +4032,8 @@ export function startUiServer(options: UiOptions): UiHandle {
            */
           const worklogs = h.store.worklogSummaryFor(ids);
           const externalSummaries = h.store.externalLinks().summaries();
+          // The row's pull request badge (PrBadge): every linked pull request, one query.
+          const pullRequests = h.store.externalLinks().pullRequests();
           /**
            * O6 (STA-138): what each row is waiting on, and what is waiting on it.
            *
@@ -4040,6 +4074,7 @@ export function startUiServer(options: UiOptions): UiHandle {
             // missing" — it never invents a fact it was not sent.
             worklog: worklogs.get(issue.id) ?? null,
             ...(externalSummaries[issue.id] ? {externalLinks:externalSummaries[issue.id]} : {}),
+            ...rowPullRequests(pullRequests.get(issue.id)),
             deps: {
               blockedBy: blockedBy.get(issue.id) ?? [],
               blocks: blocks.get(issue.id) ?? [],

@@ -1,8 +1,11 @@
 import { createHash } from "node:crypto";
 import type { WorkspaceStore } from "../store.js";
 import { StapleError, nowIso } from "../types.js";
-import type { ExternalItem, ExternalItemRef, ResolvedExternalItem } from "./contracts.js";
+import type { ExternalItem, ExternalItemRef, PullRequestChecks, PullRequestDetails, ResolvedExternalItem } from "./contracts.js";
 import { externalItemKey } from "./provider.js";
+
+/** The event an unlink records, so `integrations discover` never links the same pull request to the ticket again. */
+export const EXTERNAL_UNLINKED_EVENT = "external_unlinked";
 
 export interface ExternalResource extends ResolvedExternalItem {
   id: string;
@@ -16,6 +19,24 @@ export interface ExternalResource extends ResolvedExternalItem {
   /** ClickUp: where the task sat when last read on this machine, so a saved copy groups under its mapped space or list. */
   spaceId?: string;
   listIds?: string[];
+  /** A pull request read with its head on this machine: the branch, the commit and its checks. */
+  pullRequest?: PullRequestDetails;
+}
+
+/** A linked pull request as a row and the attention list read it: one per link, from the saved copy. */
+export interface LinkedPullRequest {
+  resourceId: string;
+  providerId: string;
+  key: string;
+  url: string;
+  /** The provider's number, from the key (`owner/repo#12` is 12); null when the key names none. */
+  number: number | null;
+  /** `draft`, `open`, `merged` or `closed` for GitHub; null when no state was read here or shared. */
+  state: string | null;
+  title: string | null;
+  checks: PullRequestChecks | null;
+  fetchedAt: string | null;
+  linkedAt: string;
 }
 
 export interface ExternalLink {
@@ -59,28 +80,45 @@ function hash(value: string) { return createHash("sha256").update(value).digest(
 export function resourceFromRow(row: ResourceRow): ExternalResource {
   return { id: row.id, ref: { providerId: row.provider_id, host: row.host, scopeId: row.scope_id, containerId: row.container_id, id: row.remote_id, kind: row.kind },
     key: row.display_key, url: row.url, title: row.title, body: row.body,
-    status: readStatus(row.status_json), ...readPlacement(row.status_json), fetchedAt: row.fetched_at, createdAt: row.created_at, updatedAt: row.updated_at, contextShared: row.context_shared === 1 };
+    status: readStatus(row.status_json), ...readExtras(row.status_json), fetchedAt: row.fetched_at, createdAt: row.created_at, updatedAt: row.updated_at, contextShared: row.context_shared === 1 };
 }
 
 /**
  * `status_json` holds the native state and, for a ClickUp task, the space and lists it sat in when
- * read. Placement stays with the saved copy on this machine: the wire carries only the state.
+ * read, and for a pull request read with its head, the head branch, commit and checks. Both stay
+ * with the saved copy on this machine: the wire carries only the state.
  */
-function statusJson(item: Pick<ExternalItem, "status" | "spaceId" | "listIds">): string | null {
+function statusJson(item: Pick<ExternalItem, "status" | "spaceId" | "listIds" | "pullRequest">): string | null {
   if (!item.status) return null;
   return JSON.stringify({ id: item.status.id, name: item.status.name,
-    ...(item.spaceId ? { spaceId: item.spaceId } : {}), ...(item.listIds?.length ? { listIds: item.listIds } : {}) });
+    ...(item.spaceId ? { spaceId: item.spaceId } : {}), ...(item.listIds?.length ? { listIds: item.listIds } : {}),
+    ...(item.pullRequest ? { pullRequest: item.pullRequest } : {}) });
 }
 function readStatus(json: string | null): ExternalItem["status"] {
   if (json === null) return null;
   const { id, name } = JSON.parse(json) as { id: string; name: string };
   return { id, name };
 }
-function readPlacement(json: string | null): Pick<ExternalResource, "spaceId" | "listIds"> {
+function readExtras(json: string | null): Pick<ExternalResource, "spaceId" | "listIds" | "pullRequest"> {
   if (json === null) return {};
-  const { spaceId, listIds } = JSON.parse(json) as { spaceId?: unknown; listIds?: unknown };
+  const { spaceId, listIds, pullRequest } = JSON.parse(json) as { spaceId?: unknown; listIds?: unknown; pullRequest?: unknown };
   return { ...(typeof spaceId === "string" ? { spaceId } : {}),
-    ...(Array.isArray(listIds) && listIds.every(l => typeof l === "string") ? { listIds: listIds as string[] } : {}) };
+    ...(Array.isArray(listIds) && listIds.every(l => typeof l === "string") ? { listIds: listIds as string[] } : {}),
+    ...(pullRequestDetails(pullRequest) ? { pullRequest: pullRequest as PullRequestDetails } : {}) };
+}
+const CHECK_STATES = new Set(["passing", "failing", "pending"]);
+/** Whether a value is well-formed pull request details, within their size limits. */
+function pullRequestDetails(value: unknown): value is PullRequestDetails {
+  if (!value || typeof value !== "object") return false;
+  const { headBranch, headSha, checks, createdAt } = value as Record<string, unknown>;
+  if (typeof headBranch !== "string" || !headBranch || headBranch.length > 255 || typeof headSha !== "string" || !/^[0-9a-f]{7,64}$/.test(headSha)) return false;
+  if (createdAt !== undefined && createdAt !== null && (typeof createdAt !== "string" || createdAt.length > 64)) return false;
+  if (checks === null) return true;
+  if (!checks || typeof checks !== "object") return false;
+  const { state, failing, completedAt } = checks as Record<string, unknown>;
+  return typeof state === "string" && CHECK_STATES.has(state) && Array.isArray(failing) && failing.length <= 10
+    && failing.every(name => typeof name === "string" && name.length <= 512)
+    && (completedAt === null || (typeof completedAt === "string" && completedAt.length <= 64));
 }
 
 /** Owns source context and association choices; never changes local execution fields. */
@@ -127,6 +165,9 @@ export class ExternalLinkStore {
       || (input.listIds !== undefined && (!Array.isArray(input.listIds) || input.listIds.length > 1000 || input.listIds.some(l => typeof l !== "string" || l.length > 64))))) {
       throw new StapleError("validation", "External placement exceeds its size limits");
     }
+    if (full && input.pullRequest !== undefined && (input.ref.kind !== "pull_request" || !pullRequestDetails(input.pullRequest))) {
+      throw new StapleError("validation", "Pull request details are malformed or exceed their size limits");
+    }
     return this.store.journaled(() => {
       const prior = this.find(input.ref);
       if (prior?.fetchedAt && (!full || prior.fetchedAt > fetchedAt!.toISOString())) return prior;
@@ -144,7 +185,12 @@ export class ExternalLinkStore {
         this.db.prepare(`INSERT INTO external_private_cache (resource_id,title,body,status_json,fetched_at) VALUES (?,?,?,?,?)
           ON CONFLICT(resource_id) DO UPDATE SET title=excluded.title,body=excluded.body,status_json=excluded.status_json,fetched_at=excluded.fetched_at`)
           .run(id,input.title,input.body,status,fetchedAt!.toISOString());
-        if (shared) this.db.prepare("UPDATE external_resources SET title=?,body=?,status_json=?,fetched_at=? WHERE id=?")
+        // A read that changed nothing others see leaves the shared copy as it was: a poll re-reading
+        // an unchanged pull request must not send a sync operation every time.
+        const sharedRow = shared ? this.db.prepare("SELECT title, body, status_json FROM external_resources WHERE id=?").get(id) as Pick<ResourceRow,"title"|"body"|"status_json"> : null;
+        const unchanged = sharedRow !== null && sharedRow.title === input.title && sharedRow.body === input.body
+          && JSON.stringify(readStatus(sharedRow.status_json)) === JSON.stringify(readStatus(status));
+        if (shared && !unchanged) this.db.prepare("UPDATE external_resources SET title=?,body=?,status_json=?,fetched_at=? WHERE id=?")
           .run(input.title,input.body,status,fetchedAt!.toISOString(),id);
       }
       const after = resourcePayload(this.db.prepare("SELECT * FROM external_resources WHERE id=?").get(id) as unknown as ResourceRow);
@@ -198,7 +244,12 @@ export class ExternalLinkStore {
     });
   }
 
-  unlink(ref: string, resourceId: string, actor: string): void {
+  /**
+   * Remove the association. `remember` records that a person did (an `external_unlinked` event),
+   * so discovery never links the same pull request to this ticket again by itself; `insertEvent`
+   * comes in from the caller because this module sits below the event log in the import graph.
+   */
+  unlink(ref: string, resourceId: string, actor: string, remember?: (issueId: string) => void): void {
     if (!actor.trim()) throw new StapleError("validation", "Unlinking needs an actor");
     this.store.journaled(() => {
       const issue = this.store.getIssue(ref);
@@ -207,8 +258,15 @@ export class ExternalLinkStore {
       if (Number(removed.changes) > 0) {
         this.store.journal.record({ entity: "externalLink", entityId: id, verb: "delete", actor });
         this.recordStack(issue.id, actor);
+        remember?.(issue.id);
       }
     });
+  }
+
+  /** Whether a person unlinked this resource from this ticket: discovery then leaves it unlinked. */
+  wasUnlinked(issueId: string, resourceId: string): boolean {
+    return this.db.prepare(`SELECT 1 AS hit FROM events WHERE kind = ? AND issue_id = ? AND json_extract(payload, '$.resourceId') = ? LIMIT 1`)
+      .get(EXTERNAL_UNLINKED_EVENT, issueId, resourceId) !== undefined;
   }
 
   /** Two bounded local queries for the entire list; never read provider context per row. */
@@ -232,6 +290,29 @@ export class ExternalLinkStore {
       id:row.id,providerId:row.provider_id,host:row.host,containerId:row.container_id,key:row.display_key,url:row.url,title:row.title,
       status:readStatus(row.status_json),
     });
+    return result;
+  }
+
+  /**
+   * Every linked pull request per issue, from the saved copy this machine reads (its own, or a
+   * newer shared one). One query for the whole workspace, newest link last.
+   */
+  pullRequests(): Map<string, LinkedPullRequest[]> {
+    const rows = this.db.prepare(`SELECT l.issue_id,l.created_at AS linked_at,r.id,r.provider_id,r.display_key,r.url,
+        CASE WHEN p.fetched_at IS NOT NULL AND (r.fetched_at IS NULL OR p.fetched_at>=r.fetched_at) THEN p.title ELSE r.title END AS title,
+        CASE WHEN p.fetched_at IS NOT NULL AND (r.fetched_at IS NULL OR p.fetched_at>=r.fetched_at) THEN p.status_json ELSE r.status_json END AS status_json,
+        CASE WHEN p.fetched_at IS NOT NULL AND (r.fetched_at IS NULL OR p.fetched_at>=r.fetched_at) THEN p.fetched_at ELSE r.fetched_at END AS fetched_at
+      FROM external_links l JOIN external_resources r ON r.id=l.resource_id LEFT JOIN external_private_cache p ON p.resource_id=r.id
+      WHERE r.kind='pull_request' ORDER BY l.issue_id,l.position,l.created_at,l.rowid`).all() as Array<{issue_id:string;linked_at:string;id:string;provider_id:string;display_key:string;url:string;title:string|null;status_json:string|null;fetched_at:string|null}>;
+    const result = new Map<string, LinkedPullRequest[]>();
+    for (const row of rows) {
+      const number = Number(/#([1-9][0-9]*)$/.exec(row.display_key)?.[1]);
+      const list = result.get(row.issue_id) ?? [];
+      list.push({ resourceId: row.id, providerId: row.provider_id, key: row.display_key, url: row.url,
+        number: Number.isSafeInteger(number) ? number : null, state: readStatus(row.status_json)?.id ?? null, title: row.title,
+        checks: readExtras(row.status_json).pullRequest?.checks ?? null, fetchedAt: row.fetched_at, linkedAt: row.linked_at });
+      result.set(row.issue_id, list);
+    }
     return result;
   }
 

@@ -249,6 +249,8 @@ describe("read shapes", () => {
     expect(body).toEqual({
       workspace: WS,
       externalLinks: [],
+      // The branch the work lives on (`staple branch`); none recorded and no pointer comment.
+      branch: null,
       issue: issueGolden({
         identifier: "CON-1",
         title: "Contract root task",

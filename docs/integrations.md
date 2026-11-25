@@ -55,6 +55,43 @@ If a task for it may already exist, Staple shows the matches and asks before cre
 Creation never adds the task to the pickup queue. Pull requests attach to existing tasks as
 references.
 
+## Pull requests for a ticket's branch
+
+A ticket records the branch its work lives on and the commit that branch was cut from:
+`staple branch ABC-12 feat/abc-12 --base 3f2a1bc` (MCP `set_branch`), at checkout. A ticket
+worked before this existed is read from its newest `Branch pointer: ... branch <name>, base
+<sha>` comment while the field is empty.
+
+The pull requests opened for that branch then link themselves. While the web UI is open, its
+poll asks the local `gh` every two minutes, per workspace, for the most recently updated pull
+requests of each GitHub repository mapped to the workspace (one request per repository), and
+links every one whose head is an open ticket's branch in that repository and that was opened
+after the ticket was filed (an older pull request on a reused name such as `fix/typo` is
+somebody else's work). A pull request you unlink stays unlinked. A replaced pull
+request and its successor are both linked; a stacked one on another branch is linked by hand
+(**Link pull request**, `staple integrations link`) and kept current the same way, with
+**Stacked on** to draw the stack. For an open or draft pull request it also reads the checks on
+the head commit, and it reads every open ticket's open and draft linked pull requests again,
+branch or not, so a failing check clears once it passes. A repository the account cannot read is
+reported and the others are still read. `staple branch ABC-12 --discover`, `staple integrations discover` and
+`integration_write` `discover` run the same lookup on demand.
+
+It only reads. It never unlinks, never writes to GitHub, and never changes a ticket's status:
+
+- the task row's pull request badge draws every linked pull request, draft, open, merged and
+  closed each with its own glyph, and the detail's **Pull requests** row lists them all;
+- a merged pull request puts **Mark done** beside a line saying so, under the status, and
+  `staple branch` prints the `staple done` command; finishing stays your call;
+- a failing check on an open or draft pull request of an open ticket is a row on the
+  attention list (**Pull requests with failing checks**) until a later read sees the checks
+  pass, or the pull request merges or closes.
+
+A `gh` that is not signed in, a connection in another failing state, or a workspace with no
+GitHub repository mapped finds nothing: the answer names the connection's state and what to do,
+and the connection's status in Settings shows the same. A repository outside the workspace's
+mapping is never read, and a branch of the same name in a fork does not count. Check results are
+GitHub check runs (`gh api .../check-runs`); legacy commit statuses are not read.
+
 ## Connect Linear
 
 Create a personal API key in Linear's **Settings → Security & access** with read access to the
@@ -283,6 +320,10 @@ staple integrations search --ws my-workspace --text login --json
 staple integrations search --ws my-workspace --all-workspaces --text login --json
 staple integrations preview --ws my-workspace --url https://github.com/owner/repo/issues/42 --json
 staple integrations link --ws my-workspace --ref ABC-12 --url https://github.com/owner/repo/issues/42 --confirmed --json
+
+# The pull requests whose head is each open ticket's branch (or one ticket's), linked.
+staple integrations discover --ws my-workspace --json
+staple integrations discover --ws my-workspace --ref ABC-12 --json
 ```
 
 A workspace with a mapping searches and links only its mapped repositories, teams, projects, spaces and lists. A

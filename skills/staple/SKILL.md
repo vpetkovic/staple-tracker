@@ -55,7 +55,8 @@ does not authorize claiming work. Do not fetch a whole workspace tree for one ti
 2. For queue pickup, use `next_task` and respect its order. Read the candidate's
    full context, blockers, instructions and existing worklog before claiming it
    once with `checkout_task`. A named task still has to satisfy the claim guards.
-3. Record the branch, checkout path and base commit in a comment. Store the plan
+3. Record the branch and base commit on the ticket with `set_branch` (CLI `staple
+   branch <ref> <name> --base <sha>`), and the checkout path in a comment. Store the plan
    and relevant context as keyed documents using `put_document`. Include the
    material needed to resume the work, rather than only pointing to a past chat.
 4. Comment at meaningful milestones and keep a `worklog` document current with
@@ -104,7 +105,13 @@ Staple can link a ticket to a GitHub issue or pull request, a Linear issue, an A
 item or a ClickUp task and keep a read-only copy of its title and state beside the ticket. It never writes to the
 provider, and a link never changes the ticket's status.
 
-- When you open a pull request for a ticket, or a ticket exists because of an issue
+- A pull request opened from the ticket's recorded branch links itself: the web UI's
+  poll, `integration_write` with `action: "discover"`, or `staple branch <ref>
+  --discover` find it through the local `gh` in the mapped repositories. `set_branch`
+  and `staple branch <ref>` list every linked pull request with its state (draft,
+  open, merged, closed) and checks. A merged one never finishes the ticket; a failing
+  check is on the person's attention list.
+- For a pull request on another branch, or a ticket that exists because of an issue
   the person named, link it: `integration_write` with `action: "link"`, the ticket
   `ref`, the exact `url` and `confirmed: true`. Read the ticket first; `confirmed`
   states that you checked the target.

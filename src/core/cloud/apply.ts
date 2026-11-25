@@ -165,15 +165,19 @@ export const ISSUE_FIELDS: Record<string, Column> = {
   planRunMode: col("plan_run_mode"),
   // Delivered outside the tracker: the person's mark (migration 021, design/plan.md).
   planDeliveredOn: col("plan_delivered_on"),
+  // The branch the work lives on and the commit it was cut from (migration 024, ticket-branch.ts).
+  branch: col("branch"),
+  baseCommit: col("base_commit"),
 };
 
 /**
- * The plan fields, left out of an issue's `create` while they are null. They are null on
- * every issue that is not an idea or a horizon, so a task's create carries exactly the
- * fields it carried before the plan layer existed, and an absent key on a create reads as
- * null on the receiver, which is the value the column defaults to.
+ * The fields left out of an issue's `create` while they are null: the plan fields, null on
+ * every issue that is not an idea or a horizon, and the ticket branch, null until someone
+ * records one. A task's create carries exactly the fields it carried before either existed,
+ * and an absent key on a create reads as null on the receiver, which is the value the column
+ * defaults to.
  */
-export const PLAN_ISSUE_FIELDS: ReadonlySet<string> = new Set([
+export const SPARSE_ISSUE_FIELDS: ReadonlySet<string> = new Set([
   "planMaturity",
   "planHorizonId",
   "planStart",
@@ -183,6 +187,8 @@ export const PLAN_ISSUE_FIELDS: ReadonlySet<string> = new Set([
   "planRank",
   "planRunMode",
   "planDeliveredOn",
+  "branch",
+  "baseCommit",
 ]);
 
 export const COMMENT_FIELDS: Record<string, Column> = {
@@ -317,7 +323,7 @@ export function payloadFromRow(
   const payload: Record<string, unknown> = {};
   for (const [key, mapped] of Object.entries(fields)) {
     if (!(mapped.column in row)) continue;
-    if (table === "issues" && PLAN_ISSUE_FIELDS.has(key) && row[mapped.column] === null) continue;
+    if (table === "issues" && SPARSE_ISSUE_FIELDS.has(key) && row[mapped.column] === null) continue;
     payload[key] = decodeColumn(row[mapped.column], mapped.encoding);
   }
   return payload;

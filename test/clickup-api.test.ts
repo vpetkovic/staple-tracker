@@ -267,7 +267,7 @@ describe("read-only ClickUp API adapter", () => {
   it("refuses an invalid connection and has no pull requests", () => {
     expect(() => new ClickUpApiAdapter({ ...config, scopeId: "acme" })).toThrow();
     expect(() => new ClickUpApiAdapter({ ...config, credentialEnv: "pk_secret" })).toThrow();
-    expect(new IntegrationReader(new ClickUpApiAdapter(config)).capabilities).toEqual({ readPullRequests: false, searchPullRequests: false });
+    expect(new IntegrationReader(new ClickUpApiAdapter(config)).capabilities).toEqual({ readPullRequests: false, searchPullRequests: false, discoverPullRequests: false });
   });
 
   it("a task URL or typed id from another workspace the token can see is not a fault in this connection", async () => {

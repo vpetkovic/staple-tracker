@@ -31,6 +31,7 @@ import { readWorkspaceManifest } from "./core/repo-identity.js";
 import { SurfaceAutoSync } from "./core/cloud/auto-triggers.js";
 import { VIEWS, RESOURCE_MIME_TYPE, linkToolView, readViewHtml, viewToolMeta, viewUri } from "./mcp-views.js";
 import { ticketCard, ticketCardText, type TicketCard } from "./mcp-ticket-card.js";
+import { setTicketBranch } from "./core/ticket-branch.js";
 import { DECISION_VIEW_IDS, approvalComment, configuredHumanName, personFor, sendBackComment } from "./mcp-view-actions.js";
 import { queueLanes, queueText, type QueueLanes } from "./mcp-queue.js";
 import { ATTENTION_KINDS, attentionList, attentionText, hubAttentionSources } from "./core/attention.js";
@@ -1339,7 +1340,7 @@ for (const spec of [
   { name: "integration_read", actions: INTEGRATION_READ_ACTIONS, readOnly: true,
     description: "Read local provider connections with their last known health and the gh accounts this machine is already signed in to (detected), check health (cached for pollIntervalSeconds; force=true probes now; a failure is a state, not an error), discover repositories, search provider issues/PRs, resolve exact URLs, preview migration matches, list links or get batched counts. Search never creates execution work. Without a connection, cached context remains readable. Pass connectionId for live reads." },
   { name: "integration_write", actions: INTEGRATION_WRITE_ACTIONS, readOnly: false,
-    description: "Link or unlink provider issues and PR references, refresh cached context, create local work from an issue with a requestKey, explicitly share source context, or set an explicit PR stack. Linking needs ref and confirmed=true; create requires additionalWork=true when matches already exist. No remote writes or PR operations." },
+    description: "Link or unlink provider issues and PR references, refresh cached context, create local work from an issue with a requestKey, explicitly share source context, set an explicit PR stack, or discover: find the pull requests whose head is each open ticket's branch (or ref's; see set_branch) in the GitHub repositories mapped to the workspace, link them, and read the tickets' open linked PRs again for state and checks. Discover never changes a ticket's status, and a connection that is not working is reported in failures, not thrown. Linking needs ref and confirmed=true; create requires additionalWork=true when matches already exist. No remote writes or PR operations." },
   { name: "configure_integration", actions: INTEGRATION_CONFIG_ACTIONS, readOnly: false,
     description: "Configure or remove a machine-local integration. GitHub uses host/account and existing gh authentication. Linear uses providerId linear, account user UUID, scopeId organization UUID, and credentialEnv naming a server-side personal API key environment variable. Azure DevOps uses providerId azure_devops, organization (the dev.azure.com/<organization> name, or an Azure DevOps Server collection path with host set to the Server host) and credentialEnv naming a server-side personal access token variable; account and scopeId are read from the token when omitted, and integration_read action organizations lists the organizations or collections the token reaches. ClickUp uses providerId clickup, scopeId the numeric workspace id, and credentialEnv naming a server-side personal API token environment variable; the token's user is read and bound, and an optional account (expected user id) refuses any other. connectionId edits a binding. Never pass secret values." },
 ] as const) {
@@ -1896,6 +1897,66 @@ server.registerTool(
     run(() => {
       const result = storeFor(ws).setEstimate(ref, estimate_seconds, requireActor(actor));
       return { ...result.issue, estimateChange: { from: result.from, to: result.to, changed: result.changed } };
+    }),
+);
+
+/**
+ * The branch a ticket is worked on (core/ticket-branch.ts). Like set_estimate, an absolute
+ * set: the identical repeat answers changed: false and writes nothing.
+ */
+const linkedPullRequestShape = z.object({
+  resourceId: z.string(),
+  providerId: z.string(),
+  key: z.string().describe("owner/repo#12"),
+  url: z.string(),
+  number: z.number().nullable(),
+  state: z.string().nullable().describe("draft, open, merged or closed; null when no state was read on this machine or shared"),
+  title: z.string().nullable(),
+  checks: z
+    .object({ state: z.enum(["passing", "failing", "pending"]), failing: z.array(z.string()), completedAt: z.string().nullable() })
+    .nullable()
+    .describe("The checks on the head commit at the last read; null for a merged or closed PR or a head with no checks"),
+  fetchedAt: z.string().nullable(),
+  linkedAt: z.string(),
+});
+server.registerTool(
+  "set_branch",
+  {
+    description:
+      "Record the git branch a ticket is worked on and the commit it was cut from, at checkout; branch null clears it. A changed branch drops the old base unless base_commit comes with it. Never changes status or the claim. Pull requests whose head is this branch are then found and linked by integration_write action discover (and by the web UI's poll); you do not link them by hand. While the field is empty, an existing 'Branch pointer: ... branch <name>, base <sha>' comment answers (source: comment). Returns the branch and every linked pull request with its state (draft, open, merged, closed) and checks.",
+    inputSchema: {
+      ref: refSchema,
+      branch: z.string().nullable().describe("The branch as git names it (feat/sta-42); null clears the field"),
+      base_commit: z
+        .string()
+        .nullable()
+        .optional()
+        .describe("The commit the branch was cut from (git rev-parse --short HEAD); null clears it; omit to keep it while the branch is unchanged"),
+      actor: actorSchema,
+      ws: wsSchema,
+    },
+    outputSchema: {
+      ref: z.string(),
+      branch: z
+        .object({
+          name: z.string(),
+          base: z.string().nullable(),
+          source: z.enum(["field", "comment"]),
+          setBy: z.string().nullable(),
+          setAt: z.string().nullable(),
+        })
+        .nullable(),
+      changed: z.boolean().describe("False when the ticket already carried these values: nothing was written"),
+      pullRequests: z.array(linkedPullRequestShape),
+    },
+    annotations: { title: "Set branch", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  ({ ref, branch, base_commit, actor, ws }) =>
+    run(() => {
+      const store = storeFor(ws);
+      const result = setTicketBranch(store, ref, { branch, ...(base_commit !== undefined ? { base: base_commit } : {}) }, requireActor(actor));
+      const issue = store.getIssue(ref);
+      return { ref: issue.identifier, branch: result.branch, changed: result.changed, pullRequests: store.externalLinks().pullRequests().get(issue.id) ?? [] };
     }),
 );
 

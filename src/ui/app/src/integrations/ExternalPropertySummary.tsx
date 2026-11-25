@@ -1,7 +1,9 @@
 /**
  * A task's linked issues or pull requests in its properties: one chip per link with the
- * shortest key that is still unambiguous, at most four and then "+N more", and a `+` to link
- * another. On the phone (`compact`) it is one counted pill per kind beside the other chips.
+ * shortest key that is still unambiguous, and a `+` to link another. Linked issues stop at four
+ * and then "+N more"; pull requests are all listed, since the ticket's replaced and stacked
+ * pull requests are what this row is for. On the phone (`compact`) it is one counted pill per
+ * kind beside the other chips.
  */
 import { useRef } from "react";
 import { Plus } from "lucide-react";
@@ -71,7 +73,7 @@ export function ExternalPropertySummary({
     );
   }
 
-  const shown = links.slice(0, MAX_CHIPS);
+  const shown = kind === "pull_request" ? links : links.slice(0, MAX_CHIPS);
   const more = links.length - shown.length;
   return (
     <span className="flex min-w-0 max-w-full flex-wrap items-center gap-1.5 py-1 pointer-coarse:gap-y-5 pointer-coarse:py-2" data-link-chips={kind}>

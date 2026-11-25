@@ -109,7 +109,7 @@ try {
   await pinned.handshake();
 
   const tools = await rpc("tools/list", {});
-  assert(tools.tools.length === 88, `tools/list exposes ${tools.tools.length} tools`);
+  assert(tools.tools.length === 89, `tools/list exposes ${tools.tools.length} tools`);
 
   const byName = new Map<string, any>(tools.tools.map((t: any) => [t.name, t]));
   assert(
@@ -977,7 +977,7 @@ try {
 
   const coldTools = await cold.rpc("tools/list", {});
   assert(
-    coldTools.tools.length === tools.tools.length && coldTools.tools.length === 88,
+    coldTools.tools.length === tools.tools.length && coldTools.tools.length === 89,
     `server connects and lists ${coldTools.tools.length} tools with no workspace anywhere above cwd`,
   );
 
@@ -1013,7 +1013,8 @@ try {
   // list_horizons, capture_idea, update_idea, start_idea, unlink_idea and the app-only
   // reset_idea_baseline read and write one workspace's ideas, 73, and scaffold_idea, 74.
   // Integration read/write/configure add three workspace-targetable tools, 77, and attention, 78.
-  assert(wsTargetable.length === 78, `78 workspace tools accept ws targeting (${wsTargetable.length} found)`);
+  // set_branch records a ticket's branch in one workspace, 79.
+  assert(wsTargetable.length === 79, `79 workspace tools accept ws targeting (${wsTargetable.length} found)`);
   // A person's click in a view is recorded under the person only while hosts keep these two
   // away from the model: both declare MCP Apps visibility ["app"] and take no actor.
   for (const name of ["approve_gate_from_view", "request_changes_from_view"]) {
@@ -1257,6 +1258,8 @@ try {
         // Scaffolding creates an epic's tasks: attributed like any write.
         "scaffold_idea",
         "set_blocked_by",
+        // Recording a ticket's branch names who set it.
+        "set_branch",
         // The explicit estimate write names who changed the plan.
         "set_estimate",
         // STA-179: a setting write is attributed like one too.

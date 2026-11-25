@@ -34,7 +34,7 @@ describe("read-only Linear API adapter",()=>{
     expect(body.variables).toMatchObject({text:'title "quoted"',team:teamId});
     expect(body.query).not.toContain("quoted");
     expect(fetch.mock.calls.every(([,r])=>!String(r?.body).includes("mutation"))).toBe(true);
-    expect(reader.capabilities).toEqual({readPullRequests:false,searchPullRequests:false});
+    expect(reader.capabilities).toEqual({readPullRequests:false,searchPullRequests:false,discoverPullRequests:false});
     await expect(reader.search("pull_request",{text:""})).rejects.toMatchObject({code:"protocol_unsupported"});
   });
   it("normalizes equivalent uppercase configured and returned UUIDs",async()=>{

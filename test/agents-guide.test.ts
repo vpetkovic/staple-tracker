@@ -210,10 +210,12 @@ describe("the guide teaches the whole protocol", () => {
     }
   });
 
-  it("teaches the branch pointer at checkout", () => {
+  it("teaches the branch pointer at checkout, and recording the branch that finds its pull requests", () => {
     expect(guide).toContain("Branch pointer");
-    expect(guide).toMatch(/at checkout, comment where the\s+physical work lives/i);
+    expect(guide).toMatch(/at checkout, record the branch and\s+the base commit on the ticket, and comment where the physical work lives/i);
     expect(guide).toMatch(/worktree/i);
+    expect(guide).toMatch(/staple branch \S+ feat\/\S+ --base/);
+    expect(guide).toMatch(/merged\s+pull request does not finish the ticket/i);
   });
 
   it("teaches the inbox QUEUED bucket and that a gated checkout is not retryable", () => {

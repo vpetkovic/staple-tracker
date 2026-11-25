@@ -11,7 +11,7 @@ import type { Migration } from "../types.js";
  *                       the tracker; a marked record reads shipped with no ticket
  *
  * It replicates as the `issue` field `planDeliveredOn`, one of the plan fields left out of a
- * create while null (`PLAN_ISSUE_FIELDS`). The note that goes with the mark is a document on the
+ * create while null (`SPARSE_ISSUE_FIELDS`). The note that goes with the mark is a document on the
  * record (`delivered-note`), which synchronizes as documents already do.
  *
  * Additive and nullable, run for every workspace whatever `features.planning` says: the flag

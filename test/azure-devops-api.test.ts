@@ -44,7 +44,7 @@ describe("read-only Azure DevOps adapter", () => {
     expect(await reader.validate()).toEqual({ state: "ready", identity: { login: "Ada Lovelace", organization: "acme" } });
     expect(calls[0]!.path).toBe("/acme/_apis/connectionData");
     expect(calls[0]!.headers).toMatchObject({ authorization: `Basic ${Buffer.from(`:${PAT}`).toString("base64")}`, "x-tfs-fedauthredirect": "Suppress" });
-    expect(reader.capabilities).toEqual({ readPullRequests: false, searchPullRequests: false });
+    expect(reader.capabilities).toEqual({ readPullRequests: false, searchPullRequests: false, discoverPullRequests: false });
   });
 
   it("lists projects across continuation-token pages and refuses a cursor from another binding", async () => {

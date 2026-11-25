@@ -7,11 +7,12 @@
  * (Approve, Request changes) call the ordinary gate tools through the host, which asks a
  * person first because those tools write.
  *
- * Two facts the tracker does not store as fields are read off what it does store:
+ * Two facts are read off what the tracker stores:
  *
- *   - the BRANCH POINTER is the newest comment that follows the claim-time convention
- *     (`Branch pointer: branch feat/x, base 3f2a1bc.`, docs/working-a-ticket.md), or the
- *     shorter `working on branch feat/x (off main 3f2a1bc)`;
+ *   - the BRANCH is the ticket's branch field (`staple branch`), else the newest comment that
+ *     follows the claim-time convention (`Branch pointer: branch feat/x, base 3f2a1bc.`,
+ *     docs/working-a-ticket.md), or the shorter `working on branch feat/x (off main 3f2a1bc)`,
+ *     read apart by `branchPointer` (core/ticket-branch.ts);
  *   - a criterion's MARK is the milestone goal check's verdict on a milestone, and on any
  *     other ticket "met" once it is done and "open" before (the tracker keeps no tick per
  *     criterion; the web UI's Done when list reads it the same way).
@@ -26,8 +27,11 @@ import { readConfig } from "./config/file.js";
 import { stapleHome } from "./config/home.js";
 import { MILESTONE_KIND } from "./core/milestones.js";
 import type { WorkspaceStore } from "./core/store.js";
-import type { GateDecision, IssueComment, IssueGate, QueuedBy } from "./core/types.js";
+import { branchPointer, ticketBranch } from "./core/ticket-branch.js";
+import type { GateDecision, IssueGate, QueuedBy } from "./core/types.js";
 import { DECISION_VIEWS } from "./mcp-view-actions.js";
+
+export { branchPointer };
 
 export type CriterionMark = "met" | "unmet" | "open";
 
@@ -65,35 +69,6 @@ export interface TicketCard {
   url: string | null;
   /** What the card offers: the gate buttons show only while a gate is pending. */
   actions: { approve: boolean; requestChanges: boolean };
-}
-
-const POINTER_LINE = /^\s*(?:branch pointer\s*:|working on branch\s)/i;
-const BRANCH_NAME = /\bbranch\s+`?([^\s,;()`]+)`?/i;
-const BRANCH_BASE = /\b(?:base|off)\s+(.+)$/i;
-
-/** The base as written: up to the first `)`, `,`, `;` or sentence end, without backticks. */
-function baseOf(rest: string): string | null {
-  const raw = BRANCH_BASE.exec(rest)?.[1];
-  if (raw === undefined) return null;
-  const cut = raw.split(/[),;]|\.(?:\s|$)/, 1)[0]!.replace(/`/g, "").trim();
-  return cut === "" ? null : cut;
-}
-
-/** The newest comment that records the branch a ticket is worked on, read apart. */
-export function branchPointer(comments: readonly IssueComment[]): TicketCard["branch"] {
-  for (let i = comments.length - 1; i >= 0; i--) {
-    const comment = comments[i]!;
-    const line = comment.body.split("\n", 1)[0]!;
-    if (!POINTER_LINE.test(line)) continue;
-    const pointer = line.replace(/^\s*branch pointer\s*:\s*/i, "");
-    // "Branch pointer: branch feat/x, ..." names it after "branch"; "Branch pointer: feat/x ..." first.
-    const named = BRANCH_NAME.exec(pointer) ?? /^`?([^\s,;()`]+)`?/.exec(pointer);
-    const name = named?.[1]?.replace(/\.+$/, "");
-    if (!name || /^(?:none|n\/a|tbd)$/i.test(name)) continue;
-    const base = baseOf(pointer.slice(named!.index + named![0].length));
-    return { name, base, author: comment.author, at: comment.createdAt };
-  }
-  return null;
 }
 
 /**
@@ -138,6 +113,13 @@ export function ticketUrl(base: string, workspace: string, identifier: string): 
 
 /** How many of a ticket's newest comments are searched for its branch pointer. */
 const BRANCH_POINTER_WINDOW = 200;
+
+/** The branch field when set (`staple branch`), else the newest branch-pointer comment as written. */
+function cardBranch(store: WorkspaceStore, issueId: string): TicketCard["branch"] {
+  const field = ticketBranch(store, issueId);
+  if (field?.source === "field") return { name: field.name, base: field.base, author: field.setBy ?? "unknown", at: field.setAt ?? "" };
+  return branchPointer(store.latestComments(issueId, BRANCH_POINTER_WINDOW));
+}
 
 /** Everything the ticket card shows, for one ticket. */
 export function ticketCard(store: WorkspaceStore, ref: string, uiBase: string | null = stapleUiBase()): TicketCard {
@@ -185,7 +167,7 @@ export function ticketCard(store: WorkspaceStore, ref: string, uiBase: string | 
           outcome: shown.outcome,
         }
       : null,
-    branch: branchPointer(store.latestComments(issue.id, BRANCH_POINTER_WINDOW)),
+    branch: cardBranch(store, issue.id),
     timing: {
       estimatedSeconds: timing.subtreePlan?.estimatedSeconds ?? timing.estimatedSeconds,
       elapsedSeconds: timing.activeSeconds,

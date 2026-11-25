@@ -197,6 +197,12 @@ function shortValue(value: unknown): string {
   return text.length > 40 ? `${text.slice(0, 39)}…` : text;
 }
 
+/** `gh pr checks 12 --repo owner/repo`, from the pull request's key; its URL on another host or when the key is not that shape. */
+function ghChecksCommand(pr: { key: string; url: string }): string {
+  const match = /^([A-Za-z0-9-]+\/[A-Za-z0-9_.-]+)#([1-9][0-9]*)$/.exec(pr.key);
+  return match && pr.url.startsWith("https://github.com/") ? `gh pr checks ${match[2]} --repo ${match[1]}` : `gh pr checks ${pr.url}`;
+}
+
 const scopeKey = (run: Run): string => (run.scope.kind === "queue" ? "queue" : run.scope.issueId);
 
 /**
@@ -247,6 +253,32 @@ export const ATTENTION_KINDS = [
           since: enteredStatusAt(context, issue),
           action: { verb: "review", label: "Open for review", command: `staple show ${issue.identifier} ${ws(context)}` },
         })),
+  },
+  {
+    /**
+     * A pull request linked to an open ticket whose head's checks fail, from the saved copy the
+     * last pull-request read left (`integrations discover`, the web UI's poll). It holds until a
+     * read sees the checks pass, or the pull request merge or close.
+     */
+    kind: "pr_checks_failing",
+    label: "Pull requests with failing checks",
+    dismissible: false,
+    collect: (context) => {
+      const pullRequests = context.store.externalLinks().pullRequests();
+      return context.issues.flatMap((issue) =>
+        (pullRequests.get(issue.id) ?? [])
+          .filter((pr) => pr.checks?.state === "failing" && (pr.state === "open" || pr.state === "draft"))
+          .map((pr) => ({
+            id: `${issue.identifier}:${pr.key}`,
+            ref: issue.identifier,
+            title: issue.title,
+            detail: `checks failing on ${pr.key}${pr.checks!.failing.length ? `: ${pr.checks!.failing.join(", ")}` : ""}`,
+            since: pr.checks!.completedAt ?? pr.fetchedAt ?? pr.linkedAt,
+            // Built from the key, never the synced URL, so the command is safe to copy.
+            action: { verb: "open" as const, label: "Open", command: ghChecksCommand(pr) },
+          })),
+      );
+    },
   },
   {
     /** A ticket made ready because its cross-repository blockers closed (`cross_blockers_resolved`). */

@@ -40,6 +40,29 @@ export interface ExternalItem extends ResolvedExternalItem {
   /** ClickUp only: the task's space, and its home list followed by any other lists it is in. */
   spaceId?: string;
   listIds?: string[];
+  /** A pull request read with its head, when the provider reads pull requests that way. */
+  pullRequest?: PullRequestDetails;
+}
+
+/** How the checks on a pull request's head commit stand: any failure fails, else any still running is pending. */
+export type PullRequestCheckState = "passing" | "failing" | "pending";
+
+export interface PullRequestChecks {
+  state: PullRequestCheckState;
+  /** The names of the failing checks, at most ten. */
+  failing: string[];
+  /** When the newest failing check finished (or the newest check, when none failed); null while none has. */
+  completedAt: string | null;
+}
+
+/** What a pull request read through its own endpoint adds to an item: its head, and the checks on it. */
+export interface PullRequestDetails {
+  headBranch: string;
+  headSha: string;
+  /** When the pull request was opened; null when the provider did not say. */
+  createdAt?: string | null;
+  /** Null for a merged or closed pull request, for a head commit with no checks, and when the checks could not be read. */
+  checks: PullRequestChecks | null;
 }
 
 export interface ExternalContainer {
@@ -123,6 +146,14 @@ export interface PullRequestReader {
   read(ref: ExternalItemRef, options?: ProviderReadOptions): Promise<ExternalItem>;
   /** Some providers allow exact PR references/reads without searchable PRs. */
   search?(query: ExternalSearch, options?: ProviderReadOptions): Promise<ExternalPage<ExternalItem>>;
+  /**
+   * The pull requests in one container whose head is one of these branches, in the container
+   * itself (not a fork), each with `pullRequest` details. Bounded to the provider's most recently
+   * updated pull requests, so a changed pull request is always in reach.
+   */
+  forBranches?(containerId: string, branches: readonly string[], options?: ProviderReadOptions): Promise<ExternalItem[]>;
+  /** One pull request with its `pullRequest` details. */
+  details?(ref: ExternalItemRef, options?: ProviderReadOptions): Promise<ExternalItem>;
 }
 
 /**

@@ -37,7 +37,7 @@ for (const [provider, host, mode, states] of [
       const { adapter, reader, items } = fixture(provider, host, mode, [...states]);
       const ref: ExternalItemRef = { ...items[0]!.ref, kind: "pull_request" };
       vi.mocked(adapter.resolve).mockResolvedValue({ ref, key: "PR-1", url: `https://${host}/pull/1` });
-      expect(reader.capabilities).toEqual({ readPullRequests: false, searchPullRequests: false });
+      expect(reader.capabilities).toEqual({ readPullRequests: false, searchPullRequests: false, discoverPullRequests: false });
       expect((await reader.resolve({ url: `https://${host}/pull/1` }))!.ref.kind).toBe("pull_request");
       await expect(reader.read(ref)).rejects.toMatchObject({ code: "protocol_unsupported" });
       await expect(reader.search("pull_request", { text: "fix" })).rejects.toMatchObject({ code: "protocol_unsupported" });
@@ -90,7 +90,7 @@ describe("provider-independent safety and identity", () => {
     const read = vi.fn(async () => pr);
     const search = vi.fn(async () => ({ items: [pr], nextCursor: null }));
     const reader = new IntegrationReader({ ...adapter, pullRequests: { read, search } });
-    expect(reader.capabilities).toEqual({ readPullRequests: true, searchPullRequests: true });
+    expect(reader.capabilities).toEqual({ readPullRequests: true, searchPullRequests: true, discoverPullRequests: false });
     expect(await reader.read(pr.ref)).toBe(pr);
     expect((await reader.search("pull_request", { text: "fix" })).items).toEqual([pr]);
   });
@@ -99,7 +99,7 @@ describe("provider-independent safety and identity", () => {
     const { adapter, items } = fixture("github", "github.example.com", "api", ["open"]);
     const pr = { ...items[0]!, ref: { ...items[0]!.ref, kind: "pull_request" as const } };
     const reader = new IntegrationReader({ ...adapter, pullRequests: { read: async () => pr } });
-    expect(reader.capabilities).toEqual({ readPullRequests: true, searchPullRequests: false });
+    expect(reader.capabilities).toEqual({ readPullRequests: true, searchPullRequests: false, discoverPullRequests: false });
     expect(await reader.read(pr.ref)).toEqual(pr);
     await expect(reader.search("pull_request", { text: "fix" })).rejects.toMatchObject({ code: "protocol_unsupported" });
   });
