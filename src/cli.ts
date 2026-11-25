@@ -1922,7 +1922,8 @@ function main() {
       const estimatedSeconds = estimateOption(values.estimate, values["no-estimate"]);
       const attempt = attemptOptionsFrom(values);
       const issue =
-        target === "done" || target === "cancelled"
+        // By category, as MCP does: a workspace's own finished status wakes its dependents too.
+        store.isResolvedStatus(target)
           ? completeWithHub(store, positionals[0]!, target, undefined, estimatedSeconds, agentName(values.agent), attempt)
           : store.updateIssue(
               positionals[0]!,

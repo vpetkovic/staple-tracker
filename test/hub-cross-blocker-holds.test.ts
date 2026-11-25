@@ -177,6 +177,59 @@ describe("in the store", () => {
     expect(web.store.context(copy.identifier).blockedBy).toEqual([]);
   });
 
+  it("a takeover of a stale claim does not step over the link without the override", () => {
+    const app = workspace("app");
+    const web = workspace("web");
+    const email = app.store.createIssue({ title: "Send the reset email" });
+    const page = web.store.createIssue({ title: "Reset page" });
+    web.store.checkoutIssue(page.identifier, "old-agent");
+    link(email.identifier, page.identifier);
+
+    const refused = refusal(() => web.store.checkoutIssue(page.identifier, "new-agent", undefined, { stealIfIdleSeconds: 0 }));
+    expect(refused.code).toBe("conflict");
+    expect(refused.message).toContain(`blocked across repositories by ${email.identifier} in app`);
+    expect(web.store.getIssue(page.identifier).checkoutAgent).toBe("old-agent");
+
+    const stolen = web.store.checkoutIssue(page.identifier, "person", undefined, { stealIfIdleSeconds: 0, overrideReason: "old agent died" });
+    expect(stolen.checkoutAgent).toBe("person");
+    const kinds = web.store.listEvents(0).map((event) => event.kind);
+    expect(kinds).toContain("cross_blocker_overridden");
+    // Nothing in the queue was stepped over, so the queue's own override event is not written.
+    expect(kinds).not.toContain("queue_overridden");
+  });
+
+  it("a blocker closed under the blocker workspace's own done status releases the ticket", () => {
+    const app = workspace("app");
+    const web = workspace("web");
+    app.store.addStatus({ id: "shipped", category: "done" });
+    const email = app.store.createIssue({ title: "Send the reset email" });
+    const page = web.store.createIssue({ title: "Reset page" });
+    link(email.identifier, page.identifier);
+
+    app.store.updateIssue(email.identifier, { status: "shipped" });
+    notify("app", email.identifier);
+    expect(web.store.queue().effectiveQueue({}).next?.identifier).toBe(page.identifier);
+    expect(web.store.listEvents(0).filter((event) => event.kind === "cross_blockers_resolved")).toHaveLength(1);
+  });
+
+  it("restating a blocker set never fails on a loop that already exists", () => {
+    const app = workspace("app");
+    const web = workspace("web");
+    const email = app.store.createIssue({ title: "Send the reset email" });
+    const page = web.store.createIssue({ title: "Reset page" });
+    const copy = web.store.createIssue({ title: "Reset copy" });
+    // The loop page -> copy -> email -> page, made while `web` was not on this machine.
+    link(email.identifier, page.identifier);
+    web.store.setBlockedBy(copy.identifier, [page.identifier]);
+    web.store.db.close();
+    renameSync(web.dbPath, `${web.dbPath}.away`);
+    link(copy.identifier, email.identifier);
+    renameSync(`${web.dbPath}.away`, web.dbPath);
+    const again = workspace("web");
+
+    expect(() => again.store.setBlockedBy(copy.identifier, [page.identifier])).not.toThrow();
+  });
+
   it("closing the blocker makes the ticket ready and records it in the waiting workspace", () => {
     const app = workspace("app");
     const web = workspace("web");
@@ -200,6 +253,12 @@ describe("in the store", () => {
       crossBlockers: [{ identifier: email.identifier, workspace: "app" }],
     });
     expect(web.store.checkoutIssue(page.identifier, "agent-1").checkoutAgent).toBe("agent-1");
+
+    // Reopened and closed again: a new close, so a new event.
+    app.store.updateIssue(email.identifier, { status: "todo" });
+    app.store.updateIssue(email.identifier, { status: "done" });
+    notify("app", email.identifier);
+    expect(web.store.listEvents(0).filter((event) => event.kind === "cross_blockers_resolved")).toHaveLength(2);
   });
 });
 

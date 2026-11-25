@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { stapleHome } from "../config/home.js";
-import { RESOLVED_STATUSES, StapleError } from "./types.js";
+import { RESOLVED_CATEGORIES, RESOLVED_STATUSES, StapleError } from "./types.js";
 
 /**
  * The hub's cross-repository blockers, read for the pickup and checkout paths of ONE
@@ -15,7 +15,8 @@ import { RESOLVED_STATUSES, StapleError } from "./types.js";
  * `openWorkspace` (the store would then import itself through them), it never migrates or
  * re-stamps another workspace's file on a read, and it never creates a hub that is not
  * there. It reads the same facts `Hub.crossBlockersOf` reads, by the same rule: a blocker
- * resolves at `done` or `cancelled`, and one this machine cannot read holds the ticket.
+ * resolves when its own workspace files its status under done or cancelled, and one this
+ * machine cannot read holds the ticket.
  */
 export interface HubCrossBlocker {
   identifier: string;
@@ -44,32 +45,61 @@ function openReadOnly(path: string): DatabaseSync | null {
   }
 }
 
-/** This machine's hub, read-only, or null when it has none or it carries no links table. */
+/** This machine's hub, read-only, or null when it has none or it predates the links. */
 function openHub(home: string): DatabaseSync | null {
   const db = openReadOnly(join(home, "hub.db"));
   if (db === null) return null;
-  const table = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cross_links'").get();
-  if (table === undefined) {
-    db.close();
-    return null;
+  try {
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('cross_links', 'workspaces')")
+      .all();
+    if (tables.length === 2) return db;
+  } catch {
+    // Not a database this build can read: treated as no hub, below.
   }
-  return db;
+  db.close();
+  return null;
 }
 
+/**
+ * Run `fn` over this machine's hub, or answer `empty` without one. The hub is optional at
+ * runtime, exactly as `notifyHubResolvedSafe` treats it: a hub that cannot be opened or read
+ * holds nothing back, rather than failing every pickup and checkout in the workspace. Only a
+ * refusal (`StapleError`, the cycle check's) passes through.
+ */
 function withHub<T>(home: string, empty: T, fn: (hub: DatabaseSync) => T): T {
-  let hub: DatabaseSync | null;
+  let hub: DatabaseSync | null = null;
   try {
     hub = openHub(home);
-  } catch {
-    // The hub is optional at runtime: an unreadable one holds nothing back.
+    return hub === null ? empty : fn(hub);
+  } catch (error) {
+    if (error instanceof StapleError) throw error;
     return empty;
-  }
-  if (hub === null) return empty;
-  try {
-    return fn(hub);
   } finally {
-    hub.close();
+    hub?.close();
   }
+}
+
+/** Is this status finished, by the workspace's own category when it has one? */
+function isResolved(status: string, category: string | null): boolean {
+  if (category !== null) return (RESOLVED_CATEGORIES as readonly string[]).includes(category);
+  return (RESOLVED_STATUSES as readonly string[]).includes(status);
+}
+
+/** `identifier -> {status, category}` for the named issues of one workspace file. */
+function statusesIn(db: DatabaseSync, identifiers: readonly string[]): Map<string, { status: string; category: string | null }> {
+  const marks = identifiers.map(() => "?").join(",");
+  const categorized =
+    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'workspace_statuses'").get() !== undefined;
+  const rows = db
+    .prepare(
+      categorized
+        ? `SELECT i.identifier, i.status, s.category FROM issues i
+             LEFT JOIN workspace_statuses s ON s.id = i.status WHERE i.identifier IN (${marks})`
+        : `SELECT identifier, status, NULL AS category FROM issues WHERE identifier IN (${marks})`,
+    )
+    .all(...identifiers) as Array<{ identifier: string; status: string; category: string | null }>;
+  return new Map(rows.map((row) => [row.identifier, { status: row.status, category: row.category }]));
 }
 
 function workspacePath(hub: DatabaseSync, slug: string): string | null {
@@ -103,7 +133,7 @@ export function readCrossBlockers(slug: string, home: string = stapleHome()): Ma
       .prepare("SELECT * FROM cross_links WHERE blocked_ws = ? ORDER BY id")
       .all(slug) as unknown as LinkRow[];
     if (links.length === 0) return out;
-    const statuses = new Map<string, Map<string, string> | null>();
+    const statuses = new Map<string, Map<string, { status: string; category: string | null }> | null>();
     for (const blockerWs of new Set(links.map((link) => link.blocker_ws))) {
       const path = workspacePath(hub, blockerWs);
       const db = path === null ? null : openReadOnly(path);
@@ -113,10 +143,7 @@ export function readCrossBlockers(slug: string, home: string = stapleHome()): Ma
       }
       try {
         const named = links.filter((link) => link.blocker_ws === blockerWs).map((link) => link.blocker_identifier);
-        const rows = db
-          .prepare(`SELECT identifier, status FROM issues WHERE identifier IN (${named.map(() => "?").join(",")})`)
-          .all(...named) as Array<{ identifier: string; status: string }>;
-        statuses.set(blockerWs, new Map(rows.map((row) => [row.identifier, row.status])));
+        statuses.set(blockerWs, statusesIn(db, named));
       } catch {
         statuses.set(blockerWs, null);
       } finally {
@@ -125,12 +152,13 @@ export function readCrossBlockers(slug: string, home: string = stapleHome()): Ma
     }
     for (const link of links) {
       const inWorkspace = statuses.get(link.blocker_ws) ?? null;
-      const status = inWorkspace?.get(link.blocker_identifier) ?? null;
+      const read = inWorkspace?.get(link.blocker_identifier) ?? null;
+      const status = read?.status ?? null;
       const blocker: HubCrossBlocker = {
         identifier: link.blocker_identifier,
         workspace: link.blocker_ws,
         status,
-        resolved: status !== null && (RESOLVED_STATUSES as readonly string[]).includes(status),
+        resolved: read !== null && isResolved(read.status, read.category),
         unresolvable: status === null,
         missing: inWorkspace === null ? "workspace" : status === null ? "task" : null,
       };
@@ -169,6 +197,9 @@ export function assertNoHubCycle(
   const check = (hub: DatabaseSync): void => {
     const links = hub.prepare("SELECT * FROM cross_links ORDER BY id").all() as unknown as LinkRow[];
     if (links.length === 0) return;
+    // A local edge can only close a loop through the hub if a link touches its workspace.
+    const own = options.own;
+    if (own && !links.some((link) => link.blocker_ws === own.slug || link.blocked_ws === own.slug)) return;
     const adjacency = new Map<string, string[]>();
     const add = (from: string, to: string): void => {
       adjacency.set(from, [...(adjacency.get(from) ?? []), to]);

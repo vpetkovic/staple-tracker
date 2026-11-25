@@ -132,7 +132,9 @@ error(conflict): Checkout refused: WEB-1 is blocked across repositories by APP-3
 A blocker this machine cannot read, because its repository is not here or the
 ticket is gone, holds the ticket too, and the message says it `cannot be resolved
 on this machine`. If a person decides the work goes ahead anyway, they take it
-with a reason, and the step is recorded on the ticket as `cross_blocker_overridden`:
+with a reason, and the step is recorded on the ticket as `cross_blocker_overridden`.
+Taking over a stale claim with `--steal-if-stale` does not step over the link on
+its own; it needs the override too:
 
 ```bash
 staple checkout WEB-1 --override -m "the email is live in staging"
@@ -141,10 +143,13 @@ staple checkout WEB-1 --override -m "the email is live in staging"
 The link also shows in the task detail in the web UI, in `get_task` over MCP (as
 `crossBlockers`), and in the Graph, drawn dashed. A link that would close a loop,
 through other links or through either repository's own `--blocked-by` edges, is
-refused, and so is a local edge that would close one through a link.
+refused, and so is a local edge that would close one through a link. The local
+edges of a repository that is not on this machine cannot be seen, so a loop
+through one is only caught on a machine that has both.
 
-When APP-3 is done, WEB-1 is ready again, and the hub records it, once in the hub
-and once on WEB-1 in `web` (`staple events`):
+When APP-3 is done, or moved to any status `app` files under done or cancelled,
+WEB-1 is ready again. The hub records it, in the hub and as
+`cross_blockers_resolved` on WEB-1 in `web` (`staple events`):
 
 ```bash
 staple hub events

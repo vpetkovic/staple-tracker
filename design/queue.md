@@ -303,7 +303,9 @@ this machine, naming the link; that refusal is a `conflict` like a local
 blocker's. Unlike a local edge, the hub is this machine's view of another
 repository and can be stale or absent, so a person may take the ticket anyway
 with the same flag, and the step is recorded as **`cross_blocker_overridden`**
-with the reason and the blockers it stepped over. (Pinned by
+with the reason and the blockers it stepped over (and `queue_overridden` too only
+when the same take also stepped over queue rows). A `--steal-if-stale` takeover
+is refused the same way unless it carries the override. (Pinned by
 `hub-cross-blocker-holds.test.ts` — *"checkout refuses it, and a recorded
 override is the only way through"*, *"an override never steps over a local
 blocker"*.)

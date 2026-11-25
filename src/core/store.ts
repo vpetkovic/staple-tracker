@@ -3029,9 +3029,18 @@ export class WorkspaceStore {
         row.id,
         deduped.map((b) => b.id),
       );
-      // A loop can also close through another repository: this edge, then a link out, then back.
+      /**
+       * A loop can also close through another repository: this edge, then a link out, then
+       * back. Only the edges this write ADDS are checked, so restating a set never fails on a
+       * loop that already exists (one a link made while the other side was not on this machine).
+       */
+      const existing = new Set(
+        (this.db.prepare("SELECT blocker_id FROM relations WHERE blocked_id = ? AND type = 'blocks'").all(row.id) as Array<{ blocker_id: string }>).map(
+          (edge) => edge.blocker_id,
+        ),
+      );
       assertNoHubCycle(
-        deduped.map((b) => [b.identifier, row.identifier] as const),
+        deduped.filter((b) => !existing.has(b.id)).map((b) => [b.identifier, row.identifier] as const),
         { own: { slug: this.slug, edges: localEdgesOf(this.db) } },
       );
       /**
@@ -7227,12 +7236,10 @@ export class WorkspaceStore {
        * is this machine's view of another repository and can be stale or absent. The step is
        * never silent: it is recorded as `cross_blocker_overridden` with the reason.
        */
-      // A fresh claim only: work someone holds, or a status checkout refuses, is answered below.
-      const crossHeld =
-        row.checkout_agent === null && expected.includes(row.status)
-          ? holdingCrossBlockers(this.crossBlockers().get(row.identifier) ?? [])
-          : [];
-      if (crossHeld.length > 0 && overrideReason === undefined) {
+      const crossHeld = holdingCrossBlockers(this.crossBlockers().get(row.identifier) ?? []);
+      // Here a fresh claim only: work someone holds, or a status checkout refuses, is answered below.
+      const freshClaim = row.checkout_agent === null && expected.includes(row.status);
+      if (freshClaim && crossHeld.length > 0 && overrideReason === undefined) {
         throw new StapleError(
           "conflict",
           `Checkout refused: ${row.identifier} is blocked across repositories by ${crossHeld.map(describeCrossBlocker).join(", ")}. Pick a different task, or ask a person to step over it with --override -m "<why>".`,
@@ -7310,6 +7317,8 @@ export class WorkspaceStore {
               })),
             },
           });
+          // Stepped over the link and nothing in the queue: one event says it all.
+          if ((order?.expected ?? []).length === 0) return;
         }
         this.emitEvent({
           kind: "queue_overridden",
@@ -7351,6 +7360,27 @@ export class WorkspaceStore {
         | undefined;
       if (!claimed) {
         const unresolved = this.unresolvedBlockersOf(row.id).map((b) => b.identifier);
+        /**
+         * A takeover is a fresh claim of held work, so a cross-repository blocker holds it as
+         * the guard above holds an unheld ticket: only the override steps over it, recorded.
+         */
+        if (stealIfIdleSeconds !== undefined && unresolved.length === 0 && overrideReason === undefined && crossHeld.length > 0 && row.checkout_agent !== null) {
+          throw new StapleError(
+            "conflict",
+            `Checkout refused: ${row.identifier} is blocked across repositories by ${crossHeld.map(describeCrossBlocker).join(", ")}. A takeover does not step over it; ask a person to override with --override -m "<why>".`,
+            {
+              currentStatus: row.status,
+              heldBy: row.checkout_agent,
+              blockers: [],
+              crossBlockers: crossHeld.map((blocker) => ({
+                identifier: blocker.identifier,
+                workspace: blocker.workspace,
+                status: blocker.status,
+                unresolvable: blocker.unresolvable,
+              })),
+            },
+          );
+        }
         // Explicit takeover. Blockers still win: taking over dead work must not
         // bypass a dependency the dead agent was correctly waiting on.
         if (stealIfIdleSeconds !== undefined && unresolved.length === 0) {
