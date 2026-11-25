@@ -59,6 +59,54 @@ describe("staple status", () => {
   });
 });
 
+describe("a verb missing its issue reference", () => {
+  const lastJson = (stderr: string) => JSON.parse(stderr.trim().split("\n").at(-1)!);
+  const refVerbs = [
+    "show", "checkout", "start", "done", "cancel", "release", "approve",
+    "block", "blocked-by", "wait", "doc",
+  ];
+
+  it.each(refVerbs)("staple %s refuses with a validation error, not a crash", (verb) => {
+    const json = staple(verb, "--json");
+    expect(json.status).toBe(2);
+    expect(lastJson(json.stderr)).toMatchObject({ code: "validation", message: `staple ${verb} needs an issue reference.` });
+  });
+
+  it("refuses a blank reference the same way, and says so on the human CLI", () => {
+    const blank = staple("checkout", "  ", "--json");
+    expect(blank.status).toBe(2);
+    expect(lastJson(blank.stderr)).toMatchObject({ code: "validation", message: "staple checkout needs an issue reference." });
+    const human = staple("checkout");
+    expect(human.status).toBe(2);
+    expect(human.stderr).toContain("error(validation): staple checkout needs an issue reference.");
+    expect(human.stderr).not.toContain("TypeError");
+  });
+
+  it("refuses gate, request-changes and link without their references", () => {
+    expect(lastJson(staple("gate", "--owner", "vp", "--json").stderr)).toMatchObject({ code: "validation", message: "staple gate needs an issue reference." });
+    expect(lastJson(staple("request-changes", "-m", "redo", "--json").stderr)).toMatchObject({ code: "validation", message: "staple request-changes needs an issue reference." });
+    for (const args of [["link"], ["link", "VOC-1"]]) {
+      const result = staple(...args, "--json");
+      expect(result.status).toBe(2);
+      expect(lastJson(result.stderr)).toMatchObject({ code: "validation", message: "staple link needs two issue references: staple link <blocker> <blocked>." });
+    }
+  });
+
+  it("refuses doc with a reference but no document key", () => {
+    for (const args of [["doc", "VOC-1"], ["doc", "VOC-1", "--revisions"]]) {
+      const result = staple(...args, "--json");
+      expect(result.status).toBe(2);
+      expect(lastJson(result.stderr)).toMatchObject({ code: "validation", message: "staple doc needs a document key: staple doc <ref> <key>." });
+    }
+  });
+
+  it("still checks out an issue named by a valid reference", () => {
+    const result = staple("checkout", "VOC-1", "--json");
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ identifier: "VOC-1", status: "in_progress", checkoutAgent: "cli-test" });
+  });
+});
+
 describe("staple statuses", () => {
   it("lists the configured statuses with their categories", () => {
     const { status, stdout } = staple("statuses");

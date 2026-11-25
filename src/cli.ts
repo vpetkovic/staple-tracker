@@ -490,6 +490,15 @@ function agentName(explicit?: string): string {
 }
 
 /**
+ * The issue reference a verb was given, or a validation refusal that names it. An absent
+ * or blank positional used to reach the store as `undefined` and crash in its lookup.
+ */
+function requireRef(ref: string | undefined, verb: string): string {
+  if (ref === undefined || ref.trim() === "") throw new StapleError("validation", `staple ${verb} needs an issue reference.`);
+  return ref;
+}
+
+/**
  * Stable UI credential, kept next to the hub (0600, like Jupyter's token file). A
  * browser page cannot read the filesystem, so persistence does not weaken the
  * localhost-CSRF story — it only makes bookmarks survive server restarts. Delete the
@@ -1508,8 +1517,9 @@ function main() {
 
     case "show": {
       const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { ...common, run: { type: "string" } } });
+      const ref = requireRef(positionals[0], "show");
       const { store } = getStore(values);
-      const ctx = store.context(positionals[0]!, { runId: instructionRunId(store, positionals[0]!, values.run) });
+      const ctx = store.context(ref, { runId: instructionRunId(store, ref, values.run) });
       if (values.json) {
         // Mirrors MCP get_task: claim, the gate pair and the timing pair ride
         // alongside the context, from the same store expressions get_task
@@ -1743,10 +1753,11 @@ function main() {
           ...ATTEMPT_OPEN_OPTIONS,
         },
       });
+      const ref = requireRef(positionals[0], command);
       const { store } = getStore(values);
       const stale = values["steal-if-stale"];
-      const before = stale === undefined ? null : store.claimActivity(positionals[0]!);
-      const issue = store.checkoutIssue(positionals[0]!, agentName(values.agent), undefined, {
+      const before = stale === undefined ? null : store.claimActivity(ref);
+      const issue = store.checkoutIssue(ref, agentName(values.agent), undefined, {
         stealIfIdleSeconds:
           stale === undefined ? undefined : parseDuration(stale, "steal-if-stale"),
         /**
@@ -1784,10 +1795,11 @@ function main() {
         allowPositionals: true,
         options: { ...common, agent: { type: "string" }, message: { type: "string", short: "m" }, ...ATTEMPT_OPEN_OPTIONS, ...ATTEMPT_END_OPTIONS },
       });
+      const ref = requireRef(positionals[0], command);
       const { store } = getStore(values);
       const issue = completeWithHub(
         store,
-        positionals[0]!,
+        ref,
         command === "done" ? "done" : "cancelled",
         values.message,
         undefined,
@@ -1877,16 +1889,17 @@ function main() {
         allowPositionals: true,
         options: { ...common, agent: { type: "string" }, "if-stale": { type: "string" }, ...ATTEMPT_END_OPTIONS },
       });
+      const ref = requireRef(positionals[0], "release");
       const { store } = getStore(values);
       const stale = values["if-stale"];
       // An issue a restore removed has no checkout or lease left: said, not refused.
-      const gone = store.removedByRestore(positionals[0]!);
+      const gone = store.removedByRestore(ref);
       if (gone !== null) {
         if (values.json) outJson({ released: false, removedByRestore: gone });
         else console.log(gone.message);
         break;
       }
-      const released = store.releaseIssue(positionals[0]!, agentName(values.agent), {
+      const released = store.releaseIssue(ref, agentName(values.agent), {
         ifIdleSeconds: stale === undefined ? undefined : parseDuration(stale, "if-stale"),
         attempt: attemptOptionsFrom(values),
       });
@@ -1913,9 +1926,10 @@ function main() {
         allowPositionals: true,
         options: { ...common, owner: { type: "string" }, message: { type: "string", short: "m" } },
       });
+      const ref = requireRef(positionals[0], "gate");
       const { store } = getStore(values);
       const issue = store.gateIssue(
-        positionals[0]!,
+        ref,
         { owner: values.owner ?? "", comment: values.message },
         agentName(),
       );
@@ -1938,13 +1952,14 @@ function main() {
           message: { type: "string", short: "m" },
         },
       });
+      const ref = requireRef(positionals[0], "approve");
       const { store } = getStore(values);
       const children = (values.children ?? "")
         .split(",")
         .map((s) => s.trim())
         .filter(Boolean);
       const issue = store.approveGate(
-        positionals[0]!,
+        ref,
         { children: children.length > 0 ? children : undefined, comment: values.message },
         agentName(),
       );
@@ -1972,9 +1987,10 @@ function main() {
         allowPositionals: true,
         options: { ...common, message: { type: "string", short: "m" } },
       });
+      const ref = requireRef(positionals[0], "request-changes");
       const { store } = getStore(values);
       const issue = store.requestChanges(
-        positionals[0]!,
+        ref,
         { comment: values.message ?? "" },
         agentName(),
       );
@@ -1995,9 +2011,10 @@ function main() {
         allowPositionals: true,
         options: { ...common, owner: { type: "string" }, action: { type: "string" } },
       });
+      const ref = requireRef(positionals[0], "block");
       const { store } = getStore(values);
       const issue = store.updateIssue(
-        positionals[0]!,
+        ref,
         { status: "blocked", unblockOwner: values.owner, unblockAction: values.action },
         agentName(),
       );
@@ -2015,11 +2032,12 @@ function main() {
         allowPositionals: true,
         options: { ...common, none: { type: "boolean" } },
       });
+      const ref = requireRef(positionals[0], "blocked-by");
       const { store } = getStore(values);
       const refs = values.none
         ? []
         : (positionals[1] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-      const issue = store.setBlockedBy(positionals[0]!, refs, agentName());
+      const issue = store.setBlockedBy(ref, refs, agentName());
       const blockers = store.unresolvedBlockersOf(issue.id);
       if (values.json) {
         outJson({ ...issue, unresolvedBlockers: blockers.map((b) => b.identifier) });
@@ -2035,6 +2053,7 @@ function main() {
         allowPositionals: true,
         options: { ...common, timeout: { type: "string" }, interval: { type: "string" } },
       });
+      const waitRef = requireRef(positionals[0], "wait");
       const intervalMs = positiveOption(values.interval, 500, "interval");
       const timeoutMs =
         values.timeout === undefined ? undefined : positiveOption(values.timeout, 0, "timeout") * 1000;
@@ -2045,7 +2064,7 @@ function main() {
        * first — turned `wait` into a wait on whichever issue took the number, and an agent
        * gated on its own blocked task was told it was ready (`identifier-moves.ts`).
        */
-      const waitedFor = readWithRetry(() => store.getIssue(positionals[0]!), intervalMs);
+      const waitedFor = readWithRetry(() => store.getIssue(waitRef), intervalMs);
       const ref = waitedFor.id;
       const startedAt = Date.now();
       const deadline = timeoutMs === undefined ? undefined : startedAt + timeoutMs;
@@ -2149,11 +2168,15 @@ function main() {
 
     case "link": {
       const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: common });
+      const [blocker, blocked] = positionals;
+      if (!blocker?.trim() || !blocked?.trim()) {
+        throw new StapleError("validation", "staple link needs two issue references: staple link <blocker> <blocked>.");
+      }
       // Each end is a write through a number (`Hub.validateCrossLink`), acknowledged like any other.
       if (values["ack-renumber"] === true) acknowledgeRenumbers();
       const hub = Hub.open();
       try {
-        const link = hub.addCrossLink(positionals[0]!, positionals[1]!);
+        const link = hub.addCrossLink(blocker, blocked);
         if (values.json) {
           outJson(link);
           break;
@@ -2479,8 +2502,10 @@ function main() {
           "no-instructions": { type: "boolean" },
         },
       });
+      const ref = requireRef(positionals[0], "doc");
+      const key = positionals[1];
+      if (!key?.trim()) throw new StapleError("validation", "staple doc needs a document key: staple doc <ref> <key>.");
       const { store } = getStore(values);
-      const [ref, key] = positionals;
       if (values.instructions === true && values["no-instructions"] === true) {
         throw new StapleError("validation", "Pass --instructions or --no-instructions, not both.");
       }
@@ -2489,10 +2514,10 @@ function main() {
       }
       if (values.revisions) {
         if (values.json) {
-          outJson(store.listDocumentRevisions(ref!, key!));
+          outJson(store.listDocumentRevisions(ref, key));
           break;
         }
-        for (const rev of store.listDocumentRevisions(ref!, key!)) {
+        for (const rev of store.listDocumentRevisions(ref, key)) {
           console.log(`r${rev.revision}  ${rev.createdAt.slice(0, 16)}  ${rev.author ?? "?"}  ${rev.changeSummary ?? ""}`);
         }
         break;
@@ -2500,7 +2525,7 @@ function main() {
       if (values.put !== undefined) {
         const body =
           values.put === "-" ? readStdinToEnd() : readFileSync(values.put, "utf8");
-        const result = store.putDocument(ref!, key!, body, {
+        const result = store.putDocument(ref, key, body, {
           baseRevision: values.base ? Number(values.base) : undefined,
           changeSummary: values.summary,
           author: agentName(),
@@ -2513,7 +2538,7 @@ function main() {
         console.log(`${key} @ revision ${result.revision}${result.instructions ? " (instructions)" : ""}`);
         break;
       }
-      const doc = store.getDocument(ref!, key!);
+      const doc = store.getDocument(ref, key);
       if (values.json) {
         outJson(doc);
         break;
