@@ -67,6 +67,26 @@ does not authorize claiming work. Do not fetch a whole workspace tree for one ti
 6. Before interruption or handoff, checkpoint the worklog and branch pointer and
    leave ownership explicit. Resume from that context rather than starting over.
 
+## Link provider issues and pull requests
+
+Staple can link a ticket to a GitHub issue or pull request or a Linear issue and keep
+a read-only copy of its title and state beside the ticket. It never writes to the
+provider, and a link never changes the ticket's status.
+
+- When you open a pull request for a ticket, or a ticket exists because of an issue
+  the person named, link it: `integration_write` with `action: "link"`, the ticket
+  `ref`, the exact `url` and `confirmed: true`. Read the ticket first; `confirmed`
+  states that you checked the target.
+- `integration_read` answers the questions: `preview` (what a URL is and which
+  tickets already link it), `list` (a ticket's links), `mapping` (what this workspace
+  searches), `connections` and `health`. Prefer an exact URL to `search`.
+- A workspace links only the repositories, teams and projects mapped to it. On
+  `outside_scope`, or when a connection is not ready, relay what the answer says to
+  the person. Signing in, configuring connections, mapping sources and sharing a
+  saved copy with other devices are their decisions.
+- Stacked pull requests are explicit: set the parent with `action: "stack"`. Numbers
+  and branch names never imply ancestry.
+
 ## Respect refusals and human decisions
 
 - `conflict`: another holder owns it. Take different eligible work; do not retry
