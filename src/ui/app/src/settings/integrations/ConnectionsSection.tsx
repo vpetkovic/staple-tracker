@@ -24,9 +24,9 @@ import type { Connections } from "@/integrations/useConnections";
 import type { DetectedConnection } from "../../../../../core/integrations/contracts";
 import { ConfirmDialog } from "../form/ConfirmDialog";
 import { InlineError, Section } from "../form/primitives";
-import { commandIn, CONNECTION_CHOICES, connectionMeta, linearIdProblem, offeredDetections } from "./integrations-model";
+import { azureOrganizationProblem, commandIn, CONNECTION_CHOICES, connectionMeta, linearIdProblem, offeredDetections } from "./integrations-model";
 
-type Provider = "github" | "linear";
+type Provider = "github" | "linear" | "azure_devops";
 const message = (caught: unknown) => (caught instanceof Error ? caught.message : String(caught));
 
 /** Icon buttons at the end of a row: 32px, 44px under a finger. */
@@ -227,6 +227,7 @@ export function ConnectionsSection({ state, ws, onDirtyChange, now: fixedNow }: 
           ) : null}
           {form === "github" && !empty ? formRow("github") : null}
           {form === "linear" && hasLinear ? formRow("linear") : null}
+          {form === "azure_devops" ? formRow("azure_devops") : null}
         </ListFrame>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -476,7 +477,7 @@ function DetectedRow({ detected: d, ws, reload }: { detected: DetectedConnection
   );
 }
 
-const DEFAULT_ENV = "STAPLE_LINEAR_API_KEY";
+const DEFAULT_ENV: Record<Exclude<Provider, "github">, string> = { linear: "STAPLE_LINEAR_API_KEY", azure_devops: "STAPLE_AZURE_DEVOPS_PAT" };
 
 /**
  * An add form, as a row of the list. Save stays off until the required fields are filled; a
@@ -492,14 +493,15 @@ export function ConnectionForm({ provider, ws, onCancel, onSaved, onDirtyChange 
 }) {
   const [host, setHost] = useState("github.com");
   const [account, setAccount] = useState("");
-  const [credentialEnv, setCredentialEnv] = useState(DEFAULT_ENV);
+  const defaultEnv = provider === "github" ? "" : DEFAULT_ENV[provider];
+  const [credentialEnv, setCredentialEnv] = useState(defaultEnv);
   const [organization, setOrganization] = useState("");
   const [user, setUser] = useState("");
   const [pending, setPending] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const root = useRef<HTMLFormElement>(null);
 
-  const dirty = provider === "github" ? account !== "" || host !== "github.com" : organization !== "" || user !== "" || credentialEnv !== DEFAULT_ENV;
+  const dirty = provider === "github" ? account !== "" || host !== "github.com" : organization !== "" || user !== "" || credentialEnv !== defaultEnv;
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
 
   // Radix closes the dialog on Escape from a capturing listener on the document, so the form
@@ -515,9 +517,11 @@ export function ConnectionForm({ provider, ws, onCancel, onSaved, onDirtyChange 
     return () => window.removeEventListener("keydown", onKey, true);
   }, [onCancel]);
 
-  const idProblem = provider === "linear" ? linearIdProblem(organization, user) : null;
+  const idProblem = provider === "linear" ? linearIdProblem(organization, user) : provider === "azure_devops" ? azureOrganizationProblem(organization) : null;
   const complete =
-    provider === "github" ? host.trim() !== "" && account.trim() !== "" : credentialEnv.trim() !== "" && organization.trim() !== "" && user.trim() !== "" && !idProblem;
+    provider === "github"
+      ? host.trim() !== "" && account.trim() !== ""
+      : credentialEnv.trim() !== "" && organization.trim() !== "" && (provider === "azure_devops" || user.trim() !== "") && !idProblem;
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!complete || pending) return;
@@ -527,7 +531,9 @@ export function ConnectionForm({ provider, ws, onCancel, onSaved, onDirtyChange 
       await integrationConfigure(
         provider === "github"
           ? { action: "configure", host: host.trim(), account: account.trim() }
-          : { action: "configure", providerId: "linear", account: user.trim(), scopeId: organization.trim(), credentialEnv: credentialEnv.trim() },
+          : provider === "azure_devops"
+            ? { action: "configure", providerId: "azure_devops", organization: organization.trim(), credentialEnv: credentialEnv.trim() }
+            : { action: "configure", providerId: "linear", account: user.trim(), scopeId: organization.trim(), credentialEnv: credentialEnv.trim() },
         ws,
       );
       await onSaved();
@@ -543,7 +549,7 @@ export function ConnectionForm({ provider, ws, onCancel, onSaved, onDirtyChange 
       <div className="flex items-center gap-3">
         <ProviderTile providerId={provider} />
         <p id={`${id}-title`} className="mt-1 text-body font-medium">
-          {provider === "github" ? "Add a GitHub account" : "Connect Linear"}
+          {provider === "github" ? "Add a GitHub account" : provider === "azure_devops" ? "Connect Azure DevOps" : "Connect Linear"}
         </p>
       </div>
       <div className={cn(TEXT_INDENT, "space-y-3 @max-[30rem]:ml-0")}>
@@ -556,6 +562,24 @@ export function ConnectionForm({ provider, ws, onCancel, onSaved, onDirtyChange 
               <Input id={`${id}-account`} value={account} onChange={(e) => setAccount(e.target.value)} placeholder="The account gh is signed in as" autoComplete="off" autoFocus className="pointer-coarse:h-11" />
             </FormField>
           </div>
+        ) : provider === "azure_devops" ? (
+          <>
+            <div className="grid gap-3 @min-[30rem]:grid-cols-2">
+              <FormField id={`${id}-org`} label="Organization">
+                <Input id={`${id}-org`} value={organization} onChange={(e) => setOrganization(e.target.value)} placeholder="The name in dev.azure.com/<organization>" autoComplete="off" spellCheck={false} autoFocus aria-describedby={`${id}-org-help`} className="pointer-coarse:h-11" />
+              </FormField>
+              <FormField id={`${id}-env`} label="Token variable">
+                <Input id={`${id}-env`} value={credentialEnv} onChange={(e) => setCredentialEnv(e.target.value)} autoComplete="off" spellCheck={false} aria-describedby={`${id}-org-help`} className="pointer-coarse:h-11" />
+              </FormField>
+            </div>
+            {idProblem ? (
+              <InlineError id={`${id}-org-help`}>{idProblem}</InlineError>
+            ) : (
+              <p id={`${id}-org-help`} className="text-label text-muted-foreground">
+                The variable holds a personal access token with Work Items (Read) and Project and Team (Read), in the environment Staple runs in. Staple reads your user and organization from it when you save.
+              </p>
+            )}
+          </>
         ) : (
           <>
             <FormField

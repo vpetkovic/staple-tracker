@@ -33,7 +33,7 @@ export interface PickerPage {
 export const CONNECTION_CHOICES: ReadonlyArray<{ providerId: string; label: string; available: boolean }> = [
   { providerId: "github", label: "GitHub account or Enterprise host", available: true },
   { providerId: "linear", label: "Linear workspace", available: true },
-  { providerId: "azure_devops", label: "Azure DevOps", available: false },
+  { providerId: "azure_devops", label: "Azure DevOps organization", available: true },
   { providerId: "clickup", label: "ClickUp", available: false },
 ];
 
@@ -50,6 +50,8 @@ export function commandIn(action: string | null): string | null {
 export function connectionMeta(connection: ConnectionView): string {
   if (connection.providerId === "linear")
     return [connection.health?.identity?.login ?? "Linear account", connection.health?.identity?.organization, `API key in ${connection.credentialEnv}`].filter(Boolean).join(" · ");
+  if (connection.providerId === "azure_devops")
+    return [connection.health?.identity?.login ?? "Azure DevOps account", connection.organization, `token in ${connection.credentialEnv}`].filter(Boolean).join(" · ");
   return [connection.account, connection.host === "github.com" ? null : connection.host, "through GitHub CLI"].filter(Boolean).join(" · ");
 }
 
@@ -88,9 +90,22 @@ export function linearIdProblem(organization: string, user: string): string | nu
   return field ? `${field} should be the 36-character id Linear shows, like 123e4567-e89b-12d3-a456-426614174000.` : null;
 }
 
+const AZURE_ORGANIZATION = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,48}[A-Za-z0-9])?$/;
+
+/** What is wrong with an Azure DevOps organization name, before the server is asked; null while it is empty or right. */
+export function azureOrganizationProblem(organization: string): string | null {
+  const value = organization.trim();
+  return value === "" || AZURE_ORGANIZATION.test(value) ? null : "Use the organization name from dev.azure.com/<organization>: letters, numbers and hyphens.";
+}
+
+/** The kinds of source a connection offers, in picker order. */
+export function containerKinds(providerId: string): ContainerKind[] {
+  return providerId === "linear" ? ["team", "project"] : providerId === "azure_devops" ? ["project"] : ["repository"];
+}
+
 export interface PickerSection {
   kind: ContainerKind;
-  /** "Teams" / "Projects" under a Linear connection; null for a GitHub connection's one list. */
+  /** "Teams" / "Projects" under a Linear connection; null for a connection's one list. */
   label: string | null;
   items: Array<PickerItem & { mapped: boolean }>;
   nextCursor: string | null;
@@ -103,7 +118,7 @@ export function pickerSections(
   targets: readonly MappedTarget[],
 ): PickerSection[] {
   const mapped = new Set(targets.map((t) => t.key));
-  const kinds: Array<[ContainerKind, string | null]> = providerId === "linear" ? [["team", "Teams"], ["project", "Projects"]] : [["repository", null]];
+  const kinds: Array<[ContainerKind, string | null]> = providerId === "linear" ? [["team", "Teams"], ["project", "Projects"]] : containerKinds(providerId).map((kind) => [kind, null]);
   return kinds.flatMap(([kind, label]) => {
     const page = pages[kind];
     if (!page) return [];

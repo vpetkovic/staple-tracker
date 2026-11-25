@@ -46,10 +46,11 @@ export function stateLabel(item: SourceItem): string | null {
 export function providerName(providerId: string): string {
   if (providerId === "github") return "GitHub";
   if (providerId === "linear") return "Linear";
+  if (providerId === "azure_devops") return "Azure DevOps";
   return providerId.charAt(0).toUpperCase() + providerId.slice(1);
 }
 
-/** `owner/repo` for a GitHub key, the team key for a Linear one (`ENG-4` → `ENG`). */
+/** `owner/repo` for a GitHub key, the project for an Azure DevOps one, the team key for a Linear one (`ENG-4` → `ENG`). */
 export function containerLabel(item: SourceItem): string {
   const hash = item.key.lastIndexOf("#");
   if (hash > 0) return item.key.slice(0, hash);

@@ -78,7 +78,8 @@ export function groupResults(answers: ReadonlyArray<Pick<MixedResults, "cached" 
   for (const hit of merged) {
     if (live.has(resourceKey(hit.item))) continue;
     const ref = hit.item.ref;
-    const mapped = targets.find((t) => t.kind !== "project" && t.providerId === ref.providerId && t.host === ref.host
+    // A Linear project is a filter across teams; every other target is the item's own container.
+    const mapped = targets.find((t) => !(t.providerId === "linear" && t.kind === "project") && t.providerId === ref.providerId && t.host === ref.host
       && t.scopeId === ref.scopeId && t.containerId.toLowerCase() === ref.containerId.toLowerCase());
     if (mapped) {
       add(`target:${mapped.key}`, mapped.name ?? containerLabel(hit.item), ref.providerId, hit);
@@ -173,17 +174,20 @@ export function answerFor(text: string, kind: KindFilter, containerKey: string |
 /**
  * The connection to read an item through, so the server never has to choose between two
  * accounts on one host: the one serving the source a live result came from; for a pasted
- * link, a ready connection on its host, preferring one that serves a source in scope.
+ * link, a ready connection on its host, preferring one that serves a source in scope. Where one
+ * host serves several organizations (Linear, Azure DevOps), only that organization's connection fits.
  */
 export function connectionFor(
-  where: { providerId?: string; host: string },
+  where: { providerId?: string; host: string; scopeId?: string; organization?: string },
   targetKey: string | undefined,
   targets: readonly MappingTarget[],
-  connections: ReadonlyArray<Pick<ConnectionView, "id" | "providerId" | "host" | "health">>,
+  connections: ReadonlyArray<Pick<ConnectionView, "id" | "providerId" | "host" | "health"> & { scopeId?: string; organization?: string }>,
 ): string | undefined {
   const served = targets.find((t) => t.key === targetKey)?.connectionId;
   if (served) return served;
-  const ready = connections.filter((c) => (!where.providerId || c.providerId === where.providerId) && c.host === where.host && c.health?.state === "ready");
+  const ready = connections.filter((c) => (!where.providerId || c.providerId === where.providerId) && c.host === where.host && c.health?.state === "ready"
+    && (where.scopeId === undefined || c.scopeId === undefined || c.scopeId === where.scopeId)
+    && (where.organization === undefined || c.organization === undefined || c.organization.toLowerCase() === where.organization.toLowerCase()));
   const inScope = new Set(targets.map((t) => t.connectionId));
   return (ready.find((c) => inScope.has(c.id)) ?? ready[0])?.id;
 }

@@ -157,7 +157,7 @@ describe("what Add connection offers", () => {
     expect(CONNECTION_CHOICES.map((c) => [c.providerId, c.label, c.available])).toEqual([
       ["github", "GitHub account or Enterprise host", true],
       ["linear", "Linear workspace", true],
-      ["azure_devops", "Azure DevOps", false],
+      ["azure_devops", "Azure DevOps organization", true],
       ["clickup", "ClickUp", false],
     ]);
   });
