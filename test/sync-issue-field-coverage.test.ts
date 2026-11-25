@@ -63,6 +63,8 @@ const EXCLUDED: Record<string, string> = {
   plan_rank: "as plan_maturity",
   plan_run_mode: "null at create; the person's horizon setting journals it (test/cloud-plan-sync.test.ts)",
   plan_delivered_on: "null at create; the person's delivered-outside-the-tracker mark journals it (test/cloud-plan-sync.test.ts)",
+  branch: "null at create, and left out of a create while null; `staple branch` journals it (test/ticket-branch.test.ts)",
+  base_commit: "as branch",
 };
 
 function armed(): WorkspaceStore {
@@ -166,11 +168,11 @@ describe("issue.create replicates every issues column, or says why not", () => {
     store.db.close();
   });
 
-  it("leaves the plan fields out of a task's create, so it carries what it carried before the plan layer", () => {
+  it("leaves the plan and branch fields out of a task's create, so it carries what it carried before them", () => {
     const store = armed();
     const payload = createPayload(store);
-    const plan = Object.keys(payload).filter((key) => key.startsWith("plan"));
-    expect(plan, "a plan field null on a task travels as no key at all (PLAN_ISSUE_FIELDS)").toEqual([]);
+    const sparse = Object.keys(payload).filter((key) => key.startsWith("plan") || key === "branch" || key === "baseCommit");
+    expect(sparse, "a sparse field null on a task travels as no key at all (SPARSE_ISSUE_FIELDS)").toEqual([]);
     store.db.close();
   });
 

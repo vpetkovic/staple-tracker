@@ -34,7 +34,7 @@ import {
   DERIVED_ISSUE_FIELDS,
   ISSUE_FIELDS,
   MILESTONE_FIELDS,
-  PLAN_ISSUE_FIELDS,
+  SPARSE_ISSUE_FIELDS,
   PROJECT_FIELDS,
   decodeColumn,
   type Column,
@@ -63,7 +63,7 @@ const withoutDerived = (fields: Record<string, Column>): Record<string, Column> 
   Object.fromEntries(Object.entries(fields).filter(([field]) => !DERIVED_ISSUE_FIELDS.has(field)));
 
 export const CAPTURED_TABLES: readonly CapturedTable[] = [
-  { table: "issues", entity: "issue", key: "id", fields: withoutDerived(ISSUE_FIELDS), nullOmittedOnInsert: PLAN_ISSUE_FIELDS },
+  { table: "issues", entity: "issue", key: "id", fields: withoutDerived(ISSUE_FIELDS), nullOmittedOnInsert: SPARSE_ISSUE_FIELDS },
   { table: "comments", entity: "comment", key: "id", fields: COMMENT_FIELDS },
   { table: "projects", entity: "project", key: "id", fields: PROJECT_FIELDS },
   { table: "milestone_meta", entity: "milestone", key: "issue_id", fields: MILESTONE_FIELDS, insertNullsAreDefaults: true },
