@@ -2504,6 +2504,7 @@ function main() {
       });
       const ref = requireRef(positionals[0], "doc");
       const key = positionals[1];
+      if (!key?.trim()) throw new StapleError("validation", "staple doc needs a document key: staple doc <ref> <key>.");
       const { store } = getStore(values);
       if (values.instructions === true && values["no-instructions"] === true) {
         throw new StapleError("validation", "Pass --instructions or --no-instructions, not both.");
@@ -2513,10 +2514,10 @@ function main() {
       }
       if (values.revisions) {
         if (values.json) {
-          outJson(store.listDocumentRevisions(ref, key!));
+          outJson(store.listDocumentRevisions(ref, key));
           break;
         }
-        for (const rev of store.listDocumentRevisions(ref, key!)) {
+        for (const rev of store.listDocumentRevisions(ref, key)) {
           console.log(`r${rev.revision}  ${rev.createdAt.slice(0, 16)}  ${rev.author ?? "?"}  ${rev.changeSummary ?? ""}`);
         }
         break;
@@ -2524,7 +2525,7 @@ function main() {
       if (values.put !== undefined) {
         const body =
           values.put === "-" ? readStdinToEnd() : readFileSync(values.put, "utf8");
-        const result = store.putDocument(ref, key!, body, {
+        const result = store.putDocument(ref, key, body, {
           baseRevision: values.base ? Number(values.base) : undefined,
           changeSummary: values.summary,
           author: agentName(),
@@ -2537,7 +2538,7 @@ function main() {
         console.log(`${key} @ revision ${result.revision}${result.instructions ? " (instructions)" : ""}`);
         break;
       }
-      const doc = store.getDocument(ref, key!);
+      const doc = store.getDocument(ref, key);
       if (values.json) {
         outJson(doc);
         break;

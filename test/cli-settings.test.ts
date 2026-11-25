@@ -92,6 +92,14 @@ describe("a verb missing its issue reference", () => {
     }
   });
 
+  it("refuses doc with a reference but no document key", () => {
+    for (const args of [["doc", "VOC-1"], ["doc", "VOC-1", "--revisions"]]) {
+      const result = staple(...args, "--json");
+      expect(result.status).toBe(2);
+      expect(lastJson(result.stderr)).toMatchObject({ code: "validation", message: "staple doc needs a document key: staple doc <ref> <key>." });
+    }
+  });
+
   it("still checks out an issue named by a valid reference", () => {
     const result = staple("checkout", "VOC-1", "--json");
     expect(result.status).toBe(0);
