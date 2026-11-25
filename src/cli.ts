@@ -398,22 +398,6 @@ function estimateOption(
 }
 
 /**
- * `staple estimate <ref> <dur>` / `staple estimate <ref> --clear`, resolved to the store's
- * REQUIRED value: seconds to set, or null to clear. Never undefined — that is the
- * status verb's "leave it alone", and this verb exists only to change the estimate.
- *
- * The grammar keeps `estimateOption`'s shell-safety property (see above) in both of the
- * shapes an unset variable can take:
- *
- *  - `staple estimate STA-42 "$EST"` with EST unset passes `""`, which `parseDuration`
- *    refuses — an empty string is never a clear.
- *  - `staple estimate STA-42 $EST` unquoted passes nothing at all, which is refused here
- *    as a missing duration — an absent value is never a clear either.
- *
- * Only the literal `--clear` erases, and `<dur> --clear` together is refused rather than
- * resolved by precedence, for the reason `estimateOption` gives.
- */
-/**
  * The blocker set `staple blocked-by` replaces the issue's with. The set is replaced whole, so
  * an absent or blank list used to clear every blocker without a word; only --none clears.
  */
@@ -436,6 +420,22 @@ function blockedByVerbList(raw: string | undefined, extra: readonly string[], no
   return refs;
 }
 
+/**
+ * `staple estimate <ref> <dur>` / `staple estimate <ref> --clear`, resolved to the store's
+ * REQUIRED value: seconds to set, or null to clear. Never undefined — that is the
+ * status verb's "leave it alone", and this verb exists only to change the estimate.
+ *
+ * The grammar keeps `estimateOption`'s shell-safety property (see above) in both of the
+ * shapes an unset variable can take:
+ *
+ *  - `staple estimate STA-42 "$EST"` with EST unset passes `""`, which `parseDuration`
+ *    refuses — an empty string is never a clear.
+ *  - `staple estimate STA-42 $EST` unquoted passes nothing at all, which is refused here
+ *    as a missing duration — an absent value is never a clear either.
+ *
+ * Only the literal `--clear` erases, and `<dur> --clear` together is refused rather than
+ * resolved by precedence, for the reason `estimateOption` gives.
+ */
 function estimateVerbValue(
   ref: string | undefined,
   raw: string | undefined,
