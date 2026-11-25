@@ -6,9 +6,9 @@ description: Every tool the staple MCP server offers, grouped by what an agent i
 # MCP tools
 
 Use this page to find the tool an agent calls for a job, and the command you would
-type for the same thing. The server offers 75 tools: 73 for the agent, grouped the
-same way as the [CLI reference](cli.md), and two that only its views call
-([Buttons in a view](#buttons-in-a-view)). A tool and its command follow the same rules, and most
+type for the same thing. The server offers 89 tools, grouped the same way as the
+[CLI reference](cli.md); three of them only its views call
+([Buttons in a view](#buttons-in-a-view), and the plan's `reset_idea_baseline`). A tool and its command follow the same rules, and most
 answer the same object the command prints with `--json`.
 
 1. Add the server once per machine, naming the agent
@@ -36,13 +36,14 @@ The loop an agent follows, described in
 | Tool | What it does | CLI | Writes |
 |---|---|---|---|
 | `inbox` | What is ready, waiting on a person, or blocked, in pickup order | `staple inbox` | no |
-| `attention` | The work waiting on a person, as rows: gates, resubmitted gates, person-owned blockers, reviews, tickets made ready by closed cross-workspace blockers, stopped runs, silent claims and sync conflicts. Each row names its workspace, age and one action. `hub: true` covers every workspace | `staple attention` | no |
+| `attention` | The work waiting on a person, as rows: gates, resubmitted gates, person-owned blockers, reviews, pull requests with failing checks, tickets made ready by closed cross-workspace blockers, stopped runs, silent claims and sync conflicts. Each row names its workspace, age and one action. `hub: true` covers every workspace | `staple attention` | no |
 | `list_tasks` | List tickets by status, kind, assignee or text | `staple ls` | no |
 | `get_task` | One ticket in full: claim, time, gate, blockers, attempts, and file metadata. `foundIn` names the ticket a finding was filed from, and `findings` lists what was found in this one; each carries `disposition`, `blocker` or `follow-up` | `staple show` | no |
 | `create_task` | File a ticket, with parent, blockers and estimate. For a review finding, `found_in` names the ticket it was found in, and `blocks` (`true`, or a parent, ancestor or milestone of that ticket) blocks it in the same write | `staple new --found-in` | yes |
 | `update_task` | Change status or fields; `status: "done"` finishes it. `acceptance_criteria` replaces the criteria, `remove_criteria` (1-based positions) and `add_criteria` edit them in place (answers `criteriaChange`, naming any mark it cleared); `parent` moves the ticket and its subtree, null to the top level (answers `parentChange`) | `staple status`, `staple done`, `staple criteria`, `staple move` | yes |
 | `checkout_task` | Claim a ticket and start it | `staple start` | yes |
 | `release_task` | Give a claim back | `staple release` | yes |
+| `set_branch` | Record the branch a ticket is worked on and its base commit (`null` clears). Answers the branch and every linked pull request with its state and checks. The pull requests on that branch are found and linked by `integration_write` `discover` and the web UI's poll | `staple branch` | yes |
 | `add_comment` | Add a comment | `staple comment` | yes |
 | `list_comments` | A ticket's comments, oldest first | `staple show` | no |
 | `put_document` | Store a plan, worklog or other document on a ticket. `instructions: true` makes it an instruction document for everything beneath the ticket | `staple doc --put` | yes |

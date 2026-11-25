@@ -44,8 +44,10 @@ The loser is told to move on, and it should take a different ticket, never retry
 error(conflict): Checkout refused: status is "in_progress" (held by claude), expected one of todo, backlog, blocked. Pick a different task — do not retry.
 ```
 
-Right after claiming, the agent comments where the work lives, so the next session
-can find it: `staple comment APP-1 "Branch pointer: branch feat/health-check, base 3f2a1bc."`
+Right after claiming, the agent records the branch on the ticket and comments where the
+work lives, so the next session can find it: `staple branch APP-1 feat/health-check --base 3f2a1bc`
+and `staple comment APP-1 "Branch pointer: branch feat/health-check, base 3f2a1bc."` The pull
+requests it opens from that branch are then [linked by themselves](integrations.md#pull-requests-for-a-tickets-branch).
 
 In a client that draws [views in the thread](mcp-apps.md), you see the ticket it took
 as a card: `checkout_task` draws it, and an agent that claimed with the CLI calls
