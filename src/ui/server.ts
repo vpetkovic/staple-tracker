@@ -5234,8 +5234,21 @@ export function startUiServer(options: UiOptions): UiHandle {
       }
 
       if (url.pathname === "/api/milestones") {
-        const handle = handleFor(url.searchParams.get("ws") ?? undefined);
-        json(res, 200, handle.store.milestones().list({ all: url.searchParams.get("all") === "1" }));
+        const wanted = url.searchParams.get("ws") ?? undefined;
+        const all = url.searchParams.get("all") === "1";
+        if (options.hub && !wanted) {
+          // Every workspace, as /api/issues and /api/projects read them. One without the
+          // milestone kind has no milestones: it contributes nothing rather than refusing the hub.
+          json(
+            res,
+            200,
+            allHandles()
+              .filter((h) => h.store.getKinds().some((kind) => kind.id === MILESTONE_KIND))
+              .flatMap((h) => h.store.milestones().list({ all }).map((row) => ({ ...row, workspace: h.slug }))),
+          );
+          return;
+        }
+        json(res, 200, handleFor(wanted).store.milestones().list({ all }));
         return;
       }
 

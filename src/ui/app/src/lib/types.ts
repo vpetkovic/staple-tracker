@@ -1494,7 +1494,11 @@ export interface MilestoneRemaining {
 }
 
 /** A `GET /api/milestones` row: the view without its members or goal, plus how many members there are. */
-export type MilestoneListRow = Omit<MilestoneView, "members" | "goal"> & { memberCount: number };
+export type MilestoneListRow = Omit<MilestoneView, "members" | "goal"> & {
+  memberCount: number;
+  /** Present only on a hub read with no workspace named: the workspace the row belongs to. */
+  workspace?: string;
+};
 
 /**
  * The milestone's goal as the check reads it now (core/milestone-goal.ts, design/milestones.md
