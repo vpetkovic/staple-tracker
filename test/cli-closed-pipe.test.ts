@@ -7,7 +7,7 @@
  * which is exactly what `head` does. The ticket's description is far larger than a pipe
  * buffer, so the CLI is guaranteed to still be writing when the reader goes away.
  */
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,17 +32,24 @@ afterAll(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
-/** Run the CLI, close its stdout after the first chunk, and report how it ended. */
-function stapleIntoClosedPipe(...args: string[]): Promise<{ code: number | null; stderr: string; firstChunk: string }> {
+const cliArgs = (args: string[]) => ["--import", "tsx", "src/cli.ts", ...args];
+const cliEnv = () => ({ ...process.env, STAPLE_HOME: home, STAPLE_AGENT: "pipe-test", NODE_NO_WARNINGS: "1" });
+
+/**
+ * Run the CLI, close its stdout after the first chunk, and report how it ended. `stdin`, if
+ * given, is fed in; stdin is closed either way.
+ */
+function stapleIntoClosedPipe(
+  args: string[],
+  stdin?: Buffer,
+): Promise<{ code: number | null; stderr: string; firstChunk: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      ["--import", "tsx", "src/cli.ts", ...args, "--db", dbPath],
-      {
-        env: { ...process.env, STAPLE_HOME: home, STAPLE_AGENT: "pipe-test", NODE_NO_WARNINGS: "1" },
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
+    const child = spawn(process.execPath, cliArgs(args), {
+      env: cliEnv(),
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    child.stdin.on("error", () => undefined);
+    child.stdin.end(stdin);
     let stderr = "";
     let firstChunk = "";
     child.stderr.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
@@ -57,17 +64,29 @@ function stapleIntoClosedPipe(...args: string[]): Promise<{ code: number | null;
 
 describe("a reader that closes the pipe early ends the CLI quietly", () => {
   it("text output: no stack trace, exit 0", async () => {
-    const result = await stapleIntoClosedPipe("show", "PIP-1");
+    const result = await stapleIntoClosedPipe(["show", "PIP-1", "--db", dbPath]);
     expect(result.firstChunk).toContain("PIP-1");
-    expect(result.stderr).not.toMatch(/EPIPE|Unhandled 'error' event|at /);
     expect(result.stderr).toBe("");
     expect(result.code).toBe(0);
   });
 
   it("JSON output: no stack trace, exit 0", async () => {
-    const result = await stapleIntoClosedPipe("show", "PIP-1", "--json");
+    const result = await stapleIntoClosedPipe(["show", "PIP-1", "--json", "--db", dbPath]);
     expect(result.firstChunk).toMatch(/^\{"issue":/);
     expect(result.stderr).toBe("");
     expect(result.code).toBe(0);
+  });
+
+  it("budget ingest --tee: stops echoing and ends exactly as it would with a reader that read everything", async () => {
+    // --tee echoes stdin with direct fd writes, not through process.stdout, so it needs its
+    // own handling. Far more than a pipe buffer, so the echo is still going when the pipe closes.
+    const input = Buffer.from("x".repeat(1_000_000));
+    const args = ["budget", "ingest", "--source", "claude-statusline", "--tee"];
+    const baseline = spawnSync(process.execPath, cliArgs(args), { env: cliEnv(), input, encoding: "utf8" });
+    const result = await stapleIntoClosedPipe(args, input);
+    expect(result.firstChunk).toMatch(/^x+$/);
+    expect(result.stderr).not.toMatch(/EPIPE/);
+    expect(result.stderr).toBe(baseline.stderr);
+    expect(result.code).toBe(baseline.status);
   });
 });

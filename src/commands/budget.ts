@@ -264,17 +264,22 @@ function readStdinBytes(fd = 0): Buffer {
   return Buffer.concat(chunks);
 }
 
-/** Write every byte to fd 1, parking on a non-blocking pipe that is momentarily full. */
+/**
+ * Write every byte to fd 1, parking on a non-blocking pipe that is momentarily full. A reader
+ * that has gone away (EPIPE) ends the echo, not the command: the reading is still ingested.
+ */
 function writeAllBytes(bytes: Buffer, fd = 1): void {
   let offset = 0;
   while (offset < bytes.length) {
     try {
       offset += writeSync(fd, bytes, offset, bytes.length - offset);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EAGAIN") {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EAGAIN") {
         Atomics.wait(PARK, 0, 0, 5);
         continue;
       }
+      if (code === "EPIPE") return;
       throw error;
     }
   }
