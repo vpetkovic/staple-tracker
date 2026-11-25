@@ -272,7 +272,7 @@ export default function Bento(): ReactNode {
 
           <section className={clsx(styles.band, styles.alongside)} aria-labelledby="bento-alongside">
             <div className={styles.lede}>
-              <p className={styles.eyebrow}>Next to Linear, GitHub and ClickUp</p>
+              <p className={styles.eyebrow}>Next to GitHub, Linear, ClickUp and Azure DevOps</p>
               <h2 id="bento-alongside" className={clsx(styles.title, styles.tick)}>
                 Keep your team’s board. Give agents <em>their own</em>.
               </h2>
@@ -287,11 +287,13 @@ export default function Bento(): ReactNode {
                 staple does not replace your team’s tracker. It is the execution layer: the place where agents do the
                 work, locally, ticket by ticket. Your team’s board stays where people plan, discuss and report.
               </p>
+              <p>
+                Link a ticket to a GitHub issue or pull request, or to a Linear issue, and its title and state stay
+                beside the work. The link is read-only: staple never changes anything in your tracker.
+              </p>
               <p className={styles.plannedNote}>
                 <Planned />
-                Integrations that keep the two in sync, with GitHub Issues, ClickUp and Linear, are planned, not
-                shipped. Today staple does not read from or write to any of them: use it alongside them and carry
-                items across yourself.
+                ClickUp and Azure DevOps, and sync that writes back to your tracker, are planned, not shipped.
               </p>
             </div>
             <div className={styles.compare}>
