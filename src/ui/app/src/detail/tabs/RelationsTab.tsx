@@ -65,7 +65,7 @@ import { selectionTarget } from "@/views/graph/graph-folding";
 import { nodeTypes, type GraphFlowNode } from "@/views/graph/node-types";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
 import { EmptyState, SectionHeading, cn } from "../parts";
-import { directCounts, relationStats, unreachableWords } from "../relation-stats";
+import { directCounts, findingNote, relationStats, unreachableWords } from "../relation-stats";
 import type { TabProps } from "./registry";
 
 import "./tabs.css";
@@ -457,9 +457,13 @@ export function RelationsTab({ detail, workspace, onAuthError }: TabProps) {
     (a, b) => Number(isResolvedStatus(a.status)) - Number(isResolvedStatus(b.status)),
   );
   const milestone = detail.milestone ?? null;
+  const foundIn = detail.foundIn ?? null;
+  const findings = detail.findings ?? [];
   const nothing =
     !parent &&
     !milestone &&
+    !foundIn &&
+    findings.length === 0 &&
     detail.children.length === 0 &&
     detail.blockedBy.length === 0 &&
     detail.blocks.length === 0 &&
@@ -500,6 +504,34 @@ export function RelationsTab({ detail, workspace, onAuthError }: TabProps) {
               onOpen={() => open(parent.identifier, detail.workspace)}
             />
           ) : null}
+        </Group>
+      ) : null}
+
+      {/* A finding names the ticket it was found in; the origin lists what was found in it. */}
+      {foundIn ? (
+        <Group title="Found in">
+          <TaskRow
+            identifier={foundIn.identifier}
+            title={foundIn.title}
+            status={foundIn.status}
+            note={findingNote(foundIn.disposition)}
+            onOpen={() => open(foundIn.identifier, detail.workspace)}
+          />
+        </Group>
+      ) : null}
+
+      {findings.length > 0 ? (
+        <Group title="Findings">
+          {findings.map((finding) => (
+            <TaskRow
+              key={finding.identifier}
+              identifier={finding.identifier}
+              title={finding.title}
+              status={finding.status}
+              note={findingNote(finding.disposition)}
+              onOpen={() => open(finding.identifier, detail.workspace)}
+            />
+          ))}
         </Group>
       ) : null}
 

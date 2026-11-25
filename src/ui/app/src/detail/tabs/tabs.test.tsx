@@ -16,6 +16,7 @@ import type { IssueAttachment, IssueComment, IssueDetail, IssueTiming } from "@/
 import { ActivityTab } from "./ActivityTab";
 import { DocumentsTab } from "./DocumentsTab";
 import { FilesTab } from "./FilesTab";
+import { OverviewTab } from "./OverviewTab";
 import { RelationsTab } from "./RelationsTab";
 import { visibleTabs, type TabProps } from "./registry";
 
@@ -185,11 +186,57 @@ describe("Connections", () => {
     expect(html).not.toContain("Status unknown");
   });
 
+  it("names the ticket a finding was found in, marked a blocker or a follow-up", () => {
+    const html = render(
+      RelationsTab,
+      detail({ foundIn: { identifier: "STA-20", title: "where it was found", status: "in_review", disposition: "blocker" } }),
+    );
+    expect(html).not.toContain("This task stands on its own");
+    expect(html).toContain('aria-label="Found in"');
+    expect(html).toMatch(/<button type="button" title="STA-20 · where it was found"/);
+    expect(html).toContain("In Review · Blocker");
+  });
+
+  it("lists what was found in a ticket, each a blocker or a follow-up, after where it sits", () => {
+    const html = render(
+      RelationsTab,
+      detail({
+        ancestors: [issue({ identifier: "STA-40", title: "the parent epic" })],
+        findings: [
+          { identifier: "STA-71", title: "a blocking finding", status: "todo", disposition: "blocker" },
+          { identifier: "STA-72", title: "a later finding", status: "backlog", disposition: "follow-up" },
+        ],
+      }),
+    );
+    expect(html.indexOf('aria-label="Part of"')).toBeLessThan(html.indexOf('aria-label="Findings"'));
+    expect(html).toMatch(/<button type="button" title="STA-71 · a blocking finding"/);
+    expect(html).toContain("Todo · Blocker");
+    expect(html).toContain("Backlog · Follow-up");
+  });
+
   it("says a task with no connections stands on its own, instead of drawing an empty canvas", () => {
     const html = render(RelationsTab, detail());
     expect(html).toContain("data-empty-state");
     expect(html).toContain("This task stands on its own");
     expect(html).not.toContain("Show map");
+  });
+});
+
+describe("Details", () => {
+  it("names where a finding was found and lists an origin's findings, with the waiting-on rows' pattern", () => {
+    const html = render(
+      OverviewTab,
+      detail({
+        foundIn: { identifier: "STA-20", title: "where it was found", status: "in_review", disposition: "follow-up" },
+        findings: [{ identifier: "STA-71", title: "a blocking finding", status: "todo", disposition: "blocker" }],
+      }),
+    );
+    expect(html).toContain('aria-label="Found in"');
+    expect(html).toContain('aria-label="Findings"');
+    expect(html).toContain('data-relation="STA-20"');
+    expect(html).toContain('data-relation="STA-71"');
+    expect(html).toContain(">Follow-up<");
+    expect(html).toContain(">Blocker<");
   });
 });
 

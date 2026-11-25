@@ -45,6 +45,7 @@ import { Markdown } from "@/lib/markdown";
 import { useSession } from "@/lib/session";
 import { statusCategory, statusLabel } from "@/lib/settings";
 import type { CrossBlocker, IssueDocumentMeta, IssueRef } from "@/lib/types";
+import { findingNote } from "../relation-stats";
 import { useResource } from "@/lib/useStaple";
 import { cn } from "../parts/cn";
 import { displayExcerptLine, excerptWorklog, WORKLOG_KEY } from "@/lib/worklog";
@@ -60,7 +61,7 @@ import { InstructionsSection } from "../InstructionsSection";
  * A related task as one quiet row: its status icon, its title, and its reference at the end.
  * The whole row opens it.
  */
-function RelationRow({ relation, onOpen }: { relation: IssueRef; onOpen: (identifier: string) => void }) {
+function RelationRow({ relation, onOpen, note }: { relation: IssueRef; onOpen: (identifier: string) => void; /** Quiet words before the id, e.g. a finding's disposition. */ note?: string }) {
   return (
     <li>
       <button
@@ -73,6 +74,7 @@ function RelationRow({ relation, onOpen }: { relation: IssueRef; onOpen: (identi
       >
         <StatusIcon status={relation.status} className="size-4 shrink-0" />
         <span className="min-w-0 flex-1 truncate text-body text-foreground">{relation.title}</span>
+        {note ? <span className="shrink-0 text-label text-text-secondary">{note}</span> : null}
         <span className="shrink-0 text-label text-text-tertiary">{relation.identifier}</span>
         <ArrowUpRight aria-hidden className="size-3.5 shrink-0 text-text-tertiary opacity-0 transition-opacity duration-150 group-hover:opacity-100" />
       </button>
@@ -331,6 +333,27 @@ export function OverviewTab({ detail, workspace, onAuthError }: TabProps) {
           <ul className="-mx-2 m-0 flex list-none flex-col gap-0.5 p-0">
             {detail.blocks.map((relation) => (
               <RelationRow key={relation.identifier} relation={relation} onOpen={openRef} />
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {/* A finding names the ticket it was found in; the origin lists what was found in it. */}
+      {detail.foundIn ? (
+        <section aria-label="Found in" className="mt-8">
+          <SectionHeading>Found in</SectionHeading>
+          <ul className="-mx-2 m-0 flex list-none flex-col gap-0.5 p-0">
+            <RelationRow relation={detail.foundIn} note={findingNote(detail.foundIn.disposition)} onOpen={openRef} />
+          </ul>
+        </section>
+      ) : null}
+
+      {detail.findings?.length ? (
+        <section aria-label="Findings" className="mt-8">
+          <SectionHeading action={<span className="text-text-tertiary">{detail.findings.length}</span>}>Findings</SectionHeading>
+          <ul className="-mx-2 m-0 flex list-none flex-col gap-0.5 p-0">
+            {detail.findings.map((finding) => (
+              <RelationRow key={finding.identifier} relation={finding} note={findingNote(finding.disposition)} onOpen={openRef} />
             ))}
           </ul>
         </section>

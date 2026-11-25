@@ -72,6 +72,31 @@ does not authorize claiming work. Do not fetch a whole workspace tree for one ti
    session fails as `no_worklog` without it; interactive hooks ask for the checkpoint
    before advancing, subject to the usual human-stop and loop-limit controls.
 
+## Classify review findings
+
+A reviewer reports findings; the owner of the ticket they were found in classifies
+each one before handing on. First match wins:
+
+1. **Fix here**, in the same branch and pull request: a regression, a contradiction
+   of the ticket's criteria or outcome, or the same root cause or defect class on the
+   surface it changes that needs no new product decision and fits in about half its
+   estimate again.
+2. **Blocker**: stands on its own, and the ticket cannot be verified or shipped safely
+   without it, works around it, or exposes a security or data-integrity problem on a
+   path it touches. File it with `create_task` `found_in` and `blocks: true` (CLI
+   `new "<title>" --found-in <ref> --blocks`). For merged work, block its parent or
+   milestone instead (`blocks: "<scope>"`, `--blocks <scope>`). A workaround is a
+   stopgap while the blocker is open, never the resolution.
+3. **Follow-up**: real, same area, but the ticket is correct without it: `found_in`
+   only. Security and data-integrity follow-ups are high priority and queued next.
+4. **Independent**: an unrelated area. No `found_in`; say where it was noticed.
+5. **Note only**: latent risk or tidy-up goes in the worklog, not a ticket.
+
+Record each finding on the ticket it was found in as one comment,
+`finding: <what> -> <disposition> (<where>)`. `get_task` shows `foundIn` on a finding
+and `findings` on its origin. A person's ruling on an open ticket never gets its own
+ticket: comment it there and make the change in the same branch and pull request.
+
 ## Link provider issues and pull requests
 
 Staple can link a ticket to a GitHub issue or pull request, a Linear issue, an Azure DevOps work

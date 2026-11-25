@@ -162,3 +162,8 @@ export function unreachableWords(
         advice: "Open that workspace on this computer, or remove the link if it no longer applies.",
       };
 }
+
+/** How a finding stands toward the ticket it was found in, as a row's quiet note. */
+export function findingNote(disposition: "blocker" | "follow-up"): string {
+  return disposition === "blocker" ? "Blocker" : "Follow-up";
+}

@@ -22,7 +22,7 @@ import { CLI_ENTRY, TSX_CLI, cleanEnv, startMcpClient, toolPayload } from "./fix
 
 let home: string;
 const PLANS_HEADING = "### Plans and specs are staple records";
-const FINDINGS_HEADING = "## Findings and rulings on open work stay in that ticket";
+const FINDINGS_HEADING = "## Findings and rulings on open work";
 const tempRoots: string[] = [];
 
 function scratch(label: string): string {
@@ -393,11 +393,47 @@ describe("the guide teaches the whole protocol", () => {
     expect(section).toMatch(/never\s+the default/i);
   });
 
-  it("keeps findings and rulings on open work in that ticket, and files only work that stands on its own", () => {
+  it("teaches the five dispositions of a finding, first match wins, and who classifies them", () => {
+    const section = sectionOf(guide, FINDINGS_HEADING);
+    const order = ["**Fix here**", "**Blocker**", "**Follow-up**", "**Independent**", "**Note only**"].map((name) => {
+      const index = section.indexOf(name);
+      expect(index, name).toBeGreaterThanOrEqual(0);
+      return index;
+    });
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    expect(section).toMatch(/first\s+match\s+wins/i);
+    expect(section).toMatch(/owner\s+of\s+the\s+ticket/i);
+    expect(section).toMatch(/same\s+branch\s+and\s+pull\s+request/i);
+    expect(section).toMatch(/half\s+the\s+ticket's\s+estimate/i);
+    expect(section).toMatch(/workaround\s+is\s+a\s+stopgap/i);
+  });
+
+  it("teaches the flags that file a finding where it was found, and the finding: comment", () => {
+    const section = sectionOf(guide, FINDINGS_HEADING);
+    expect(section).toContain("--found-in DEM-42 --blocks");
+    expect(section).toContain("--blocks <scope>");
+    expect(section).toContain("`found_in`");
+    expect(section).toContain("`blocks: true`");
+    expect(section).toContain("finding: <what> -> <disposition> (<where>)");
+  });
+
+  it("keeps a person's ruling on open work in that ticket", () => {
     const section = sectionOf(guide, FINDINGS_HEADING);
     expect(section).toMatch(/comment\s+on\s+that\s+ticket/i);
-    expect(section).toMatch(/same\s+branch\s+and\s+pull\s+request/i);
-    expect(section).toMatch(/only\s+for\s+work\s+that\s+stands\s+on\s+its\s+own/i);
+    expect(section).toMatch(/ruling\s+on\s+an\s+open\s+ticket\s+never\s+gets\s+its\s+own\s+ticket/i);
+  });
+});
+
+describe("the shipped skill teaches the same findings framework", () => {
+  const skill = readFileSync(join(import.meta.dirname, "..", "skills", "staple", "SKILL.md"), "utf8");
+  const section = sectionOf(skill, "## Classify review findings");
+
+  it("names the five dispositions in order, the flags and the finding: comment", () => {
+    const order = ["**Fix here**", "**Blocker**", "**Follow-up**", "**Independent**", "**Note only**"].map((name) => section.indexOf(name));
+    expect(order.every((index) => index >= 0)).toBe(true);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    for (const flag of ["`found_in`", "`blocks: true`", "--found-in <ref> --blocks", "--blocks <scope>"]) expect(section, flag).toContain(flag);
+    expect(section).toContain("finding: <what> -> <disposition> (<where>)");
     expect(section).toMatch(/ruling\s+on\s+an\s+open\s+ticket\s+never\s+gets\s+its\s+own\s+ticket/i);
   });
 });

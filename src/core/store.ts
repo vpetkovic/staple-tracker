@@ -169,6 +169,22 @@ import {
   type PlanSummary,
 } from "./plan-rollup.js";
 
+/**
+ * The `origin_kind` of a ticket filed for a finding; its `origin_id` is '<origin id>/<own id>',
+ * unique by construction, so two devices filing findings at once never contend for it.
+ */
+export const FINDING_ORIGIN_KIND = "finding";
+
+/** Where a finding stands toward the ticket it was found in, derived from the blocked-by relation. */
+export type FindingDisposition = "blocker" | "follow-up";
+
+export interface FindingRef {
+  identifier: string;
+  title: string;
+  status: IssueStatus;
+  disposition: FindingDisposition;
+}
+
 export interface CreateIssueInput {
   title: string;
   description?: string | null;
@@ -187,6 +203,17 @@ export interface CreateIssueInput {
   unblockAction?: string | null;
   originKind?: string;
   originId?: string | null;
+  /**
+   * The ticket this one was found in, for a review finding: recorded on the origin columns
+   * (`origin_kind` {@link FINDING_ORIGIN_KIND}, `origin_id` '<origin id>/<new id>').
+   */
+  foundIn?: string | null;
+  /**
+   * With `foundIn`, make the finding a blocker: `true` blocks the found-in ticket, a ref blocks
+   * that scope instead (the found-in ticket, an ancestor of it, or its milestone). The scope
+   * gains the finding as a blocker in the same create.
+   */
+  blocks?: boolean | string | null;
   idempotencyKey?: string | null;
   allowDuplicate?: boolean;
   /** Plan-time estimate in whole seconds; omit or null for none. */
@@ -2709,8 +2736,11 @@ export class WorkspaceStore {
 
       const blockerRows = (input.blockedBy ?? []).map((ref) => this.requireTarget(ref));
       this.assertNoPlanDependency(kind, blockerRows);
+      const finding = this.findingOf(input);
 
       const id = internal.id ?? newId();
+      const originKind = finding ? FINDING_ORIGIN_KIND : (input.originKind ?? "manual");
+      const originId = finding ? `${finding.origin.id}/${id}` : (input.originId ?? null);
       /**
        * An idea holds no ticket number until it is promoted: a draft identifier made from its own
        * UUID, which consumes nothing from the counter and is never shown (design/plan.md, "Identity").
@@ -2747,8 +2777,8 @@ export class WorkspaceStore {
           input.blockParentUntilDone ? 1 : 0,
           statusCategory === "blocked" ? (input.unblockOwner ?? null) : null,
           statusCategory === "blocked" ? (input.unblockAction ?? null) : null,
-          input.originKind ?? "manual",
-          input.originId ?? null,
+          originKind,
+          originId,
           input.idempotencyKey ?? null,
           statusCategory === "blocked" ? now : null,
           estimatedSeconds,
@@ -2766,6 +2796,17 @@ export class WorkspaceStore {
         this.assertNoCycle(parent.id, [id]);
         this.insertEdge(id, parent.id, input.createdBy ?? null);
       }
+      /**
+       * A blocker finding is added to its scope's set exactly as such a child is to its parent's:
+       * one edge, carried by the finding's own create (`foundInBlocks`) and added, never a
+       * replacement of the scope's set, so blockers two devices file against one scope at once
+       * both stand (`applyIssue`, `cloud/apply.ts`).
+       */
+      if (finding?.scope) {
+        this.assertNoPlanDependency(finding.scope.kind, [{ identifier: identifier, kind, title }], finding.scope);
+        this.assertNoCycle(finding.scope.id, [id]);
+        this.insertEdge(id, finding.scope.id, input.createdBy ?? null);
+      }
 
       this.emitEvent({
         kind: "issue_created",
@@ -2781,6 +2822,7 @@ export class WorkspaceStore {
        */
       if (blockerRows.length > 0) this.emitBlockerSet(id, input.createdBy ?? null);
       if (input.blockParentUntilDone && parent) this.emitBlockerSet(parent.id, input.createdBy ?? null);
+      if (finding?.scope) this.emitBlockerSet(finding.scope.id, input.createdBy ?? null);
       /**
        * One operation for the whole create, declared after the replay guard so a
        * replayed idempotency key journals nothing — obligation 5 is "no second
@@ -2838,8 +2880,8 @@ export class WorkspaceStore {
           blockParentUntilDone: input.blockParentUntilDone ?? false,
           unblockOwner: row.unblock_owner,
           unblockAction: row.unblock_action,
-          originKind: input.originKind ?? "manual",
-          originId: input.originId ?? null,
+          originKind,
+          originId,
           idempotencyKey: input.idempotencyKey ?? null,
           estimatedSeconds: estimatedSeconds,
           projectId: project?.id ?? null,
@@ -2848,6 +2890,8 @@ export class WorkspaceStore {
           updatedAt: now,
           blockedBy: blockerRows.map((blocker) => blocker.id),
           ...(blockerRows.length > 0 ? { edges: this.edgeFactsOf(id) } : {}),
+          // Not a column: the scope a blocker finding adds itself to, as the applier adds it.
+          ...(finding?.scope ? { foundInBlocks: finding.scope.id } : {}),
         },
         actor: input.createdBy ?? null,
       });
@@ -3025,6 +3069,109 @@ export class WorkspaceStore {
       this.maybeEmitBlockersResolved(row);
       return rowToIssue(this.requireRow(row.id));
     });
+  }
+
+  // ---------- findings ----------
+
+  /**
+   * The origin a create names with `foundIn`, and the scope it blocks, validated before an issue
+   * number is spent. The scope is the origin or a scope above it ({@link scopesAbove}); resolved
+   * work cannot be held up, so a resolved scope is refused naming the open scopes above it.
+   */
+  private findingOf(input: CreateIssueInput): { origin: IssueRow; scope: IssueRow | null } | null {
+    const blocks = input.blocks ?? false;
+    if (!input.foundIn) {
+      if (blocks !== false) throw new StapleError("validation", "blocks needs foundIn: a finding blocks the ticket it was found in, or a scope above it");
+      return null;
+    }
+    if (input.originKind !== undefined || input.originId !== undefined) {
+      throw new StapleError("validation", "foundIn records the origin itself; pass it without originKind or originId");
+    }
+    const origin = this.requireTarget(input.foundIn);
+    if (blocks === false) return { origin, scope: null };
+    const scope = blocks === true || blocks.trim() === "" ? origin : this.requireTarget(blocks);
+    const above = this.scopesAbove(origin);
+    if (!above.some((row) => row.id === scope.id)) {
+      throw new StapleError(
+        "validation",
+        `${scope.identifier} is not ${origin.identifier} or a scope above it. A finding blocks the ticket it was found in, its parent chain or its milestone.`,
+      );
+    }
+    if (this.isResolvedStatus(scope.status)) {
+      const open = this.scopesAbove(scope)
+        .slice(1)
+        .filter((row) => !this.isResolvedStatus(row.status));
+      const instead =
+        open.length > 0
+          ? `Block ${open.map((row) => `its ${row.kind === MILESTONE_KIND ? "milestone" : "parent"} ${row.identifier}`).join(" or ")} instead (--blocks ${open[0]!.identifier}), or file it as a follow-up.`
+          : "Nothing above it is open; file it as a follow-up.";
+      throw new StapleError("validation", `${scope.identifier} is ${scope.status}, and a blocker cannot hold up resolved work. ${instead}`, {
+        scopes: open.map((row) => row.identifier),
+      });
+    }
+    return { origin, scope };
+  }
+
+  /** The issue, its ancestors nearest first, then the milestone it counts toward: what a finding in it may block. */
+  private scopesAbove(row: IssueRow): IssueRow[] {
+    const scopes = [row];
+    let cursor = row.parent_id;
+    while (cursor && scopes.length <= MAX_TREE_DEPTH) {
+      const parent = this.db.prepare("SELECT * FROM issues WHERE id = ?").get(cursor) as IssueRow | undefined;
+      if (!parent) break;
+      scopes.push(parent);
+      cursor = parent.parent_id;
+    }
+    const milestone = this.milestones().effectiveMilestone(row.id);
+    if (milestone && !scopes.some((scope) => scope.id === milestone.id)) scopes.push(this.requireRow(milestone.id));
+    return scopes;
+  }
+
+  /** Whether each finding blocks its origin or a scope above it, from the relation as it stands. */
+  private dispositionOf(origin: IssueRow, findingIds: string[]): Map<string, FindingDisposition> {
+    const scopes = this.scopesAbove(origin).map((row) => row.id);
+    const blocking = new Set(
+      findingIds.length === 0
+        ? []
+        : (
+            this.db
+              .prepare(
+                `SELECT DISTINCT blocker_id FROM relations WHERE type = 'blocks'
+                  AND blocker_id IN (${findingIds.map(() => "?").join(",")}) AND blocked_id IN (${scopes.map(() => "?").join(",")})`,
+              )
+              .all(...findingIds, ...scopes) as Array<{ blocker_id: string }>
+          ).map((edge) => edge.blocker_id),
+    );
+    return new Map(findingIds.map((id) => [id, blocking.has(id) ? "blocker" : "follow-up"]));
+  }
+
+  /** The ticket `row` was found in, or null for one that is not a finding (or whose origin is gone). */
+  private foundInOf(row: IssueRow): FindingRef | null {
+    if (row.origin_kind !== FINDING_ORIGIN_KIND || !row.origin_id) return null;
+    const originId = row.origin_id.slice(0, row.origin_id.indexOf("/"));
+    const origin = this.db.prepare("SELECT * FROM issues WHERE id = ?").get(originId) as IssueRow | undefined;
+    if (!origin) return null;
+    return {
+      identifier: origin.identifier,
+      title: origin.title,
+      status: origin.status as IssueStatus,
+      disposition: this.dispositionOf(origin, [row.id]).get(row.id)!,
+    };
+  }
+
+  /** The findings filed against `row`, oldest first. */
+  private findingsOf(row: IssueRow): FindingRef[] {
+    const prefix = `${row.id}/`;
+    const rows = this.db
+      .prepare("SELECT * FROM issues WHERE origin_kind = ? AND substr(origin_id, 1, ?) = ? ORDER BY created_at, identifier")
+      .all(FINDING_ORIGIN_KIND, prefix.length, prefix) as unknown as IssueRow[];
+    const dispositions = this.dispositionOf(row, rows.map((finding) => finding.id));
+    return rows.map((finding) => ({
+      identifier: finding.identifier,
+      title: finding.title,
+      status: finding.status as IssueStatus,
+      disposition: dispositions.get(finding.id)!,
+    }));
   }
 
   blockersOf(issueId: string): IssueRow[] {
@@ -8209,6 +8356,10 @@ export class WorkspaceStore {
     children: Issue[];
     blockedBy: Array<{ identifier: string; title: string; status: IssueStatus }>;
     blocks: Array<{ identifier: string; title: string; status: IssueStatus }>;
+    /** The ticket this one was found in, when it was filed for a finding. */
+    foundIn: FindingRef | null;
+    /** The tickets filed for findings in this one, each a blocker or a follow-up. */
+    findings: FindingRef[];
     comments: IssueComment[];
     documents: Array<IssueDocumentMeta & { body?: string }>;
     /** Metadata only. The bytes are never part of this payload. */
@@ -8248,6 +8399,8 @@ export class WorkspaceStore {
       children,
       blockedBy: this.blockersOf(row.id).map(toRef),
       blocks: this.dependentsOf(row.id).map(toRef),
+      foundIn: this.foundInOf(row),
+      findings: this.findingsOf(row),
       comments: this.listComments(row.id, 20),
       documents: opts.includeDocuments
         ? documents.map((doc) => ({ ...doc, body: this.getDocument(row.id, doc.key).body }))

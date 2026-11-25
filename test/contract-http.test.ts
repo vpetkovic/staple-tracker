@@ -263,6 +263,9 @@ describe("read shapes", () => {
       children: [],
       blockedBy: [],
       blocks: [],
+      // Not filed for a finding, and none filed against it.
+      foundIn: null,
+      findings: [],
       // KNOWN: authorType is "user" because the fixture comment was posted by the
       // CLI, which hardcodes "user" (src/cli.ts case "comment"), while MCP
       // add_comment defaults to "agent". Same store call, different default per

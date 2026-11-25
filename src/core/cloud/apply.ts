@@ -787,15 +787,14 @@ function applyIssue(db: DatabaseSync, input: ApplyInput): boolean {
     /**
      * A child created to block its parent until done adds that one edge to the parent's set,
      * merged into whatever the parent holds: an addition, never a replacement, so a child made
-     * offline elsewhere keeps its edge. Dated at the child's create, by its author.
+     * offline elsewhere keeps its edge. Dated at the child's create, by its author. A blocker
+     * finding adds its edge to its scope's set the same way.
      */
-    const child = db.prepare("SELECT parent_id, block_parent_until_done, created_by, created_at FROM issues WHERE id = ?").get(input.entityId) as
-      | { parent_id: string | null; block_parent_until_done: number; created_by: string | null; created_at: string }
-      | undefined;
-    if (child && child.parent_id !== null && child.block_parent_until_done === 1) {
+    const edges = createdEdgesOf(db, input);
+    for (const edge of edges.targets) {
       db.prepare(
         `INSERT OR IGNORE INTO relations (blocker_id, blocked_id, type, created_by, created_at) VALUES (?, ?, 'blocks', ?, ?)`,
-      ).run(input.entityId, child.parent_id, child.created_by, child.created_at);
+      ).run(input.entityId, edge, edges.createdBy, edges.createdAt);
     }
   } else if (input.verb === "create" && typeof input.seq === "number") {
     keepChildEdgeAgainstEarlierSet(db, input);
@@ -866,23 +865,40 @@ function applyIssue(db: DatabaseSync, input: ApplyInput): boolean {
  * later in the log than this create, and stands.
  */
 function keepChildEdgeAgainstEarlierSet(db: DatabaseSync, input: ApplyInput): void {
-  const child = db.prepare("SELECT parent_id, block_parent_until_done, created_by, created_at FROM issues WHERE id = ?").get(input.entityId) as
+  const edges = createdEdgesOf(db, input);
+  for (const blockedId of edges.targets) {
+    const write = db
+      .prepare(
+        `SELECT a.seq AS seq, w.op_id AS op FROM sync_field_writes w LEFT JOIN sync_applied a ON a.op_id = w.op_id
+          WHERE w.entity = 'relation' AND w.entity_id = ? AND w.field = 'blockedBy'`,
+      )
+      .get(blockedId) as { seq: number | null; op: string } | undefined;
+    if (write !== undefined && (write.seq === null || write.seq > (input.seq as number))) continue;
+    db.prepare(`INSERT OR IGNORE INTO relations (blocker_id, blocked_id, type, created_by, created_at) VALUES (?, ?, 'blocks', ?, ?)`).run(
+      input.entityId,
+      blockedId,
+      edges.createdBy,
+      edges.createdAt,
+    );
+  }
+}
+
+/**
+ * The edges an issue's create adds to sets other than its own: to its parent, when it was made
+ * to block the parent until done, and to a blocker finding's scope (`foundInBlocks`, which only
+ * a create carries). A scope this device no longer holds is skipped rather than deferred: it
+ * was there when the finding was filed, so it can only have been removed since.
+ */
+function createdEdgesOf(db: DatabaseSync, input: ApplyInput): { targets: string[]; createdBy: string | null; createdAt: string } {
+  const row = db.prepare("SELECT parent_id, block_parent_until_done, created_by, created_at FROM issues WHERE id = ?").get(input.entityId) as
     | { parent_id: string | null; block_parent_until_done: number; created_by: string | null; created_at: string }
     | undefined;
-  if (!child || child.parent_id === null || child.block_parent_until_done !== 1) return;
-  const write = db
-    .prepare(
-      `SELECT a.seq AS seq, w.op_id AS op FROM sync_field_writes w LEFT JOIN sync_applied a ON a.op_id = w.op_id
-        WHERE w.entity = 'relation' AND w.entity_id = ? AND w.field = 'blockedBy'`,
-    )
-    .get(child.parent_id) as { seq: number | null; op: string } | undefined;
-  if (write !== undefined && (write.seq === null || write.seq > (input.seq as number))) return;
-  db.prepare(`INSERT OR IGNORE INTO relations (blocker_id, blocked_id, type, created_by, created_at) VALUES (?, ?, 'blocks', ?, ?)`).run(
-    input.entityId,
-    child.parent_id,
-    child.created_by,
-    child.created_at,
-  );
+  if (!row) return { targets: [], createdBy: null, createdAt: input.at };
+  const targets: string[] = [];
+  if (row.parent_id !== null && row.block_parent_until_done === 1) targets.push(row.parent_id);
+  const scope = input.verb === "create" ? input.payload.foundInBlocks : undefined;
+  if (typeof scope === "string" && !targets.includes(scope) && issueExists(db, scope)) targets.push(scope);
+  return { targets, createdBy: row.created_by, createdAt: row.created_at };
 }
 
 /**
