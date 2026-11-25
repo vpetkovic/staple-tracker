@@ -606,6 +606,31 @@ describe("text", () => {
     const rows = [row({ identifier: "A", title: "Rebuild The Header" })];
     expect(ids(applyFilters(rows, state({ text: "  the HEADER " })))).toEqual(["A"]);
   });
+
+  it("also admits a row the server matched for this text (a word in its plan, comment or criteria)", () => {
+    const rows = [
+      row({ id: "body-id", identifier: "BODY", title: "unrelated" }),
+      row({ id: "title-id", identifier: "TITLE", title: "the axolotl migration" }),
+      row({ id: "none-id", identifier: "NONE", title: "unrelated" }),
+    ];
+    const bodyId = rows[0]!.issue.id;
+    expect(ids(applyFilters(rows, state({ text: " axolotl " }), { q: "axolotl", ids: new Set([bodyId]) }))).toEqual([
+      "BODY",
+      "TITLE",
+    ]);
+  });
+
+  it("ignores a server answer to a different text, so a stale answer never widens the list", () => {
+    const rows = [row({ id: "body-id", identifier: "BODY", title: "unrelated" })];
+    const stale = { q: "axolotl", ids: new Set([rows[0]!.issue.id]) };
+    expect(applyFilters(rows, state({ text: "axolotls" }), stale)).toEqual([]);
+  });
+
+  it("still applies the done default and dimensions to a server-matched row", () => {
+    const rows = [row({ id: "done-id", identifier: "DONE", title: "unrelated", status: "done" })];
+    const served = { q: "axolotl", ids: new Set([rows[0]!.issue.id]) };
+    expect(applyFilters(rows, state({ text: "axolotl" }), served)).toEqual([]);
+  });
 });
 
 // ---------- combination ----------

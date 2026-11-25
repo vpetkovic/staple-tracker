@@ -266,6 +266,27 @@ export interface SetEstimateResult {
   changed: boolean;
 }
 
+/**
+ * What a text query (`q`) matches: every place words are written on a ticket. The title,
+ * identifier, description, assignee, each label and acceptance criterion, every comment
+ * still standing, and the CURRENT revision of every document (plan, worklog, any key).
+ * One predicate, so `staple ls -q`, the MCP list tool and the toolbar search
+ * (`/api/search`) cannot disagree about what a word finds. Each `?` takes the same
+ * `%q%` pattern. LIKE, not an FTS index: substring and case-insensitive (ASCII), which is
+ * what the toolbar always did, and the subqueries ride the issue_id primary keys.
+ */
+const TEXT_MATCH_SQL = `(
+  issues.title LIKE ? OR issues.identifier LIKE ? OR issues.description LIKE ? OR issues.assignee LIKE ?
+  OR (json_valid(issues.labels) AND EXISTS (SELECT 1 FROM json_each(issues.labels) l WHERE l.value LIKE ?))
+  OR (json_valid(issues.acceptance_criteria)
+      AND EXISTS (SELECT 1 FROM json_each(issues.acceptance_criteria) ac WHERE ac.value LIKE ?))
+  OR EXISTS (SELECT 1 FROM comments c WHERE c.issue_id = issues.id AND c.deleted_at IS NULL AND c.body LIKE ?)
+  OR EXISTS (SELECT 1 FROM documents d JOIN document_revisions r
+               ON r.issue_id = d.issue_id AND r.key = d.key AND r.revision = d.current_revision
+             WHERE d.issue_id = issues.id AND r.body LIKE ?)
+)`;
+const TEXT_MATCH_PARAMS = TEXT_MATCH_SQL.split("?").length - 1;
+
 export interface IssueFilters {
   status?: IssueStatus[];
   kind?: IssueKind[];
@@ -7990,9 +8011,9 @@ export class WorkspaceStore {
        * for the identifier somebody wrote down finds the issue it meant, beside whichever
        * issue holds that number now.
        */
-      where.push("(title LIKE ? OR identifier LIKE ? OR description LIKE ? OR id = ?)");
+      where.push(`(${TEXT_MATCH_SQL} OR id = ?)`);
       const like = `%${filters.q}%`;
-      params.push(like, like, like, formerHolderOf(this.db, filters.q.trim().toUpperCase()));
+      params.push(...Array<string>(TEXT_MATCH_PARAMS).fill(like), formerHolderOf(this.db, filters.q.trim().toUpperCase()));
     }
     /**
      * The status rank is GENERATED from the workspace's configuration (STA-140)

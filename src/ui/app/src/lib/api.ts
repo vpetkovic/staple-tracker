@@ -705,6 +705,10 @@ export const adoptHubRegistry = (digest?: string) =>
 export const getIssues = (params: { ws?: string; assignee?: string } = {}) =>
   request<IssueRow[]>(`/api/issues${qs(params)}`);
 
+/** The toolbar search, answered by the store's `q` match (the one `staple ls -q` uses): ids only. */
+export const searchIssues = (params: { ws?: string; q: string }) =>
+  request<{ q: string; ids: string[] }>(`/api/search${qs(params)}`);
+
 export const getInbox = (params: { assignee?: string } = {}) =>
   request<InboxRow[]>(`/api/inbox${qs(params)}`);
 
