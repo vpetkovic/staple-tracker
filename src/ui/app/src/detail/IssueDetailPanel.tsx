@@ -1,4 +1,4 @@
-import { ExternalPropertySummary } from "@/integrations/ExternalPropertySummary";
+import { ExternalLinkAdd, ExternalPropertySummary } from "@/integrations/ExternalPropertySummary";
 import { ideaPlanHref } from "./PlannedIdeaLinks";
 /**
  * The detail panel's contents: the bar, the header (breadcrumb, title, status line, actions),
@@ -753,10 +753,16 @@ function Properties({
         <PropertyRow label="Created">
           <RelativeTime iso={issue.createdAt} inSentence />
         </PropertyRow>
-        {!phone ? <>
-          <PropertyRow label="Linked issues" right={layout === "grid"}><ExternalPropertySummary detail={detail} kind="issue" /></PropertyRow>
-          <PropertyRow label="Pull requests" right={layout === "grid"}><ExternalPropertySummary detail={detail} kind="pull_request" /></PropertyRow>
-        </> : null}
+        {!phone ? (
+          <>
+            <PropertyRow label="Linked issues" span>
+              <ExternalPropertySummary detail={detail} kind="issue" refresh={refresh} />
+            </PropertyRow>
+            <PropertyRow label="Pull requests" span>
+              <ExternalPropertySummary detail={detail} kind="pull_request" refresh={refresh} />
+            </PropertyRow>
+          </>
+        ) : null}
         <PropertyRow label="Labels" span>
           <InlineLabels {...editor} />
         </PropertyRow>
@@ -807,6 +813,7 @@ function SummaryChips({
       )}
       <ExternalPropertySummary detail={detail} kind="issue" compact />
       <ExternalPropertySummary detail={detail} kind="pull_request" compact />
+      <ExternalLinkAdd detail={detail} />
     </div>
   );
 }
@@ -859,6 +866,15 @@ function DetailTabs({
     if (keep > 0 && scroller && panels) setReserve(reserveFor(keep, panelGeometry(scroller, panels)));
     setTab(next);
   }, []);
+  /** The same reserve, for a tab that is about to get shorter without the tab changing: the scroll stays put. */
+  const holdScroll = useCallback(() => {
+    const sentinel = sentinelRef.current;
+    const panels = panelsRef.current;
+    const scroller = sentinel ? scrollerOf(sentinel) : null;
+    if (!scroller || !panels || scroller.scrollTop <= 0) return;
+    anchorRef.current = { kind: "at", scrollTop: scroller.scrollTop };
+    setReserve(reserveFor(scroller.scrollTop, panelGeometry(scroller, panels)));
+  }, []);
   /**
    * A tab asking to hand the reader to another tab (Details' worklog "Show all" lands on
    * Documents). This file subscribes to a verb and sets its own state; see
@@ -887,14 +903,14 @@ function DetailTabs({
         data-detail-tabs=""
         data-stuck={stuck ? "" : undefined}
       >
-        <DetailTabStrip sheet={sheet} label="Issue detail tabs" items={tabs} active={active} />
+        <DetailTabStrip sheet={sheet} label="Issue detail tabs" items={tabs.map((t) => ({ id: t.id, label: t.label, count: t.count?.(detail) ?? null }))} active={active} />
       </div>
       <div ref={panelsRef} data-detail-tabpanels="" style={reserve !== null ? { minHeight: reserve } : undefined}>
         {tabs.map((definition) => {
           const Tab = definition.component;
           return (
             <TabsContent key={definition.id} value={definition.id} className="pt-5">
-              <Tab detail={detail} workspace={detail.workspace} onAuthError={onAuthError} refresh={refresh} />
+              <Tab detail={detail} workspace={detail.workspace} onAuthError={onAuthError} refresh={refresh} holdScroll={holdScroll} />
             </TabsContent>
           );
         })}

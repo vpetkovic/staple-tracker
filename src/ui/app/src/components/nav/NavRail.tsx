@@ -65,6 +65,9 @@ import { RunCard } from "@/components/autopilot/RunBanner";
 import { cn } from "@/lib/utils";
 import { NAV_GROUPS, chooseRailWorkspace, projectCaption, railWorkspaces, type NavGroup, type NavItem } from "./nav-model";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
+import { integrationRead } from "@/lib/api";
+import { CONNECTIONS_CHANGED, type ConnectionView } from "@/integrations/connection-status";
+import { needsAttention } from "@/settings/integrations/integrations-model";
 
 const THEME_KEY = "staple:theme";
 
@@ -547,10 +550,7 @@ export function NavRail({
       </div>
 
       <div className="shrink-0 px-3 pb-1 max-md:px-2.5">
-        <button type="button" aria-label="Integrations" title="Configure integrations" className={RAIL_ROW_CLASS}
-          onClick={() => { openSettings({ section: "integrations" }); onNavigate?.(); }}>
-          <Plug aria-hidden />Integrations
-        </button>
+        <IntegrationsRailItem onNavigate={onNavigate} />
       </div>
       {/* ── the foot: Settings, and the theme ── */}
       <div className="flex shrink-0 items-center gap-1 border-t border-sidebar-border/70 px-3 py-2 max-md:block max-md:px-2.5">
@@ -573,6 +573,63 @@ export function NavRail({
         <ThemeToggle asRow={phone} />
       </div>
     </nav>
+  );
+}
+
+/**
+ * INTEGRATIONS, WITH A DOT WHEN A CONNECTION NEEDS ATTENTION. The connections list carries
+ * each connection's last known health and never probes, so it is read when the rail mounts
+ * again when the tab comes back into view, and whenever another surface reports a change;
+ * nothing here polls or checks.
+ */
+function IntegrationsRailItem({ onNavigate }: { onNavigate?: () => void }) {
+  const session = useSession();
+  const [connections, setConnections] = useState<Array<Pick<ConnectionView, "health">>>([]);
+  useEffect(() => {
+    let active = true;
+    const read = () =>
+      void integrationRead<{ connections: ConnectionView[] }>({ action: "connections" }, session.ws || undefined)
+        .then((answer) => active && setConnections(answer.connections))
+        .catch(() => {});
+    const onVisible = () => {
+      if (document.visibilityState === "visible") read();
+    };
+    read();
+    document.addEventListener("visibilitychange", onVisible);
+    // Settings, the link dialog and the External links tab announce what they learn, so the dot follows a fix at once.
+    window.addEventListener(CONNECTIONS_CHANGED, read);
+    return () => {
+      active = false;
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener(CONNECTIONS_CHANGED, read);
+    };
+    // Connections belong to the computer: one read per mount, whatever workspace is shown.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return (
+    <IntegrationsRailRow
+      connections={connections}
+      onClick={() => {
+        openSettings({ section: "integrations" });
+        onNavigate?.();
+      }}
+    />
+  );
+}
+
+export function IntegrationsRailRow({ connections, onClick }: { connections: ReadonlyArray<Pick<ConnectionView, "health">>; onClick: () => void }) {
+  const attention = needsAttention(connections);
+  return (
+    <button type="button" title="Configure integrations" data-nav-integrations className={RAIL_ROW_CLASS} onClick={onClick}>
+      <Plug aria-hidden />
+      Integrations
+      {attention ? (
+        <>
+          <span aria-hidden data-integrations-attention className="ml-auto size-1.5 shrink-0 rounded-full bg-[var(--status-task-todo)]" />
+          <span className="sr-only">, needs attention</span>
+        </>
+      ) : null}
+    </button>
   );
 }
 

@@ -31,7 +31,7 @@ import { VocabularyList } from "./VocabularyList";
 import { servedGlyphMap } from "./glyph-picker/glyph-picker-model";
 import { sanitizeThroughServer } from "./glyph-picker/sanitize";
 import { kindRows, statusRows } from "./settings-ops";
-import { isHubRegistryCategory, isWorkspaceCloudCategory } from "./settings-shell";
+import { INTEGRATIONS_CATEGORY_ID, isHubRegistryCategory, isWorkspaceCloudCategory } from "./settings-shell";
 import { isMembersCategory } from "./members-settings";
 import { MembersSection } from "./MembersSection";
 import { JoinOfferCard } from "@/components/join/JoinOffer";
@@ -72,7 +72,7 @@ export function CategoryContent({ category, settings, applyTo, onDirtyChange, ws
    * down: `applyTo` writes `/api/settings`, and there is nothing in this section
    * that route could ever legally carry.
    */
-  if (category.id === "integrations") return <IntegrationsSection ws={ws} settings={settings} applyTo={applyTo} onDirtyChange={onDirtyChange} />;
+  if (category.id === INTEGRATIONS_CATEGORY_ID) return <IntegrationsSection ws={ws} settings={settings} applyTo={applyTo} onDirtyChange={onDirtyChange} />;
   if (isCloudCategory(category.id)) {
     return (
       <>

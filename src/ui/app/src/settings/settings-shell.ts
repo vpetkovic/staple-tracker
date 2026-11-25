@@ -200,13 +200,25 @@ export function isWorkspaceCloudCategory(id: string | null | undefined): boolean
   return id === WORKSPACE_CLOUD_CATEGORY.id;
 }
 
+/**
+ * INTEGRATIONS IS THE COMPUTER'S SCREEN. The registry keeps it per workspace, because the
+ * mapping it edits syncs with each workspace; but its connections belong to this computer and
+ * its mapping lists every workspace, each row writing to its own. So the sheet shows it
+ * across all workspaces, right after "Workspaces on this computer" (82): no workspace picker,
+ * no "Applies to <workspace> only", and it opens from All workspaces.
+ */
+export const INTEGRATIONS_CATEGORY_ID = "integrations";
+const INTEGRATIONS_PLACEMENT = { scope: "global", order: 83 } as const;
+
 /** The registry plus the two split-out cloud sections; untouched while the registry is empty. */
 export function withShellCategories(categories: readonly SettingCategoryView[]): SettingCategoryView[] {
   if (categories.length === 0) return [...categories];
   const extra = [HUB_REGISTRY_CATEGORY, WORKSPACE_CLOUD_CATEGORY, MEMBERS_CATEGORY].filter(
     (added) => !categories.some((category) => category.id === added.id),
   );
-  return [...categories, ...extra].sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
+  return [...categories, ...extra]
+    .map((category) => (category.id === INTEGRATIONS_CATEGORY_ID ? { ...category, ...INTEGRATIONS_PLACEMENT } : category))
+    .sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
 }
 
 /**

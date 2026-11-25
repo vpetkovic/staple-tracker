@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { freshness, uniqueHits, type SearchHit } from "./model";
+import { uniqueHits, type SearchHit } from "./model";
 const hit: SearchHit = {
   item: {
     ref: {
@@ -31,17 +31,5 @@ describe("provider search presentation", () => {
       "old/repo#1",
       "old/repo#1",
     ]);
-  });
-  it("distinguishes references, recently cached context and old context without claiming live freshness", () => {
-    expect(freshness(hit.item)).toContain("not fetched");
-    const dated = {
-      ...hit.item,
-      title: "Source",
-      body: null,
-      status: null,
-      fetchedAt: "2026-11-23T00:00:00Z",
-    };
-    expect(freshness(dated, Date.parse("2026-11-23T01:00:00Z"))).toContain("Cached context");
-    expect(freshness(dated, Date.parse("2026-11-25T01:00:00Z"))).toContain("Stale cache");
   });
 });

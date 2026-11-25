@@ -109,54 +109,73 @@ const detail = (p: Page) => p.locator("[data-detail-overlay]");
 const heading = (p: Page) => detail(p).locator('aside[aria-label="Issue detail"]');
 
 describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
-  it("keeps first-connection defaults consistent and applies saved defaults with explicit type overrides", async () => {
+  it("adds a GitHub connection from an inline form that Escape cancels without closing Settings", async () => {
     const { page, context, errors } = await open(single, "/?view=tasks");
     const connection = { id: "test-gh", providerId: "github", host: "github.com", account: "tester", mode: "cli" };
-    let configured = false;
+    let configured: Record<string, unknown> | null = null;
     await page.route("**/api/integrations/read", route => {
       const command = route.request().postDataJSON();
-      if (command.action === "connections") return route.fulfill({ json: { connections: configured ? [connection] : [] } });
+      if (command.action === "connections") return route.fulfill({ json: { connections: configured ? [{ ...connection, health: null }] : [], detected: [] } });
       return route.continue();
     });
     await page.route("**/api/integrations/configure", route => {
-      configured = true;
+      configured = route.request().postDataJSON();
       return route.fulfill({ json: connection });
     });
-    await page.goto(`${at(single)}/?settings=integrations&settings-ws=alpha&token=${single.token}`, { waitUntil: "networkidle" });
-    await expect.poll(() => page.getByLabel("Default connection", { exact: true }).inputValue()).toBe("");
-    await page.getByLabel("Expected GitHub account", { exact: true }).fill("tester");
+    // No workspace named: the screen is the computer's.
+    await page.goto(`${at(single)}/?settings=integrations&token=${single.token}`, { waitUntil: "networkidle" });
+    const settings = page.getByRole("dialog", { name: "Settings" });
+    // Planned providers are listed and cannot be chosen yet.
     await page.getByRole("button", { name: "Add connection", exact: true }).click();
-    await expect.poll(() => page.getByLabel("Default connection", { exact: true }).inputValue()).toBe("test-gh");
-    await page.getByLabel("Default connection", { exact: true }).selectOption("");
-    await expect.poll(() => page.getByRole("button", { name: "Save defaults", exact: true }).isEnabled()).toBe(true);
-    await page.getByRole("button", { name: "Save defaults", exact: true }).click();
-    await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("staple:link-defaults:v1:alpha") ?? "null")?.connectionId)).toBe("");
-    await page.getByLabel("Default connection", { exact: true }).selectOption("test-gh");
-    await page.getByLabel("Default resource type", { exact: true }).selectOption("pull_request");
-    await page.getByRole("button", { name: "Save defaults", exact: true }).click();
-    await page.goto(`${at(single)}/?issue=ALP-1&token=${single.token}`, { waitUntil: "networkidle" });
-    await page.getByRole("button", { name: "Link issue", exact: true }).click();
-    await expect.poll(() => page.getByLabel("Provider connection", { exact: true }).inputValue()).toBe("test-gh");
-    expect(await page.getByLabel("Resource type", { exact: true }).inputValue()).toBe("issue");
+    for (const planned of ["Azure DevOps", "ClickUp"]) {
+      const item = page.getByRole("menuitem", { name: new RegExp(`^${planned}`) });
+      expect(await item.getAttribute("aria-disabled")).toBe("true");
+      expect(await item.innerText()).toContain("Soon");
+    }
+    expect(await page.getByRole("menuitem", { name: /^Linear workspace/ }).getAttribute("aria-disabled")).toBeNull();
     await page.keyboard.press("Escape");
-    await page.getByRole("tab", { name: "External links", exact: true }).click();
-    await page.getByRole("button", { name: "Link issue or PR", exact: true }).click();
-    await expect.poll(() => page.getByLabel("Provider connection", { exact: true }).inputValue()).toBe("test-gh");
-    expect(await page.getByLabel("Resource type", { exact: true }).inputValue()).toBe("pull_request");
+    await page.getByRole("button", { name: "Add account", exact: true }).click();
+    await page.getByLabel("Account", { exact: true }).fill("tester");
     await page.keyboard.press("Escape");
-    await page.goto(`${at(single)}/?settings=integrations&settings-ws=alpha&token=${single.token}`, { waitUntil: "networkidle" });
-    await page.getByRole("checkbox", { name: /Remember last-used selections/ }).check();
-    await page.getByRole("button", { name: "Save defaults", exact: true }).click();
-    await page.goto(`${at(single)}/?issue=ALP-1&token=${single.token}`, { waitUntil: "networkidle" });
-    await page.getByRole("button", { name: "Link PR", exact: true }).click();
-    await expect.poll(() => page.getByLabel("Provider connection", { exact: true }).inputValue()).toBe("test-gh");
-    await page.getByLabel("Resource type", { exact: true }).selectOption("issue");
-    await page.getByLabel("Provider connection", { exact: true }).selectOption("");
+    await expect.poll(() => page.getByLabel("Account", { exact: true }).count()).toBe(0);
+    expect(await settings.isVisible()).toBe(true);
+    await page.getByRole("button", { name: "Add account", exact: true }).click();
+    const save = page.getByRole("button", { name: "Save", exact: true });
+    expect(await save.isDisabled()).toBe(true);
+    await page.getByLabel("Account", { exact: true }).fill("tester");
+    await save.click();
+    await expect.poll(() => page.getByText("tester · through GitHub CLI", { exact: true }).count()).toBe(1);
+    expect(configured).toMatchObject({ action: "configure", host: "github.com", account: "tester" });
+    expect(await page.getByRole("button", { name: "Add account", exact: true }).count()).toBe(0);
+    expect(errors).toEqual([]);
+    await context.close();
+  }, 30_000);
+
+  it("the link dialog opens on the field, remembers the last filter, and says when nothing is set up to search", async () => {
+    const { page, context, errors } = await open(single, "/?issue=ALP-1");
+    const dialog = page.locator("[data-link-external]");
+    const pressed = (name: string) => dialog.getByRole("button", { name, exact: true }).getAttribute("aria-pressed");
+    await page.getByRole("button", { name: "Link pull request", exact: true }).click();
+    await expect.poll(() => dialog.getByText("Nothing is set up to search yet.").count()).toBe(1);
+    expect(await page.evaluate(() => document.activeElement?.getAttribute("placeholder"))).toBe("Search issues and pull requests, or paste a link");
+    expect(await pressed("Pull requests")).toBe("true");
+    expect(await dialog.getByRole("button", { name: /^Link to ALP-1/ }).count()).toBe(1);
+    expect(await dialog.locator("select, details, input[type=checkbox]").count()).toBe(0);
+    // The task can be taken back off: the chip returns to asking for one, and a task can be chosen again.
+    await dialog.getByRole("button", { name: /^Link to ALP-1/ }).click();
+    await page.getByRole("option", { name: /^No task/ }).click();
+    expect(await dialog.getByRole("button", { name: "Choose a task", exact: true }).count()).toBe(1);
+    await dialog.getByRole("button", { name: "Choose a task", exact: true }).click();
+    expect(await page.getByRole("option", { name: /^No task/ }).count()).toBe(0);
+    await page.getByRole("option", { name: /ALP-1/ }).click();
+    expect(await dialog.getByRole("button", { name: /^Link to ALP-1/ }).count()).toBe(1);
+    await dialog.getByRole("button", { name: "Issues", exact: true }).click();
+    expect(await page.evaluate(() => localStorage.getItem("staple:link-kind:v1"))).toBe("issue");
     await page.keyboard.press("Escape");
-    await page.getByRole("tab", { name: "External links", exact: true }).click();
-    await page.getByRole("button", { name: "Link issue or PR", exact: true }).click();
-    await expect.poll(() => page.getByLabel("Resource type", { exact: true }).inputValue()).toBe("issue");
-    expect(await page.getByLabel("Provider connection", { exact: true }).inputValue()).toBe("");
+    await expect.poll(() => dialog.count()).toBe(0);
+    await page.getByRole("tab", { name: /^External links/ }).click();
+    await page.getByRole("tabpanel").getByRole("button", { name: "Link", exact: true }).first().click();
+    await expect.poll(() => pressed("Issues")).toBe("true");
     expect(errors).toEqual([]);
     await context.close();
   }, 30_000);
@@ -184,47 +203,52 @@ describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
     });
     try {
       await page.goto(`${at(single)}/?settings=integrations&settings-ws=alpha&token=${single.token}`,{waitUntil:"networkidle"});
-      await page.getByLabel("Connection provider").selectOption("linear");
-      await page.getByLabel("Expected Linear user UUID").fill(account);
-      await page.getByLabel("Linear organization UUID").fill(org);
-      await page.getByLabel("API key environment variable name").fill("STAPLE_TEST_LINEAR_KEY");
-      await page.getByRole("button",{name:"Add connection",exact:true}).click();
-      await page.getByRole("button",{name:"Check connection",exact:true}).click();
-      await expect.poll(()=>page.getByText("Connected for read-only access",{exact:false}).count()).toBe(1);
-      await page.getByRole("button",{name:"Find teams",exact:true}).click();
-      await page.getByLabel("Repository or team to map to alpha",{exact:true}).selectOption({label:"Engineering (ENG)"});
-      // One row per workspace on this computer; map from alpha's row.
-      await page.getByLabel("Repository or team to map to alpha",{exact:true}).locator("xpath=following-sibling::button").click();
-      await expect.poll(()=>page.getByRole("button",{name:"Unmap",exact:true}).count()).toBe(1);
-      await page.getByLabel("Default container",{exact:true}).selectOption(`linear.app/${org}/${team}`);
-      await page.getByRole("checkbox",{name:/Remember last-used selections/}).check();
-      await page.getByRole("button",{name:"Save defaults",exact:true}).click();
-      await page.goto(`${at(single)}/?issue=ALP-1&token=${single.token}`,{waitUntil:"networkidle"});
-      await page.getByRole("button",{name:"Link issue",exact:true}).click();
-      await expect.poll(()=>page.getByLabel("Container scope",{exact:true}).inputValue()).toBe(team);
-      expect(await page.getByLabel("Resource type",{exact:true}).inputValue()).toBe("issue");
-      expect(await page.getByLabel("Resource type",{exact:true}).locator('option[value="pull_request"]').isDisabled()).toBe(true);
-      await page.getByLabel("Issue URL or search").fill("fixture");
-      await page.getByRole("button",{name:"Search",exact:true}).click();
-      await expect.poll(()=>page.getByRole("button",{name:/Linear fixture source/}).count()).toBe(1);
-      await page.getByRole("button",{name:"More results",exact:true}).click();
-      await expect.poll(()=>page.getByRole("button",{name:/Second page source/}).count()).toBe(1);
-      expect(await page.getByRole("button",{name:/Linear fixture source/}).count()).toBe(1);
-      await page.getByRole("button",{name:/Linear fixture source/}).click();
-      await page.getByRole("button",{name:"Confirm link",exact:true}).click();
-      await expect.poll(()=>page.getByText("Source linked. Local execution fields are unchanged.",{exact:true}).count()).toBe(1);
+      await page.getByRole("button",{name:"Set up",exact:true}).click();
+      await page.getByLabel("API key variable",{exact:true}).fill("STAPLE_TEST_LINEAR_KEY");
+      await page.getByLabel("Organization ID",{exact:true}).fill(org);
+      await page.getByLabel("Your user ID",{exact:true}).fill(account);
+      await page.getByRole("button",{name:"Save",exact:true}).click();
+      // Saving reloads the list and checks the new connection.
+      await expect.poll(()=>page.locator('[data-connection-row="linear"] [data-connection-state="ready"]').count()).toBe(1);
+      // A window on one workspace lists the others on this computer but only its own row can change.
+      expect(await page.locator("[data-workspace-row]").count()).toBeGreaterThan(1);
+      expect(await page.getByRole("button",{name:/^Add a source to /}).count()).toBe(1);
+      await page.getByRole("button",{name:"Add a source to alpha",exact:true}).click();
+      await page.getByRole("option",{name:/Engineering \(ENG\)/}).click();
+      await expect.poll(()=>page.getByRole("button",{name:"Remove Engineering (ENG) from alpha",exact:true}).count()).toBe(1);
       await page.keyboard.press("Escape");
-      await page.getByRole("tab",{name:"External links",exact:true}).click();
+      await page.goto(`${at(single)}/?issue=ALP-1&token=${single.token}`,{waitUntil:"networkidle"});
+      // The phone summary has one way to link, for both kinds.
+      await page.getByRole("button",{name:"Link an issue or pull request",exact:true}).click();
+      const dialog=page.locator("[data-link-external]");
+      await expect.poll(()=>dialog.getByRole("button",{name:/^Search scope: alpha · 1 source/}).count()).toBe(1);
+      await page.keyboard.type("fixture");
+      await expect.poll(()=>dialog.getByRole("option",{name:/Linear fixture source/}).count()).toBe(1);
+      await dialog.getByRole("button",{name:"Show more",exact:true}).click();
+      await expect.poll(()=>dialog.getByRole("option",{name:/Second page source/}).count()).toBe(1);
+      expect(await dialog.getByRole("option",{name:/Linear fixture source/}).count()).toBe(1);
+      expect(await dialog.getByRole("option",{name:/Linear fixture source/}).getAttribute("aria-selected")).toBe("true");
+      await page.keyboard.press("Enter");
+      await expect.poll(()=>dialog.getByRole("option",{name:/Linear fixture source/}).innerText()).toContain("Linked here");
+      expect(await page.evaluate(()=>document.activeElement?.getAttribute("role"))).toBe("combobox");
+      await page.keyboard.press("Escape");
+      await page.getByRole("tab",{name:/^External links/}).click();
       const card=page.locator("[data-external-resource]");
       await expect.poll(()=>card.innerText()).toContain("In review");
-      await card.getByText("Source context",{exact:true}).click();
-      expect(await card.innerText()).toContain("Linear private source context");
+      // The row opens in place for the saved description.
+      await card.locator("[aria-expanded]").first().click();
+      await expect.poll(()=>card.innerText()).toContain("Linear private source context");
       title="Linear renamed source";identifier="ENG-99";
-      await page.getByRole("button",{name:"Refresh context for ENG-12",exact:true}).click();
+      // On a phone a row's actions are its menu.
+      const refresh=async(key:string)=>{
+        await page.getByRole("button",{name:`More actions for ${key}`,exact:true}).click();
+        await page.getByRole("menuitem",{name:"Refresh",exact:true}).click();
+      };
+      await refresh("ENG-12");
       await expect.poll(()=>card.innerText()).toContain("Linear renamed source");
       denied=true;
-      await page.getByRole("button",{name:"Refresh context for ENG-99",exact:true}).click();
-      await expect.poll(()=>page.getByRole("alert").innerText()).toContain("Linear rejected the API key in STAPLE_TEST_LINEAR_KEY");
+      await refresh("ENG-99");
+      await expect.poll(()=>card.getByRole("alert").innerText()).toContain("Linear rejected the API key in STAPLE_TEST_LINEAR_KEY");
       expect(await card.innerText()).toContain("Linear renamed source");
       expect(await heading(page).innerText()).toContain("Set up the repository (alpha)");
       expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);

@@ -268,8 +268,9 @@ describe("the pickup order", () => {
   });
 
   it("gives every row the one place its actions live", () => {
-    // The actions column is ON here, and it is the same slot the tree hangs its menu on.
-    expect(html).toContain('data-testid="row-quick-actions"');
+    // The actions column is ON here, and it is the same slot the tree hangs its menu on:
+    // inside the trailing slot, never laid over the cue cluster.
+    expect(html).toMatch(/class="staple-row-trail">(?:<time[^>]*>[^<]*<\/time>)?<span class="staple-row-quick" data-testid="row-quick-actions"/);
   });
 });
 

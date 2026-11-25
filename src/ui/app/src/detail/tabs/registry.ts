@@ -26,6 +26,11 @@ export interface TabProps {
   onAuthError: (error: AuthError) => void;
   /** Call after any write so the page reflects it without waiting for the next poll. */
   refresh: () => void;
+  /**
+   * Call just before a change that may make this tab shorter (a filter, a collapsed section):
+   * the scroll then stays where the reader has it instead of being pulled up (tab-scroll.ts).
+   */
+  holdScroll?: () => void;
 }
 
 export interface TabDefinition {
@@ -36,6 +41,8 @@ export interface TabDefinition {
   component: ComponentType<TabProps>;
   /** Hide the tab entirely when it has nothing to show, or does not apply to this kind. Documents and Files leave this unset: an empty tab is the answer. */
   available?: (detail: IssueDetail) => boolean;
+  /** A number drawn after the label, when the tab holds a countable set; null draws none. */
+  count?: (detail: IssueDetail) => number | null;
 }
 
 import { ExternalLinksTab } from "./ExternalLinksTab";
@@ -77,7 +84,7 @@ export const TABS: readonly TabDefinition[] = [
    * that vanishes teaches nobody that the feature exists. The tab renders "no relations"
    * rather than an empty canvas, which is the honest version of the same answer.
    */
-  { id: "external-links", label: "External links", component: ExternalLinksTab, available: task },
+  { id: "external-links", label: "External links", component: ExternalLinksTab, available: task, count: (detail) => detail.externalLinks?.length || null },
   { id: "relations", label: "Connections", component: RelationsTab, available: task },
   { id: "idea-connections", label: "Connections", component: IdeaConnectionsTab, available: isIdeaDetail },
   /**
