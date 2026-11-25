@@ -143,14 +143,35 @@ repository.
 6. \`staple events\` — see what your completion unblocked (\`blockers_resolved\`,
    \`children_complete\`). Then go back to \`inbox\`.
 
-## Findings and rulings on open work stay in that ticket
+## Findings and rulings on open work
 
-When a review finding, or a person's ruling, falls within an open ticket's
-outcome (above all while its pull request is unmerged), record the ruling as a
-comment on that ticket and make the change in the same branch and pull request.
-File a new ticket only for work that stands on its own: it can complete, block
-or be reviewed independently, or it is real today but outside what the ticket
-changes. A person's ruling on an open ticket never gets its own ticket.
+A reviewer reports findings; the owner of the ticket they were found in
+classifies each one and acts on it before handing on. First match wins:
+
+1. **Fix here**, in the same branch and pull request: the change introduced it;
+   it contradicts the ticket's acceptance criteria or outcome; or it is the same
+   root cause or defect class on the surface the ticket changes, needs no new
+   product decision and fits in about half the ticket's estimate again.
+2. **Blocker**: it stands on its own, and the ticket cannot be verified or
+   shipped safely without it, the ticket works around it, or it is a security or
+   data-integrity problem on a path the ticket touches. File it found in the
+   ticket and blocking it: \`staple new "<title>" --found-in ${ref} --blocks\`
+   (MCP \`create_task\` with \`found_in\` and \`blocks: true\`). Once the ticket is
+   merged, block its parent or milestone instead with \`--blocks <scope>\`. A
+   workaround is a stopgap while the blocker is open, never the resolution.
+3. **Follow-up**: real and in the same area, but the ticket is complete and
+   correct without it: \`staple new "<title>" --found-in ${ref}\`. Security and
+   data-integrity follow-ups are high priority and queued next.
+4. **Independent**: an unrelated area. File it without \`--found-in\` and say in
+   its description where it was noticed.
+5. **Note only**: a latent risk or tidy-up goes in the worklog, not a ticket.
+
+When unsure between fixing here and a follow-up, and the fix is cheap, fix it
+here. Record every finding as one comment on the ticket it was found in,
+\`finding: <what> -> <disposition> (<where>)\`, naming the commit or the new
+ticket. A person's ruling on an open ticket never gets its own ticket: record it
+as a comment on that ticket and make the change in the same branch and pull
+request.
 
 ## Show your work in the thread
 
