@@ -110,12 +110,16 @@ it. Never pass the token as a CLI argument or paste it into a connection form.
 
 Your workspace ID is the number after `app.clickup.com/` in any ClickUp page's address. In
 **Settings → Integrations**, choose **Add connection → ClickUp workspace**, enter the environment
-variable name and the workspace ID, and save. Staple checks that the token can see that workspace,
-and every task it reads must belong to it. Then add spaces or lists to a workspace under
-**Workspaces**.
+variable name and the workspace ID, and save. Staple asks ClickUp who the token belongs to and binds
+the connection to that user and workspace; you never type a user id. On every command it checks the
+token still belongs to that user (otherwise **Wrong account**) and can see that workspace, and every
+task it reads must belong to it. Pass `--account USER_ID` to configure to refuse a token of anyone
+else. Add a connection per workspace or token; a pasted task URL is read through whichever connected
+workspace holds it. Then add spaces or lists to a workspace under **Workspaces**.
 
 ```sh
-staple integrations configure --provider clickup   --scope WORKSPACE_ID --credential-env STAPLE_CLICKUP_API_TOKEN --json
+staple integrations configure --provider clickup \
+  --scope WORKSPACE_ID --credential-env STAPLE_CLICKUP_API_TOKEN --json
 staple integrations containers --connection CONNECTION_ID --json                       # spaces
 staple integrations containers --connection CONNECTION_ID --container-kind list --json  # lists, one space per page
 staple integrations map --ws my-workspace --connection CONNECTION_ID --container SPACE_ID --json
@@ -127,9 +131,15 @@ staple integrations link --ws my-workspace --ref ABC-12 --url https://app.clicku
 A task is identified by its workspace and task id, so moving it between lists or spaces keeps its
 links. Paste a task URL (`https://app.clickup.com/t/86abc123`, or `/t/WORKSPACE_ID/DEV-42` for a
 custom id), or type a task id or custom id to find it wherever it is. Custom ids are display keys.
-ClickUp's API has no text search, so typing matches task names, custom ids and ids over the most
-recently updated tasks in the mapped spaces and lists, three provider pages (300 tasks) at a time;
-**Show more** reads further back. An empty field lists recent tasks.
+ClickUp's API has no text search, so typing matches task names, custom ids and ids in Staple. Each
+page of results scans three provider pages (300 tasks, most recently updated first) of the mapped
+spaces and lists, and **Show more** scans the next three, further back. A typed task id or custom id
+is also looked up directly and shown first, wherever the task is, and not repeated on later pages.
+An empty field lists recent tasks. Pages are numbered by ClickUp, not anchored to a task: a task
+updated while you page moves to the front, so it can be missed or shown twice until you search again.
+
+The source picker lists spaces, then lists one space at a time in space-id order. Spaces and each
+space's lists are reused for a minute, so typing a filter does not read them again.
 
 The saved copy keeps the task's native status and adds a short **ClickUp** block under the
 description: the space, folder and list it lives in, where its status sits among that list's own

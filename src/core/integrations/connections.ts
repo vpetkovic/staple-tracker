@@ -23,7 +23,7 @@ const LEGACY_DIRECTORY = /^[0-9a-f]{64}$/;
 function identity(c: ProviderConnection): string {
   return JSON.stringify(c.providerId === "linear"
     ? [c.providerId, c.host, c.account.toLowerCase(), c.scopeId, c.credentialEnv]
-    : c.providerId === "clickup" ? [c.providerId, c.host, c.scopeId, c.credentialEnv]
+    : c.providerId === "clickup" ? [c.providerId, c.host, c.account, c.scopeId, c.credentialEnv]
     : [c.providerId, c.host.toLowerCase(), c.account.toLowerCase()]);
 }
 

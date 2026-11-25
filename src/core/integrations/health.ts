@@ -52,6 +52,7 @@ function action(connection: ProviderConnection, state: ConnectionState, health: 
     switch (state) {
       case "ready": return null;
       case "unauthenticated": return `Set ${connection.credentialEnv} to a valid ClickUp personal API token in the environment of the Staple process, then restart it.`;
+      case "account_mismatch": return `Set ${connection.credentialEnv} to the token of the ClickUp user this connection was made with, or connect ClickUp again${login ? ` as ${login}` : ""}.`;
       case "forbidden": return `Use a token for a ClickUp user who belongs to workspace ${connection.scopeId}.`;
       case "rate_limited": return "Wait for the ClickUp rate limit to reset, then check again.";
       case "offline": return "Check that the computer running Staple can reach api.clickup.com.";

@@ -10,7 +10,7 @@ import { IntegrationConnections, type ProviderConnection } from "./connections.j
 import { present, resolveScope, storedMapping, TargetNames, writeMapping, type MappingTarget, type SearchScope, type WorkspaceHandle } from "./mapping.js";
 import { MAPPING_LIMIT, targetKey, type StoredTarget } from "./mapping-format.js";
 import { ExternalWork } from "./external-work.js";
-import { ClickUpApiAdapter } from "./clickup-api.js";
+import { ClickUpApiAdapter, discoverClickUp, type ClickUpIdentity } from "./clickup-api.js";
 import { LinearApiAdapter } from "./linear-api.js";
 import { externalResourceId, type ExternalResource } from "./link-store.js";
 import { IntegrationReader } from "./provider.js";
@@ -50,7 +50,9 @@ export class IntegrationOperations {
   constructor(private readonly workspaceStore:WorkspaceStore|null, private readonly options:{home?:string;factories?:ReadonlyMap<string,AdapterFactory>;liveReadsAvailable?:boolean;
     gh?:GhRunner;caches?:{health:ProbeCache<ConnectionHealthSnapshot>;detection:ProbeCache<Array<{host:string;login:string}>>};
     /** Every workspace on this machine, for All workspaces and for unmapped workspaces. Defaults to this one. */
-    workspaces?:()=>WorkspaceHandle[]}={}) {
+    workspaces?:()=>WorkspaceHandle[];
+    /** Reads which ClickUp user a token belongs to and that it sees the workspace, for configure to bind. */
+    discoverClickUp?:(scopeId:string,credentialEnv:string)=>Promise<ClickUpIdentity>}={}) {
     this.connections = new IntegrationConnections(options.home);
     this.names = new TargetNames(`${this.connections.directory}/names`);
     this.caches = options.caches ?? processCaches;
@@ -137,10 +139,35 @@ export class IntegrationOperations {
     // A pasted cached URL remains usable without a machine connection.
     if(cached.length>1 && !c.connectionId) throw new StapleError("conflict","Several scoped resources use this URL. Choose a resource or connection explicitly.");
     if (cached.length===1 && !c.connectionId) return storedSource(this.store.externalLinks().resource(cached[0]!.id));
+    if (parsed.host==="app.clickup.com") return this.clickupSource(c,parsed);
     const reader=this.reader(this.select(c,parsed.host));
     const resolved=await reader.resolve({url:parsed.href});
     if (!resolved) throw new StapleError("not_found","No accessible issue or PR was found at this URL");
     return resolved.ref.kind==="pull_request" && !reader.capabilities.readPullRequests ? resolved:reader.read(resolved.ref);
+  }
+  /**
+   * A ClickUp task URL may name no workspace, and this computer may have several ClickUp connections:
+   * the one the URL names, else the one asked for and then the others, until one can read the task.
+   */
+  private async clickupSource(c:IntegrationCommand,url:URL):Promise<ExternalItem> {
+    const named=/^\/t\/([0-9]+)\//.exec(url.pathname)?.[1];
+    const clickup=this.connections.list().filter(x=>x.providerId==="clickup" && (!named || x.scopeId===named));
+    const asked=c.connectionId ? this.connections.resolve(c.connectionId) : null;
+    const order=asked?.providerId==="clickup" && (!named || asked.scopeId===named) ? [asked,...clickup.filter(x=>x.id!==asked.id)] : clickup;
+    if (!order.length) throw new StapleError("unavailable","Cached-only session. Configure a connection for live reads in Settings > Integrations.");
+    let elsewhere:StapleError|null=null;
+    for (const connection of order) {
+      const reader=this.reader(connection.id);
+      try {
+        const resolved=await reader.resolve({url:url.href});
+        if (resolved) return reader.read(resolved.ref);
+      } catch (error) {
+        if (!(error instanceof StapleError && error.detail?.reason==="other_workspace")) throw error;
+        elsewhere=error;
+      }
+    }
+    // Every connection could see the task but none is for its workspace: say so, not "not found".
+    throw elsewhere ?? new StapleError("not_found","No ClickUp workspace connected here has a task at this URL");
   }
   counts():Record<string,{issues:number;pullRequests:number}> {
     const rows=this.store.db.prepare(`SELECT l.issue_id,r.kind,COUNT(*) AS n FROM external_links l
@@ -179,8 +206,14 @@ export class IntegrationOperations {
       case "configure":
         if(c.providerId === "linear") return this.connections.save({id:c.connectionId,providerId:"linear",mode:"api",host:"linear.app",
           account:need(c.account,"expected Linear user UUID"),scopeId:need(c.scopeId,"Linear organization UUID"),credentialEnv:need(c.credentialEnv,"credential environment variable name")});
-        if(c.providerId === "clickup") return this.connections.save({id:c.connectionId,providerId:"clickup",mode:"api",host:"app.clickup.com",
-          scopeId:need(c.scopeId,"ClickUp workspace id"),credentialEnv:need(c.credentialEnv,"credential environment variable name")});
+        if(c.providerId === "clickup") {
+          const scopeId=need(c.scopeId,"ClickUp workspace id"),credentialEnv=need(c.credentialEnv,"credential environment variable name");
+          if (this.options.liveReadsAvailable===false) throw new StapleError("unavailable","Cached-only session. Connect ClickUp on the machine running Staple.");
+          // The token says whose it is; the person never types a ClickUp user id.
+          const found=await (this.options.discoverClickUp ?? discoverClickUp)(scopeId,credentialEnv);
+          if (c.account && c.account!==found.account) throw new StapleError("auth",`The token in ${credentialEnv} belongs to ${found.login ?? "a different ClickUp user"}, not the user this connection expects.`,{reason:"account_mismatch",...(found.login ? {login:found.login} : {})});
+          return this.connections.save({id:c.connectionId,providerId:"clickup",mode:"api",host:"app.clickup.com",account:found.account,scopeId,credentialEnv});
+        }
         return this.connections.save({id:c.connectionId,providerId:"github",mode:"cli",host:need(c.host,"GitHub host").toLowerCase(),account:need(c.account,"expected gh account")});
       case "remove": this.connections.remove(need(c.connectionId,"connection")); return {removed:true};
       case "health": return {health:await this.health(c.connectionId,c.force===true),pollIntervalSeconds:HEALTH_POLL_INTERVAL_SECONDS};
@@ -377,11 +410,18 @@ function contains(target:MappingTarget,item:ResolvedExternalItem):boolean {
 function outsideTarget(item:ResolvedExternalItem,connections:ProviderConnection[]):MappingTarget {
   const r=item.ref;
   const stored:StoredTarget=r.providerId==="clickup"
-    ? {providerId:"clickup",host:"app.clickup.com",scopeId:r.scopeId,kind:"space",containerId:(item as ExternalItem).spaceId ?? "",name:null,url:null}
+    ? {providerId:"clickup",host:"app.clickup.com",scopeId:r.scopeId,kind:"space",containerId:clickupSpace(item),name:null,url:null}
     : r.providerId==="github"
     ? {providerId:"github",host:r.host,scopeId:"host",kind:"repository",containerId:r.containerId,name:item.key.replace(/#[0-9]+$/,""),url:item.url.replace(/\/(issues|pull)\/[0-9]+$/,"")}
     : {providerId:"linear",host:"linear.app",scopeId:r.scopeId,kind:"team",containerId:r.containerId,name:item.key.replace(/-[0-9]+$/,""),url:null};
   return present(stored,connections);
+}
+
+/** A live ClickUp read always says which space a task is in; without it there is nothing honest to offer. */
+function clickupSpace(item:ResolvedExternalItem):string {
+  const space=(item as ExternalItem).spaceId;
+  if (!space) throw new StapleError("unavailable","ClickUp did not say which space this task is in; refresh it and try again");
+  return space;
 }
 
 function encodeCursor(binding:string,parts:Record<string,string>):string {

@@ -13,6 +13,9 @@ export interface ExternalResource extends ResolvedExternalItem {
   createdAt: string;
   updatedAt: string;
   contextShared: boolean;
+  /** ClickUp: where the task sat when last read on this machine, so a saved copy groups under its mapped space or list. */
+  spaceId?: string;
+  listIds?: string[];
 }
 
 export interface ExternalLink {
@@ -56,7 +59,28 @@ function hash(value: string) { return createHash("sha256").update(value).digest(
 export function resourceFromRow(row: ResourceRow): ExternalResource {
   return { id: row.id, ref: { providerId: row.provider_id, host: row.host, scopeId: row.scope_id, containerId: row.container_id, id: row.remote_id, kind: row.kind },
     key: row.display_key, url: row.url, title: row.title, body: row.body,
-    status: row.status_json === null ? null : JSON.parse(row.status_json), fetchedAt: row.fetched_at, createdAt: row.created_at, updatedAt: row.updated_at, contextShared: row.context_shared === 1 };
+    status: readStatus(row.status_json), ...readPlacement(row.status_json), fetchedAt: row.fetched_at, createdAt: row.created_at, updatedAt: row.updated_at, contextShared: row.context_shared === 1 };
+}
+
+/**
+ * `status_json` holds the native state and, for a ClickUp task, the space and lists it sat in when
+ * read. Placement stays with the saved copy on this machine: the wire carries only the state.
+ */
+function statusJson(item: Pick<ExternalItem, "status" | "spaceId" | "listIds">): string | null {
+  if (!item.status) return null;
+  return JSON.stringify({ id: item.status.id, name: item.status.name,
+    ...(item.spaceId ? { spaceId: item.spaceId } : {}), ...(item.listIds?.length ? { listIds: item.listIds } : {}) });
+}
+function readStatus(json: string | null): ExternalItem["status"] {
+  if (json === null) return null;
+  const { id, name } = JSON.parse(json) as { id: string; name: string };
+  return { id, name };
+}
+function readPlacement(json: string | null): Pick<ExternalResource, "spaceId" | "listIds"> {
+  if (json === null) return {};
+  const { spaceId, listIds } = JSON.parse(json) as { spaceId?: unknown; listIds?: unknown };
+  return { ...(typeof spaceId === "string" ? { spaceId } : {}),
+    ...(Array.isArray(listIds) && listIds.every(l => typeof l === "string") ? { listIds: listIds as string[] } : {}) };
 }
 
 /** Owns source context and association choices; never changes local execution fields. */
@@ -99,6 +123,10 @@ export class ExternalLinkStore {
       || (input.status !== null && (!input.status || typeof input.status !== "object" || typeof input.status.id !== "string" || typeof input.status.name !== "string" || input.status.id.length > 512 || input.status.name.length > 512)))) {
       throw new StapleError("validation", "External context exceeds its size limits or has an invalid status");
     }
+    if (full && ((input.spaceId !== undefined && (typeof input.spaceId !== "string" || input.spaceId.length > 64))
+      || (input.listIds !== undefined && (!Array.isArray(input.listIds) || input.listIds.length > 1000 || input.listIds.some(l => typeof l !== "string" || l.length > 64))))) {
+      throw new StapleError("validation", "External placement exceeds its size limits");
+    }
     return this.store.journaled(() => {
       const prior = this.find(input.ref);
       if (prior?.fetchedAt && (!full || prior.fetchedAt > fetchedAt!.toISOString())) return prior;
@@ -112,7 +140,7 @@ export class ExternalLinkStore {
         .run(id, input.ref.providerId, host, input.ref.scopeId, input.ref.containerId, input.ref.id, input.ref.kind,
           input.key, url.href, prior?.createdAt ?? timestamp, timestamp);
       if (full) {
-        const status = input.status ? JSON.stringify({ id: input.status.id, name: input.status.name }) : null;
+        const status = statusJson(input);
         this.db.prepare(`INSERT INTO external_private_cache (resource_id,title,body,status_json,fetched_at) VALUES (?,?,?,?,?)
           ON CONFLICT(resource_id) DO UPDATE SET title=excluded.title,body=excluded.body,status_json=excluded.status_json,fetched_at=excluded.fetched_at`)
           .run(id,input.title,input.body,status,fetchedAt!.toISOString());
@@ -135,7 +163,7 @@ export class ExternalLinkStore {
       if (enabled && current.fetchedAt === null) throw new StapleError("validation", "Read source context before sharing it");
       this.db.prepare("UPDATE external_resources SET context_shared=?, title=?, body=?, status_json=?, fetched_at=?, updated_at=? WHERE id=?")
         .run(enabled ? 1 : 0, enabled ? current.title : null, enabled ? current.body : null,
-          enabled && current.status ? JSON.stringify(current.status) : null, enabled ? current.fetchedAt : null, nowIso(), resourceId);
+          enabled ? statusJson(current) : null, enabled ? current.fetchedAt : null, nowIso(), resourceId);
       this.recordResource(resourceId, "update", actor);
       return this.resource(resourceId);
     });
@@ -202,7 +230,7 @@ export class ExternalLinkStore {
     ) WHERE ordinal<=5`).all() as Array<{issue_id:string;id:string;provider_id:string;host:string;container_id:string;kind:string;display_key:string;url:string;title:string|null;status_json:string|null}>;
     for(const row of rows) result[row.issue_id]![row.kind === "issue" ? "issues" : "pullRequests"].items.push({
       id:row.id,providerId:row.provider_id,host:row.host,containerId:row.container_id,key:row.display_key,url:row.url,title:row.title,
-      status:row.status_json===null ? null : JSON.parse(row.status_json),
+      status:readStatus(row.status_json),
     });
     return result;
   }
@@ -257,7 +285,7 @@ export function resourcePayload(row: ResourceRow): Record<string, unknown> {
   return { providerId: row.provider_id, host: row.host, scopeId: row.scope_id, containerId: row.container_id,
     remoteId: row.remote_id, kind: row.kind, key: row.display_key, url: row.url, context: { shared: row.context_shared === 1,
     title: row.context_shared ? row.title : null, body: row.context_shared ? row.body : null,
-    status: row.context_shared && row.status_json ? JSON.parse(row.status_json) : null,
+    status: row.context_shared ? readStatus(row.status_json) : null,
     fetchedAt: row.context_shared ? row.fetched_at : null }, createdAt: row.created_at, updatedAt: row.updated_at };
 }
 export function linkPayload(row: LinkRow): Record<string, unknown> {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ExternalLink } from "../../../../core/integrations/link-store";
+import { clickupWorkspaces, containerLabel } from "./link-state";
 import { groupLinks, uniqueHits, type SearchHit } from "./model";
 const hit: SearchHit = {
   item: {
@@ -40,5 +41,15 @@ describe("link groups", () => {
     const link = (id: string, key: string) =>
       ({ id, resource: { ref: { providerId: "clickup", host: "app.clickup.com", scopeId: "9012345", containerId: "9012345", id, kind: "issue" }, key } }) as unknown as ExternalLink;
     expect(groupLinks([link("86b", "86b"), link("86a", "DEV-7")]).map((g) => [g.label, g.links.length])).toEqual([["ClickUp", 2]]);
+  });
+  it("names a ClickUp group by its workspace once a connection here has read the name", () => {
+    const names = clickupWorkspaces([
+      { providerId: "clickup", scopeId: "1", health: { identity: { organization: "Acme" } } },
+      { providerId: "clickup", scopeId: "2", health: null },
+      { providerId: "linear", scopeId: "3", health: { identity: { organization: "Linear org" } } },
+    ]);
+    expect([...names]).toEqual([["1", "Acme"]]);
+    const item = (scopeId: string) => ({ ref: { providerId: "clickup", host: "app.clickup.com", scopeId, containerId: scopeId, id: "86a", kind: "issue" as const }, key: "86a", url: "https://app.clickup.com/t/86a" });
+    expect([containerLabel(item("1"), names), containerLabel(item("2"), names), containerLabel(item("1"))]).toEqual(["Acme", "ClickUp", "ClickUp"]);
   });
 });

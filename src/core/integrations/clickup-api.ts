@@ -6,12 +6,17 @@ import { sharedBudget, type RequestBudget } from "./rate-limit.js";
 import type { ConnectionHealth, ContainerKind, ExternalContainer, ExternalItem, ExternalItemRef, ExternalLocator, ExternalPage, ExternalSearch, IntegrationAdapter, ProviderReadOptions } from "./contracts.js";
 
 const numericId = z.string().regex(/^[1-9][0-9]{0,19}$/);
+/** `account` is the ClickUp user the token belonged to when the connection was made; configure discovers it. */
 export const clickupConnectionSchema = z.object({
   id: z.string().regex(/^[A-Za-z0-9_-]{1,80}$/), providerId: z.literal("clickup"), mode: z.literal("api"),
-  host: z.literal("app.clickup.com"), scopeId: numericId,
+  host: z.literal("app.clickup.com"), account: numericId, scopeId: numericId,
   credentialEnv: z.string().regex(/^[A-Z][A-Z0-9_]{0,127}$/),
 }).strict();
 export type ClickUpApiConnection = z.infer<typeof clickupConnectionSchema>;
+/** What configure knows before it has asked ClickUp who the token belongs to. */
+const discoverySchema = clickupConnectionSchema.omit({ id: true, account: true });
+type ClickUpDiscovery = z.infer<typeof discoverySchema>;
+export interface ClickUpIdentity { account: string; login: string | null; organization: string }
 
 const API = "https://api.clickup.com/api/v2";
 const HOST = "app.clickup.com";
@@ -27,6 +32,8 @@ const MAX_BYTES = 8_000_000;
 const TIMEOUT_MS = 15_000;
 const DESCRIPTION_BYTES = 200_000;
 const CONTEXT_ITEMS = 50;
+/** How long spaces and each space's lists are reused, so a filter typed in the source picker reads them once. */
+const CATALOGUE_TTL_MS = 60_000;
 /** 401 codes meaning the token itself is missing, unknown or revoked. Any other 401 is something the token cannot see. */
 const TOKEN_CODES = new Set(["OAUTH_017", "OAUTH_019", "OAUTH_021", "OAUTH_025", "OAUTH_077"]);
 const TASK_ID = /^[0-9a-z]{3,32}$/;
@@ -58,6 +65,29 @@ const listDetail = z.object({
   space: z.object({ id: idish, name: name.optional() }), statuses: z.array(status).max(500).optional(),
 });
 type ListDetail = z.infer<typeof listDetail>;
+const me = z.object({ user: z.object({ id: idish, username: z.string().max(256).nullable().optional() }) });
+
+/**
+ * Spaces and lists read recently through one token, bound to one workspace and user. A value is
+ * shared by every operation in the process for a short time; a failed read is never kept.
+ */
+export class ClickUpCatalogue {
+  private readonly entries = new Map<string, { at: number; value: Promise<unknown> }>();
+  read<T>(key: string, now: number, load: () => Promise<T>): Promise<T> {
+    const held = this.entries.get(key);
+    if (held && now - held.at < CATALOGUE_TTL_MS) return held.value as Promise<T>;
+    const value = load();
+    this.entries.set(key, { at: now, value });
+    value.catch(() => { if (this.entries.get(key)?.value === value) this.entries.delete(key); });
+    return value;
+  }
+}
+const processCatalogue = new ClickUpCatalogue();
+
+/** Who a token is and that it can see the workspace, for configure to bind. Two GET requests. */
+export function discoverClickUp(scopeId: string, credentialEnv: string, dependencies: ConstructorParameters<typeof ClickUpApiAdapter>[1] = {}): Promise<ClickUpIdentity> {
+  return new ClickUpApiAdapter({ providerId: "clickup", mode: "api", host: HOST, scopeId, credentialEnv }, dependencies).identify();
+}
 
 /** Personal API token stays in the server environment. IO is injectable, never a configurable remote URL. */
 export class ClickUpApiAdapter implements IntegrationAdapter {
@@ -69,15 +99,21 @@ export class ClickUpApiAdapter implements IntegrationAdapter {
   private readonly credential: () => string | undefined;
   private readonly now: () => Date;
   private readonly budgetFor: (token: string) => RequestBudget;
-  private spaceList: Promise<Array<z.infer<typeof space>>> | null = null;
-  constructor(config: ClickUpApiConnection, dependencies: {
-    fetch?: typeof fetch; credential?: () => string | undefined; now?: () => Date; budget?: (token: string) => RequestBudget;
+  private readonly catalogue: ClickUpCatalogue;
+  /** Null only for discovery, which reads nothing but /user and /team. */
+  private readonly expected: string | null;
+  private user: Promise<z.infer<typeof me>["user"]> | null = null;
+  constructor(config: ClickUpApiConnection | ClickUpDiscovery, dependencies: {
+    fetch?: typeof fetch; credential?: () => string | undefined; now?: () => Date; budget?: (token: string) => RequestBudget; catalogue?: ClickUpCatalogue;
   } = {}) {
-    const parsed = clickupConnectionSchema.safeParse(config);
-    if (!parsed.success) throw new StapleError("validation", "Configure a ClickUp workspace id and the name of the environment variable holding the API token");
-    this.config = parsed.data;
+    const bound = "account" in config ? clickupConnectionSchema.safeParse(config) : null;
+    const discovery = bound ? null : discoverySchema.safeParse(config);
+    if (bound?.success === false || discovery?.success === false) throw new StapleError("validation", "Configure a ClickUp workspace id and the name of the environment variable holding the API token");
+    this.config = bound?.data ?? { id: "discovery", account: "", ...discovery!.data! };
+    this.expected = bound?.data?.account ?? null;
     this.scope = { providerId: "clickup", host: HOST, scopeId: this.config.scopeId };
     this.connection = { id: this.config.id, mode: "api" };
+    this.catalogue = dependencies.catalogue ?? processCatalogue;
     this.fetch = dependencies.fetch ?? globalThis.fetch;
     this.credential = dependencies.credential ?? (() => process.env[this.config.credentialEnv]);
     this.now = dependencies.now ?? (() => new Date());
@@ -87,9 +123,8 @@ export class ClickUpApiAdapter implements IntegrationAdapter {
 
   async validate(options?: ProviderReadOptions): Promise<ConnectionHealth> {
     try {
-      const { user } = await this.get("/user", null, z.object({ user: z.object({ username: z.string().max(256).nullable().optional() }) }), options);
-      const workspace = await this.workspace(options);
-      return { state: "ready", identity: user.username ? { login: user.username, organization: workspace.name } : { login: workspace.name } };
+      const { login, organization } = await this.identify(options);
+      return { state: "ready", identity: { login: login ?? `ClickUp user ${this.expected}`, organization } };
     } catch (error) {
       if (options?.signal?.aborted) throw options.signal.reason;
       if (!(error instanceof StapleError)) throw error;
@@ -103,20 +138,27 @@ export class ClickUpApiAdapter implements IntegrationAdapter {
     return { items: (await this.spaces(options)).map(s => ({ id: s.id, name: s.name, url: this.spaceUrl(s.id) })), nextCursor: null };
   }
 
-  /** Lists, one space per page: its folderless lists, then each folder's. */
+  /**
+   * Lists, one space per page in space-id order: its folderless lists, then each folder's. The
+   * cursor names the last space served, so a space added or archived while paging neither
+   * repeats nor skips another. Each space's lists are reused for a minute.
+   */
   async listLists(cursor?: string, options?: ProviderReadOptions): Promise<ExternalPage<ExternalContainer>> {
-    const index = cursor === undefined ? 0 : this.after(cursor, "lists");
-    const spaces = await this.spaces(options);
-    const at = spaces[index];
+    const after = cursor === undefined ? null : BigInt(this.after(cursor, "lists", numericId));
+    const spaces = [...await this.spaces(options)].sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
+    const rest = after === null ? spaces : spaces.filter(s => BigInt(s.id) > after);
+    const at = rest[0];
     if (!at) return { items: [], nextCursor: null };
-    const archived = new URLSearchParams({ archived: "false" });
-    const folders = await this.get(`/space/${at.id}/folder`, archived, z.object({ folders: z.array(z.object({ id: idish, name, hidden: z.boolean().optional(), lists: z.array(list).max(1000).optional() })).max(1000) }), options);
-    const loose = await this.get(`/space/${at.id}/list`, archived, z.object({ lists: z.array(list).max(1000) }), options);
-    const items = [
-      ...loose.lists.map(l => ({ id: l.id, name: `${at.name} / ${l.name}`, url: this.listUrl(l.id) })),
-      ...folders.folders.flatMap(f => (f.lists ?? []).map(l => ({ id: l.id, name: [at.name, f.hidden ? null : f.name, l.name].filter(Boolean).join(" / "), url: this.listUrl(l.id) }))),
-    ];
-    return { items, nextCursor: index + 1 < spaces.length ? this.cursor("lists", index + 1) : null };
+    const items = await this.catalogue.read(await this.cacheKey(`lists:${at.id}`, options), this.now().valueOf(), async () => {
+      const archived = new URLSearchParams({ archived: "false" });
+      const folders = await this.get(`/space/${at.id}/folder`, archived, z.object({ folders: z.array(z.object({ id: idish, name, hidden: z.boolean().optional(), lists: z.array(list).max(1000).optional() })).max(1000) }), options);
+      const loose = await this.get(`/space/${at.id}/list`, archived, z.object({ lists: z.array(list).max(1000) }), options);
+      return [
+        ...loose.lists.map(l => ({ id: l.id, name: `${at.name} / ${l.name}`, url: this.listUrl(l.id) })),
+        ...folders.folders.flatMap(f => (f.lists ?? []).map(l => ({ id: l.id, name: [at.name, f.hidden ? null : f.name, l.name].filter(Boolean).join(" / "), url: this.listUrl(l.id) }))),
+      ];
+    });
+    return { items, nextCursor: rest.length > 1 ? this.cursor("lists", at.id) : null };
   }
 
   async readContainer(id: string, kind: ContainerKind, options?: ProviderReadOptions): Promise<ExternalContainer | null> {
@@ -140,7 +182,8 @@ export class ClickUpApiAdapter implements IntegrationAdapter {
     const typed = search.text.trim().replace(/^#/, "");
     const needle = typed.toLowerCase();
     const binding = JSON.stringify(["tasks", needle, search.spaceId ?? null, search.listId ?? null]);
-    let page = search.cursor === undefined ? 0 : this.after(search.cursor, binding);
+    // The cursor carries the task the first page found by exact id, so a later page does not show it again.
+    let [page, shown] = search.cursor === undefined ? [0, null] : this.after(search.cursor, binding, z.tuple([z.number().int().nonnegative().max(MAX_PAGE), z.string().regex(TASK_ID).nullable()]));
     const inScope = (item: ExternalItem) => (!search.spaceId || item.spaceId === search.spaceId) && (!search.listId || !!item.listIds?.includes(search.listId));
     const items: ExternalItem[] = [];
     let last = false;
@@ -151,7 +194,7 @@ export class ClickUpApiAdapter implements IntegrationAdapter {
       if (search.listId) params.append("list_ids[]", search.listId);
       const data = await this.get(`/team/${this.scope.scopeId}/task`, params, z.object({ tasks: z.array(task).max(PAGE_SIZE), last_page: z.boolean().optional() }), options);
       for (const t of data.tasks) {
-        if (needle && ![t.name, t.custom_id ?? "", t.id].some(v => v.toLowerCase().includes(needle))) continue;
+        if (t.id === shown || (needle && ![t.name, t.custom_id ?? "", t.id].some(v => v.toLowerCase().includes(needle)))) continue;
         const item = this.item(t);
         // A task in several lists can match a filter through a list that is not its home; it is
         // shown only where Staple can also link it, so the scope check at link time agrees.
@@ -164,12 +207,15 @@ export class ClickUpApiAdapter implements IntegrationAdapter {
     if (search.cursor === undefined && (TASK_ID.test(typed) && /[0-9]/.test(typed) || CUSTOM_ID.test(typed))) {
       try {
         const exact = this.item(await this.task(typed, CUSTOM_ID.test(typed), options));
-        if (inScope(exact) && !items.some(i => i.ref.id === exact.ref.id)) items.unshift(exact);
+        if (inScope(exact)) {
+          if (!items.some(i => i.ref.id === exact.ref.id)) items.unshift(exact);
+          shown = exact.ref.id;
+        }
       } catch (error) {
         if (!(error instanceof StapleError) || (error.code !== "not_found" && error.code !== "validation")) throw error;
       }
     }
-    return { items, nextCursor: last ? null : this.cursor(binding, page) };
+    return { items, nextCursor: last ? null : this.cursor(binding, [page, shown]) };
   }
 
   async resolve(locator: ExternalLocator, options?: ProviderReadOptions) {
@@ -224,6 +270,38 @@ export class ClickUpApiAdapter implements IntegrationAdapter {
     catch (error) { if (error instanceof StapleError && error.code === "not_found") return null; throw error; }
   }
 
+  /** The token's user and the bound workspace's name. A bound adapter also refuses a different user. */
+  async identify(options?: ProviderReadOptions): Promise<ClickUpIdentity> {
+    const user = await this.me(options);
+    const workspace = await this.workspace(options);
+    return { account: user.id, login: user.username || null, organization: workspace.name };
+  }
+
+  /** GET /user once per adapter, which is built per operation: the check every command makes. */
+  private me(options?: ProviderReadOptions) {
+    if (!this.user) {
+      const held = this.get("/user", null, me, options).then(r => r.user);
+      held.catch(() => { if (this.user === held) this.user = null; });
+      this.user = held;
+    }
+    return this.user;
+  }
+
+  private async checkUser(options?: ProviderReadOptions) {
+    if (this.expected === null) return;
+    const user = await this.me(options);
+    if (user.id !== this.expected) {
+      throw new StapleError("auth", `The API token in ${this.config.credentialEnv} belongs to ${user.username || "another ClickUp user"}, not the ClickUp user this connection was made with.`,
+        { reason: "account_mismatch", ...(user.username ? { login: user.username } : {}) });
+    }
+  }
+
+  /** A catalogue key for this token, workspace and user; the token is only ever hashed. */
+  private async cacheKey(part: string, options?: ProviderReadOptions) {
+    await this.checkUser(options);
+    return createHash("sha256").update(JSON.stringify([this.credential() ?? "", this.scope.scopeId, this.expected, part])).digest("hex");
+  }
+
   private async workspace(options?: ProviderReadOptions) {
     const { teams } = await this.get("/team", null, z.object({ teams: z.array(z.object({ id: idish, name })).max(1000) }), options);
     const found = teams.find(t => t.id === this.scope.scopeId);
@@ -231,14 +309,10 @@ export class ClickUpApiAdapter implements IntegrationAdapter {
     return found;
   }
 
-  /** Read once per adapter, which is built per operation, so paging through lists does not re-read them. */
-  private spaces(options?: ProviderReadOptions): Promise<Array<z.infer<typeof space>>> {
-    if (!this.spaceList) {
-      const held = this.get(`/team/${this.scope.scopeId}/space`, new URLSearchParams({ archived: "false" }), z.object({ spaces: z.array(space).max(1000) }), options).then(r => r.spaces);
-      held.catch(() => { if (this.spaceList === held) this.spaceList = null; });
-      this.spaceList = held;
-    }
-    return this.spaceList;
+  /** Reused for a minute across operations, so paging and filtering lists do not re-read them. */
+  private async spaces(options?: ProviderReadOptions): Promise<Array<z.infer<typeof space>>> {
+    return this.catalogue.read(await this.cacheKey("spaces", options), this.now().valueOf(), async () =>
+      (await this.get(`/team/${this.scope.scopeId}/space`, new URLSearchParams({ archived: "false" }), z.object({ spaces: z.array(space).max(1000) }), options)).spaces);
   }
 
   private item(source: Task, where: ListDetail | null = null): ExternalItem {
@@ -261,15 +335,15 @@ export class ClickUpApiAdapter implements IntegrationAdapter {
   private binding(binding: string) {
     return createHash("sha256").update(JSON.stringify([this.config.id, this.scope.scopeId, this.config.credentialEnv, binding])).digest("hex");
   }
-  private cursor(binding: string, position: number) {
+  private cursor(binding: string, position: unknown) {
     return Buffer.from(JSON.stringify([this.binding(binding), position])).toString("base64url");
   }
-  private after(cursor: string, binding: string): number {
+  private after<S extends z.ZodTypeAny>(cursor: string, binding: string, position: S): z.infer<S> {
     try {
       if (cursor.length > 512) throw new Error();
-      const [hash, position] = z.tuple([z.string(), z.number().int().nonnegative().max(MAX_PAGE)]).parse(JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")));
+      const [hash, value] = z.tuple([z.string(), position]).parse(JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")));
       if (hash !== this.binding(binding)) throw new Error();
-      return position;
+      return value;
     } catch { throw new StapleError("cursor_invalid", "ClickUp search or connection changed; start again"); }
   }
 
@@ -277,6 +351,8 @@ export class ClickUpApiAdapter implements IntegrationAdapter {
     options?.signal?.throwIfAborted();
     const token = this.credential();
     if (!token || token.length > 4096 || /\s/.test(token)) throw new StapleError("auth", `${this.config.credentialEnv} isn't set where Staple runs.`);
+    if (this.expected === null && path !== "/user" && path !== "/team") throw new StapleError("validation", "Connect ClickUp before reading through it");
+    if (path !== "/user") await this.checkUser(options);
     const budget = this.budgetFor(token);
     const url = `${API}${path}${params?.size ? `?${params}` : ""}`;
     for (let attempt = 0; ; attempt++) {

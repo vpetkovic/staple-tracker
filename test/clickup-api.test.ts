@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import { ClickUpApiAdapter, type ClickUpApiConnection } from "../src/core/integrations/clickup-api.js";
+import { ClickUpApiAdapter, ClickUpCatalogue, discoverClickUp, type ClickUpApiConnection } from "../src/core/integrations/clickup-api.js";
 import { IntegrationReader } from "../src/core/integrations/provider.js";
 import { RequestBudget } from "../src/core/integrations/rate-limit.js";
 
 const workspace = "9012345";
 const spaceId = "90170001";
 const listId = "901700100";
-const config: ClickUpApiConnection = { id: "clickup-work", providerId: "clickup", mode: "api", host: "app.clickup.com", scopeId: workspace, credentialEnv: "STAPLE_CLICKUP_TOKEN" };
+const ACCOUNT = "4401";
+const config: ClickUpApiConnection = { id: "clickup-work", providerId: "clickup", mode: "api", host: "app.clickup.com", account: ACCOUNT, scopeId: workspace, credentialEnv: "STAPLE_CLICKUP_TOKEN" };
 const TOKEN = "pk_fixture_secret_token";
 const task = {
   id: "86abc123", custom_id: "DEV-42", name: "Ship the importer", markdown_description: "Source **context**",
@@ -27,13 +28,25 @@ function clock(start = 1_764_000_000_000) {
   const state = { now: start, slept: [] as number[] };
   return { state, clock: { now: () => state.now, sleep: async (ms: number) => { state.slept.push(ms); state.now += ms; } } };
 }
-function setup(route: Route, options: { token?: string | undefined; limit?: number } = {}) {
+/**
+ * `fetch` records the requests the route answers. GET /user, the per-command check of the bound
+ * user, is answered as the bound user unless `user: null` hands it to the route too.
+ */
+function setup(route: Route, options: { token?: string | undefined; limit?: number; user?: { id: string; username: string } | null } = {}) {
   const fetch = vi.fn(async (input: unknown, _request?: RequestInit) => route(new URL(String(input))));
+  const users = vi.fn();
+  const answer = async (input: unknown, request?: RequestInit) => {
+    if (options.user !== null && new URL(String(input)).pathname === "/api/v2/user") { users(); return json({ user: options.user ?? { id: ACCOUNT, username: "ada" } }); }
+    return fetch(input, request);
+  };
   const time = clock();
   const budget = new RequestBudget("ClickUp", options.limit ?? 100, time.clock);
-  const adapter = new ClickUpApiAdapter(config, { fetch: fetch as unknown as typeof globalThis.fetch, credential: () => ("token" in options ? options.token : TOKEN),
-    now: () => new Date("2026-11-25T12:00:00Z"), budget: () => budget });
-  return { adapter, fetch, reader: new IntegrationReader(adapter), time, budget };
+  const deps = { fetch: answer as unknown as typeof globalThis.fetch, credential: () => ("token" in options ? options.token : TOKEN),
+    now: () => new Date(time.state.now), budget: () => budget, catalogue: new ClickUpCatalogue() };
+  const adapter = new ClickUpApiAdapter(config, deps);
+  // Another operation in the same process: a fresh adapter sharing the catalogue and budget.
+  const again = () => new ClickUpApiAdapter(config, deps);
+  return { adapter, fetch, users, reader: new IntegrationReader(adapter), time, budget, again, deps };
 }
 const json = (body: unknown, init?: ResponseInit) => Response.json(body, init);
 const tasksRoute = (pages: Array<{ tasks: unknown[]; last_page?: boolean }>): Route => url => {
@@ -44,14 +57,14 @@ const tasksRoute = (pages: Array<{ tasks: unknown[]; last_page?: boolean }>): Ro
 
 describe("read-only ClickUp API adapter", () => {
   it("checks the token sees the workspace and names the connection, sending the personal token without Bearer", async () => {
-    const { reader, fetch } = setup(url => url.pathname === "/api/v2/user" ? json({ user: { id: 7, username: "ada", email: "ada@example.test" } })
-      : json({ teams: [{ id: workspace, name: "Acme" }, { id: "1", name: "Other" }] }));
+    const { reader, fetch } = setup(url => url.pathname === "/api/v2/user" ? json({ user: { id: Number(ACCOUNT), username: "ada", email: "ada@example.test" } })
+      : json({ teams: [{ id: workspace, name: "Acme" }, { id: "1", name: "Other" }] }), { user: null });
     expect(await reader.validate()).toEqual({ state: "ready", identity: { login: "ada", organization: "Acme" } });
     const [url, request] = fetch.mock.calls[0]!;
     expect(String(url)).toBe("https://api.clickup.com/api/v2/user");
     expect(request).toMatchObject({ method: "GET", redirect: "error", headers: { authorization: TOKEN } });
     expect(fetch.mock.calls.every(([, r]) => r?.method === "GET")).toBe(true);
-    const elsewhere = setup(url => url.pathname === "/api/v2/user" ? json({ user: { username: "ada" } }) : json({ teams: [{ id: "1", name: "Other" }] }));
+    const elsewhere = setup(() => json({ teams: [{ id: "1", name: "Other" }] }));
     expect(await elsewhere.adapter.validate()).toEqual({ state: "forbidden", message: "The API token in STAPLE_CLICKUP_TOKEN cannot see ClickUp workspace 9012345." });
   });
 
@@ -220,7 +233,8 @@ describe("read-only ClickUp API adapter", () => {
   });
 
   it("fails a multi-page search whole when the budget runs out midway, never returning a truncated page", async () => {
-    const { reader, fetch } = setup(tasksRoute([{ tasks: [task], last_page: false }, { tasks: [task], last_page: false }, { tasks: [task], last_page: false }]), { limit: 2 });
+    // One request is the bound-user check, one the first page; the second page has no budget left.
+    const { reader, fetch } = setup(tasksRoute([{ tasks: [task], last_page: false }, { tasks: [task], last_page: false }, { tasks: [task], last_page: false }]), { limit: 3 });
     await expect(reader.search("issue", { text: "nothing matches this" })).rejects.toMatchObject({ code: "rate_limited" });
     expect(fetch).toHaveBeenCalledTimes(2);
   });
@@ -278,8 +292,10 @@ describe("read-only ClickUp API adapter", () => {
     const spaces = Array.from({ length: 4 }, (_, i) => ({ id: `9017000${i}`, name: `Space ${i}` }));
     const { adapter, fetch } = setup(url => url.pathname.endsWith("/space") ? json({ spaces })
       : url.pathname.endsWith("/folder") ? json({ folders: [] }) : json({ lists: [{ id: "901700100", name: "L" }] }));
-    let cursor: string | undefined;
-    do { cursor = (await adapter.listLists(cursor)).nextCursor ?? undefined; } while (cursor);
+    let cursor: string | undefined, pages = 0;
+    // Bounded, so a cursor that repeats a space fails here instead of paging forever.
+    do { cursor = (await adapter.listLists(cursor)).nextCursor ?? undefined; } while (cursor && ++pages < 10);
+    expect(pages).toBe(spaces.length - 1);
     expect(fetch.mock.calls.filter(([u]) => String(u).includes("/space?")).length).toBe(1);
     expect(fetch).toHaveBeenCalledTimes(1 + 2 * spaces.length);
   });
@@ -287,5 +303,90 @@ describe("read-only ClickUp API adapter", () => {
   it("lists a task once per page even when the text matches it twice", async () => {
     const { adapter } = setup(tasksRoute([{ tasks: [task, task], last_page: true }]));
     expect((await adapter.searchIssues({ text: "importer" })).items.map(i => i.ref.id)).toEqual(["86abc123"]);
+  });
+
+  it("binds the token's user: a different user is a wrong account on every command, and health names them", async () => {
+    const swapped = setup(tasksRoute([{ tasks: [task], last_page: true }]), { user: { id: "999", username: "grace" } });
+    for (const read of [() => swapped.adapter.listContainers(), () => swapped.adapter.searchIssues({ text: "" }), () => swapped.adapter.resolve({ url: "https://app.clickup.com/t/86abc123" })]) {
+      await expect(read()).rejects.toMatchObject({ code: "auth", detail: { reason: "account_mismatch", login: "grace" } });
+    }
+    // The token's user is checked before anything else is read.
+    expect(swapped.fetch).not.toHaveBeenCalled();
+    expect(await swapped.adapter.validate()).toMatchObject({ state: "account_mismatch", identity: { login: "grace" },
+      message: "The API token in STAPLE_CLICKUP_TOKEN belongs to grace, not the ClickUp user this connection was made with." });
+    const same = setup(url => url.pathname.endsWith("/team") ? json({ teams: [{ id: workspace, name: "Acme" }] }) : json({ spaces: [] }));
+    await same.adapter.listContainers();
+    await same.adapter.listContainers();
+    expect(await same.adapter.validate()).toEqual({ state: "ready", identity: { login: "ada", organization: "Acme" } });
+    // Once per command (adapter), not once per request.
+    expect(same.users).toHaveBeenCalledTimes(1);
+  });
+
+  it("discovers who a token belongs to for configure, reading only /user and /team", async () => {
+    const fetch = vi.fn(async (input: unknown) => {
+      const path = new URL(String(input)).pathname;
+      return path === "/api/v2/user" ? json({ user: { id: 4401, username: "ada" } }) : json({ teams: [{ id: workspace, name: "Acme" }] });
+    });
+    const deps = { fetch: fetch as unknown as typeof globalThis.fetch, credential: () => TOKEN, budget: () => new RequestBudget("ClickUp", 100), catalogue: new ClickUpCatalogue() };
+    expect(await discoverClickUp(workspace, "STAPLE_CLICKUP_TOKEN", deps)).toEqual({ account: ACCOUNT, login: "ada", organization: "Acme" });
+    expect(fetch.mock.calls.map(([u]) => new URL(String(u)).pathname)).toEqual(["/api/v2/user", "/api/v2/team"]);
+    await expect(discoverClickUp("1234", "STAPLE_CLICKUP_TOKEN", deps)).rejects.toMatchObject({ code: "forbidden" });
+    await expect(discoverClickUp(workspace, "STAPLE_CLICKUP_TOKEN", { ...deps, credential: () => undefined })).rejects.toMatchObject({ code: "auth" });
+    // Without a bound user nothing else can be read.
+    const unbound = new ClickUpApiAdapter({ providerId: "clickup", mode: "api", host: "app.clickup.com", scopeId: workspace, credentialEnv: "STAPLE_CLICKUP_TOKEN" }, deps);
+    await expect(unbound.listContainers()).rejects.toMatchObject({ code: "validation" });
+    expect(() => new ClickUpApiAdapter({ ...config, account: "ada" })).toThrow();
+  });
+
+  it("reuses spaces and each space's lists for a minute across operations, per token", async () => {
+    const spaces = [{ id: "90170002", name: "Ops" }, { id: spaceId, name: "Engineering" }];
+    const { adapter, fetch, again, time, deps } = setup(url => url.pathname.endsWith("/space") ? json({ spaces })
+      : url.pathname.endsWith("/folder") ? json({ folders: [] }) : json({ lists: [{ id: "901700100", name: "L" }] }));
+    await adapter.listLists();
+    const read = fetch.mock.calls.length;
+    expect(read).toBe(3);
+    // A filter typed in the picker is a new operation: nothing is read again within the minute.
+    for (let i = 0; i < 3; i++) await again().listLists();
+    await again().listContainers();
+    expect(fetch).toHaveBeenCalledTimes(read);
+    // Another token, even for the same user and workspace, reads for itself.
+    await new ClickUpApiAdapter(config, { ...deps, credential: () => "pk_other_token" }).listLists();
+    expect(fetch).toHaveBeenCalledTimes(read + 3);
+    time.state.now += 61_000;
+    await again().listLists();
+    expect(fetch).toHaveBeenCalledTimes(read + 6);
+  });
+
+  it("names the last space served in the lists cursor, so a space added or archived while paging neither repeats nor skips one", async () => {
+    let spaces = [{ id: "90170001", name: "A" }, { id: "90170003", name: "C" }, { id: "90170005", name: "E" }];
+    const { adapter, time } = setup(url => url.pathname.endsWith("/space") ? json({ spaces })
+      : url.pathname.endsWith("/folder") ? json({ folders: [] }) : json({ lists: [{ id: url.pathname.split("/")[4]!.replace(/^9017/, "9018"), name: "L" }] }));
+    const first = await adapter.listLists();
+    expect(first.items.map(i => i.name)).toEqual(["A / L"]);
+    // Between pages A is archived and B (between A and C) is added; the cache expires.
+    spaces = [{ id: "90170002", name: "B" }, { id: "90170003", name: "C" }, { id: "90170005", name: "E" }];
+    time.state.now += 61_000;
+    const second = await adapter.listLists(first.nextCursor!);
+    expect(second.items.map(i => i.name)).toEqual(["B / L"]);
+    const third = await adapter.listLists(second.nextCursor!);
+    const fourth = await adapter.listLists(third.nextCursor!);
+    expect([third.items[0]!.name, fourth.items[0]!.name, fourth.nextCursor]).toEqual(["C / L", "E / L", null]);
+    await expect(adapter.listLists("bm90LWEtY3Vyc29y")).rejects.toMatchObject({ code: "cursor_invalid" });
+  });
+
+  it("does not repeat on Show more the task the first page found by its exact id", async () => {
+    const exact = { ...task, id: "86exact1", custom_id: "DEV-9", name: "Exact DEV-9 task" };
+    const { reader } = setup(url => {
+      if (url.pathname.endsWith(`/team/${workspace}/task`)) {
+        const page = Number(url.searchParams.get("page"));
+        // The task the id names sits on the fourth provider page, past the first page of results.
+        return json({ tasks: [page === 3 ? exact : { ...task, id: `86fill${page}0`, custom_id: `DEV-9${page}` }], last_page: page === 4 });
+      }
+      return url.pathname === "/api/v2/task/DEV-9" ? json(exact) : json({}, { status: 404 });
+    });
+    const first = await reader.search("issue", { text: "DEV-9" });
+    expect(first.items.map(i => i.key)).toEqual(["DEV-9", "DEV-90", "DEV-91", "DEV-92"]);
+    const more = await reader.search("issue", { text: "DEV-9", cursor: first.nextCursor! });
+    expect(more.items.map(i => i.key)).toEqual(["DEV-94"]);
   });
 });
