@@ -5,6 +5,8 @@ import type { ExternalRowSummary } from "../../../../core/integrations/link-stor
 import { leadingTone } from "./link-state";
 import { LinkGlyph } from "./parts";
 import { LinkHoverCard, LinkListCard, previewTones } from "./LinkHoverCard";
+import { ChecksMark } from "./PullRequestParts";
+import type { ChecksState } from "./pull-requests";
 
 /** A row's counted badge: a glyph and a number, quiet until hovered, a 44px target on a finger. */
 export const ROW_COUNT_BADGE =
@@ -41,18 +43,21 @@ export function ExternalLinkBadges({
   issueId,
   issueRef,
   withoutPullRequests = false,
+  pullRequestChecks = null,
 }: {
   summary?: ExternalRowSummary;
   workspace: string;
   issueId: string;
   issueRef?: string;
   withoutPullRequests?: boolean;
+  /** The mark the counted pull requests wear when one of them has failing or pending checks. */
+  pullRequestChecks?: ChecksState | null;
 }) {
   if (!summary || (!summary.issues.count && (withoutPullRequests || !summary.pullRequests.count))) return null;
   return (
     <span className="inline-flex shrink-0 items-center gap-0.5" data-external-link-badges>
       <Badge group={summary.issues} kind="issue" workspace={workspace} issueId={issueId} issueRef={issueRef} />
-      {withoutPullRequests ? null : <Badge group={summary.pullRequests} kind="pull_request" workspace={workspace} issueId={issueId} issueRef={issueRef} />}
+      {withoutPullRequests ? null : <Badge group={summary.pullRequests} kind="pull_request" workspace={workspace} issueId={issueId} issueRef={issueRef} checks={pullRequestChecks} />}
     </span>
   );
 }
@@ -63,16 +68,19 @@ function Badge({
   workspace,
   issueId,
   issueRef,
+  checks = null,
 }: {
   group: ExternalRowSummary["issues"];
   kind: "issue" | "pull_request";
   workspace: string;
   issueId: string;
   issueRef?: string;
+  checks?: ChecksState | null;
 }) {
   const showAll = useShowExternalLinks(workspace, issueId, issueRef, kind);
   if (!group.count) return null;
-  const label = `${group.count} linked ${kind === "issue" ? "issue" : "pull request"}${group.count === 1 ? "" : "s"}`;
+  const count = `${group.count} linked ${kind === "issue" ? "issue" : "pull request"}${group.count === 1 ? "" : "s"}`;
+  const label = checks === "failing" ? `${count}, checks failing` : checks === "pending" ? `${count}, checks pending` : count;
   return (
     <LinkHoverCard
       aria-label={label}
@@ -94,6 +102,7 @@ function Badge({
     >
       <LinkGlyph kind={kind} tone={leadingTone(previewTones(group.items, kind))} className="size-3.5" />
       <span>{group.count}</span>
+      <ChecksMark checks={checks} />
     </LinkHoverCard>
   );
 }

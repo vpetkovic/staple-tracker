@@ -205,7 +205,9 @@ describe("PR badge slot", () => {
     const four = renderRow({}, null, prs);
     expect(four).toContain("#9");
     expect(four).not.toContain(">#8<");
-    expect(four).toContain('aria-label="4 pull requests: #9 open, #8 draft, #7 merged, #6 closed"');
+    // Several of its own: the badge is a button that opens their list, named by its tally.
+    expect(four).toContain('aria-label="4 pull requests: 1 open, 1 draft, 1 merged, 1 closed"');
+    expect(four).toContain('data-pr-set="own"');
     for (const tone of ["open", "draft", "merged", "closed"]) expect(four).toContain(`data-link-tone="${tone}"`);
     expect(four).not.toContain("staple-pr-more");
 

@@ -34,18 +34,12 @@ import { ROW_COUNT_BADGE, useShowExternalLinks } from "@/integrations/ExternalLi
 import { LinkHoverCard } from "@/integrations/LinkHoverCard";
 import { LinkGlyph } from "@/integrations/parts";
 import { ChecksMark, PullRequestCard, PullRequestTally } from "@/integrations/PullRequestParts";
-import { checksWords, countWords, entryTone, isSubtreeSet, rowEntry, tallyOf, tallyWords, type ChecksState, type PullRequestEntry } from "@/integrations/pull-requests";
+import { checksWords, countWords, entryTone, isSubtreeSet, rowEntry, tallyOf, tallyWords, worstChecks } from "@/integrations/pull-requests";
 
 const word = (state: PullRequestRef["state"]) => (state === "unknown" ? "state unknown" : state);
 
 /** Glyphs drawn before the rest are counted: the lead one and three more. */
 const MAX_GLYPHS = 4;
-
-/** The one mark a badge for several wears: failing beats pending, and passing says nothing. */
-function worstChecks(entries: readonly PullRequestEntry[]): ChecksState | null {
-  if (entries.some((entry) => entry.checks === "failing")) return "failing";
-  return entries.some((entry) => entry.checks === "pending") ? "pending" : null;
-}
 
 /** A 44px target on a finger, around a control drawn smaller. */
 const HIT = "relative pointer-coarse:min-h-0 pointer-coarse:before:absolute pointer-coarse:before:-inset-y-3 pointer-coarse:before:inset-x-0 pointer-coarse:before:content-['']";

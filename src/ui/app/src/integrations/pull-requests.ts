@@ -302,3 +302,9 @@ export function childPullRequests(entries: readonly PullRequestEntry[] | undefin
   }));
   return { pullRequests: drawn.map(({ ref }) => ref), externalLinks: { issues: { count: 0, items: [] }, pullRequests: { count: items.length, items } } };
 }
+
+/** The one mark a badge that stands for several wears: failing beats pending, and passing says nothing. */
+export function worstChecks(entries: readonly Pick<PullRequestEntry, "checks">[]): ChecksState | null {
+  if (entries.some((entry) => entry.checks === "failing")) return "failing";
+  return entries.some((entry) => entry.checks === "pending") ? "pending" : null;
+}

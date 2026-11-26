@@ -50,7 +50,7 @@ import { KindGlyph } from "./KindGlyph";
 import { LabelPills } from "./LabelPills";
 import { ParentRollupBar } from "./ParentRollup";
 import { PrBadge } from "./PrBadge";
-import { isSubtreeSet } from "@/integrations/pull-requests";
+import { isSubtreeSet, rowEntry, worstChecks } from "@/integrations/pull-requests";
 import { PrioritySignal } from "./PrioritySignal";
 import { DeskPickupCue, HorizonCompactChip, MilestoneCue, PickupCue, PickupPill } from "./RowCues";
 import { rowMilestoneCue } from "./row-cues";
@@ -322,6 +322,8 @@ export function TaskRowLine({
    * and the total: the counted link badge that would stand in knows only the parent's own.
    */
   const prBadge = Boolean(columns.pr && row.pullRequests?.length && (plan.prBadge || isSubtreeSet(row.pullRequests, issue.identifier)));
+  /** Without the badge, the counted link badge carries the checks mark for the row's pull requests. */
+  const prChecks = prBadge ? null : worstChecks((row.pullRequests ?? []).map((pr) => rowEntry(pr, issue.identifier)));
   /**
    * On a compact row the claim is an avatar, and when the holder IS the assignee the second
    * avatar would repeat the same initials beside it. One is drawn; the claim's carries more.
@@ -648,7 +650,7 @@ export function TaskRowLine({
               <WorklogCue worklog={row.worklog} claim={claim} checkoutAgent={issue.checkoutAgent} now={now} />
             ) : null}
             {/* Last of the signals, so the who slot and the trailing slot after them stay clean columns. */}
-            <ExternalLinkBadges summary={row.externalLinks} workspace={row.workspace} issueId={issue.id} issueRef={issue.identifier} withoutPullRequests={prBadge} />
+            <ExternalLinkBadges summary={row.externalLinks} workspace={row.workspace} issueId={issue.id} issueRef={issue.identifier} withoutPullRequests={prBadge} pullRequestChecks={prChecks} />
             {prBadge ? <PrBadge pullRequests={row.pullRequests} showNumber={plan.prNumber} counted={!plan.prBadge} workspace={row.workspace} issueId={issue.id} issueRef={issue.identifier} /> : null}
           </span>
           {columns.claim || columns.assignee ? (
@@ -771,7 +773,7 @@ export function TaskRowLine({
         {columns.assignee && issue.assignee && !(plan.claim === "avatar" && claimHolder === issue.assignee) ? (
           <Avatar name={issue.assignee} kind="human" size={20} className="staple-row-assignee" />
         ) : null}
-        <ExternalLinkBadges summary={row.externalLinks} workspace={row.workspace} issueId={issue.id} issueRef={issue.identifier} withoutPullRequests={prBadge} />
+        <ExternalLinkBadges summary={row.externalLinks} workspace={row.workspace} issueId={issue.id} issueRef={issue.identifier} withoutPullRequests={prBadge} pullRequestChecks={prChecks} />
         {prBadge ? <PrBadge pullRequests={row.pullRequests} showNumber={plan.prNumber} counted={!plan.prBadge} workspace={row.workspace} issueId={issue.id} issueRef={issue.identifier} /> : null}
         {columns.date && plan.date ? (
           <time className="staple-row-date" dateTime={issue.updatedAt} title={issue.updatedAt}>

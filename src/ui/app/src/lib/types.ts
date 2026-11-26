@@ -860,8 +860,6 @@ export interface PullRequestRef {
   checks?: "passing" | "failing" | "pending";
   /** On a parent's row, the tickets of its subtree this pull request is linked on; absent on a leaf's. */
   tickets?: string[];
-  /** The checks on the head commit at the last read; absent when none were read (merged, closed, no checks). */
-  checks?: "passing" | "failing" | "pending";
   /** ISO-8601. Optional; tooltip only. */
   updatedAt?: string | null;
 }
