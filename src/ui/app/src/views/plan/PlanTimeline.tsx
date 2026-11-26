@@ -1,33 +1,38 @@
-import { planCounts } from "@/views/plan/plan-counts";
 /**
  * The Timeline lens: ideas as rows grouped by horizon, on a month axis.
  *
  * Each row shows the PLANNED window, which the person edits by dragging the bar (move) or its
- * ends (resize), and, once work is linked, the ACTUAL window derived from it: solid while
- * work has happened, dashed to the forecast end, hatched where it runs past the planned end.
- * A started idea that was re-planned shows its baseline as a faint outline behind the plan.
- * Vertical lines mark today and every dated horizon. An arrow runs from each record to the
- * records that wait on it (their Dependencies, and depends-on cells naming it), and a shipped
- * record's bar ends in the same ✓ every other surface shows.
+ * ends (resize) with a mouse or a pen, or with the arrow keys, and, once work is linked, the
+ * ACTUAL window derived from it, with a label after the bar saying where it ends. Links between
+ * ideas show on demand: for the row hovered, focused or selected, or all of them with "Show all
+ * links"; a row that starts before something it waits on ends carries a red notch at all times.
  *
- * The chart scrolls inside its own frame in both directions with the idea names pinned on
- * the left and the axis pinned on top, so the page itself never scrolls sideways.
+ * The layout follows the Plan container's width. From 760px a name column is pinned on the left
+ * and the range sits in the axis corner; under it each row is a label line pinned over its own
+ * lane, so the chart takes the full width, and a finger pans it. The chart scrolls inside its
+ * own frame (`data-plan-timeline-frame`), the one scroller plan memory restores.
  */
 import { ChevronDown, ChevronRight } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
-import type { IdeaData, PlanData } from "@/lib/plan-types";
+import type { HorizonData, IdeaData } from "@/lib/plan-types";
 import { useIsDesk } from "@/lib/use-media";
 import { cn } from "@/lib/utils";
-import { Chip, Progress, type Write } from "./PlanBoards";
-import { dayIndex, dayLabel, dayOf, dependencyEdges, dragWindow, horizonDone, isShipped, monthsIn, riskOf, timelineGroups, timelineRange } from "./plan-model";
 import { offers } from "@/detail/plain-actions";
-import { ShippedCheck, ShippedMark } from "@/detail/ShippedMark";
+import { STATE_WORDS } from "@/detail/plan-record";
+import { ShippedMark } from "@/detail/ShippedMark";
+import type { BoardProps } from "./plan-board";
+import { countWord } from "./plan-counts";
+import { dayIndex, dayLabel, dayOf, dependencyEdges, dragWindow, horizonDone, monthsIn, timelineRange, type TimelineGroup } from "./plan-model";
+import { Flag, PLAN_WIDTH, SegmentedBar, StateGlyph, useElementWidth } from "./plan-parts";
+import { treeHeader } from "./plan-tree";
+import { BAR_MIDDLE, EndWords, RangeControl, RowBars, TimelineKey, type BarHandlers, type Layout } from "./TimelineBars";
+import { datesBody, elbowPath, endLabel, linkView, monthLabel, notched, nudge, pxPerDay, spanOf, startsDrag, startsEarly, timelineRows, todayScroll, windowOf, type Range } from "./timeline-model";
 
-/** Every bar is drawn in a 40px band; a phone row is taller so its name can take up to three lines. */
-const BAND = 40;
-type Zoom = "fit" | "month" | "week";
-const ZOOM_PX: Record<Exclude<Zoom, "fit">, number> = { month: 5, week: 18 };
+const AXIS = 34;
+/** A wide row; a stacked row is a 24px label line over a 26px lane. */
+const ROW = { wide: 34, stacked: 50 } as const;
+const LABEL_LINE = 24;
 
 interface Drag {
   id: string;
@@ -37,337 +42,363 @@ interface Drag {
   moved: boolean;
 }
 
-export function PlanTimeline({ plan, write, onOpen, selected }: { plan: PlanData; write: Write; onOpen: (id: string) => void; selected: string | null }) {
+/** The lens, sized by its own container: measured, or before that the shell's guess. */
+export function PlanTimeline(props: BoardProps) {
   const desk = useIsDesk();
-  const nameWidth = desk ? 240 : 176;
-  const rowHeight = desk ? BAND : 52;
-  const [zoom, setZoom] = useState<Zoom>(desk ? "fit" : "month");
+  const { ref, width } = useElementWidth<HTMLDivElement>();
+  return (
+    <div ref={ref} className="flex h-full min-h-0 flex-col" data-plan-timeline>
+      <Timeline {...props} width={width ?? (desk ? 1280 : 375)} />
+    </div>
+  );
+}
+
+/** The lens at a container width: the wide layout from 760px, the stacked one under it. */
+export function Timeline({ plan, write, onOpen, selected, filtering = false, width }: BoardProps & { width: number }) {
+  const layout: Layout = width < PLAN_WIDTH.compact ? "stacked" : "wide";
+  const stacked = layout === "stacked";
+  const nameWidth = stacked ? 0 : width < PLAN_WIDTH.medium ? 220 : 300;
+  const { ref: frame, width: frameWidth } = useElementWidth<HTMLDivElement>();
+  // The frame's own width less its scrollbar, once laid out.
+  const visible = frameWidth ?? width;
+  const view = Math.max(1, visible - nameWidth);
+
+  const [chosen, setRange] = useState<Range | null>(null);
+  const range = chosen ?? (stacked ? "3m" : "all");
   const [folded, setFolded] = useState<Set<string>>(new Set());
+  const [showAll, setShowAll] = useState(false);
+  const [hovered, setHovered] = useState<string | null>(null);
+  const [focused, setFocused] = useState<string | null>(null);
+  const [keyOpen, setKeyOpen] = useState(false);
   const [preview, setPreview] = useState<{ id: string; start: number; end: number } | null>(null);
   const drag = useRef<Drag | null>(null);
-  const frame = useRef<HTMLDivElement>(null);
-  const [frameWidth, setFrameWidth] = useState(1000);
+  // A drag ends in a click on the bar; that click must not also open the idea.
+  const dragged = useRef(false);
 
-  useEffect(() => {
-    const element = frame.current;
-    if (!element || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => setFrameWidth(element.clientWidth));
-    observer.observe(element);
-    setFrameWidth(element.clientWidth);
-    return () => observer.disconnect();
-  }, []);
-
-  const range = useMemo(() => timelineRange(plan), [plan]);
-  const days = range.to - range.from;
-  const px = zoom === "fit" ? Math.max(1.5, (frameWidth - nameWidth - 8) / days) : ZOOM_PX[zoom];
-  const width = Math.ceil(days * px);
-  const x = (day: number) => (day - range.from) * px;
-  const groups = useMemo(() => timelineGroups(plan, folded), [plan, folded]);
-  const months = useMemo(() => monthsIn(range), [range]);
+  const span = useMemo(() => timelineRange(plan), [plan]);
+  const days = span.to - span.from;
+  const px = pxPerDay(range, view, days);
+  const chartWidth = Math.ceil(days * px);
+  const x = (day: number) => (day - span.from) * px;
   const today = dayIndex(plan.today);
+  const groups = useMemo(() => timelineRows(plan, folded, filtering), [plan, folded, filtering]);
+  const months = useMemo(() => monthsIn(span), [span]);
   const shown = useMemo(() => new Set(groups.flatMap((group) => group.rows.map((row) => row.idea.id))), [groups]);
   const edges = useMemo(() => dependencyEdges(plan, shown), [plan, shown]);
-  // Where each row sits, measured once laid out: undated rows and group headers vary in height.
-  const chart = useRef<HTMLDivElement>(null);
+  const ideaById = useMemo(() => new Map(plan.ideas.map((idea) => [idea.id, idea])), [plan]);
+  const notches = useMemo(() => notched(edges, ideaById), [edges, ideaById]);
+  // On a phone the selected idea is the only focus; the desk adds the row hovered and the bar focused.
+  const focus = stacked ? selected : (hovered ?? focused ?? selected);
+  const links = linkView(edges, focus, showAll && !stacked);
+
+  // Where each row sits, measured once laid out: an undated line's height follows its chips.
+  const canvas = useRef<HTMLDivElement>(null);
   const [rowTops, setRowTops] = useState<Map<string, number>>(new Map());
   useLayoutEffect(() => {
-    const element = chart.current;
+    const element = canvas.current;
     if (!element) return;
     const next = new Map<string, number>();
     for (const row of element.querySelectorAll<HTMLElement>("[data-plan-timeline-row]")) next.set(row.dataset.planTimelineRow!, row.offsetTop);
     setRowTops((current) => (current.size === next.size && [...next].every(([id, top]) => current.get(id) === top) ? current : next));
-  }, [groups, rowHeight, edges]);
-  const ideaById = useMemo(() => new Map(plan.ideas.map((idea) => [idea.id, idea])), [plan]);
+  }, [groups, layout, visible]);
 
-  // Bring today into view once per zoom level, after the frame has been measured.
-  const centred = useRef<Zoom | null>(null);
+  // Bring today a third of the way in once per range, after the frame is measured and before
+  // plan memory restores a saved position. All starts at the beginning.
+  const centred = useRef<Range | null>(null);
   useEffect(() => {
     const element = frame.current;
-    if (!element || element.clientWidth === 0 || centred.current === zoom) return;
-    centred.current = zoom;
-    const visible = element.clientWidth;
-    if (width > visible - nameWidth) element.scrollLeft = Math.max(0, x(today) - (visible - nameWidth) / 3);
+    if (!element || frameWidth === null || centred.current === range) return;
+    centred.current = range;
+    element.scrollLeft = range === "all" ? 0 : todayScroll(x(today), view);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [zoom, frameWidth, width]);
+  }, [range, frameWidth]);
+  const toToday = () => {
+    if (frame.current) frame.current.scrollLeft = todayScroll(x(today), view);
+  };
 
-  const begin = (event: ReactPointerEvent, idea: IdeaData, mode: Drag["mode"]) => {
-    // Dates move only where the idea's state offers it (a shipped or raw idea's bar stays put).
-    if (!offers(idea, "plan_dates")) return;
-    event.preventDefault();
-    event.stopPropagation();
-    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
-    const start = idea.planned.start ?? idea.planned.target!;
-    const end = idea.planned.target ?? idea.planned.start!;
-    drag.current = { id: idea.id, mode, x0: event.clientX, window: { start: dayIndex(start), end: dayIndex(end) }, moved: false };
-  };
-  const move = (event: ReactPointerEvent) => {
-    const current = drag.current;
-    if (!current) return;
-    const delta = Math.round((event.clientX - current.x0) / px);
-    if (delta !== 0) current.moved = true;
-    setPreview({ id: current.id, ...dragWindow(current.window, current.mode, delta) });
-  };
-  const end = (event: ReactPointerEvent) => {
-    const current = drag.current;
-    drag.current = null;
-    if (!current) return;
-    const delta = Math.round((event.clientX - current.x0) / px);
-    const next = dragWindow(current.window, current.mode, delta);
-    if (!current.moved || (next.start === current.window.start && next.end === current.window.end)) {
+  const handlersFor = (idea: IdeaData): BarHandlers => ({
+    onPointerDown: (event, mode) => {
+      dragged.current = false;
+      // A finger pans the chart; a mouse or a pen moves the dates where the idea offers them.
+      if (!startsDrag(idea, event.pointerType)) return;
+      const planned = windowOf(idea);
+      if (!planned) return;
+      event.preventDefault();
+      event.stopPropagation();
+      (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+      drag.current = { id: idea.id, mode, x0: event.clientX, window: planned, moved: false };
+    },
+    onPointerMove: (event) => {
+      const current = drag.current;
+      if (!current) return;
+      const delta = Math.round((event.clientX - current.x0) / px);
+      if (delta !== 0) current.moved = true;
+      setPreview({ id: current.id, ...dragWindow(current.window, current.mode, delta) });
+    },
+    onPointerUp: (event) => {
+      const current = drag.current;
+      drag.current = null;
+      if (!current) return;
+      dragged.current = current.moved;
+      const next = dragWindow(current.window, current.mode, Math.round((event.clientX - current.x0) / px));
+      if (!current.moved || (next.start === current.window.start && next.end === current.window.end)) {
+        setPreview(null);
+        return;
+      }
+      void write("update", { ref: current.id, ...datesBody(idea, next) }).finally(() => setPreview(null));
+    },
+    onPointerCancel: () => {
+      drag.current = null;
       setPreview(null);
-      if (!current.moved) onOpen(current.id);
-      return;
-    }
-    void write("update", { ref: current.id, plannedStart: dayOf(next.start), plannedTarget: dayOf(next.end) }).finally(() => setPreview(null));
+    },
+    onClick: () => {
+      if (dragged.current) {
+        dragged.current = false;
+        return;
+      }
+      onOpen(idea.id);
+    },
+    onKeyDown: (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        onOpen(idea.id);
+        return;
+      }
+      const body = nudge(idea, event.key, event.shiftKey);
+      if (event.key === "ArrowLeft" || event.key === "ArrowRight") event.preventDefault();
+      if (body) void write("update", { ref: idea.id, ...body });
+    },
+    onFocus: () => setFocused(idea.id),
+    onBlur: () => setFocused((current) => (current === idea.id ? null : current)),
+  });
+
+  const toggleFold = (id: string) => {
+    const next = new Set(folded);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setFolded(next);
   };
 
-  const addDates = (idea: IdeaData) =>
-    void write("update", { ref: idea.id, plannedStart: plan.today, plannedTarget: dayOf(today + 28) });
+  const addDates = (idea: IdeaData) => void write("update", { ref: idea.id, plannedStart: plan.today, plannedTarget: dayOf(today + 28) });
+  const canvasWidth = nameWidth + chartWidth;
 
   return (
-    <div className="flex h-full min-h-0 flex-col" data-plan-timeline>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-gutter pt-2">
-        <p className="hidden min-w-0 flex-1 text-caption text-text-tertiary md:block">
-          Drag a planned bar to move it, its ends to change the dates. Actual dates come from the linked work.
-        </p>
-        <div className="flex items-center gap-1" role="group" aria-label="Zoom">
-          {(["fit", "month", "week"] as const).map((level) => (
-            <Button key={level} size="sm" variant={zoom === level ? "secondary" : "ghost"} className="min-h-8 capitalize" aria-pressed={zoom === level} onClick={() => setZoom(level)} data-plan-zoom={level}>
-              {level === "fit" ? "Fit" : level}
-            </Button>
-          ))}
-        </div>
-      </div>
-      <Legend />
-      <div ref={frame} className="relative mx-gutter mb-3 min-h-0 flex-1 overflow-auto rounded-lg border bg-card" data-plan-timeline-frame>
-        <div ref={chart} className="relative" style={{ width: nameWidth + width }}>
-          {/* The axis, pinned on top. */}
-          <div className="sticky top-0 z-20 flex h-8 border-b bg-card">
-            <div className="sticky left-0 z-30 shrink-0 border-r bg-card" style={{ width: nameWidth }} />
-            <div className="relative" style={{ width }}>
-              {months.map((month) => (
-                <div key={month.day} className="absolute top-0 h-full border-l pl-1 text-caption leading-8 text-text-tertiary" style={{ left: x(month.day) }}>
-                  {px * 30 > 34 ? month.label : ""}
-                </div>
-              ))}
-              <span className="absolute top-1.5 z-10 -translate-x-1/2 rounded bg-primary px-1 text-[10px] leading-5 text-primary-foreground" style={{ left: x(today) }}>
-                today
+    <>
+      <div ref={frame} className="relative min-h-0 flex-1 overflow-auto overscroll-x-contain" data-plan-timeline-frame data-plan-timeline-stacked={stacked ? "" : undefined}>
+        <div ref={canvas} className="relative" style={{ width: canvasWidth }}>
+          <div className="sticky top-0 z-[6] flex border-b bg-card" style={{ height: AXIS }}>
+            {stacked ? null : (
+              <div className="sticky left-0 z-[7] flex shrink-0 items-center border-r bg-card px-2.5" style={{ width: nameWidth }}>
+                <RangeControl range={range} onRange={setRange} />
+              </div>
+            )}
+            <div className="relative shrink-0 overflow-hidden" style={{ width: chartWidth }}>
+              {months.map((month, index) => {
+                const next = months[index + 1]?.day ?? span.to;
+                const label = monthLabel(month.day, (next - month.day) * px, index === 0);
+                return (
+                  <div key={month.day} className="absolute inset-y-0 whitespace-nowrap border-l pl-1.5 text-caption leading-[34px] text-text-tertiary" style={{ left: x(month.day) }}>
+                    {label.year ? <b className="font-semibold text-foreground">{label.text}</b> : label.text}
+                  </div>
+                );
+              })}
+              {plan.horizons
+                .filter((horizon) => horizon.date)
+                .map((horizon) => (
+                  <span key={horizon.id} className="absolute top-[9px] z-[5] -translate-x-1/2 whitespace-nowrap rounded-[3px] bg-foreground px-1.5 text-[10px] font-semibold leading-4 text-background" style={{ left: x(dayIndex(horizon.date!) + 1) }} data-plan-horizon-tag={horizon.identifier}>
+                    <span aria-hidden>◆ </span>
+                    {horizon.name} · {dayLabel(horizon.date, false)}
+                  </span>
+                ))}
+              <span className="absolute top-[9px] z-[6] -translate-x-1/2 whitespace-nowrap rounded-[3px] bg-destructive px-1.5 text-[10px] font-semibold leading-4 text-white" style={{ left: x(today) + px / 2 }}>
+                Today
               </span>
             </div>
           </div>
-          {/* Today and every dated horizon, through the whole chart. */}
-          <div className="pointer-events-none absolute inset-y-0 z-10" style={{ left: nameWidth, width }}>
-            <div className="absolute inset-y-0 w-px bg-primary" style={{ left: x(today) }} data-plan-today />
-
+          {/* Month lines, today and every dated horizon, through the whole chart and under the rows. */}
+          <div className="pointer-events-none absolute inset-y-0 z-[1]" style={{ left: nameWidth, width: chartWidth }} aria-hidden>
+            {months.map((month) => (
+              <div key={month.day} className="absolute bottom-0 border-l border-border/55" style={{ left: x(month.day), top: AXIS }} />
+            ))}
             {plan.horizons
               .filter((horizon) => horizon.date)
               .map((horizon) => (
-                <div key={horizon.id} className="absolute inset-y-0 border-l border-dashed border-destructive/70" style={{ left: x(dayIndex(horizon.date!) + 1) }} data-plan-horizon-line={horizon.identifier}>
-                  <span className="absolute top-9 left-1 whitespace-nowrap rounded bg-card/90 px-1 text-[10px] leading-4 text-destructive">{horizon.name}</span>
-                </div>
+                <div key={horizon.id} className="absolute bottom-0 border-l-[1.5px] border-dashed border-foreground opacity-55" style={{ left: x(dayIndex(horizon.date!) + 1), top: AXIS }} data-plan-horizon-line={horizon.identifier} />
               ))}
+            <div className="absolute inset-y-0 z-[4] border-l-[1.5px] border-destructive" style={{ left: x(today) + px / 2 }} data-plan-today />
           </div>
-          <DependencyArrows edges={edges} ideas={ideaById} rowTops={rowTops} rowHeight={rowHeight} x={x} left={nameWidth} width={width} />
-          {groups.map((group) => {
-            // A horizon's counts are the server's, as its board header and drawer show them; the
-            // records with no horizon are counted from the rows.
-            const risk = group.horizon
-              ? { late: group.horizon.lateCount, notStarted: group.horizon.notStartedCount }
-              : riskOf(group.rows.map((row) => row.idea).concat(group.undated));
-            return (
-              <div key={group.key} data-plan-timeline-group={group.key || "none"}>
-                <div className="flex border-b bg-surface-sunken" style={{ height: BAND - 8 }}>
-                  <div className="sticky left-0 z-10 flex shrink-0 items-center gap-2 border-r bg-surface-sunken px-2 text-label font-semibold" style={{ width: nameWidth }}>
-                    <span className="truncate">{group.title}</span>
-                    {group.date ? <span className="shrink-0 font-normal text-text-tertiary">{dayLabel(group.date, false)}</span> : null}
+          {groups.map((group) => (
+            <div key={group.key} data-plan-timeline-group={group.key || "none"}>
+              <GroupRow group={group} width={canvasWidth} visible={visible} />
+              {group.rows.map((row) => {
+                const idea = row.idea;
+                const planned = preview?.id === idea.id ? { start: preview.start, end: preview.end } : windowOf(idea);
+                const dim = links.related !== null && !links.related.has(idea.id);
+                const waitsOn = idea.dependsOn.map((id) => ideaById.get(id)?.title).filter((title): title is string => title !== undefined);
+                const name = (
+                  <NameLine
+                    idea={idea}
+                    fold={row.folds && !filtering ? { open: !folded.has(idea.id), toggle: () => toggleFold(idea.id) } : null}
+                    onOpen={() => onOpen(idea.id)}
+                    end={stacked ? <EndWords label={endLabel(idea, today)} className="ml-auto" /> : null}
+                  />
+                );
+                const bars = (
+                  <RowBars idea={idea} planned={planned} layout={layout} x={x} px={px} today={today} notch={notches.has(idea.id)} movable={offers(idea, "plan_dates")} waitsOn={waitsOn} handlers={handlersFor(idea)} />
+                );
+                const chosenRow = selected === idea.id;
+                return (
+                  <div
+                    key={idea.id}
+                    className={cn("group/row relative z-[2] border-b border-border/55", stacked ? "block" : "flex", chosenRow ? "bg-surface-selected" : "hover:bg-surface-hover")}
+                    style={{ width: canvasWidth, height: ROW[layout] }}
+                    data-plan-timeline-row={idea.id}
+                    data-plan-dim={dim ? "" : undefined}
+                    data-plan-selected={chosenRow ? "" : undefined}
+                    onPointerEnter={(event) => event.pointerType === "mouse" && setHovered(idea.id)}
+                    onPointerLeave={() => setHovered((current) => (current === idea.id ? null : current))}
+                  >
+                    <div
+                      className={cn(
+                        "sticky left-0 z-[3] flex items-center bg-card",
+                        // Opaque over the bars that scroll under it, with the row's own hover or selection on top.
+                        chosenRow ? "bg-[image:linear-gradient(var(--surface-selected),var(--surface-selected))]" : "group-hover/row:bg-[image:linear-gradient(var(--surface-hover),var(--surface-hover))]",
+                        stacked ? "gap-2 pt-1 pr-3" : "shrink-0 gap-2 border-r pr-3",
+                        dim && "[&>*]:opacity-28",
+                      )}
+                      style={stacked ? { width: visible, height: LABEL_LINE, paddingLeft: 12 + row.depth * 12 } : { width: nameWidth, paddingLeft: 16 + row.depth * 16 }}
+                      data-plan-timeline-label={idea.id}
+                    >
+                      {name}
+                    </div>
+                    <div className={cn("relative shrink-0", stacked ? "-mt-0.5" : "h-full", dim && "[&>*]:opacity-28")} style={{ width: chartWidth, height: stacked ? ROW.stacked - LABEL_LINE : undefined }}>
+                      {bars}
+                    </div>
                   </div>
-                  <div className="sticky z-10 flex items-center gap-1.5 px-2 text-caption" style={{ left: nameWidth }}>
-                    {group.horizon ? <>
-                      <span>{planCounts(group.horizon)}</span>
-                      {group.horizon.awaitingApproval ? <Chip tone="amber">Waiting for your approval</Chip> : null}
-                      {horizonDone(group.horizon) ? <ShippedMark /> : group.horizon.shippedCount > 0 ? <ShippedMark count={group.horizon.shippedCount} /> : null}
-                      {group.horizon.percent !== null && !horizonDone(group.horizon) ? <Progress percent={group.horizon.percent} complete={group.horizon.complete} /> : null}
-                    </> : null}
-                    {risk.late > 0 ? <Chip tone="red">{risk.late} late</Chip> : null}
-                    {risk.notStarted > 0 ? <Chip tone="amber">{risk.notStarted} not started</Chip> : null}
+                );
+              })}
+              {group.undated.length > 0 ? (
+                <div className="relative z-[2] border-b" style={{ width: canvasWidth }} data-plan-undated={group.key || "none"}>
+                  <div className={cn("sticky left-0 flex flex-wrap items-center gap-1.5 py-[7px] text-label text-text-tertiary", stacked ? "px-3" : "px-4")} style={{ width: visible }}>
+                    <span>{countWord(group.undated.length, "idea")} without dates:</span>
+                    {group.undated.map((idea) =>
+                      offers(idea, "plan_dates") ? (
+                        <button key={idea.id} type="button" className={UNDATED} onClick={() => addDates(idea)} title={`${idea.title}: add dates`} data-plan-add-dates={idea.id}>
+                          <span className="truncate">{idea.title}</span>
+                          <span className="shrink-0 text-text-tertiary">· add dates</span>
+                        </button>
+                      ) : (
+                        <button key={idea.id} type="button" className={UNDATED} onClick={() => onOpen(idea.id)} title={idea.title} data-plan-undated-idea={idea.id}>
+                          <span className="truncate">{idea.title}</span>
+                        </button>
+                      ),
+                    )}
                   </div>
                 </div>
-                {group.rows.map((row) => {
-                  const idea = row.idea;
-                  const planned = preview?.id === idea.id ? { start: preview.start, end: preview.end } : windowOf(idea);
-                  return (
-                    <div key={idea.id} className={cn("flex border-b", selected === idea.id && "bg-surface-selected")} style={{ height: rowHeight }} data-plan-timeline-row={idea.id}>
-                      <div className="sticky left-0 z-10 flex shrink-0 items-center gap-1 border-r bg-card pr-2" style={{ width: nameWidth, paddingLeft: 4 + row.depth * (desk ? 14 : 10) }}>
-                        {row.folds ? (
-                          <button
-                            type="button"
-                            className="flex size-6 shrink-0 items-center justify-center rounded text-text-tertiary hover:bg-surface-hover"
-                            aria-label={folded.has(idea.id) ? `Show ${idea.title}'s sub-ideas` : `Hide ${idea.title}'s sub-ideas`}
-                            aria-expanded={!folded.has(idea.id)}
-                            onClick={() => {
-                              const next = new Set(folded);
-                              if (next.has(idea.id)) next.delete(idea.id);
-                              else next.add(idea.id);
-                              setFolded(next);
-                            }}
-                          >
-                            {folded.has(idea.id) ? <ChevronRight className="size-3.5" aria-hidden /> : <ChevronDown className="size-3.5" aria-hidden />}
-                          </button>
-                        ) : (
-                          <span className="w-6 shrink-0" />
-                        )}
-                        <button type="button" className={cn("min-w-0 flex-1 text-left text-label hover:underline", desk ? "truncate" : "line-clamp-3 leading-tight [overflow-wrap:anywhere]")} onClick={() => onOpen(idea.id)} title={idea.title} data-plan-timeline-name={idea.id}>
-                          {idea.title}
-                        </button>
-                        {idea.late ? <span className="size-1.5 shrink-0 rounded-full bg-destructive" aria-label="late" /> : idea.notStarted ? <span className="size-1.5 shrink-0 rounded-full bg-[color:var(--status-task-todo)]" aria-label="not started" /> : null}
-                      </div>
-                      <div className="relative" style={{ width }}>
-                        <div className="absolute inset-x-0 top-1/2 -translate-y-1/2" style={{ height: BAND }}>
-                        {idea.baseline ? <BaselineGhost idea={idea} x={x} /> : null}
-                        {planned ? (
-                          <div
-                            className="group absolute top-2 h-4 cursor-grab touch-none rounded-sm border border-[color:var(--status-task-in_progress)]/70 bg-[color:var(--status-task-in_progress)]/20 hover:bg-[color:var(--status-task-in_progress)]/30 focus-visible:ring-2 focus-visible:ring-ring"
-                            style={{ left: x(planned.start), width: Math.max(6, (planned.end - planned.start + 1) * px) }}
-                            data-plan-bar={idea.id}
-                            role="slider"
-                            aria-label={`${idea.title} planned ${dayLabel(dayOf(planned.start))} to ${dayLabel(dayOf(planned.end))}`}
-                            aria-valuetext={`${dayOf(planned.start)} to ${dayOf(planned.end)}`}
-                            tabIndex={0}
-                            onPointerDown={(event) => begin(event, idea, "move")}
-                            onPointerMove={move}
-                            onPointerUp={end}
-                            onPointerCancel={() => {
-                              drag.current = null;
-                              setPreview(null);
-                            }}
-                            onKeyDown={(event) => {
-                              const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
-                              if (step === 0 || !planned) return;
-                              event.preventDefault();
-                              const mode = event.shiftKey ? "end" : "move";
-                              const next = dragWindow(planned, mode, step * 7);
-                              void write("update", { ref: idea.id, plannedStart: dayOf(next.start), plannedTarget: dayOf(next.end) });
-                            }}
-                          >
-                            <span className="absolute inset-y-0 left-0 w-2 cursor-ew-resize" onPointerDown={(event) => begin(event, idea, "start")} onPointerMove={move} onPointerUp={end} data-plan-bar-start={idea.id} />
-                            <span className="absolute inset-y-0 right-0 w-2 cursor-ew-resize" onPointerDown={(event) => begin(event, idea, "end")} onPointerMove={move} onPointerUp={end} data-plan-bar-end={idea.id} />
-                          </div>
-                        ) : null}
-                        <ActualBar idea={idea} x={x} px={px} today={today} />
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-                {group.undated.length > 0 ? (
-                  <div className="flex border-b" data-plan-undated={group.key || "none"}>
-                    <div className="sticky left-0 z-10 shrink-0 border-r bg-card px-2 py-1.5 text-caption text-text-tertiary" style={{ width: nameWidth }}>
-                      No dates yet
-                    </div>
-                    <div className="sticky flex flex-wrap items-center gap-1.5 px-2 py-1.5" style={{ left: nameWidth }}>
-                      {group.undated.map((idea) =>
-                        offers(idea, "plan_dates") ? (
-                          <Button key={idea.id} size="sm" variant="outline" className="h-7 text-caption" onClick={() => addDates(idea)} data-plan-add-dates={idea.id}>
-                            {idea.title} · add dates
-                          </Button>
-                        ) : (
-                          <span key={idea.id} className="inline-flex h-7 items-center rounded-md border border-dashed px-2 text-caption text-text-tertiary" data-plan-undated-idea={idea.id}>
-                            {idea.title}
-                          </span>
-                        ),
-                      )}
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            );
-          })}
+              ) : null}
+            </div>
+          ))}
+          <DependencyArrows edges={links.drawn} ideas={ideaById} rowTops={rowTops} barY={(stacked ? LABEL_LINE - 2 : 0) + BAR_MIDDLE(layout)} x={x} left={nameWidth} width={chartWidth} />
         </div>
+      </div>
+      {stacked ? (
+        <>
+          {keyOpen ? <TimelineKey className="gap-x-2.5 border-t px-3 py-[7px]" /> : null}
+          <div className="flex flex-none items-center gap-2 border-t px-3 py-1.5" data-plan-timeline-controls>
+            <RangeControl range={range} onRange={setRange} large />
+            <Button variant="ghost" className="h-[34px] px-3 text-body" onClick={toToday} data-plan-to-today>
+              Today
+            </Button>
+            <Button variant="ghost" className="ml-auto h-[34px] px-3 text-body" aria-pressed={keyOpen} aria-expanded={keyOpen} onClick={() => setKeyOpen(!keyOpen)} data-plan-key-toggle>
+              Key
+            </Button>
+          </div>
+        </>
+      ) : (
+        <div className="flex flex-none items-center gap-2 border-t px-4 py-1.5" data-plan-timeline-controls>
+          <TimelineKey className="min-w-0 flex-1" />
+          <Button variant="ghost" size="sm" onClick={toToday} data-plan-to-today>
+            Today
+          </Button>
+          <Button variant={showAll ? "secondary" : "ghost"} size="sm" aria-pressed={showAll} onClick={() => setShowAll(!showAll)} title="Otherwise links show for the row you hover or select" data-plan-show-links>
+            Show all links
+          </Button>
+        </div>
+      )}
+    </>
+  );
+}
+
+const UNDATED = "focus-ring inline-flex h-6 max-w-[260px] items-center gap-1 rounded-md border border-dashed border-border-strong bg-card px-2 text-text-secondary hover:bg-surface-hover";
+
+/** A row's name: its fold, state, title and one flag, and on a stacked row the end label at the right. */
+function NameLine({ idea, fold, onOpen, end }: { idea: IdeaData; fold: { open: boolean; toggle: () => void } | null; onOpen: () => void; end: ReactNode }) {
+  const flag = idea.late && idea.state !== "shipped" ? <Flag tone="late" /> : idea.notStarted ? <Flag tone="notStarted" /> : null;
+  return (
+    <>
+      {fold ? (
+        <button
+          type="button"
+          className="focus-ring -ml-1 flex size-5 shrink-0 items-center justify-center rounded text-text-tertiary hover:bg-surface-hover"
+          aria-label={fold.open ? `Hide ${idea.title}'s sub-ideas` : `Show ${idea.title}'s sub-ideas`}
+          aria-expanded={fold.open}
+          onClick={fold.toggle}
+        >
+          {fold.open ? <ChevronDown className="size-3.5" aria-hidden /> : <ChevronRight className="size-3.5" aria-hidden />}
+        </button>
+      ) : null}
+      <StateGlyph state={idea.state} percent={idea.percent} />
+      <button type="button" className="focus-ring relative min-w-0 flex-1 truncate rounded-sm text-left text-body hover:underline" onClick={onOpen} title={idea.title} data-plan-timeline-name={idea.id}>
+        {idea.title}
+        <span className="sr-only">, {(STATE_WORDS[idea.state] ?? idea.state).toLowerCase()}</span>
+      </button>
+      {flag}
+      {end}
+    </>
+  );
+}
+
+/** A horizon's group row: its name, date, bar, the server's percent and its flags; "No horizon" for the rest. */
+function GroupRow({ group, width, visible }: { group: TimelineGroup; width: number; visible: number }) {
+  const horizon = group.horizon;
+  return (
+    <div className="relative z-[2] flex border-b bg-surface-sunken" style={{ width, height: ROW.wide }}>
+      <div className="sticky left-0 z-[3] flex items-center gap-2.5 overflow-hidden whitespace-nowrap bg-surface-sunken px-4 text-label" style={{ maxWidth: visible }}>
+        <span className="text-body font-semibold text-foreground">{group.title}</span>
+        {group.date ? <span className="text-text-tertiary">{dayLabel(group.date)}</span> : null}
+        {horizon ? <GroupFlags horizon={horizon} /> : null}
       </div>
     </div>
   );
 }
 
-function windowOf(idea: IdeaData): { start: number; end: number } | null {
-  const start = idea.planned.start ?? idea.planned.target;
-  const end = idea.planned.target ?? idea.planned.start;
-  return start && end ? { start: dayIndex(start), end: dayIndex(end) } : null;
-}
-
-function BaselineGhost({ idea, x }: { idea: IdeaData; x: (day: number) => number }) {
-  const start = idea.baseline!.start ?? idea.baseline!.target;
-  const end = idea.baseline!.target ?? idea.baseline!.start;
-  if (!start || !end) return null;
-  const same = start === idea.planned.start && end === idea.planned.target;
-  if (same) return null;
+function GroupFlags({ horizon }: { horizon: HorizonData }) {
+  const done = horizonDone(horizon);
+  const needsYou = treeHeader(horizon).needsYou;
   return (
-    <div
-      className="pointer-events-none absolute top-1 h-6 rounded-sm border border-dashed border-text-tertiary/70"
-      style={{ left: x(dayIndex(start)), width: Math.max(6, x(dayIndex(end) + 1) - x(dayIndex(start))) }}
-      title={`Baseline ${dayLabel(start)} to ${dayLabel(end)}`}
-      data-plan-baseline={idea.id}
-    />
+    <>
+      {horizon.percent !== null ? (
+        <SegmentedBar units={horizon.units} percent={horizon.percent} complete={horizon.complete} className="mt-0 shrink-0 [&>div:first-child]:w-[90px] [&>div:first-child]:flex-none [&>span]:text-label [&>span]:font-medium [&>span]:text-foreground" />
+      ) : null}
+      {horizon.awaitingApproval ? <Flag tone="you" data-plan-horizon-awaiting={horizon.identifier}>Waiting for your approval</Flag> : null}
+      {needsYou ? <Flag tone="you">{needsYou}</Flag> : null}
+      {!done && horizon.lateCount > 0 ? <Flag tone="late">{horizon.lateCount} late</Flag> : null}
+      {!done && horizon.notStartedCount > 0 ? <Flag tone="notStarted">{horizon.notStartedCount} not started</Flag> : null}
+      {done ? <ShippedMark className="text-caption" /> : horizon.shippedCount > 0 ? <ShippedMark count={horizon.shippedCount} className="text-caption" /> : null}
+    </>
   );
-}
-
-/** The derived bar: solid over the work that has happened, dashed to the forecast, hatched past the plan. */
-function ActualBar({ idea, x, px, today }: { idea: IdeaData; x: (day: number) => number; px: number; today: number }) {
-  // Work that landed with no recorded start (delivered outside the tracker) is the day it landed.
-  const first = idea.actual.start ?? idea.actual.end;
-  if (!first) return null;
-  const start = dayIndex(first);
-  const done = idea.actual.end ? dayIndex(idea.actual.end) : today;
-  const forecast = idea.actual.forecastEnd ? dayIndex(idea.actual.forecastEnd) : null;
-  const plannedEnd = idea.planned.target ? dayIndex(idea.planned.target) : null;
-  const last = Math.max(done, forecast ?? done);
-  const slipFrom = plannedEnd !== null && last > plannedEnd ? Math.max(start, plannedEnd + 1) : null;
-  const shipped = isShipped(idea);
-  return (
-    <div className="pointer-events-none absolute top-[26px] h-1.5" style={{ left: x(start), width: Math.max(4, x(last + 1) - x(start)) }} data-plan-actual={idea.id}>
-      <div className={cn("absolute inset-y-0 left-0 rounded-full", shipped ? "bg-[color:var(--status-task-done)]" : "bg-foreground/80")} style={{ width: Math.max(4, (done - start + 1) * px) }} />
-      {forecast !== null && forecast > done ? (
-        <div className="absolute inset-y-0 rounded-full border border-dashed border-foreground/60" style={{ left: (done - start + 1) * px, width: (forecast - done) * px }} data-plan-forecast={idea.id} />
-      ) : null}
-      {shipped ? (
-        <span className="absolute top-1/2 -translate-y-1/2" style={{ left: (done - start + 1) * px - 2 }} data-plan-shipped-cap={idea.id}>
-          <ShippedCheck label={`${idea.title} shipped`} />
-        </span>
-      ) : null}
-      {slipFrom !== null ? (
-        <div
-          className="absolute -inset-y-0.5 rounded-sm"
-          style={{
-            left: (slipFrom - start) * px,
-            width: (last - slipFrom + 1) * px,
-            backgroundImage: "repeating-linear-gradient(135deg, var(--color-destructive) 0 2px, transparent 2px 5px)",
-            opacity: 0.8,
-          }}
-          data-plan-slip={idea.id}
-        />
-      ) : null}
-    </div>
-  );
-}
-
-/** The day a record's bar starts and ends on: planned where it has a plan, else its actual work. */
-function spanOf(idea: IdeaData): { start: number; end: number } | null {
-  const planned = windowOf(idea);
-  if (planned) return planned;
-  const first = idea.actual.start ?? idea.actual.end;
-  if (!first) return null;
-  const end = idea.actual.end ?? idea.actual.forecastEnd ?? first;
-  return { start: dayIndex(first), end: dayIndex(end) };
 }
 
 /**
- * An arrow from the end of the record waited on to the start of the one waiting, drawn under
- * the bars and above the grid. A row not laid out yet (folded away) draws none.
+ * The links drawn, each an elbow from the end of the record waited on to the start of the one
+ * waiting, red when it starts first; over the lanes and under the pinned names. A row not laid
+ * out yet (folded away, or before the first layout) draws none.
  */
 export function DependencyArrows({
   edges,
   ideas,
   rowTops,
-  rowHeight,
+  barY,
   x,
   left,
   width,
@@ -375,13 +406,12 @@ export function DependencyArrows({
   edges: ReadonlyArray<{ from: string; to: string }>;
   ideas: ReadonlyMap<string, IdeaData>;
   rowTops: ReadonlyMap<string, number>;
-  rowHeight: number;
+  /** From a row's top to the middle of its planned bar. */
+  barY: number;
   x: (day: number) => number;
   left: number;
   width: number;
 }) {
-  // The planned bar's middle: the 40px band sits centred in the row, the bar 8px below its top.
-  const barY = (top: number) => top + rowHeight / 2 - BAND / 2 + 16;
   const paths = edges.flatMap((edge) => {
     const from = ideas.get(edge.from);
     const to = ideas.get(edge.to);
@@ -391,21 +421,16 @@ export function DependencyArrows({
     const a = spanOf(from);
     const b = spanOf(to);
     if (!a || !b) return [];
-    const x1 = x(a.end + 1);
-    const y1 = barY(fromTop);
-    const x2 = x(b.start) - 2;
-    const y2 = barY(toTop);
-    const bend = Math.max(12, Math.min(48, Math.abs(x2 - x1) / 2));
-    return [{ key: `${edge.from}>${edge.to}`, d: `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`, late: b.start <= a.end }];
+    return [{ key: `${edge.from}>${edge.to}`, d: elbowPath(x(a.end + 1), fromTop + barY, x(b.start) - 3, toTop + barY), late: startsEarly(from, to) }];
   });
   if (paths.length === 0) return null;
   return (
-    <svg className="pointer-events-none absolute top-0 z-[5] h-full overflow-visible" style={{ left, width }} aria-hidden data-plan-arrows={paths.length}>
+    <svg className="pointer-events-none absolute top-0 z-[2] h-full overflow-visible" style={{ left, width }} aria-hidden data-plan-arrows={paths.length}>
       <defs>
-        <marker id="plan-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <marker id="plan-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto">
           <path d="M0,0 L8,4 L0,8 z" className="fill-text-secondary" />
         </marker>
-        <marker id="plan-arrow-late" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <marker id="plan-arrow-late" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto">
           <path d="M0,0 L8,4 L0,8 z" className="fill-destructive" />
         </marker>
       </defs>
@@ -414,29 +439,12 @@ export function DependencyArrows({
           key={path.key}
           d={path.d}
           fill="none"
-          strokeWidth={1.25}
+          strokeWidth={1.4}
           className={path.late ? "stroke-destructive" : "stroke-text-secondary"}
           markerEnd={path.late ? "url(#plan-arrow-late)" : "url(#plan-arrow)"}
           data-plan-arrow={path.key}
         />
       ))}
     </svg>
-  );
-}
-
-function Legend() {
-  return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-gutter py-2 text-caption text-text-tertiary" aria-label="Legend">
-      <span className="flex items-center gap-1.5"><span className="h-3 w-6 rounded-sm border border-[color:var(--status-task-in_progress)]/70 bg-[color:var(--status-task-in_progress)]/20" />planned</span>
-      <span className="flex items-center gap-1.5"><span className="h-3 w-6 rounded-sm border border-dashed border-text-tertiary/70" />baseline</span>
-      <span className="flex items-center gap-1.5"><span className="h-1.5 w-6 rounded-full bg-foreground/80" />actual</span>
-      <span className="flex items-center gap-1.5"><span className="h-1.5 w-6 rounded-full border border-dashed border-foreground/60" />forecast</span>
-      <span className="flex items-center gap-1.5"><span className="h-2 w-6 rounded-sm" style={{ backgroundImage: "repeating-linear-gradient(135deg, var(--color-destructive) 0 2px, transparent 2px 5px)" }} />past the plan</span>
-      <span className="flex items-center gap-1.5"><ShippedCheck label="" />shipped</span>
-      <span className="flex items-center gap-1.5">
-        <svg width="24" height="8" aria-hidden><path d="M1 4 H 20" className="stroke-text-secondary" strokeWidth="1.25" /><path d="M18,1 L23,4 L18,7 z" className="fill-text-secondary" /></svg>
-        needed first
-      </span>
-    </div>
   );
 }

@@ -41,12 +41,13 @@ function displays(plan: PlanData) {
   };
 }
 
-it("uses singular counts on the horizon header, drawer and timeline", () => {
+it("uses singular counts on the horizon header and drawer", () => {
   const plan = store.plan().view();
   const horizon = plan.horizons[0]!;
   Object.assign(horizon, { ideaCount: 1, records: { leaves: 1, shipped: 0, started: 0, shaped: 1, exploring: 0, parentCount: 0 }, memberCount: 1 });
-  // Keep an otherwise empty timeline group visible, as a hand-placed member does.
-  for (const html of Object.values(displays(plan))) {
+  // The timeline's group row carries no counts: its name, date, bar, percent and flags.
+  const { board, drawer } = displays(plan);
+  for (const html of [board, drawer]) {
     expect(plain(html)).toContain("1 idea · 1 member");
     expect(plain(html)).not.toContain("1 ideas");
   }
@@ -64,7 +65,8 @@ describe("D review integration", () => {
     Object.assign(horizon, { ideaCount: 7, records: { leaves: 7, shipped: 0, started: 0, shaped: 7, exploring: 0, parentCount: 0 }, memberCount: 9, shippedCount: 3, lateCount: 4, notStartedCount: 2, progress: 0.25, percent: 25 });
     for (const [name, html] of Object.entries(displays(view))) {
       const words = plain(html);
-      for (const expected of ["7 ideas", "9 members", "3 shipped", "4 late", "2 not started"]) expect(words, name).toContain(expected);
+      const expected = name === "timeline" ? ["3 shipped", "4 late", "2 not started"] : ["7 ideas", "9 members", "3 shipped", "4 late", "2 not started"];
+      for (const fact of expected) expect(words, name).toContain(fact);
       expect(html, name).toContain('aria-label="25% done"');
     }
   });

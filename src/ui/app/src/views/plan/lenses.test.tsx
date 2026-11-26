@@ -10,7 +10,7 @@ import { Markdown } from "@/lib/markdown";
 import { ShippedMark } from "@/detail/ShippedMark";
 import { planActionItems, planPrimary } from "@/detail/plain-actions";
 import { cardMenuItems, DeliveryChips, HorizonsBoard, IdeasBoard, shelfRestore } from "./PlanBoards";
-import { DependencyArrows, PlanTimeline } from "./PlanTimeline";
+import { DependencyArrows, PlanTimeline, Timeline } from "./PlanTimeline";
 import { RunSettingForm, runSettingLabel } from "./RunSetting";
 import { dependencyEdges, horizonDone, horizonsColumns, ideasColumns, inHorizonsLens, inIdeasLens } from "./plan-model";
 
@@ -347,7 +347,7 @@ describe("dependencies on the timeline", () => {
           ]}
           ideas={ideas}
           rowTops={new Map([["a", 0], ["b", 40], ["c", 80]])}
-          rowHeight={40}
+          barY={14}
           x={(day) => day}
           left={240}
           width={1000}
@@ -369,7 +369,7 @@ describe("dependencies on the timeline", () => {
 
   it("draws nothing for a row not laid out", () => {
     const ideas = new Map([a, b].map((entry) => [entry.id, entry]));
-    const html = renderToStaticMarkup(<DependencyArrows edges={[{ from: "a", to: "b" }]} ideas={ideas} rowTops={new Map([["a", 0]])} rowHeight={40} x={(day) => day} left={0} width={10} />);
+    const html = renderToStaticMarkup(<DependencyArrows edges={[{ from: "a", to: "b" }]} ideas={ideas} rowTops={new Map([["a", 0]])} barY={14} x={(day) => day} left={0} width={10} />);
     expect(html).toBe("");
   });
 });
@@ -450,5 +450,79 @@ describe("the Dropped shelf", () => {
     // Never straight to raw: a dropped record that holds a horizon cannot be raw.
     expect(shelfRestore(gone)?.call).toMatchObject({ verb: "update", body: { ref: "gone", maturity: "exploring" } });
     expect(shelfRestore(idea("held", { maturity: "dropped", stage: "dropped", state: "dropped", actions: [{ id: "restore", label: "Restore", who: "person", disabledReason: "not now" }] }))?.call).toBeUndefined();
+  });
+});
+
+describe("the Timeline lens", () => {
+  const a = idea("a", { planned: { start: "2026-10-01", target: "2026-10-10" } });
+  const b = idea("b", { planned: { start: "2026-10-12", target: "2026-10-20" }, dependsOn: ["a"] });
+  const c = idea("c", { planned: { start: "2026-10-05", target: "2026-10-08" }, dependsOn: ["a"] });
+  const calm = idea("calm", { planned: { start: "2026-11-01", target: "2026-12-20" } });
+  const draw = (ideas: IdeaData[], width: number, selected: string | null = null) =>
+    renderToStaticMarkup(<Timeline plan={plan(ideas)} write={async () => true} onOpen={() => {}} selected={selected} width={width} />);
+  const tag = (html: string, marker: string) => html.match(new RegExp(`<[^>]*${marker}[^>]*>`))?.[0] ?? "";
+
+  it("stacks under 760px of container: no name column, each label pinned left at the frame's width over its lane", () => {
+    const narrow = draw([a, calm], 759);
+    expect(narrow).toContain("data-plan-timeline-stacked");
+    const label = tag(narrow, 'data-plan-timeline-label="a"');
+    expect(label).toContain("sticky left-0");
+    expect(label).toContain("width:759px");
+    expect(narrow).toContain("data-plan-key-toggle");
+    expect(narrow).not.toContain("data-plan-show-links");
+    // The end label rides on the label line, not after the bar.
+    expect(narrow).toMatch(/data-plan-timeline-label="a"[\s\S]*29d past Oct 10[\s\S]*data-plan-bar="a"/);
+
+    const wide = draw([a, calm], 760);
+    expect(wide).not.toContain("data-plan-timeline-stacked");
+    expect(tag(wide, 'data-plan-timeline-label="a"')).toContain("width:220px");
+    expect(tag(draw([a], 1040), 'data-plan-timeline-label="a"')).toContain("width:300px");
+    expect(wide).toContain("data-plan-show-links");
+  });
+
+  it("opens on All at the desk and on 3 months when stacked, with no hint paragraph", () => {
+    expect(tag(draw([a], 1280), 'data-plan-zoom="all"')).toContain('aria-pressed="true"');
+    expect(tag(draw([a], 375), 'data-plan-zoom="3m"')).toContain('aria-pressed="true"');
+    expect(draw([a], 1280)).not.toContain("Drag a planned bar");
+  });
+
+  it("ends each bar with where it ends, late in the destructive colour", () => {
+    const html = draw([a, calm], 1280);
+    expect(text(html)).toContain("29d past Oct 10");
+    expect(text(html)).toContain("to Dec 20");
+    expect(html).toMatch(/data-plan-end-label="late"[^>]*>29d past Oct 10|text-flag-late[^>]*>29d past Oct 10/);
+  });
+
+  it("dims the rows the selected idea's links do not touch, and nothing without a selection", () => {
+    const dimmed = (html: string) => [...html.matchAll(/data-plan-timeline-row="([^"]+)"[^>]*data-plan-dim/g)].map((match) => match[1]);
+    expect(dimmed(draw([a, b, c, calm], 1280, "b"))).toEqual(["c", "calm"]);
+    expect(dimmed(draw([a, b, c, calm], 1280))).toEqual([]);
+    // A selection with no links dims nothing.
+    expect(dimmed(draw([a, b, c, calm], 1280, "calm"))).toEqual([]);
+  });
+
+  it("notches a row that starts before something it waits on ends, at all times", () => {
+    const html = draw([a, b, c], 1280);
+    expect(html).toContain('data-plan-notch="c"');
+    expect(html).not.toContain('data-plan-notch="b"');
+    expect(html).not.toContain('data-plan-notch="a"');
+  });
+
+  it("draws a planned window with only a target as a diamond on that day", () => {
+    const target = idea("t", { planned: { start: null, target: "2026-12-01" } });
+    const html = draw([target, a], 1280);
+    const diamond = tag(html, 'data-plan-bar="t"');
+    expect(diamond).toContain('data-plan-target-only="t"');
+    expect(diamond).toContain("rotate-45");
+    expect(diamond).toContain('aria-label="Idea t target Dec 1, 2026"');
+    expect(tag(html, 'data-plan-bar="a"')).not.toContain("data-plan-target-only");
+  });
+
+  it("lists ideas without dates on one line, add dates only where offered", () => {
+    const dated = idea("d", { actions: [{ id: "plan_dates", label: "Change the planned dates", who: "person" }] });
+    const html = draw([a, dated, idea("e")], 1280);
+    expect(text(html)).toContain("2 ideas without dates:");
+    expect(html).toContain('data-plan-add-dates="d"');
+    expect(html).toContain('data-plan-undated-idea="e"');
   });
 });
