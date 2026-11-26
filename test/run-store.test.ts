@@ -319,7 +319,8 @@ describe("run continue", () => {
     runs.start({ actor: BOT, scope: epic, maxTickets: 1 });
     expect(cont()).toMatchObject({ action: "take", ref: a });
     expect(cont({ outcome: "failed", reason: "first" })).toMatchObject({ action: "take", ref: a, resumed: false });
-    expect(cont({ outcome: "failed", reason: "second" })).toMatchObject({ action: "stop", reason: "failure_streak" });
+    // One ticket failing twice is named once, not "A and A".
+    expect(cont({ outcome: "failed", reason: "second" })).toMatchObject({ action: "stop", reason: "failure_streak", message: `${a} failed twice in a row.` });
   });
 
   it("--max-tickets 1 stops on the budget once its one ticket is done", () => {

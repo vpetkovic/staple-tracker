@@ -419,7 +419,10 @@ export function evaluateStopRules(run: RunForRules, facts: RunFacts): StopDecisi
   const streak = recorded.slice(-FAILURE_STREAK_LIMIT);
   if (streak.length === FAILURE_STREAK_LIMIT && streak.every((ticket) => ticket.outcome === "failed")) {
     const refs = streak.map((ticket) => ticket.identifier);
-    return stop("failure_streak", { tickets: refs, limit: FAILURE_STREAK_LIMIT }, `${refs.join(" and ")} both failed in a row.`);
+    // A retried ticket fails twice as itself: named once, as the web UI words it (run-text.ts).
+    const named = [...new Set(refs)];
+    const message = named.length === 1 ? `${named[0]} failed twice in a row.` : `${named.join(" and ")} both failed in a row.`;
+    return stop("failure_streak", { tickets: refs, limit: FAILURE_STREAK_LIMIT }, message);
   }
 
   if (facts.scopeGone) {
