@@ -70,6 +70,19 @@ function finish(identifier: string): void {
   store.updateIssue(identifier, { status: "done" }, "agent");
 }
 
+describe("the plan read", () => {
+  it("carries each record's brief as one line, for a card to show without opening it", () => {
+    const written = idea("Written", { brief: "\n  Let integrators call the API from a browser.  \n\nMore detail the card never shows." });
+    const unwritten = idea("Unwritten");
+    const emptied = idea("Emptied", { brief: "Soon gone" });
+    plan.update(emptied, { brief: "" }, "vp", PERSON);
+    const line = (id: string) => plan.view().ideas.find((record) => record.id === id)!.briefLine;
+    expect(line(written)).toBe("Let integrators call the API from a browser.");
+    expect(line(unwritten)).toBeNull();
+    expect(line(emptied)).toBeNull();
+  });
+});
+
 describe("enabling", () => {
   it("adds the idea and milestone kinds and seeds Now and Next once, as milestones", () => {
     expect(store.getKinds().map((k) => k.id)).toEqual(expect.arrayContaining([IDEA_KIND, MILESTONE_KIND]));

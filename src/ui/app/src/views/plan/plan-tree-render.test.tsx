@@ -29,6 +29,7 @@ function idea(id: string, title: string, extra: Partial<IdeaData> = {}): IdeaDat
     kind: "idea",
     title,
     description: null,
+    briefLine: null,
     maturity: "shaped",
     stage: "scheduled",
     parentId: null,

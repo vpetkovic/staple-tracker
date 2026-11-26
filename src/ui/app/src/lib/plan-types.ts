@@ -109,6 +109,8 @@ export interface IdeaData {
   kind: string;
   title: string;
   description: string | null;
+  /** The brief's first written line; null while it has none. */
+  briefLine: string | null;
   maturity: Maturity;
   stage: Stage;
   parentId: string | null;

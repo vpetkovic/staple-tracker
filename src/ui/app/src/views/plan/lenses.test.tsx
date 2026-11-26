@@ -22,6 +22,7 @@ function idea(id: string, extra: Partial<IdeaData> = {}): IdeaData {
     kind: "idea",
     title: `Idea ${id}`,
     description: null,
+    briefLine: null,
     maturity: "raw",
     stage: "raw",
     parentId: null,

@@ -208,6 +208,8 @@ export interface IdeaView {
   kind: string;
   title: string;
   description: string | null;
+  /** The brief's first written line, for a card to show; null while it has none. The detail carries the whole brief. */
+  briefLine: string | null;
   maturity: Maturity;
   stage: Stage;
   parentId: string | null;
@@ -1426,6 +1428,7 @@ export class PlanStore {
         kind: row.kind,
         title: row.title,
         description: row.description,
+        briefLine: firstLine(this.documentBody(row.id, BRIEF_KEY)),
         maturity,
         stage,
         parentId: row.parent_id !== null && byId.has(row.parent_id) ? row.parent_id : null,
@@ -2480,6 +2483,11 @@ export function mergeSections(base: PlanSections, patch: PlanPatch): PlanSection
 }
 
 /** The shaped gate as a refusal: what the plan still needs, named. */
+/** The first line with text in it, trimmed; null for none. */
+function firstLine(text: string | null): string | null {
+  return text?.split("\n").map((line) => line.trim()).find((line) => line !== "") ?? null;
+}
+
 /**
  * A dropped record keeps its horizon and planned dates. Raw holds neither (it offers no schedule
  * and no plan dates), and a record restored into raw could not shed them: so it is restored to
