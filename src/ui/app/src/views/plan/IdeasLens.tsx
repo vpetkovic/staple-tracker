@@ -238,6 +238,7 @@ function RawRow({ plan, idea, column, columns, write, onOpen, selected, onDrag }
             </>
           ) : null}
           {parent ? <span className="truncate">· in {parent.title}</span> : null}
+          <RiskFlags idea={idea} />
         </div>
       </div>
       {explore ? (
@@ -327,6 +328,7 @@ function ExploringCard({ plan, entry, column, columns, write, onOpen, selected, 
           {c.filled}/{c.total} written
         </span>
         {idea.openQuestions > 0 ? <Amber>{questions(idea.openQuestions, true)}</Amber> : null}
+        <RiskFlags idea={idea} />
         {horizon ? <HorizonChip label={`${horizon.name}${horizon.date ? ` · ${dayLabel(horizon.date, false)}` : ""}`} /> : null}
         <span className="ms-auto flex items-center gap-1">
           {shape?.ready ? (
@@ -398,6 +400,16 @@ function SubIdeas({ entry, onOpen, filtering }: { entry: BoardEntry; onOpen: (id
         </ul>
       ) : null}
     </div>
+  );
+}
+
+/** Late and not started, as the server flags them: what the Late and Not started pills pick a card by. */
+function RiskFlags({ idea }: { idea: IdeaData }) {
+  return (
+    <>
+      {idea.late ? <Flag tone="late" data-plan-card-flag="late" /> : null}
+      {idea.notStarted ? <Flag tone="notStarted" data-plan-card-flag="notStarted" /> : null}
+    </>
   );
 }
 

@@ -101,6 +101,13 @@ describe("the notch", () => {
     const ideas = new Map([a, early, after].map((entry) => [entry.id, entry]));
     expect([...notched([{ from: "a", to: "early" }, { from: "a", to: "after" }], ideas)]).toEqual(["early"]);
   });
+
+  it("leaves a shipped row alone: its order is history", () => {
+    const a = idea("a", { planned: { start: "2026-10-01", target: "2026-10-10" } });
+    const landed = idea("landed", { state: "shipped", planned: { start: "2026-10-05", target: "2026-10-20" }, dependsOn: ["a"] });
+    const ideas = new Map([a, landed].map((entry) => [entry.id, entry]));
+    expect([...notched([{ from: "a", to: "landed" }], ideas)]).toEqual([]);
+  });
 });
 
 describe("the arrow", () => {

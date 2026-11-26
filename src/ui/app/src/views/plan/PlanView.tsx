@@ -320,7 +320,8 @@ export function PlanBar({ lens, plan, focus, onFocus, text, onText, onCapture, o
         </div>
       ) : null}
       <span aria-hidden className="ms-auto" />
-      {tools}
+      {/* Under 620px a lens's tools move into the lens (Horizons draws + Horizon at its end). */}
+      {tools ? <span className="contents @max-[620px]/plan:hidden">{tools}</span> : null}
       <PlanSearch text={text} onText={onText} />
       {lens === "ideas" ? null : <CapturePopover onCapture={onCapture} onViewIdeas={onViewIdeas} />}
     </div>

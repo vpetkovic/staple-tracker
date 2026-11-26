@@ -142,14 +142,17 @@ describe("the Ideas lens is thinking only", () => {
     expect(horizonsColumns(plan(all))[0]!.ideas.map((entry) => entry.id)).toEqual(["ready"]);
   });
 
-  it("shows how much of the plan is written and the horizon, and nothing about delivery", () => {
+  it("shows how much of the plan is written, the horizon and its late and not started flags, and nothing about work", () => {
     const thinking = { ...exploring, completeness: { starred: 3, starredTotal: 3, filled: 7, total: 10 }, linkCount: 2, late: true, notStarted: true };
     const html = renderToStaticMarkup(<IdeasBoard plan={plan([thinking])} write={async () => true} onOpen={() => {}} selected={null} />);
     expect(html).toContain('data-plan-card-completeness="3/3"');
     expect(text(html)).toContain("7/10 written");
     expect(html).toContain("data-horizon-chip");
     expect(text(html)).toContain("◇ H now · Dec 31");
-    expect(text(html)).not.toMatch(/linked|late|not started|shipped|% done/);
+    // The Late and Not started pills pick this card, so it says why; work is still Horizons' to show.
+    expect(html).toContain('data-plan-card-flag="late"');
+    expect(html).toContain('data-plan-card-flag="notStarted"');
+    expect(text(html)).not.toMatch(/linked|shipped|% done/);
   });
 
   it("renders no delivery card on the board", () => {

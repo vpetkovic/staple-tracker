@@ -63,13 +63,13 @@ export function startsEarly(waitedOn: IdeaData, waiting: IdeaData): boolean {
   return a !== null && b !== null && b.start <= a.end;
 }
 
-/** The rows that start before something they wait on ends: each gets the red notch. */
+/** The rows that start before something they wait on ends: each gets the red notch. A shipped row gets none: its order is history. */
 export function notched(edges: readonly DependencyEdge[], ideas: ReadonlyMap<string, IdeaData>): Set<string> {
   const out = new Set<string>();
   for (const edge of edges) {
     const from = ideas.get(edge.from);
     const to = ideas.get(edge.to);
-    if (from && to && startsEarly(from, to)) out.add(edge.to);
+    if (from && to && to.state !== "shipped" && startsEarly(from, to)) out.add(edge.to);
   }
   return out;
 }

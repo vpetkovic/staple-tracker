@@ -6,7 +6,7 @@
  * section, or onto the drop rail pinned at the top while a drag is on. A section the idea's state
  * would refuse is never marked as a target.
  */
-import { Milestone, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 import { useState, type DragEvent, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -46,6 +46,10 @@ export function HorizonsBoard({ plan, write, onOpen, selected, filtering = false
         {columns.slice(1).map((column) => (
           <HorizonSection key={column.key} lens={lens} column={column} />
         ))}
+        {/* On a phone-width page the toolbar has no room for it beside the pills. */}
+        <div className="hidden px-3 pt-4 @max-[620px]/plan:block">
+          <AddHorizon write={write} row />
+        </div>
       </div>
     </div>
   );
@@ -216,7 +220,8 @@ function RailTarget({ lens, column }: { lens: Pick<LensContext, "plan" | "write"
   );
 }
 
-export function AddHorizon({ write }: { write: Write }) {
+/** The toolbar's + Horizon; `row` is the same control as a full-width row at the end of the outline. */
+export function AddHorizon({ write, row = false }: { write: Write; row?: boolean }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [date, setDate] = useState("");
@@ -230,12 +235,15 @@ export function AddHorizon({ write }: { write: Write }) {
     }
   };
   if (!open) {
-    return (
-      // On a phone-width toolbar it is an icon beside the pills, still named in words.
-      <Button variant="outline" size="sm" className="h-8 @max-[620px]/plan:w-8 @max-[620px]/plan:px-0" aria-label="Add a horizon" title="Add a horizon" onClick={() => setOpen(true)} data-plan-add-horizon>
-        <Plus aria-hidden className="@max-[620px]/plan:hidden" />
-        <Milestone aria-hidden className="hidden @max-[620px]/plan:block" />
-        <span className="@max-[620px]/plan:sr-only">Horizon</span>
+    return row ? (
+      <Button variant="outline" className="min-h-11 w-full justify-center" onClick={() => setOpen(true)} data-plan-add-horizon-row>
+        <Plus aria-hidden />
+        Add a horizon
+      </Button>
+    ) : (
+      <Button variant="outline" size="sm" className="h-8" title="Add a horizon" onClick={() => setOpen(true)} data-plan-add-horizon>
+        <Plus aria-hidden />
+        Horizon
       </Button>
     );
   }
