@@ -67,6 +67,8 @@ function session(): StapleSession {
     setView: noop,
     milestoneFocus: null,
     focusMilestone: noop,
+    run: null,
+    openRun: noop,
     projects: { data: [], error: undefined, loading: false, reload: noop },
     focusProject: noop,
     ws: "goal",

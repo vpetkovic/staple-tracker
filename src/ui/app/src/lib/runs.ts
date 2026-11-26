@@ -11,9 +11,12 @@
  * took and has not recorded yet, keyed by workspace and issue id. A run that ended holds
  * nothing (core settles its open ticket), so its rows wear no badge.
  */
-import { createContext, useContext } from "react";
+import { createContext, useCallback, useContext } from "react";
+import { type AuthError, getRun } from "./api";
 import { isLiveRun } from "./run-text";
+import { useSession } from "./session";
 import type { RunEntry } from "./types";
+import { useResource } from "./useStaple";
 
 /** How a row is on autopilot: its own ticket, the scope a run works, or a folded parent of a ticket. */
 export type AutopilotMark =
@@ -123,4 +126,40 @@ export function useRuns(): RunsState {
 /** The live run working this issue, or null. */
 export function useRunClaim(workspace: string, issueId: string): RunEntry | null {
   return useRuns().claimed.get(claimKey(workspace, issueId)) ?? null;
+}
+
+/**
+ * The run the Autopilot page shows when its address names none (a wide page's second pane):
+ * the newest live run, else the newest run. Shown, never written to the address: the address
+ * says what the reader chose, and the reader chose the page.
+ */
+export function defaultRun(entries: readonly RunEntry[]): RunEntry | null {
+  return entries.find((entry) => isLiveRun(entry.run)) ?? entries[0] ?? null;
+}
+
+export interface RunRead {
+  /** The run, or null: no id, still loading, or not found (`error` says which). */
+  entry: RunEntry | null;
+  error: Error | undefined;
+  loading: boolean;
+}
+
+/**
+ * ONE RUN BY ID, for `?view=autopilot&run=`. The page's own read when it lists the run, so a
+ * listed run follows the poll with every other surface; otherwise `/api/run`, which serves
+ * an ended run past the list's limit and, on a hub, finds the workspace that holds it (a
+ * link carries only the id). That read follows the poll too. An unknown id is a 404 in
+ * `error`. What a previous id loaded is never answered for the next.
+ */
+export function useRunEntry(runId: string | null, onAuthError: (error: AuthError) => void): RunRead {
+  const { entries } = useRuns();
+  const { version } = useSession();
+  const listed = runId === null ? null : (entries.find((entry) => entry.run.id === runId) ?? null);
+  const fetch = runId !== null && listed === null;
+  const load = useCallback(() => (fetch && runId !== null ? getRun({ id: runId }) : Promise.resolve(null)), [fetch, runId]);
+  const fetched = useResource<RunEntry | null>(load, [fetch, runId, version], onAuthError);
+  if (runId === null) return { entry: null, error: undefined, loading: false };
+  if (listed) return { entry: listed, error: undefined, loading: false };
+  const entry = fetched.data?.run.id === runId ? fetched.data : null;
+  return { entry, error: entry ? undefined : fetched.error, loading: entry === null && fetched.error === undefined };
 }

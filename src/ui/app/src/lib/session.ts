@@ -27,15 +27,31 @@ import type { Resource } from "./useStaple";
  * preference. What the user sees is `VIEW_LABELS` — the tree view is called "Tasks"
  * everywhere a human reads it.
  */
-export const VIEWS = ["tree", "queue", "attention", "graph", "milestones", "plan", "calibration", "budget"] as const;
+export const VIEWS = ["tree", "queue", "attention", "autopilot", "graph", "milestones", "plan", "calibration", "budget"] as const;
 export type ViewName = (typeof VIEWS)[number];
+
+/**
+ * WHERE EACH VIEW SITS IN THE NAVIGATION. The two views about what needs a person and what
+ * agents are doing sit above the workspaces at the top of the rail, apart from the Views
+ * group; the phone's tab bar shows `TAB_VIEWS` and every other view is one tap further, in
+ * its More sheet. The rail and the tab bar iterate these; nothing else decides placement.
+ */
+export const TOP_VIEWS: readonly ViewName[] = ["attention", "autopilot"];
+export const TAB_VIEWS: readonly ViewName[] = ["attention", "autopilot", "tree", "queue"];
+
+export function isTopView(view: ViewName): boolean {
+  return TOP_VIEWS.includes(view);
+}
 
 /** The human name of each view — the rail row, the content header, the palette command. */
 export const VIEW_LABELS: Record<ViewName, string> = {
   tree: "Tasks",
   queue: "Queue",
-  // The work waiting on a person (views/attention): gates, reviews, blockers a person owns.
-  attention: "Attention",
+  // The work waiting on a person (views/attention): gates, reviews, blockers a person owns. The
+  // id stays `attention` (saved preferences key off it); the address word is `inbox`.
+  attention: "Inbox",
+  // Agents working a scope ticket after ticket: the live runs and every run's history.
+  autopilot: "Autopilot",
   graph: "Graph",
   milestones: "Milestones",
   plan: "Plan",
@@ -69,7 +85,7 @@ export function isMachineView(view: ViewName): boolean {
  *                 group or sort, and finished work has its own control in the graph's View
  *                 menu (show, fade, hide), so a second Done here would be a duplicate.
  *   Milestones  — Done alone: it lists finished milestones when finished work is shown.
- *   Queue, Attention, Estimates, Usage — none. The queue is the pickup order itself, and the two
+ *   Queue, Inbox, Autopilot, Estimates, Usage — none. The queue is the pickup order itself, and the two
  *                 reports read a workspace's (or the machine's) whole history.
  */
 export interface ViewControls {
@@ -88,6 +104,7 @@ const VIEW_CONTROLS: Record<ViewName, ViewControls> = {
   plan: { arrange: false, filter: false, done: false },
   queue: { arrange: false, filter: false, done: false },
   attention: { arrange: false, filter: false, done: false },
+  autopilot: { arrange: false, filter: false, done: false },
   calibration: { arrange: false, filter: false, done: false },
   budget: { arrange: false, filter: false, done: false },
 };
@@ -202,6 +219,17 @@ export interface StapleSession {
    */
   milestoneFocus: string | null;
   focusMilestone: (ref: string) => void;
+
+  /**
+   * THE RUN THE AUTOPILOT PAGE IS ON — `?view=autopilot&run=<run id>`, null on the page
+   * without one (and on every other view). `openRun` is the one way there, like
+   * `focusMilestone`: it switches to Autopilot and records the run, or with null opens the
+   * page itself. Every place that names a run navigates with it (the rail, a task's notice,
+   * a milestone's goal, a stop notice, an Inbox row), so each is a history step and Back
+   * returns from it; list to run and run to list are steps too.
+   */
+  run: string | null;
+  openRun: (runId: string | null) => void;
 
   /**
    * THE TRACKED PROJECTS, fetched once for the whole page — the rail lists them under

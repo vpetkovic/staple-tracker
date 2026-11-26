@@ -16,7 +16,6 @@ import { personActor } from "@/detail/parts/person";
 import { type AuthError, dismissAttention, getAttention, resolveCloudConflict } from "@/lib/api";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
 import { useSession } from "@/lib/session";
-import { openRunHistory } from "@/lib/shell-events";
 import { markStopsSeen } from "@/lib/stop-seen-store";
 import type { AttentionList, AttentionRow } from "@/lib/types";
 import { type Resource, useResource } from "@/lib/useStaple";
@@ -72,7 +71,7 @@ export function useAttention(onAuthError: (error: AuthError) => void): Attention
       if (go?.to === "issue") session.open(go.workspace, go.ref);
       else if (go?.to === "run") {
         seenFor(row);
-        openRunHistory({ runId: go.runId });
+        session.openRun(go.runId);
       }
     },
     resolve: (row, take) =>

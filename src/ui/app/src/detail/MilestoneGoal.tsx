@@ -30,9 +30,8 @@ import {
 } from "@/lib/goal-text";
 import { endedStateText, isLiveRun, liveStateText, tickets } from "@/lib/run-text";
 import { useRuns } from "@/lib/runs";
-import { useSession } from "@/lib/session";
+import { useOptionalSession, useSession } from "@/lib/session";
 import { statusLabel } from "@/lib/settings";
-import { openRunHistory } from "@/lib/shell-events";
 import type { CriterionVerdict, EvidenceItem, GoalCriterion, IssueGate, MilestoneView, RunEntry } from "@/lib/types";
 import { DetailCard, SectionHeading, cn, useNow } from "./parts";
 import { openDetailTab, openTabOnArrival } from "./tabs/registry";
@@ -134,6 +133,7 @@ export function goalRunOf(entries: readonly RunEntry[], workspace: string, miles
 
 /** "opus's goal run: Working · created 1 of 5 tickets it may" — or how the last one ended. */
 function GoalRunLine({ entry }: { entry: RunEntry }) {
+  const session = useOptionalSession();
   const live = isLiveRun(entry.run);
   const state = live ? liveStateText(entry) : endedStateText(entry.run);
   const children = entry.goal?.children ?? (entry.run.goal ? { created: entry.run.goal.children.length, cap: entry.run.goal.childCap } : null);
@@ -144,7 +144,7 @@ function GoalRunLine({ entry }: { entry: RunEntry }) {
       {children ? <span>created {children.created} of {tickets(children.cap)} it may</span> : null}
       <button
         type="button"
-        onClick={() => openRunHistory({ runId: entry.run.id })}
+        onClick={() => session?.openRun(entry.run.id)}
         className="rounded-sm text-body font-medium text-foreground underline underline-offset-2 hover:no-underline focus-ring pointer-coarse:min-h-11"
       >
         See the run

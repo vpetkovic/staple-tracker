@@ -46,7 +46,6 @@ import {
   searchIssues,
 } from "@/lib/api";
 import { buildRunsState, RunsContext } from "@/lib/runs";
-import { RunHistoryMount } from "@/components/autopilot/RunHistoryMount";
 import { buildFilterContext, type MilestoneFacts, type ProjectFacts } from "@/lib/filter-dimensions";
 import {
   loadFilters,
@@ -105,6 +104,7 @@ import { MilestonesView } from "@/views/milestones/MilestonesView";
 import { PlanView } from "@/views/plan/PlanView";
 import { QueueView } from "@/views/queue/QueueView";
 import { AttentionView } from "@/views/attention/AttentionView";
+import { AutopilotView } from "@/views/autopilot/AutopilotView";
 import { TreeView } from "@/views/TreeView";
 import { LoadingState, ProblemState } from "@/components/plain/States";
 
@@ -121,6 +121,7 @@ const VIEW_COMPONENTS: Record<ViewName, typeof TreeView | typeof PlanView> = {
   plan: PlanView,
   queue: QueueView,
   attention: AttentionView,
+  autopilot: AutopilotView,
   calibration: CalibrationView,
   budget: BudgetView,
 };
@@ -164,6 +165,8 @@ export function App() {
    * because it is the second half of one navigation act; see lib/session.ts.
    */
   const [milestoneFocus, setMilestoneFocus] = useState<string | null>(initialUrl?.focus ?? null);
+  /** The run the Autopilot page is on (`?view=autopilot&run=`): the other half of `openRun`. */
+  const [run, setRun] = useState<string | null>(initialUrl?.run ?? null);
   // A short ticket link (`?ws=staple&issue=STA-12`, no `view`) still lands on its workspace.
   const [ws, setWsState] = useState(() => initialUrl?.ws ?? linkWorkspace(window.location.search));
   const [selection, setSelection] = useState<Selection | null>(null);
@@ -487,12 +490,21 @@ export function App() {
    */
   const goToView = useCallback((next: ViewName) => {
     setMilestoneFocus(null);
+    setRun(null);
     setView(next);
   }, []);
 
   const focusMilestone = useCallback((ref: string) => {
     setMilestoneFocus(ref);
+    setRun(null);
     setView("milestones");
+  }, []);
+
+  /** The Autopilot page, on one run or (null) on the page itself: lib/session.ts `openRun`. */
+  const openRun = useCallback((runId: string | null) => {
+    setMilestoneFocus(null);
+    setRun(runId);
+    setView("autopilot");
   }, []);
 
   /**
@@ -513,6 +525,7 @@ export function App() {
         ),
       );
       setMilestoneFocus(null);
+      setRun(null);
       setView("tree");
     },
     [ws, legacyFilters],
@@ -530,6 +543,7 @@ export function App() {
       const landing = afterWorkspaceSwitch({ view }, next, () => filters);
       setWsState(landing.ws);
       setMilestoneFocus(landing.focus);
+      setRun(landing.run);
       if (next) rememberWorkspace(next);
     },
     [view, filters],
@@ -552,8 +566,8 @@ export function App() {
    */
   const correcting = useRef(false);
   const shellState = useMemo<ShellUrlState>(
-    () => ({ ws, view, filters, focus: milestoneFocus }),
-    [ws, view, filters, milestoneFocus],
+    () => ({ ws, view, filters, focus: milestoneFocus, run }),
+    [ws, view, filters, milestoneFocus, run],
   );
   const planWorkspace = ws || (bootstrap.data?.workspaces.length === 1 || bootstrap.data?.mode === "workspace" ? bootstrap.data?.workspaces[0]?.slug : "") || "";
   useEffect(() => {
@@ -612,6 +626,7 @@ export function App() {
       setWsState(next.ws);
       setView(next.view);
       setMilestoneFocus(next.focus);
+      setRun(next.run);
       setFilterPrefs((current) => withFiltersForScope(current, sortScopeKey(next.ws, next.view), next.filters));
     };
     window.addEventListener("popstate", onPop);
@@ -656,6 +671,8 @@ export function App() {
       setView: goToView,
       milestoneFocus,
       focusMilestone,
+      run,
+      openRun,
       projects,
       focusProject,
       ws,
@@ -690,6 +707,8 @@ export function App() {
     goToView,
     milestoneFocus,
     focusMilestone,
+    run,
+    openRun,
     projects,
     focusProject,
     ws,
@@ -768,8 +787,6 @@ export function App() {
         <MountBoundary label="Settings" placement="overlay"><SettingsMount /></MountBoundary>
         {/* The project dialog (migration 009): opened from the rail's `+` and each project's gear. */}
         <MountBoundary label="Project settings" placement="overlay"><ProjectDialogMount /></MountBoundary>
-        {/* The autopilot run history: opened from the rail, the phone strip and a task's detail. */}
-        <MountBoundary label="Run history" placement="overlay"><RunHistoryMount /></MountBoundary>
         {/* `?join=<link>`: join a shared workspace from a link, on any page, even with no workspace. */}
         <LinkJoinMount hubMode={session.mode === "hub"} />
 

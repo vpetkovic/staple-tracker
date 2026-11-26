@@ -60,7 +60,6 @@ import { openProjectDialog, openSettings } from "@/lib/shell-events";
 import { usePendingJoinRequests } from "@/lib/pending-requests";
 import { isAllWorkspaces, scopeName, useSession, type ViewName } from "@/lib/session";
 import { useRuns } from "@/lib/runs";
-import { openRunHistory } from "@/lib/shell-events";
 import { RunCard } from "@/components/autopilot/RunBanner";
 import { cn } from "@/lib/utils";
 import { NAV_GROUPS, chooseRailWorkspace, projectCaption, railWorkspaces, type NavGroup, type NavItem } from "./nav-model";
@@ -409,7 +408,7 @@ function AutopilotSection({ onNavigate }: { onNavigate?: () => void }) {
           data-nav-run-history
           onClick={() => {
             onNavigate?.();
-            openRunHistory();
+            session.openRun(null);
           }}
           className={RAIL_ROW_CLASS}
         >

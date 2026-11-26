@@ -13,7 +13,7 @@
 import { Bot } from "lucide-react";
 import { scopeText } from "@/lib/run-text";
 import { useAutopilotMark, type AutopilotMark } from "@/lib/runs";
-import { openRunHistory } from "@/lib/shell-events";
+import { useOptionalSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
 
 /** The sentence the badge stands for: its tooltip and its accessible name. */
@@ -77,6 +77,7 @@ export function AutopilotBadge({
  * Nothing when no live run holds the task or works through it.
  */
 export function AutopilotNotice({ workspace, issueId, className }: { workspace: string; issueId: string; className?: string }) {
+  const session = useOptionalSession();
   const mark = useAutopilotMark(workspace, issueId);
   if (!mark) return null;
   const { run } = mark.entry;
@@ -90,7 +91,7 @@ export function AutopilotNotice({ workspace, issueId, className }: { workspace: 
       </span>
       <button
         type="button"
-        onClick={() => openRunHistory({ runId: run.id })}
+        onClick={() => session?.openRun(run.id)}
         className="rounded-sm text-body font-medium text-foreground underline underline-offset-2 hover:no-underline focus-ring pointer-coarse:min-h-11"
       >
         See the run
