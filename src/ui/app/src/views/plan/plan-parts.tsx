@@ -304,10 +304,10 @@ export function Chip({ children, tone }: { children: ReactNode; tone?: "amber" |
 }
 
 /** The server's percent, as it gives it; a whole 100 that is not complete (an idea left unsized) says so. */
-export function Progress({ percent, complete = true }: { percent: number; complete?: boolean }) {
+export function Progress({ percent, complete = true, className }: { percent: number; complete?: boolean; className?: string }) {
   const incomplete = percent === 100 && !complete;
   return (
-    <div className="mt-2 flex items-center gap-2" aria-label={`${percent}% done${incomplete ? ", incomplete" : ""}`}>
+    <div className={cn("mt-2 flex items-center gap-2", className)} aria-label={`${percent}% done${incomplete ? ", incomplete" : ""}`}>
       <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
         <div className="h-full rounded-full bg-primary" style={{ width: `${percent}%` }} />
       </div>

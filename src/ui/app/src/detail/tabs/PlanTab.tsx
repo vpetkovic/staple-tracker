@@ -25,7 +25,7 @@ import { useSession } from "@/lib/session";
 import { useResource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
 import { dayLabel, descendantsOf } from "@/views/plan/plan-model";
-import { Flag, SegmentedBar, StateGlyph } from "@/views/plan/plan-parts";
+import { Flag, Progress, StateGlyph } from "@/views/plan/plan-parts";
 import { offers } from "../plain-actions";
 import { STATE_WORDS, onScaffoldRequest, planRecordOf, usePlanWrite, type PlanWrite } from "../plan-record";
 import { EmptyValue, PropertyList, PropertyRow } from "../PropertyGrid";
@@ -345,7 +345,8 @@ function Work({ record, write }: { record: IdeaDetailData; write: PlanWrite }) {
                     {link.title}
                   </span>
                   <span className="staple-plan-wide truncate text-label text-text-tertiary">{link.status.replace(/_/g, " ")}</span>
-                  <SegmentedBar units={{ done: link.doneLeaves, open: link.leaves - link.doneLeaves, planned: 0 }} percent={link.percent} complete className="staple-plan-link-bar mt-0" />
+                  {/* The server's percent: a cancelled issue has no leaves to split, and still reads done. */}
+                  <Progress percent={link.percent} className="staple-plan-link-bar mt-0" />
                 </>
               )}
               {unlinks ? (

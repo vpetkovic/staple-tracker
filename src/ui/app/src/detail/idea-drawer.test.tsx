@@ -308,6 +308,17 @@ describe("the properties and the work", () => {
     expect(html).toContain('data-plan-unlink="LAR-12"');
   });
 
+  it("draws each link's bar from the server's percent, so cancelled work with no leaves still reads full", () => {
+    const shipped = idea({ state: "shipped", stage: "shipped", linkCount: 1, percent: 100 });
+    const rec = record(shipped, {
+      linked: [{ missing: false, id: "i2", identifier: "LAR-13", title: "Dropped work", kind: "task", status: "cancelled", resolved: true, leaves: 0, doneLeaves: 0, progress: 1, percent: 100, startedAt: null, completedAt: null, milestone: null }],
+    });
+    const html = tab(rec);
+    const link = html.slice(html.indexOf('data-plan-link="LAR-13"'), html.indexOf("</li>", html.indexOf('data-plan-link="LAR-13"')));
+    expect(link).toContain('aria-label="100% done"');
+    expect(link).toContain("width:100%");
+  });
+
   it("keeps the work near the end for an idea being shaped, after the decisions", () => {
     const rec = record(idea({ actions: [...EDITS, act("adopt")] }));
     const html = tab(rec);
