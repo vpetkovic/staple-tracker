@@ -229,14 +229,30 @@ export function railKeyAction(event: KeyLike, context: RailKeyContext): RailKeyA
   return "toggle";
 }
 
+/** What the shell knows when the rail appears or goes away. */
+export interface RailFocusChange {
+  /** Was the rail on screen before, and is it now (the desk column, or the phone's sheet)? */
+  wasVisible: boolean;
+  visible: boolean;
+  /** The rail is the phone's sheet, which is modal, rather than the desk column. */
+  overlay: boolean;
+  /** Focus is on nothing (`<body>`): the control that had it went away with the change. */
+  focusLost: boolean;
+}
+
 /**
- * Where focus goes when the sheet's open state changes. Opening: into the rail, so the
- * keyboard lands inside it rather than behind it. Closing: back to the "Show navigation"
- * button that opened it, rather than dropping to `<body>`. Nothing when nothing changed.
+ * Where focus goes when the rail appears or goes away.
+ *
+ * The sheet is modal, so opening it always moves focus into the rail. Everything else only
+ * catches focus that would otherwise fall to `<body>`: hiding the rail from inside it lands
+ * on the "Show navigation" button, and showing it from that button (which goes away)
+ * lands in the rail. A `[` pressed while working elsewhere on the page moves nothing.
  */
-export function overlayFocusTarget(previouslyOpen: boolean, open: boolean): "rail" | "show-navigation" | null {
-  if (previouslyOpen === open) return null;
-  return open ? "rail" : "show-navigation";
+export function railFocusTarget(change: RailFocusChange): "rail" | "show-navigation" | null {
+  if (change.wasVisible === change.visible) return null;
+  if (change.visible && change.overlay) return "rail";
+  if (!change.focusLost) return null;
+  return change.visible ? "rail" : "show-navigation";
 }
 
 // ---------------------------------------------------------------- persistence
