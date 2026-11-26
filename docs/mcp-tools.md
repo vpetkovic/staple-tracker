@@ -38,7 +38,7 @@ The loop an agent follows, described in
 | `inbox` | What is ready, waiting on a person, or blocked, in pickup order | `staple inbox` | no |
 | `attention` | The work waiting on a person, as rows: gates, resubmitted gates, person-owned blockers, reviews, pull requests with failing checks, tickets made ready by closed cross-workspace blockers, stopped runs, silent claims and sync conflicts. Each row names its workspace, age and one action. `hub: true` covers every workspace | `staple attention` | no |
 | `list_tasks` | List tickets by status, kind, assignee or text | `staple ls` | no |
-| `get_task` | One ticket in full: claim, time, gate, blockers, attempts, and file metadata. `foundIn` names the ticket a finding was filed from, and `findings` lists what was found in this one; each carries `disposition`, `blocker` or `follow-up` | `staple show` | no |
+| `get_task` | One ticket in full: claim, time, gate, blockers, attempts, and file metadata. `foundIn` names the ticket a finding was filed from, and `findings` lists what was found in this one; each carries `disposition`, `blocker` or `follow-up`. On a parent, `subtreePullRequests` lists the pull requests of the parent and all its descendants, each once with `own` and the `tickets` it is linked on | `staple show` | no |
 | `create_task` | File a ticket, with parent, blockers and estimate. For a review finding, `found_in` names the ticket it was found in, and `blocks` (`true`, or a parent, ancestor or milestone of that ticket) blocks it in the same write | `staple new --found-in` | yes |
 | `update_task` | Change status or fields; `status: "done"` finishes it. `acceptance_criteria` replaces the criteria, `remove_criteria` (1-based positions) and `add_criteria` edit them in place (answers `criteriaChange`, naming any mark it cleared); `parent` moves the ticket and its subtree, null to the top level (answers `parentChange`) | `staple status`, `staple done`, `staple criteria`, `staple move` | yes |
 | `checkout_task` | Claim a ticket and start it | `staple start` | yes |
@@ -170,7 +170,7 @@ an agent calls them.
 | Tool | What it does | View | Writes |
 |---|---|---|---|
 | `show_about` | Which staple this is: version, workspace, tickets by status, the views it has | `ui://staple/about` | no |
-| `show_ticket` | One ticket as a card: status, criteria, gate, attempt, branch, time, and a link to it | `ui://staple/ticket` | no |
+| `show_ticket` | One ticket as a card: status, criteria, gate, attempt, branch, time, a parent's subtree pull requests, and a link to it | `ui://staple/ticket` | no |
 | `show_progress` | One ticket's current attempt: its milestones, time against the estimate, last activity | `ui://staple/progress` | no |
 | `show_queue` | The pickup queue in lanes: Ready in pickup order, Gated with the owner, In progress with who holds what | `ui://staple/queue` | no |
 

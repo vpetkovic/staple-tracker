@@ -139,6 +139,8 @@ describe("the pane cannot drift from the tool", () => {
       // The certified plan of a parent, in lockstep with get_task.
       "planSummary",
       "queuedBy",
+      // A parent's pull requests and its descendants' (this ticket has a child), in lockstep with get_task.
+      "subtreePullRequests",
       // STA-81, and the same lockstep story as `claim`: both surfaces spread the
       // SAME store.detailTiming() call, which is why the deep-equality tests
       // above went on passing while this inventory needed a deliberate edit.

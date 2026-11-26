@@ -1287,6 +1287,8 @@ describe("tool response shapes (31/31)", () => {
           timing: { estimatedSeconds: null, elapsedSeconds: null },
           url: `http://127.0.0.1:4400/?ws=${WS}&issue=CON-1`,
           actions: { approve: false, requestChanges: false },
+          // CON-1 is a parent with no pull requests in its subtree.
+          subtreePullRequests: [],
         },
       }),
     );
@@ -1540,6 +1542,8 @@ describe("tool response shapes (31/31)", () => {
       // The certified plan of a parent: its one child is an unplanned unit, so labor and
       // path are null with a reason, never 0.
       planSummary: UNPLANNED_CON1,
+      // A parent's pull requests and its descendants': CON-1 has a child and no pull request.
+      subtreePullRequests: [],
     });
   });
 

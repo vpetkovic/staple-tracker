@@ -92,6 +92,25 @@ and the connection's status in Settings shows the same. A repository outside the
 mapping is never read, and a branch of the same name in a fork does not count. Check results are
 GitHub check runs (`gh api .../check-runs`); legacy commit statuses are not read.
 
+### A parent's pull requests
+
+A parent, an epic included, also shows every pull request linked on its descendants, so a
+feature is reviewed from its parent without opening each child. Its own come first, then its
+descendants' in tree order. A pull request linked on two tickets of the subtree is listed once
+and names both. Done and cancelled children count, because a merged pull request on a finished
+child is part of the feature's history.
+
+- The parent's row badge counts the whole set, and its tooltip names the tickets of each one.
+- The detail's **Pull requests** row keeps the parent's own chips and follows them with each
+  descendant's, each naming the tickets it is linked on. Clicking a ticket opens it. On a phone
+  the set is under **More details**.
+- `staple show <parent>` prints the set under `pull requests (this ticket and its descendants):`.
+  `staple show --json`, MCP `get_task` and `/api/agent-context` carry it as
+  `subtreePullRequests`: each pull request with `own` and `tickets`. `show_ticket` has the
+  same field, and on a ticket with no children it is null.
+- A ticket with no children is unchanged and has no `subtreePullRequests`. A parent with no
+  pull requests in its subtree shows nothing in that slot.
+
 ## Connect Linear
 
 Create a personal API key in Linear's **Settings → Security & access** with read access to the
