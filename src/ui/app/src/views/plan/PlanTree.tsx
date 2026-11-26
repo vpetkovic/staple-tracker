@@ -35,12 +35,12 @@ export function TreeHeader({ horizon, className }: { horizon: HorizonData; class
  * The tree's rows. `wrap` lets the lens frame a top row as its card (its menu and selection);
  * `drag` lets a row be dragged to another column, on the desk only, never a reserved or dimmed row.
  */
-export function PlanTree({ rows, opener, drag = false, selected = null, wrap }: { rows: TreeRow[]; opener: TreeOpener; drag?: boolean; selected?: string | null; wrap?: (row: TreeRow, node: ReactNode) => ReactNode }) {
+export function PlanTree({ rows, opener, drag = false, unfold = false, selected = null, wrap }: { rows: TreeRow[]; opener: TreeOpener; drag?: boolean; unfold?: boolean; selected?: string | null; wrap?: (row: TreeRow, node: ReactNode) => ReactNode }) {
   const desk = useIsDesk();
   return (
     <ul className="m-0 flex list-none flex-col gap-2 p-0" data-plan-tree="">
       {rows.map((row) => {
-        const node = <TreeNode row={row} opener={opener} drag={drag && desk} desk={desk} selected={selected} depth={0} />;
+        const node = <TreeNode row={row} opener={opener} drag={drag && desk} desk={desk || unfold} selected={selected} depth={0} />;
         return <li key={row.idea.id}>{wrap ? wrap(row, node) : node}</li>;
       })}
     </ul>

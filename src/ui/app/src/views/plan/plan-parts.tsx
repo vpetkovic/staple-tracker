@@ -3,13 +3,59 @@
  * header are drawn, the same in every lens, the drawer and the Milestones view. Presentation
  * only: every count, unit, percent, state and flag is the server's.
  */
-import type { ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type FormEvent, type ReactNode, type RefObject } from "react";
+import { Input } from "@/components/ui/input";
 import type { HorizonData, IdeaData, IdeaState, PlanUnits } from "@/lib/plan-types";
 import { cn } from "@/lib/utils";
 import { STATE_WORDS } from "@/detail/plan-record";
 import { ShippedCheck, ShippedMark } from "@/detail/ShippedMark";
 import { dayIndex, dayLabel, horizonDone, isShipped } from "./plan-model";
 import { percentText, treeHeader } from "./plan-tree";
+
+/**
+ * The Plan container's widths where its layout changes (build spec, "Widths"): under `phone` the
+ * toolbar takes its phone form, under `compact` rows go to two lines and Ideas and the Timeline
+ * stack, under `medium` the Planned column drops, under `search` the filter folds to a button.
+ * CSS switches on them with container queries on `@container/plan`; JS that must know measures.
+ */
+export const PLAN_WIDTH = { phone: 620, compact: 760, medium: 1040, search: 1100 } as const;
+
+/** An element's own width, kept current; null until it has been laid out (and in a string render). */
+export function useElementWidth<T extends HTMLElement>(): { ref: RefObject<T | null>; width: number | null } {
+  const ref = useRef<T>(null);
+  const [width, setWidth] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    const measure = () => setWidth(element.clientWidth);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  return { ref, width };
+}
+
+/** The capture field: Enter captures a raw idea and clears it for the next one. Its form carries `data-plan-capture` wherever it sits. */
+export function CaptureForm({ onCapture, autoFocus, className, inputClassName }: { onCapture: (title: string) => Promise<boolean>; autoFocus?: boolean; className?: string; inputClassName?: string }) {
+  const [title, setTitle] = useState("");
+  const [busy, setBusy] = useState(false);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    const clean = title.trim();
+    if (!clean || busy) return;
+    setBusy(true);
+    const ok = await onCapture(clean);
+    setBusy(false);
+    if (ok) setTitle("");
+  };
+  return (
+    <form className={className} onSubmit={submit} data-plan-capture>
+      {/* Read-only, not disabled, while it writes: the field keeps focus for the next idea. */}
+      <Input value={title} onChange={(event) => setTitle(event.target.value)} readOnly={busy} aria-busy={busy || undefined} placeholder="Capture an idea… (Enter)" aria-label="Capture an idea" autoFocus={autoFocus} className={cn("h-9", inputClassName)} />
+    </form>
+  );
+}
 
 /**
  * An idea's state as a 14px picture: raw a dotted ring, exploring a dashed amber ring with a dot,

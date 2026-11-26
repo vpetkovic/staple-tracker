@@ -31,9 +31,13 @@ export interface BoardProps {
   selected: string | null;
   currentColumn?: string;
   onColumn?: (column: string) => void;
+  /** A focus or filter text is on: fold nothing away, so every match shows. */
+  filtering?: boolean;
+  /** Captures a raw idea; the Ideas lens draws its field at the top of Raw. */
+  capture?: (title: string) => Promise<boolean>;
 }
 
-export function Board({ columns, hint, action, footer, currentColumn, onColumn, column }: Pick<BoardProps, "currentColumn" | "onColumn"> & { columns: BoardColumn[]; hint: string; action?: ReactNode; footer?: ReactNode; column: (column: BoardColumn, desk: boolean) => ReactNode }) {
+export function Board({ columns, footer, currentColumn, onColumn, column }: Pick<BoardProps, "currentColumn" | "onColumn"> & { columns: BoardColumn[]; footer?: ReactNode; column: (column: BoardColumn, desk: boolean) => ReactNode }) {
   const desk = useIsDesk();
   const [localColumn, setLocalColumn] = useState(columns[0]?.key ?? "");
   const current = currentColumn ?? localColumn;
@@ -45,10 +49,6 @@ export function Board({ columns, hint, action, footer, currentColumn, onColumn, 
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex flex-wrap items-center gap-2 px-gutter pt-2">
-        <p className="min-w-0 flex-1 text-caption text-text-tertiary">{hint}</p>
-        {action}
-      </div>
       {desk ? null : (
         <div role="tablist" aria-label="Column" className="flex gap-1.5 overflow-x-auto px-gutter py-2" data-plan-column-switcher>
           {columns.map((entry) => {

@@ -24,18 +24,17 @@ export function HorizonsBoard(props: BoardProps) {
       columns={columns}
       currentColumn={props.currentColumn}
       onColumn={props.onColumn}
-      hint="Delivery: shaped, started and shipped work by horizon. Drag a ready card into a horizon to schedule it, or back to Unscheduled. A horizon with a date is a release line."
-      action={<AddHorizon write={props.write} />}
       column={(column, desk) => <HorizonColumn key={column.key} {...props} column={column} columns={columns} desk={desk} />}
     />
   );
 }
 
-function HorizonColumn({ plan, column, columns, write, desk, onOpen, selected }: BoardProps & { column: BoardColumn; columns: BoardColumn[]; desk: boolean }) {
+function HorizonColumn({ plan, column, columns, write, desk, onOpen, selected, filtering = false }: BoardProps & { column: BoardColumn; columns: BoardColumn[]; desk: boolean }) {
   const tree = planTree({ horizonId: column.horizon?.id ?? null, ideas: plan.ideas, horizons: plan.horizons });
   const done = column.horizon ? horizonDone(column.horizon) : false;
   const [showDone, setShowDone] = useState(false);
-  const folded = done && !showDone;
+  // A done horizon starts folded, unless a filter is on: then every match shows.
+  const folded = done && !showDone && !filtering;
   return (
     <ColumnFrame plan={plan} column={column} write={write} desk={desk}>
       {column.horizon ? (
@@ -68,6 +67,7 @@ function HorizonColumn({ plan, column, columns, write, desk, onOpen, selected }:
           rows={tree}
           opener={{ onOpen }}
           drag
+          unfold={filtering}
           selected={selected}
           wrap={(row, node) => (row.reserved ? node : <DeliveryCard row={row} column={column} columns={columns} write={write} onOpen={onOpen} selected={selected}>{node}</DeliveryCard>)}
         />
@@ -275,14 +275,14 @@ export function AddHorizon({ write }: { write: Write }) {
   };
   if (!open) {
     return (
-      <Button variant="outline" size="sm" className="min-h-9" onClick={() => setOpen(true)} data-plan-add-horizon>
+      <Button variant="outline" size="sm" className="h-8" onClick={() => setOpen(true)} data-plan-add-horizon>
         <Plus aria-hidden />
         Horizon
       </Button>
     );
   }
   return (
-    <form onSubmit={submit} className="flex w-full flex-wrap items-center gap-2 md:w-auto" data-plan-add-horizon-form>
+    <form onSubmit={submit} className="flex flex-wrap items-center gap-2 @max-[760px]/plan:w-full" data-plan-add-horizon-form>
       <Input value={name} autoFocus onChange={(event) => setName(event.target.value)} placeholder="Name, e.g. Q2" aria-label="New horizon name" className="h-9 w-40" />
       <input type="date" value={date} onChange={(event) => setDate(event.target.value)} aria-label="New horizon date (optional)" className="h-9 rounded-md border bg-field px-2 text-label" />
       <Button type="submit" size="sm">Add</Button>

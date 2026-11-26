@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 import { planActionItems, type PlanItem } from "@/detail/plain-actions";
 import { ShippedMark } from "@/detail/ShippedMark";
 import { Board, ColumnFrame, MoveMenu, openOnKey, type BoardProps, type Write } from "./plan-board";
-import { Amber, Chip, Flag, HorizonChip, StateGlyph } from "./plan-parts";
+import { Amber, CaptureForm, Chip, Flag, HorizonChip, StateGlyph } from "./plan-parts";
 import { columnEntries, dayLabel, droppedIdeas, horizonOf, ideasColumns, isShipped, isStarted, riskOf, riskWords, type BoardColumn, type BoardEntry } from "./plan-model";
 
 export function IdeasBoard(props: BoardProps) {
@@ -22,14 +22,13 @@ export function IdeasBoard(props: BoardProps) {
       columns={columns}
       currentColumn={props.currentColumn}
       onColumn={props.onColumn}
-      hint="Thinking: ideas mature from raw to exploring. Mark one shaped, from its menu or its Plan tab, and it moves to Horizons, ready to schedule."
       footer={dropped.length > 0 ? <DroppedShelf ideas={dropped} write={props.write} /> : null}
       column={(column, desk) => <IdeaColumn key={column.key} {...props} column={column} columns={columns} desk={desk} />}
     />
   );
 }
 
-function IdeaColumn({ plan, column, columns, write, desk, onOpen, selected }: BoardProps & { column: BoardColumn; columns: BoardColumn[]; desk: boolean }) {
+function IdeaColumn({ plan, column, columns, write, desk, onOpen, selected, filtering, capture }: BoardProps & { column: BoardColumn; columns: BoardColumn[]; desk: boolean }) {
   const entries = columnEntries(plan, column);
   return (
     <ColumnFrame plan={plan} column={column} write={write} desk={desk}>
@@ -40,8 +39,9 @@ function IdeaColumn({ plan, column, columns, write, desk, onOpen, selected }: Bo
         </div>
         <div className="text-caption text-text-tertiary">{column.hint}</div>
       </header>
+      {column.key === "m:raw" && capture ? <CaptureForm onCapture={capture} className="px-2 pt-2" /> : null}
       <div data-plan-scroll-key={column.key} className={cn("flex flex-col gap-2 p-2", desk && "min-h-0 overflow-y-auto")}>
-        {entries.map((entry) => <IdeaCard key={entry.idea.id} plan={plan} entry={entry} column={column} columns={columns} write={write} onOpen={onOpen} selected={selected} />)}
+        {entries.map((entry) => <IdeaCard key={entry.idea.id} plan={plan} entry={entry} column={column} columns={columns} write={write} onOpen={onOpen} selected={selected} filtering={filtering} />)}
         {entries.length === 0 ? <div className="rounded-md border border-dashed px-3 py-4 text-center text-caption text-text-tertiary">Nothing here yet</div> : null}
       </div>
     </ColumnFrame>
@@ -54,9 +54,11 @@ export function shelfRestore(idea: IdeaData): PlanItem | null {
 }
 
 /** A card on the Ideas lens: a record still being thought, its sub-ideas folded under it. */
-function IdeaCard({ plan, entry, column, columns, write, onOpen, selected }: BoardProps & { entry: BoardEntry; column: BoardColumn; columns: BoardColumn[] }) {
+function IdeaCard({ plan, entry, column, columns, write, onOpen, selected, filtering = false }: BoardProps & { entry: BoardEntry; column: BoardColumn; columns: BoardColumn[] }) {
   const { idea, nested, descendants, parentTitle } = entry;
-  const [expanded, setExpanded] = useState(false);
+  const [opened, setExpanded] = useState(false);
+  // While a filter is on, a match under a parent shows without a click.
+  const expanded = opened || filtering;
   const horizon = horizonOf(plan, idea);
   const rollup = riskWords(riskOf(descendants), true);
   const elsewhere = descendants.length - nested.length;

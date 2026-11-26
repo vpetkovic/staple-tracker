@@ -1,36 +1,45 @@
 /**
  * The Plan destination (design/plan.md): ideas and horizons above the tracker.
  *
- * Three lenses on the same ideas, one segmented control: Ideas (columns by maturity, quick
- * capture), Horizons (Unscheduled and each horizon in order) and Timeline (planned, baseline
- * and actual windows on a month axis). Any card or row opens the idea in the shared detail
+ * Three lenses on the same ideas under one toolbar: Ideas (columns by maturity, capture at the
+ * top of Raw), Horizons (Unscheduled and each horizon in order) and Timeline (planned, baseline
+ * and actual windows on a month axis). The toolbar's "Show only" focus and filter narrow every
+ * lens alike, keeping each match's parents. Any card or row opens the idea in the shared detail
  * drawer, the same one every issue opens in; the drawer chooses its tabs and actions by the
- * record's kind and lifecycle state.
+ * record's kind and lifecycle state. The layout follows the Plan container's width
+ * (`@container/plan`), not the viewport's.
  *
  * The page is the person: the server records every write here as the person's, which is what
  * lets it set maturity, horizons, dates and the baseline that an agent may not.
  */
-import { Lightbulb } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
+import { Lightbulb, Plus, Search, X } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { GuardRefusal } from "@/components/GuardRefusal";
 import { PlainCard } from "@/components/plain/PlainCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { DetailTabStrip } from "@/detail/tabs/DetailTabStrip";
 import { useIsDesk } from "@/lib/use-media";
 import { afterHistorySettles, replaceUrl } from "@/lib/back-to-close";
 import { personActor } from "@/detail/parts/person";
 import { getPlan, planWrite, type AuthError } from "@/lib/api";
-import type { PlanData } from "@/lib/plan-types";
+import type { IdeaData, PlanData } from "@/lib/plan-types";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
 import { useSession } from "@/lib/session";
 import { useResource } from "@/lib/useStaple";
-import { ErrorState, LoadingState } from "@/views/ViewChrome";
+import { cn } from "@/lib/utils";
+import { ErrorState } from "@/views/ViewChrome";
 import { workspaceScope } from "@/views/workspace-scope";
-import { HorizonsBoard, IdeasBoard, type Write } from "./PlanBoards";
+import { AddHorizon, HorizonsBoard } from "./HorizonsLens";
+import { IdeasBoard } from "./IdeasLens";
 import { PlanTimeline } from "./PlanTimeline";
-import { LENSES, type Lens } from "./plan-model";
+import type { BoardProps, Write } from "./plan-board";
+import { focusCounts, focusing, focusPlan, type PlanFocus } from "./plan-focus";
+import { inHorizonsLens, inIdeasLens, LENSES, type Lens } from "./plan-model";
+import { CaptureForm, PLAN_WIDTH, useElementWidth } from "./plan-parts";
 import { loadPlanMemory, readPlanLens, savePlanMemory, withPlanLens } from "./plan-memory";
 
 export function PlanView({ onAuthError }: { onAuthError: (error: AuthError) => void }) {
@@ -56,6 +65,8 @@ function WorkspacePlan({ workspace, onAuthError }: { workspace: string; onAuthEr
   const resource = useResource(load, [ws, session.version], onAuthError);
   const [written, setWritten] = useState<PlanData | null>(null);
   const [refusal, setRefusal] = useState<Refusal | null>(null);
+  // View state only: it starts again with each workspace (this component is keyed by it) and is not remembered.
+  const [focus, setFocus] = useState<PlanFocus>("all");
   const memory = useRef(loadPlanMemory(workspace));
   const [lens, setLens] = useState<Lens>(() => {
     const params = new URLSearchParams(window.location.search);
@@ -141,7 +152,7 @@ function WorkspacePlan({ workspace, onAuthError }: { workspace: string; onAuthEr
   );
 
   const plan = written ?? resource.data;
-  if (!plan) return resource.error ? <ErrorState error={resource.error} /> : <LoadingState />;
+  if (!plan) return resource.error ? <ErrorState error={resource.error} /> : <PlanSkeleton lens={lens} />;
   if (!plan.enabled) return <PlanOff workspace={workspace} onTurnOn={() => void write("enable", {})} refusal={refusal} />;
 
   // An idea opens by its id (it has no number), a promoted one by its number, both in the shared drawer.
@@ -151,28 +162,76 @@ function WorkspacePlan({ workspace, onAuthError }: { workspace: string; onAuthEr
     session.open(workspace, idea?.identifier ?? horizon?.identifier ?? id);
   };
   const selected = session.selection && session.selection.workspace === workspace ? (plan.ideas.find((idea) => idea.id === session.selection!.ref || idea.identifier === session.selection!.ref)?.id ?? null) : null;
-  const query = session.filters.text.trim().toLowerCase();
-  const filtered = query ? { ...plan, ideas: plan.ideas.filter(idea => idea.title.toLowerCase().includes(query)) } : plan;
-  const board = { plan: filtered, write, onOpen: open, selected, currentColumn: column, onColumn: (next: string) => {
-    setColumn(next);
-    memory.current.column[lens] = next;
-    savePlanMemory(workspace, memory.current);
-  } };
+  const text = session.filters.text;
+  const setText = (next: string) => session.setFilters({ ...session.filters, text: next });
+  // Capture never moves the page: the idea lands in Raw, and the toolbar offers a way there.
+  const capture = (title: string) => write("capture", { title });
   return (
-    <div ref={frame} className="relative flex h-full min-h-0 flex-col" data-plan-view={workspace} onScrollCapture={event => rememberScroll(event.target as HTMLElement)}>
+    <div ref={frame} className="@container/plan relative flex h-full min-h-0 flex-col" data-plan-view={workspace} onScrollCapture={event => rememberScroll(event.target as HTMLElement)}>
       <Tabs value={lens} onValueChange={value => chooseLens(value as Lens)} className="min-h-0 flex-1 gap-0">
-      <PlanBar lens={lens} onCapture={(title) => { chooseLens("ideas"); return write("capture", { title }); }} />
+      <PlanBar
+        lens={lens}
+        plan={plan}
+        focus={focus}
+        onFocus={setFocus}
+        text={text}
+        onText={setText}
+        onCapture={capture}
+        onViewIdeas={() => chooseLens("ideas")}
+        tools={lens === "horizons" ? <AddHorizon write={write} /> : null}
+      />
       {refusal ? (
         <div className="px-gutter pt-2" data-plan-refusal>
-          <GuardRefusal refusal={refusal} />
+          <GuardRefusal refusal={refusal} onDismiss={() => setRefusal(null)} />
         </div>
       ) : null}
       <TabsContent value={lens} className="min-h-0 flex-1 overflow-hidden">
-        {lens === "ideas" ? <IdeasBoard {...board} /> : lens === "horizons" ? <HorizonsBoard {...board} /> : <PlanTimeline {...board} />}
+        <PlanLens
+          lens={lens}
+          plan={plan}
+          focus={focus}
+          text={text}
+          onClear={() => { setFocus("all"); setText(""); }}
+          write={write}
+          onOpen={open}
+          selected={selected}
+          capture={capture}
+          currentColumn={column}
+          onColumn={(next: string) => {
+            setColumn(next);
+            memory.current.column[lens] = next;
+            savePlanMemory(workspace, memory.current);
+          }}
+        />
       </TabsContent>
       </Tabs>
     </div>
   );
+}
+
+/** What each lens draws, so a narrowed plan with nothing for it says so instead of showing empty columns. */
+const LENS_HOLDS: Record<Lens, (idea: IdeaData, plan: PlanData) => boolean> = {
+  ideas: (idea, plan) => inIdeasLens(plan, idea) || idea.state === "dropped",
+  horizons: (idea) => idea.state !== "dropped" && (inHorizonsLens(idea) || idea.carriedBy !== null),
+  timeline: (idea) => idea.maturity !== "dropped",
+};
+
+/** The active lens, drawn from the plan narrowed to the focus and the filter text. */
+export function PlanLens({ lens, plan, focus, text, onClear, ...board }: Omit<BoardProps, "filtering"> & { lens: Lens; focus: PlanFocus; text: string; onClear: () => void }) {
+  const shown = focusPlan(plan, focus, text);
+  const filtering = focusing(focus, text);
+  if (filtering && !shown.ideas.some((idea) => LENS_HOLDS[lens](idea, shown))) {
+    return (
+      <div className="flex flex-col items-center gap-3 px-gutter py-12 text-center" data-plan-nothing>
+        <p className="m-0 text-body text-text-secondary">Nothing here matches.</p>
+        <Button variant="outline" size="sm" onClick={onClear} data-plan-clear-filter>
+          Clear filter
+        </Button>
+      </div>
+    );
+  }
+  const props = { ...board, plan: shown, filtering };
+  return lens === "ideas" ? <IdeasBoard {...props} /> : lens === "horizons" ? <HorizonsBoard {...props} /> : <PlanTimeline {...props} />;
 }
 
 function PlanOff({ workspace, onTurnOn, refusal }: { workspace: string; onTurnOn: () => void; refusal: Refusal | null }) {
@@ -202,29 +261,217 @@ function PlanOff({ workspace, onTurnOn, refusal }: { workspace: string; onTurnOn
   );
 }
 
-function PlanBar({ lens, onCapture }: { lens: Lens; onCapture: (title: string) => Promise<boolean> }) {
-  const session = useSession();
-  const sheet = !useIsDesk();
-  const [title, setTitle] = useState("");
-  const [busy, setBusy] = useState(false);
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    const clean = title.trim();
-    if (!clean || busy) return;
-    setBusy(true);
-    const ok = await onCapture(clean);
-    setBusy(false);
-    if (ok) {
-      setTitle("");
-    }
-  };
+const PILLS: ReadonlyArray<{ id: Exclude<PlanFocus, "all">; label: string; dot: string }> = [
+  { id: "you", label: "Needs you", dot: "bg-[color:var(--status-task-in_progress)]" },
+  { id: "late", label: "Late", dot: "bg-destructive" },
+  { id: "notStarted", label: "Not started", dot: "bg-[color:var(--status-task-todo)]" },
+];
+
+/**
+ * The one toolbar: lens tabs with their counts, the "Show only" pills, the lens's own tools, the
+ * filter and, outside Ideas (whose capture sits at the top of Raw), the capture button.
+ */
+export function PlanBar({ lens, plan, focus, onFocus, text, onText, onCapture, onViewIdeas, tools }: {
+  lens: Lens;
+  plan: PlanData;
+  focus: PlanFocus;
+  onFocus: (focus: PlanFocus) => void;
+  text: string;
+  onText: (text: string) => void;
+  onCapture: (title: string) => Promise<boolean>;
+  onViewIdeas: () => void;
+  tools: ReactNode;
+}) {
+  const desk = useIsDesk();
+  const { ref, width } = useElementWidth<HTMLDivElement>();
+  // The segmented control under the phone width of the Plan container; before it is measured, the shell's.
+  const sheet = width === null ? !desk : width < PLAN_WIDTH.phone;
+  const counts = focusCounts(plan);
+  const lenses = LENSES.map((item) => ({ ...item, count: item.id === "ideas" ? plan.ideas.filter((idea) => inIdeasLens(plan, idea)).length : item.id === "horizons" ? plan.horizons.length : null }));
+  // A pill with nothing to show is left out, unless it is the one on: it stays so it can be turned off.
+  const pills = PILLS.filter((pill) => counts[pill.id] > 0 || focus === pill.id);
   return (
-    <div className="flex flex-wrap items-center gap-2 border-b px-gutter py-2" data-plan-bar>
-      <DetailTabStrip sheet={sheet} label="Plan lens" items={LENSES} active={lens} marker="data-plan-lens" />
-      <Input aria-label="Filter ideas" placeholder="Filter ideas…" className="h-9 w-40" value={session.filters.text} onChange={event => session.setFilters({ ...session.filters, text: event.target.value })} />
-      <form className="min-w-0 flex-1 basis-56" onSubmit={submit} data-plan-capture>
-        <Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Capture an idea… (Enter)" aria-label="Capture an idea" className="h-9" disabled={busy} />
-      </form>
+    <div ref={ref} className="flex flex-wrap items-center gap-x-2 gap-y-1.5 border-b px-gutter py-2" data-plan-bar>
+      <div className="min-w-0 @max-[620px]/plan:basis-full">
+        <DetailTabStrip sheet={sheet} label="Plan lens" items={lenses} active={lens} marker="data-plan-lens" />
+      </div>
+      {pills.length > 0 ? (
+        <div role="group" aria-label="Show only" className="flex min-w-0 items-center gap-1.5 [scrollbar-width:none] @max-[620px]/plan:flex-1 @max-[620px]/plan:overflow-x-auto @min-[620px]/plan:ml-1 @min-[620px]/plan:border-l @min-[620px]/plan:pl-3">
+          {pills.map((pill) => {
+            const on = focus === pill.id;
+            return (
+              <button
+                key={pill.id}
+                type="button"
+                aria-pressed={on}
+                data-plan-focus={pill.id}
+                onClick={() => onFocus(on ? "all" : pill.id)}
+                className={cn(
+                  "focus-ring-inset inline-flex h-[26px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 text-label text-text-secondary transition-colors hover:bg-surface-hover @max-[620px]/plan:h-8 @max-[620px]/plan:text-body",
+                  on && "border-primary bg-primary text-primary-foreground hover:bg-primary",
+                )}
+              >
+                <span aria-hidden className={cn("size-1.5 rounded-full", pill.dot)} />
+                {pill.label}
+                <span className="font-semibold tabular-nums">{counts[pill.id]}</span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+      <span aria-hidden className="ms-auto" />
+      {tools}
+      <PlanSearch text={text} onText={onText} />
+      {lens === "ideas" ? null : <CapturePopover onCapture={onCapture} onViewIdeas={onViewIdeas} />}
     </div>
   );
 }
+
+/** The filter: a field on a wide toolbar, a button that opens it on a narrower one, its own row on a phone. */
+function PlanSearch({ text, onText }: { text: string; onText: (text: string) => void }) {
+  const [opened, setOpened] = useState(false);
+  const input = useRef<HTMLInputElement>(null);
+  // A filter that is on is never hidden behind the button.
+  const open = opened || text !== "";
+  const toggle = () => {
+    if (open) {
+      onText("");
+      setOpened(false);
+      return;
+    }
+    setOpened(true);
+    requestAnimationFrame(() => input.current?.focus());
+  };
+  return (
+    <>
+      <div className={cn("relative w-[200px] shrink-0", open ? "@max-[1100px]/plan:w-[180px] @max-[620px]/plan:order-last @max-[620px]/plan:w-full" : "@max-[1100px]/plan:hidden")}>
+        <Search aria-hidden className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-text-tertiary" />
+        <Input
+          ref={input}
+          aria-label="Filter the plan"
+          placeholder="Filter the plan…"
+          className="h-8 pl-8 @max-[620px]/plan:h-[38px] @max-[620px]/plan:text-base"
+          value={text}
+          onChange={(event) => onText(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && text !== "") onText("");
+          }}
+        />
+      </div>
+      <Button variant="outline" size="icon" className="hidden size-8 @max-[1100px]/plan:inline-flex" aria-label={open ? "Close the filter" : "Filter the plan"} aria-expanded={open} onClick={toggle} data-plan-search-toggle>
+        {open ? <X aria-hidden /> : <Search aria-hidden />}
+      </Button>
+    </>
+  );
+}
+
+/** `+ Idea` on Horizons and the Timeline: a field in a popover. The idea lands in Raw and the lens stays put. */
+function CapturePopover({ onCapture, onViewIdeas }: { onCapture: (title: string) => Promise<boolean>; onViewIdeas: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [captured, setCaptured] = useState(false);
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setCaptured(false);
+      }}
+    >
+      <PopoverTrigger asChild>
+        <Button size="sm" className="h-8" aria-label="Capture an idea" data-plan-capture-open>
+          <Plus aria-hidden />
+          Idea
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80 max-w-[calc(100vw-2rem)] p-3">
+        <CaptureForm
+          autoFocus
+          onCapture={async (title) => {
+            const ok = await onCapture(title);
+            if (ok) setCaptured(true);
+            return ok;
+          }}
+        />
+        {captured ? (
+          <p role="status" className="m-0 mt-2 text-label text-text-secondary" data-plan-captured>
+            Captured to Raw.{" "}
+            <button
+              type="button"
+              className="focus-ring rounded-sm font-medium text-foreground underline underline-offset-2"
+              onClick={() => {
+                setOpen(false);
+                onViewIdeas();
+              }}
+              data-plan-captured-view
+            >
+              View
+            </button>
+          </p>
+        ) : null}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** While the plan loads: the toolbar, then a shape like the lens it will show. */
+function PlanSkeleton({ lens }: { lens: Lens }) {
+  return (
+    <div className="@container/plan flex h-full min-h-0 flex-col" aria-busy="true" data-plan-loading={lens}>
+      <span role="status" className="sr-only">
+        Loading the plan
+      </span>
+      <div className="flex flex-wrap items-center gap-2 border-b px-gutter py-2">
+        <Skeleton className="h-8 w-60 @max-[620px]/plan:w-full" />
+        <Skeleton className="h-[26px] w-44 rounded-full" />
+        <span className="ms-auto" />
+        <Skeleton className="h-8 w-20" />
+      </div>
+      {lens === "horizons" ? (
+        <div className="flex flex-col">
+          <div className="flex flex-col gap-2 border-b px-gutter py-3">
+            <Skeleton className="h-5 w-56" />
+            <Skeleton className="h-2 w-[340px] max-w-full" />
+            <Skeleton className="h-3 w-96 max-w-full" />
+          </div>
+          {SKELETON_ROWS.map((row) => (
+            <div key={row} className="flex h-9 items-center gap-3 border-b px-gutter">
+              <Skeleton className="size-3.5 rounded-full" />
+              <Skeleton className="h-3.5 max-w-[420px] flex-1" style={{ maxWidth: 200 + ((row * 67) % 220) }} />
+              <Skeleton className="ms-auto h-1.5 w-28 @max-[760px]/plan:hidden" />
+            </div>
+          ))}
+        </div>
+      ) : lens === "timeline" ? (
+        <div className="flex flex-col">
+          <div className="flex h-[34px] items-center gap-10 border-b px-gutter">
+            {SKELETON_ROWS.slice(0, 6).map((month) => (
+              <Skeleton key={month} className="h-3 w-10" />
+            ))}
+          </div>
+          {SKELETON_ROWS.map((row) => (
+            <div key={row} className="flex h-[34px] items-center gap-3 border-b px-gutter">
+              <Skeleton className="h-3.5 w-40 shrink-0 @max-[760px]/plan:hidden" />
+              <Skeleton className="h-3" style={{ marginLeft: `${(row * 9) % 40}%`, width: `${18 + ((row * 13) % 30)}%` }} />
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="grid min-h-0 flex-1 content-start gap-4 p-gutter @min-[760px]/plan:grid-cols-[minmax(280px,360px)_minmax(0,1fr)]">
+          <div className="flex flex-col gap-2">
+            <Skeleton className="h-9 w-full" />
+            {SKELETON_ROWS.slice(0, 5).map((row) => (
+              <Skeleton key={row} className="h-11 w-full" />
+            ))}
+          </div>
+          <div className="grid content-start gap-3 [grid-template-columns:repeat(auto-fill,minmax(300px,1fr))]">
+            {SKELETON_ROWS.slice(0, 4).map((row) => (
+              <Skeleton key={row} className="h-32" />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const SKELETON_ROWS = [1, 2, 3, 4, 5, 6, 7, 8];
