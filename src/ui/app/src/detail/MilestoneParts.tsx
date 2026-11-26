@@ -42,8 +42,9 @@ export function planOf(detail: IssueDetail): MilestoneView | null {
 }
 
 /**
- * Does the primary action open the plan? Only for an open milestone: a finished one is not in
- * the Milestones list by default, and its primary is the ordinary Reopen.
+ * Does the primary action show the milestone on the Milestones page? Only for an open
+ * milestone: a finished one sits on the page's Finished shelf, read-only, and its primary is
+ * the ordinary Reopen.
  */
 export function opensPlan(detail: IssueDetail): boolean {
   const state = planOf(detail)?.milestone.state;
@@ -91,7 +92,10 @@ export function MilestoneDue({ plan, workspace = "" }: { plan: MilestoneView; wo
   );
 }
 
-/** A milestone's primary action: its plan lives on the Milestones page, where it is edited. */
+/**
+ * A milestone's primary action: its plan lives on the Milestones page, where it is edited, so
+ * this lands on its section there (`openMilestoneIn` sets the focus the outline scrolls to).
+ */
 export function OpenPlanAction({
   workspace,
   identifier,
@@ -113,7 +117,7 @@ export function OpenPlanAction({
       className={cn("gap-1.5", className)}
     >
       <MilestoneIcon aria-hidden className="size-4" />
-      Open plan
+      Show in Milestones
     </Button>
   );
 }

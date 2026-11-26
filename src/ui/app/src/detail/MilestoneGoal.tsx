@@ -7,7 +7,8 @@
  * says, the evidence as links (a ticket opens the ticket, a document opens it on that
  * ticket's Documents tab), who marked it and when, and, for an unknown one, why.
  *
- * Then the pace against the target date (the check's verdict and its numbers, in words),
+ * Under the criteria, any mark the check cleared (`ClearedMarks`, shared with the Milestones
+ * page). Then the pace against the target date (the check's verdict and its numbers, in words),
  * the milestone's gate (whose approval it waits for, and whether a goal run or a person
  * asked for it), and the goal run working it, if any.
  *
@@ -202,6 +203,7 @@ export function MilestoneGoalSection({ plan, gate, workspace }: { plan: Mileston
           ))}
         </ul>
       ) : null}
+      <ClearedMarks cleared={goal.cleared} className="pt-1" />
 
       <DetailCard className="mt-3 flex flex-col gap-3">
         <div className="flex min-w-0 flex-col gap-1" data-goal-pace={pace.verdict}>
