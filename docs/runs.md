@@ -75,10 +75,11 @@ run 888bc3df-1f29-4ac7-bf25-4b7cc74ccf41  active  claude over issue APP-7
   continues: 1 workable in scope
 ```
 
-In the web UI, each live run is a card in the sidebar's **Autopilot** section with
-what it is working on, what is left, and **Stop**. The ticket it holds wears an
-*Autopilot* badge. **Run history** shows every run and ticket, with Pause and Resume.
-When a run stops, open pages say why and link to what needs you.
+In the web UI, the **Autopilot** page lists every run and shows one in full: what
+it is working on, its limits, each ticket it took and what is next, with **Pause**,
+**Resume** and **Stop**. The sidebar has a line per live run, and the ticket a run
+holds wears an *Autopilot* badge. When a run stops, open pages say why and link to
+what needs you and to the run.
 
 ## 4. Pause, resume or stop
 
