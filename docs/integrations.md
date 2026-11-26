@@ -80,6 +80,10 @@ It only reads. It never unlinks, never writes to GitHub, and never changes a tic
 
 - the task row's pull request badge draws every linked pull request, draft, open, merged and
   closed each with its own glyph, and the detail's **Pull requests** row lists them all;
+- a failing check puts a crossed circle beside the pull request, and a check still running a
+  dashed one, on the row badge, the detail's chip and the External links row. Passing checks
+  draw nothing. A badge that stands for several pull requests opens their list on hover,
+  keyboard focus or tap: each title, state and check, one click from the provider;
 - a merged pull request puts **Mark done** beside a line saying so, under the status, and
   `staple branch` prints the `staple done` command; finishing stays your call;
 - a failing check on an open or draft pull request of an open ticket is a row on the
@@ -100,6 +104,42 @@ a run concluded `stale` or with a conclusion Staple does not know, a `pending` s
 check runs than ten pages hold leaves it pending, never passing. A commit with neither check runs
 nor statuses has no checks. When the account cannot read one of the two, a failure in the other
 still fails, and otherwise the checks are unknown.
+
+### A parent's pull requests
+
+A parent, an epic included, also shows every pull request linked on its descendants, so a
+feature is reviewed from its parent without opening each child. Its own come first, then its
+descendants' in tree order. A pull request linked on two tickets of the subtree is listed once
+and names both. Done and cancelled children count, because a merged pull request on a finished
+child is part of the feature's history. While the parent is open, the background refresh
+reads a finished child's open or draft pull request again too, so a pull request merged after
+its child was closed does not stay open on the parent.
+
+- The parent's row badge is a tally of the whole set by state: failing checks first, then open,
+  draft, merged and closed. It never leads with one number, because that number could be a
+  child's pull request. Its list names the tickets of each pull request, the ones that need a
+  person first. On a narrow row the tally folds to a glyph and the total, and it stays on a
+  phone row.
+- The detail's **Pull requests** row keeps the parent's own chips, exactly as on a ticket
+  with no children. Under them one line, for example "8 in tasks inside" with the same tally,
+  stands for the descendants' pull requests and opens their list.
+- **External links** lists them under **In tasks inside**, after the parent's own links, each
+  row naming the tickets it is linked on. Clicking a ticket opens it; unlinking and stacking
+  stay with the ticket that owns the link. **Refresh all** reads these again too.
+- Each row under **Tasks inside** shows that child's pull requests, a tally when the child is
+  itself a parent.
+- On a phone the pull request pill counts the whole set and opens External links.
+- The ticket card in an agent host lists the same set under **Pull requests**.
+- `staple show <parent>` prints the set under `pull requests (this ticket and its descendants):`.
+  `staple show --json`, MCP `get_task` and `/api/agent-context` carry it as
+  `subtreePullRequests`: each pull request with `own`, `tickets`, `checks` and its provider
+  `ref`, and each ticket with `childId`, the parent's direct child it sits under (null for the
+  parent itself). The terminal and the card text add `checks failing: <names>` or
+  `checks pending` after a pull request's state, and nothing when its checks pass. `show_ticket`
+  has the same field, null on a ticket with no children, and every card also carries the
+  ticket's own `pullRequests`.
+- A ticket with no children is unchanged and has no `subtreePullRequests`. A parent with no
+  pull requests in its subtree shows nothing in that slot.
 
 ## Connect Linear
 

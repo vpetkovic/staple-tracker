@@ -38,6 +38,7 @@ import { ArrowUpRight, CircleAlert, CircleCheck, FileText, Hourglass } from "luc
 import { useCallback, useMemo } from "react";
 import { StatusIcon, TaskList } from "@/components/task-list";
 import { Button } from "@/components/ui/button";
+import { childPullRequests, entriesByChild, subtreeEntries } from "@/integrations/pull-requests";
 import { getDocument } from "@/lib/api";
 import type { AuthError } from "@/lib/api";
 import { blockingDescriptor, needsBorrowedDescriptor } from "@/lib/derived-blocked";
@@ -231,6 +232,8 @@ function WorklogPanel({
 export function OverviewTab({ detail, workspace, onAuthError }: TabProps) {
   const session = useSession();
   const { issue } = detail;
+  // Each child's pull requests, a sub-parent's whole subtree included, for its row under "Tasks inside".
+  const byChild = useMemo(() => entriesByChild(subtreeEntries(detail)), [detail]);
   const openRef = (identifier: string) => session.open(workspace, identifier);
   const finished = statusCategory(issue.status) === "done";
 
@@ -370,7 +373,7 @@ export function OverviewTab({ detail, workspace, onAuthError }: TabProps) {
             <TaskList
               label="Children"
               preset="panel"
-              rows={detail.children.map((child) => ({ workspace, issue: child, claim: null }))}
+              rows={detail.children.map((child) => ({ workspace, issue: child, claim: null, ...childPullRequests(byChild.get(child.id), child.id) }))}
               currentRef={issue.identifier}
               onOpen={session.open}
             />

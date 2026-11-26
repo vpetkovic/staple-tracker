@@ -1,6 +1,7 @@
 import { attentionList, dismissAttention } from "../core/attention.js";
 import { IntegrationOperations, INTEGRATION_READ_ACTIONS, INTEGRATION_WRITE_ACTIONS, INTEGRATION_CONFIG_ACTIONS, type AdapterFactory } from "../core/integrations/operations.js";
 import { DISCOVERY_ACTOR, discoveryRuns, rowPullRequests } from "../core/integrations/pr-discovery.js";
+import { subtreePullRequestsField, subtreePullRequestsFor } from "../core/subtree-pull-requests.js";
 import { ticketBranch } from "../core/ticket-branch.js";
 /**
  * staple ui — tiny local web server, alive only while you use the page.
@@ -1132,6 +1133,8 @@ export function startUiServer(options: UiOptions): UiHandle {
       attempts: handle.store.attemptSummary(context.issue.id),
       orchestration: handle.store.orchestrationSummary(context.issue.id),
       planSummary: handle.store.planSummary(context.issue.id),
+      // A parent's pull requests and every descendant's, for its Pull requests row; absent on a leaf.
+      ...subtreePullRequestsField(handle.store, context.issue.id),
       /**
        * Membership is a relation, not hierarchy, so `ancestors` never shows it. The
        * detail names the milestone an issue counts toward (its own, else the nearest
@@ -4032,8 +4035,11 @@ export function startUiServer(options: UiOptions): UiHandle {
            */
           const worklogs = h.store.worklogSummaryFor(ids);
           const externalSummaries = h.store.externalLinks().summaries();
-          // The row's pull request badge (PrBadge): every linked pull request, one query.
+          // The row's pull request badge (PrBadge): every linked pull request, one query. A
+          // parent's badge draws its subtree's set instead: one subtree walk for every parent
+          // on the page, over the same pull request read.
           const pullRequests = h.store.externalLinks().pullRequests();
+          const subtreePullRequests = subtreePullRequestsFor(h.store, ids, pullRequests);
           /**
            * O6 (STA-138): what each row is waiting on, and what is waiting on it.
            *
@@ -4074,7 +4080,7 @@ export function startUiServer(options: UiOptions): UiHandle {
             // missing" — it never invents a fact it was not sent.
             worklog: worklogs.get(issue.id) ?? null,
             ...(externalSummaries[issue.id] ? {externalLinks:externalSummaries[issue.id]} : {}),
-            ...rowPullRequests(pullRequests.get(issue.id)),
+            ...rowPullRequests(subtreePullRequests.get(issue.id) ?? pullRequests.get(issue.id)),
             deps: {
               blockedBy: blockedBy.get(issue.id) ?? [],
               blocks: blocks.get(issue.id) ?? [],
@@ -4309,6 +4315,7 @@ export function startUiServer(options: UiOptions): UiHandle {
           attempts: handle.store.attemptSummary(context.issue.id),
           orchestration: handle.store.orchestrationSummary(context.issue.id),
           planSummary: handle.store.planSummary(context.issue.id),
+          ...subtreePullRequestsField(handle.store, context.issue.id),
         });
         return;
       }

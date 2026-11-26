@@ -13,11 +13,15 @@
  * owner), never the agent. Their answer carries the ticket as it now stands, so the card
  * redraws with the gate decided: "Gate approved by <person> · from the card". Open in Staple
  * asks the host to open the web UI's deep link.
+ *
+ * Under the facts the card lists the ticket's pull requests (`pull-requests.ts`): a parent's
+ * with its descendants', a leaf's its own. A row asks the host to open the pull request.
  */
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import "../shared/base.css";
 import "./ticket.css";
 import { h, resultText, startView, type ViewHost } from "../shared/runtime.js";
+import { pullRequestsSection } from "./pull-requests.js";
 
 type Mark = "met" | "unmet" | "open";
 
@@ -56,6 +60,10 @@ interface Card {
   timing: { estimatedSeconds: number | null; elapsedSeconds: number | null };
   url: string | null;
   actions: { approve: boolean; requestChanges: boolean };
+  /** A parent's pull requests and its descendants'; null on a ticket with no children. Read defensively. */
+  subtreePullRequests?: unknown;
+  /** The ticket's own pull requests, drawn when it has no subtree set. Read defensively. */
+  pullRequests?: unknown;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -348,6 +356,22 @@ function factsSection(card: Card, host: ViewHost): HTMLElement | null {
   return rows.length === 0 ? null : h("dl", { class: "ticket-facts" }, ...rows);
 }
 
+/** Ask the host to open a link; a refusal or a failure becomes the card's note. */
+async function openLink(host: ViewHost, url: string): Promise<void> {
+  try {
+    const opened = await host.openLink(url);
+    if (!opened) {
+      state.note = "The host did not open the link.";
+      state.noteTone = "error";
+      rerender(host);
+    }
+  } catch (error) {
+    state.note = `The host did not open the link: ${errorText(error)}`;
+    state.noteTone = "error";
+    rerender(host);
+  }
+}
+
 function renderCard(card: Card, host: ViewHost): void {
   resetFor(card.identifier);
   const meta = [card.kind.label, `${card.priority} priority`, card.assignee ? card.assignee : "unassigned"];
@@ -355,20 +379,7 @@ function renderCard(card: Card, host: ViewHost): void {
     ? (() => {
         const url = card.url;
         const button = h("button", { class: "view-button ticket-open", type: "button", "data-action": "open", title: "Open this ticket in the Staple web UI" }, "Open in Staple ↗");
-        button.addEventListener("click", async () => {
-          try {
-            const opened = await host.openLink(url);
-            if (!opened) {
-              state.note = "The host did not open the link.";
-              state.noteTone = "error";
-              rerender(host);
-            }
-          } catch (error) {
-            state.note = `The host did not open the link: ${errorText(error)}`;
-            state.noteTone = "error";
-            rerender(host);
-          }
-        });
+        button.addEventListener("click", () => void openLink(host, url));
         return button;
       })()
     : null;
@@ -387,6 +398,7 @@ function renderCard(card: Card, host: ViewHost): void {
       gateSection(card, host),
       criteriaSection(card),
       factsSection(card, host),
+      pullRequestsSection(card, (url) => void openLink(host, url)),
       state.note ? h("p", { class: `ticket-note ticket-note-${state.noteTone}`, role: "status", "data-action-note": "" }, state.note) : null,
       open ? h("footer", { class: "ticket-foot" }, open) : null,
     ),

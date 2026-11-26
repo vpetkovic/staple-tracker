@@ -17,6 +17,7 @@
  * background of the web UI's poll, where an error has nowhere to go.
  */
 import type { WorkspaceStore } from "../store.js";
+import { type SubtreePullRequest, subtreePullRequestsFor } from "../subtree-pull-requests.js";
 import { type TicketBranch, ticketBranches } from "../ticket-branch.js";
 import { StapleError } from "../types.js";
 import type { ConnectionHealthSnapshot, ConnectionState, ExternalItem } from "./contracts.js";
@@ -92,8 +93,12 @@ export async function discoverPullRequests(deps: DiscoveryDependencies, refs?: r
   };
   // Every open ticket's live linked pull requests are read again, branch or not; only the branch lookup needs one.
   const live = (pr: LinkedPullRequest) => pr.providerId === "github" && (pr.state === null || pr.state === "open" || pr.state === "draft");
+  // A finished child's pull requests are drawn on its open parent (subtree-pull-requests.ts), so
+  // they are read again while any ancestor is open. Discovery links only to open tickets, so
+  // what finished descendants carry is the same before and after the branch lookup.
   const linkedBefore = links.pullRequests();
-  if (working.length === 0 && !issues.some((issue) => (linkedBefore.get(issue.id) ?? []).some(live))) {
+  const drawnOnParents = [...subtreePullRequestsFor(store, issues.map((issue) => issue.id), linkedBefore).values()].flat();
+  if (working.length === 0 && !issues.some((issue) => (linkedBefore.get(issue.id) ?? []).some(live)) && !drawnOnParents.some(live)) {
     report.note = refs ? "This ticket has no branch. Record one with staple branch <ref> <branch>." : null;
     return finish();
   }
@@ -187,15 +192,15 @@ export async function discoverPullRequests(deps: DiscoveryDependencies, refs?: r
   }
 
   // Every open ticket's other linked pull requests that can still change: stacked ones on another
-  // branch, ones linked by hand, ones on a ticket with no branch. Only in mapped repositories,
-  // oldest saved copy first, so a failing check is read again until it passes.
+  // branch, ones linked by hand, ones on a ticket with no branch, ones on a finished descendant
+  // of an open parent. Only in mapped repositories, each once, oldest saved copy first, so a
+  // failing check is read again until it passes.
   const linkedNow = links.pullRequests();
-  const stale = issues
-    .flatMap((issue) => linkedNow.get(issue.id) ?? [])
-    .filter(live)
+  const once = new Set<string>();
+  const stale = [...issues.flatMap((issue) => linkedNow.get(issue.id) ?? []), ...drawnOnParents]
+    .filter((pr) => live(pr) && !once.has(pr.resourceId) && once.add(pr.resourceId))
     .map((pr) => ({ pr, resource: links.resource(pr.resourceId) }))
     .filter(({ resource }) => !seen.has(`${resource.ref.host}/${resource.ref.containerId}#${resource.ref.id}`))
-    .filter((entry, index, all) => all.findIndex((other) => other.resource.id === entry.resource.id) === index)
     .sort((a, b) => (a.pr.fetchedAt ?? "").localeCompare(b.pr.fetchedAt ?? ""))
     .slice(0, REFRESH_LIMIT);
   for (const { resource } of stale) {
@@ -230,20 +235,64 @@ export interface RowPullRequest {
   state: RowState;
   title: string | null;
   updatedAt: string | null;
+  /** On a parent's row, the tickets of its subtree the pull request is linked on; absent on a leaf's. */
+  tickets?: string[];
+  /** The checks on the head commit at the last read; absent when none were read (merged, closed, no checks). */
+  checks?: "passing" | "failing" | "pending";
 }
 
+/** A parent's row: counts over its whole subtree set, which the row lists only the first of. */
+export interface RowPullRequestCounts {
+  total: number;
+  /** Open or draft with failing checks; each also counts in `open` or `draft`. */
+  failing: number;
+  open: number;
+  draft: number;
+  unknown: number;
+  merged: number;
+  closed: number;
+  /** Not recorded on the row's own ticket: only its descendants carry them. */
+  inside: number;
+}
+
+/** A parent's row lists this many of its subtree set; its counts cover the whole set. */
+export const PARENT_ROW_PULL_REQUESTS = 8;
+
 /**
- * A row's `pullRequests`: every linked pull request, the ones still moving first (open, draft,
- * unknown, then merged and closed), newest first within a state. A GitHub pull request is all
- * a link can be, so every one is drawn: one with no state read yet draws as unknown.
+ * A row's `pullRequests`. A leaf's: every linked pull request, the ones still moving first
+ * (open, draft, unknown, then merged and closed), newest first within a state. A GitHub pull
+ * request is all a link can be, so every one is drawn: one with no state read yet draws as
+ * unknown. A parent's (given its subtree set, `subtree-pull-requests.ts`): the ones with
+ * failing checks first, then the same order, only the first `PARENT_ROW_PULL_REQUESTS`, each
+ * naming the tickets it is linked on, and `pullRequestCounts` over the whole set.
  */
-export function rowPullRequests(linked: readonly LinkedPullRequest[] | undefined): { pullRequests?: RowPullRequest[] } {
+export function rowPullRequests(linked: readonly (LinkedPullRequest | SubtreePullRequest)[] | undefined): {
+  pullRequests?: RowPullRequest[];
+  pullRequestCounts?: RowPullRequestCounts;
+} {
   const drawable = (linked ?? []).filter((pr) => pr.providerId === "github" && pr.number !== null);
   if (!drawable.length) return {};
   const stateOf = (pr: LinkedPullRequest): RowState => (ROW_STATES.includes(pr.state as RowState) && pr.state !== "unknown" ? (pr.state as RowState) : "unknown");
-  return {
-    pullRequests: [...drawable]
-      .sort((a, b) => ROW_STATES.indexOf(stateOf(a)) - ROW_STATES.indexOf(stateOf(b)) || b.number! - a.number!)
-      .map((pr) => ({ provider: "github", number: pr.number!, url: pr.url, state: stateOf(pr), title: pr.title, updatedAt: pr.fetchedAt })),
-  };
+  const failing = (pr: LinkedPullRequest) => (pr.state === "open" || pr.state === "draft") && pr.checks?.state === "failing";
+  const parent = drawable.some((pr) => "tickets" in pr);
+  const rank = (pr: LinkedPullRequest) => (parent && failing(pr) ? -1 : ROW_STATES.indexOf(stateOf(pr)));
+  const sorted = [...drawable].sort((a, b) => rank(a) - rank(b) || b.number! - a.number!);
+  const row = (pr: LinkedPullRequest | SubtreePullRequest): RowPullRequest => ({
+    provider: "github",
+    number: pr.number!,
+    url: pr.url,
+    state: stateOf(pr),
+    title: pr.title,
+    updatedAt: pr.fetchedAt,
+    ...(pr.checks ? { checks: pr.checks.state } : {}),
+    ...("tickets" in pr ? { tickets: pr.tickets.map((ticket) => ticket.identifier) } : {}),
+  });
+  if (!parent) return { pullRequests: sorted.map(row) };
+  const counts: RowPullRequestCounts = { total: drawable.length, failing: 0, open: 0, draft: 0, unknown: 0, merged: 0, closed: 0, inside: 0 };
+  for (const pr of drawable) {
+    counts[stateOf(pr)] += 1;
+    if (failing(pr)) counts.failing += 1;
+    if ("own" in pr && !pr.own) counts.inside += 1;
+  }
+  return { pullRequests: sorted.slice(0, PARENT_ROW_PULL_REQUESTS).map(row), pullRequestCounts: counts };
 }

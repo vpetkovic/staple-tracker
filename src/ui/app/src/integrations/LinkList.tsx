@@ -29,6 +29,8 @@ import { countWords, openLabel, refreshConnection, stackIndent } from "./links-v
 import { groupLinks, type ExternalLink } from "./model";
 import { ItemGlyph, LINK_PROSE, LinkStatePill, ProviderMark } from "./parts";
 import { parentChoices, prStacks, prTreeRows } from "./pr-stacks";
+import { ChecksMark } from "./PullRequestParts";
+import { checksWords, linkEntry } from "./pull-requests";
 
 export type WriteLink = (command: Record<string, unknown>) => Promise<void>;
 
@@ -170,6 +172,8 @@ export function LinkRow({
   const age = savedAge(r, now);
   const open_ = openLabel(r.ref.providerId);
   const provider = providerName(r.ref.providerId);
+  const entry = r.ref.kind === "pull_request" ? linkEntry(link) : null;
+  const checks = entry ? checksWords(entry) : null;
 
   /** Resolves to whether the write was accepted, so a control that showed it early can take it back. */
   async function run(action: string, command: Record<string, unknown>): Promise<boolean> {
@@ -239,9 +243,12 @@ export function LinkRow({
             />
             <span aria-hidden className="shrink-0" style={{ width: `calc(6px + var(--step) * ${indent})` }} />
             <ItemGlyph item={r} />
-            <span title={title} className="ml-2 min-w-0 flex-1 truncate text-body">
+            <span title={title} className="ml-2 min-w-0 truncate text-body">
               {title}
             </span>
+            {entry && entry.checks !== "passing" ? <ChecksMark checks={entry.checks} className="ml-1.5 size-3.5" /> : null}
+            {entry && entry.checks !== "passing" && checks ? <span className="sr-only">{checks}</span> : null}
+            <span className="min-w-0 flex-1" />
             <span className="hidden max-w-32 shrink-0 truncate pl-2 text-label text-text-tertiary tabular-nums @min-[520px]:inline">
               {key}
             </span>
@@ -367,6 +374,14 @@ export function LinkRow({
               <Fact label="Share saved copy with workspace" title={SHARE_TITLE}>
                 <Switch checked={r.contextShared} disabled={busy !== null} title={SHARE_TITLE} onChange={share} label="Share saved copy with workspace" />
               </Fact>
+              {checks ? (
+                <Fact label="Checks">
+                  <span data-link-checks={entry!.checks} className="flex min-w-0 items-center gap-1.5 text-right wrap-anywhere">
+                    <ChecksMark checks={entry!.checks} />
+                    {checks.replace(/^checks /, "").replace(/^./, (c) => c.toUpperCase())}
+                  </span>
+                </Fact>
+              ) : null}
               <Fact label="Saved copy">
                 {age ? (
                   <span className={cn(age.stale && AMBER)}>{age.sentence.replace(/^Saved copy from /, "")}</span>

@@ -1,4 +1,6 @@
 import type { ExternalLink, ExternalRowSummary } from "../../../../core/integrations/link-store.js";
+import type { RowPullRequestCounts } from "../../../../core/integrations/pr-discovery.js";
+import type { SubtreePullRequest } from "../../../../core/subtree-pull-requests.js";
 import type { TicketBranch } from "../../../../core/ticket-branch.js";
 import type { HorizonData, IdeaData, IdeaDetailData, PlanStepData } from "./plan-types.js";
 /**
@@ -855,9 +857,19 @@ export interface PullRequestRef {
   state: "draft" | "open" | "merged" | "closed" | "unknown";
   /** Optional; tooltip only. */
   title?: string | null;
+  /** How the head commit's checks stand; absent when none were read, and for a merged or closed pull request. */
+  checks?: "passing" | "failing" | "pending";
+  /** On a parent's row, the tickets of its subtree this pull request is linked on; absent on a leaf's. */
+  tickets?: string[];
   /** ISO-8601. Optional; tooltip only. */
   updatedAt?: string | null;
 }
+
+/**
+ * A parent row's whole subtree set, counted (core/integrations/pr-discovery.ts). The row
+ * carries only the first of its pull requests; these say how many there are in all.
+ */
+export type PullRequestCounts = RowPullRequestCounts;
 
 /** GET /api/issues */
 /**
@@ -950,6 +962,12 @@ export interface IssueRow {
    * freezing it into the entity would be a lie waiting to happen.
    */
   pullRequests?: PullRequestRef[];
+  /**
+   * On a parent's row only: counts by state over its whole subtree set, of which
+   * `pullRequests` lists the first eight (failing checks first). `inside` counts the ones
+   * only its descendants carry. Absent on a leaf's row and on a row with none.
+   */
+  pullRequestCounts?: PullRequestCounts;
   externalLinks?: ExternalRowSummary;
   /**
    * The review gate ON this row, and the gate this row is QUEUED BEHIND
@@ -1110,6 +1128,12 @@ export interface IssueDetail {
   externalLinks?: ExternalLink[];
   /** The branch the work lives on (`staple branch`), else the newest branch-pointer comment; null when neither. */
   branch?: TicketBranch | null;
+  /**
+   * A parent's pull requests and every descendant's (core/subtree-pull-requests.ts): its own
+   * first, then its descendants' in tree order, each once with the tickets it is linked on.
+   * Absent on a ticket with no children; empty on a parent whose subtree has none.
+   */
+  subtreePullRequests?: SubtreePullRequest[];
   workspace: string;
   issue: Issue;
   ancestors: Issue[];

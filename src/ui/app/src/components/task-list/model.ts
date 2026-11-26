@@ -17,6 +17,7 @@ import type {
   IssueDeps,
   IssueStatus,
   PlanSource,
+  PullRequestCounts,
   PullRequestRef,
   RowCues,
   RowHorizon,
@@ -128,6 +129,7 @@ export interface TaskRow {
   claim: ClaimActivity | null;
   workspace: string;
   pullRequests?: PullRequestRef[];
+  pullRequestCounts?: PullRequestCounts;
   externalLinks?: ExternalRowSummary;
   /**
    * The latest checkpoint, or nothing — W1 (STA-113), rendered by W4 (STA-116).
@@ -569,6 +571,7 @@ export interface TaskSource {
   claim: ClaimActivity | null;
   workspace: string;
   pullRequests?: PullRequestRef[];
+  pullRequestCounts?: PullRequestCounts;
   externalLinks?: ExternalRowSummary;
   worklog?: WorklogSummary | null;
   deps?: IssueDeps;
@@ -590,6 +593,7 @@ export function flatRow(source: TaskSource, over: Partial<TaskRow> = {}): TaskRo
     claim: source.claim,
     workspace: source.workspace,
     pullRequests: source.pullRequests,
+    pullRequestCounts: source.pullRequestCounts,
     externalLinks: source.externalLinks,
     worklog: source.worklog,
     deps: source.deps,

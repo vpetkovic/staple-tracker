@@ -41,6 +41,7 @@ import { runCloudCommand } from "./commands/cloud.js";
 import { runIntegrationsCommand } from "./commands/integrations.js";
 import { runBranchCommand } from "./commands/branch.js";
 import { runCheckpointCommand } from "./commands/checkpoint.js";
+import { checksPhrase, subtreePullRequests, subtreePullRequestsField } from "./core/subtree-pull-requests.js";
 import { ticketBranch } from "./core/ticket-branch.js";
 import { runFileCommand } from "./commands/file.js";
 import { runHubRegistryCommand } from "./commands/hub-registry.js";
@@ -1702,6 +1703,8 @@ function main() {
           attempts: store.attemptSummary(ctx.issue.id),
           orchestration: store.orchestrationSummary(ctx.issue.id),
           planSummary: store.planSummary(ctx.issue.id),
+          // A parent's pull requests and every descendant's, as get_task carries them; absent on a leaf.
+          ...subtreePullRequestsField(store, ctx.issue.id),
         });
         break;
       }
@@ -1794,6 +1797,15 @@ function main() {
       // The branch the work lives on (`staple branch`, `staple checkpoint --branch`), only when one is recorded.
       const branch = ticketBranch(store, i.id);
       if (branch) console.log(`branch ${branch.name}${branch.base ? ` · base ${branch.base}` : ""}${branch.source === "comment" ? " (from a comment)" : ""}`);
+      // A parent's pull requests and its descendants', each with the tickets it is recorded on.
+      const subtree = subtreePullRequests(store, i.id);
+      if (subtree?.length) {
+        console.log("pull requests (this ticket and its descendants):");
+        for (const pr of subtree) {
+          const checks = checksPhrase(pr.checks);
+          console.log(`  ${(pr.state ?? "unknown").padEnd(7)} ${pr.key}${pr.title ? `  ${pr.title}` : ""}${checks ? ` · ${checks}` : ""} · ${pr.tickets.map((t) => t.identifier).join(", ")}`);
+        }
+      }
       if (i.description) console.log(`\n${i.description}`);
       if (i.acceptanceCriteria?.length) {
         console.log("\nacceptance criteria:");
