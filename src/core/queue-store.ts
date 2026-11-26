@@ -1110,7 +1110,7 @@ export class QueueStore {
       default:
         throw new StapleError("validation", `Unknown queue verb "${verb as string}". Use: ls, add, rm, mv, reorder, next, prune`);
     }
-    const view = this.view({ all: input.all, actor });
+    const view = this.view({ all: input.all, actor, pickup: input.pickup });
     return verb === "add" ? { ...view, replayed } : view;
   }
 }
@@ -1234,6 +1234,8 @@ export interface QueueMutationInput extends QueuePosition {
   note?: string | null;
   /** Passed through to the view: show resolved entries too. */
   all?: boolean;
+  /** Passed through to the view: the member rung, as a pickup answer applies it. */
+  pickup?: MemberLens | null;
 }
 
 /**

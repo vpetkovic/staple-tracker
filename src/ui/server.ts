@@ -37,6 +37,7 @@ import {
 import { REQUIRED_STATUS_CATEGORIES, STATUS_CATEGORIES, type StatusCategory } from "../core/types.js";
 import type { SettingOp, UpdateIssueInput, VocabularyOp, WorkspaceStore } from "../core/store.js";
 import type { QueueVerb } from "../core/queue-store.js";
+import type { QueuePolicy } from "../core/settings-registry.js";
 // R6a (STA-176): the settings registry and the global values it defines, served
 // beside the workspace ones so the page can say which scope each setting has.
 import { settingDefinitionsFor, settingRegistryView, settingValueView } from "../core/settings-registry.js";
@@ -827,6 +828,28 @@ export function startUiServer(options: UiOptions): UiHandle {
     if (!options.hub) return [handleFor()];
     handleFor(); // populate cache
     return [...stores.values()];
+  }
+
+  /** The workspace's `queue.policy`, which every queue answer carries so a page can say it. */
+  function queuePolicyOf(handle: StoreHandle): QueuePolicy {
+    return handle.store.getSetting("queue.policy") as QueuePolicy;
+  }
+
+  /**
+   * One workspace's queue listing, as `GET /api/queue` answers it: the `{revision, entries,
+   * effective}` view every surface shares, plus the policy. `pickup=1` asks for the member
+   * rung `queue next` applies (`assigned_to_other_member`), so a page whose next pick skips
+   * another member's ticket can show the row it skipped and the store's reason for it.
+   */
+  function queueListing(handle: StoreHandle, params: URLSearchParams) {
+    return {
+      ...handle.store.queue().view({
+        all: params.get("all") === "1",
+        actor: queryActor(params.get("actor")),
+        pickup: params.get("pickup") === "1" ? handle.store.members() : null,
+      }),
+      policy: queuePolicyOf(handle),
+    };
   }
 
   function json(res: ServerResponse, status: number, payload: unknown, headers: Record<string, string> = {}): void {
@@ -5574,14 +5597,31 @@ export function startUiServer(options: UiOptions): UiHandle {
        */
       if (url.pathname === "/api/queue") {
         const handle = handleFor(url.searchParams.get("ws") ?? undefined);
-        json(
-          res,
-          200,
-          handle.store.queue().view({
-            all: url.searchParams.get("all") === "1",
-            actor: queryActor(url.searchParams.get("actor")),
-          }),
-        );
+        json(res, 200, queueListing(handle, url.searchParams));
+        return;
+      }
+
+      /**
+       * EVERY WORKSPACE'S PLAN, one section each — the Queue page on All workspaces.
+       * The /api/attention shape: in hub mode with no `ws` every available workspace,
+       * otherwise the one; a workspace that cannot be read is named in `failed` and
+       * costs the others nothing. Nothing is merged: each section is that workspace's
+       * own `/api/queue` answer, with its own revision, so every write stays per
+       * workspace and carries its own base.
+       */
+      if (url.pathname === "/api/queues") {
+        const wanted = url.searchParams.get("ws") ?? undefined;
+        const targets = options.hub && !wanted ? allHandles() : [handleFor(wanted)];
+        const workspaces: Array<{ slug: string; prefix: string } & ReturnType<typeof queueListing>> = [];
+        const failed: Array<{ workspace: string; message: string }> = [];
+        for (const handle of targets) {
+          try {
+            workspaces.push({ slug: handle.slug, prefix: handle.prefix, ...queueListing(handle, url.searchParams) });
+          } catch (error) {
+            failed.push({ workspace: handle.slug, message: error instanceof Error ? error.message : String(error) });
+          }
+        }
+        json(res, 200, { workspaces, failed });
         return;
       }
 
@@ -5606,10 +5646,8 @@ export function startUiServer(options: UiOptions): UiHandle {
         const body = await readBody(req);
         const handle = handleFor((body.ws as string) ?? undefined);
         const verb = QUEUE_VERBS[url.pathname]!;
-        json(
-          res,
-          200,
-          handle.store.queue().mutate(
+        json(res, 200, {
+          ...handle.store.queue().mutate(
             verb,
             {
               ref: body.ref as string | undefined,
@@ -5620,10 +5658,14 @@ export function startUiServer(options: UiOptions): UiHandle {
               baseRevision: body.baseRevision as number | undefined,
               note: (body.note as string | undefined) ?? null,
               all: body.all === true,
+              // The answer is drawn by the page that sent the write, so it is read the way
+              // that page reads (`pickup=1` on its GET): with the member rung when asked.
+              pickup: body.pickup === true ? handle.store.members() : null,
             },
             bodyActor(body),
           ),
-        );
+          policy: queuePolicyOf(handle),
+        });
         return;
       }
 

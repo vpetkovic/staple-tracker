@@ -55,6 +55,7 @@ import type {
   ProjectRemoval,
   ProjectRow,
   QueueView,
+  HubQueues,
   RemoteBackup,
   RunEntry,
   RemoteDevice,
@@ -1020,8 +1021,18 @@ export const sanitizeGlyphSvg = (input: { svg: string; label?: string }) =>
  * `all` includes resolved entries, the way `getMilestones({all})` includes resolved
  * milestones; the editor ties it to the page's "show done" so one switch governs both.
  */
-export const getQueue = (params: { ws?: string; all?: boolean } = {}) =>
-  request<QueueView>(`/api/queue${qs({ ws: params.ws, all: params.all ? "1" : undefined })}`);
+export const getQueue = (params: { ws?: string; all?: boolean; pickup?: boolean } = {}) =>
+  request<QueueView>(
+    `/api/queue${qs({ ws: params.ws, all: params.all ? "1" : undefined, pickup: params.pickup ? "1" : undefined })}`,
+  );
+
+/**
+ * Every workspace's plan, one section each (All workspaces in hub mode, else the one). Each
+ * section is that workspace's own `getQueue` answer; nothing is merged, so writes stay per
+ * workspace. `pickup` applies the member rung, as on `getQueue`.
+ */
+export const getQueues = (params: { all?: boolean; pickup?: boolean } = {}) =>
+  request<HubQueues>(`/api/queues${qs({ all: params.all ? "1" : undefined, pickup: params.pickup ? "1" : undefined })}`);
 
 /**
  * Every queue write answers with the same `QueueView` a read does, and every one of them
@@ -1036,6 +1047,17 @@ export const getQueue = (params: { ws?: string; all?: boolean } = {}) =>
  * move is a bulk `reorder` (see views/queue/QueueView.tsx), and with no actor the next
  * item is the first `eligible` row of the `effective` list the page already holds.
  */
+/**
+ * How a write's answer is read, which is how the page that sent it reads: `all` keeps the
+ * resolved entries in it and `pickup` applies the member rung. A page that draws from a
+ * write's answer must ask for the same reading as its GET, or the answer it draws is a
+ * different list from the one it showed a moment before.
+ */
+export type QueueAnswerReading = {
+  all?: boolean;
+  pickup?: boolean;
+};
+
 const queueWrite = (route: string, body: Record<string, unknown>) =>
   request<QueueView>(`/api/queue/${route}`, {
     method: "POST",
@@ -1052,9 +1074,9 @@ export const enqueueTask = (target: {
   after?: string;
   at?: number;
   note?: string;
-}) => queueWrite("enqueue", target);
+} & QueueAnswerReading) => queueWrite("enqueue", target);
 
-export const dequeueTask = (target: { ws?: string; ref: string; baseRevision: number }) =>
+export const dequeueTask = (target: { ws?: string; ref: string; baseRevision: number } & QueueAnswerReading) =>
   queueWrite("remove", target);
 
 /**
@@ -1062,11 +1084,11 @@ export const dequeueTask = (target: { ws?: string; ref: string; baseRevision: nu
  * call, one transaction, one revision bump — so the two input methods cannot drift into
  * two write paths that disagree about what a move is.
  */
-export const reorderQueue = (target: { ws?: string; order: readonly string[]; baseRevision: number }) =>
+export const reorderQueue = (target: { ws?: string; order: readonly string[]; baseRevision: number } & QueueAnswerReading) =>
   queueWrite("reorder", target);
 
 /** Drop every resolved entry. `all` is not a thing here: prune takes the whole plan. */
-export const pruneQueue = (target: { ws?: string; baseRevision: number }) => queueWrite("prune", target);
+export const pruneQueue = (target: { ws?: string; baseRevision: number } & QueueAnswerReading) => queueWrite("prune", target);
 
 // ---------- projects (migration 009) ----------
 

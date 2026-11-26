@@ -481,6 +481,20 @@ not writable. (Pinned by `queue-surfaces.test.ts` — *"enqueue, move, reorder,
 dequeue and prune agree on all three"*, *"next is one shape on CLI, MCP and
 HTTP"*, *"the reads are not writable and the verbs are not readable"*.)
 
+The web page reads a little more than the CLI prints, and only adds to it.
+Every HTTP queue answer, read or write, carries the workspace's `policy`.
+`GET /api/queue?pickup=1` applies the member rung `queue next` applies, so a
+shared workspace's listing marks another member's ticket
+`assigned_to_other_member` with the store's reason instead of `eligible`, and
+its first eligible row is the next pick. A write body with `all: true` and
+`pickup: true` answers with the same reading, which is what the page sends,
+because it draws the write's answer until its next read. `GET /api/queues` is
+every workspace's plan in hub mode (one workspace when `ws` is named), one
+section each as `{workspaces: [{slug, prefix, ...the /api/queue answer}],
+failed: [{workspace, message}]}`. Nothing is merged: a plan stays per
+workspace and every write names its workspace and base. (Pinned by
+`ui-queue-reads.test.ts`.)
+
 ## Worked example: STA-31 → STA-66 → STA-146
 
 VP queues three things, in this order: **STA-31** (A1, a task, `done`),
