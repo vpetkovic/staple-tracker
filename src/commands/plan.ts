@@ -9,6 +9,7 @@
  * person made from the CLI.
  */
 import { readFileSync } from "node:fs";
+import { readInputFile } from "../core/input-file.js";
 import { basename } from "node:path";
 import { parseArgs } from "node:util";
 import { configuredHumanName } from "../mcp-view-actions.js";
@@ -351,7 +352,7 @@ export function runIdeaCommand(rest: string[]): void {
     case "import": {
       const path = need(first, "a plan file (markdown)");
       const result = plan.importPlan(
-        { name: basename(path), markdown: readFileSync(path, "utf8") },
+        { name: basename(path), markdown: readInputFile(path, "idea import", "utf8") },
         { parent: values.parent ?? null, horizon: values.horizon ?? null, maturity: values.maturity },
         actor,
         options,

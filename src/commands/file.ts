@@ -17,7 +17,8 @@
  * (unless the file is too large to sync its bytes), and the revision that held
  * the bytes stays. A second run creates nothing.
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
+import { readInputFile } from "../core/input-file.js";
 import { basename } from "node:path";
 import { parseArgs } from "node:util";
 import { acknowledgeRenumbers } from "../core/identifier-moves.js";
@@ -72,7 +73,7 @@ function attach(args: string[]): void {
   });
   const [ref, path] = positionals;
   if (!ref || !path) throw new StapleError("validation", "file attach needs a ticket and a path. " + USAGE);
-  const bytes = readFileSync(path);
+  const bytes = readInputFile(path, "file attach");
   const result = open(values).attachFile(ref, {
     filename: values.filename ?? basename(path),
     bytes,
