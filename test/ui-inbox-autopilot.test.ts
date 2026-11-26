@@ -161,6 +161,11 @@ describe.skipIf(Boolean(reason))("the Inbox from the keyboard", () => {
       // The first rows are the tickets in review: Enter opens that ticket in the drawer.
       await page.keyboard.press("Enter");
       await expect.poll(() => openedIssue(page)).toBe(reviews[0]);
+      // Closing the drawer returns to the row it was opened from, not to the page.
+      await page.locator("[data-detail-overlay]").waitFor();
+      await page.keyboard.press("Escape");
+      await page.locator("[data-detail-overlay]").waitFor({ state: "detached" });
+      await expect.poll(() => focused(page)).toBe(`row:${keys[0]}`);
       expect(errors).toEqual([]);
     } finally {
       await context.close();

@@ -17,10 +17,13 @@ export interface FocusRoot {
   readonly activeElement: unknown;
 }
 
-/** The row the list drew for this identifier, never the dimmed parent-for-context copy. */
+/**
+ * The row the list drew for this identifier, never the dimmed parent-for-context copy; or,
+ * on the Inbox, the row that waits on that ticket (views/attention/InboxParts.tsx).
+ */
 export function rowSelector(identifier: string): string {
   const escaped = identifier.replace(/["\\]/g, "\\$&");
-  return `[data-testid="task-row"][data-identifier="${escaped}"]:not([data-ghost])`;
+  return `[data-testid="task-row"][data-identifier="${escaped}"]:not([data-ghost]), [data-attention-row][data-identifier="${escaped}"]`;
 }
 
 /**
