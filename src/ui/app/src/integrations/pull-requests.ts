@@ -68,7 +68,7 @@ export function subtreeEntry(pr: SubtreePullRequest): PullRequestEntry {
     own: pr.own,
     tickets: pr.tickets,
     // Absent from a server that predates it; the entry then lists but cannot be refreshed from here.
-    ref: (pr as { ref?: ExternalItemRef }).ref,
+    ref: pr.ref as ExternalItemRef | undefined,
     fetchedAt: pr.fetchedAt,
   };
 }

@@ -241,28 +241,58 @@ export interface RowPullRequest {
   checks?: "passing" | "failing" | "pending";
 }
 
+/** A parent's row: counts over its whole subtree set, which the row lists only the first of. */
+export interface RowPullRequestCounts {
+  total: number;
+  /** Open or draft with failing checks; each also counts in `open` or `draft`. */
+  failing: number;
+  open: number;
+  draft: number;
+  unknown: number;
+  merged: number;
+  closed: number;
+  /** Not recorded on the row's own ticket: only its descendants carry them. */
+  inside: number;
+}
+
+/** A parent's row lists this many of its subtree set; its counts cover the whole set. */
+export const PARENT_ROW_PULL_REQUESTS = 8;
+
 /**
- * A row's `pullRequests`: every linked pull request, the ones still moving first (open, draft,
- * unknown, then merged and closed), newest first within a state. A GitHub pull request is all
- * a link can be, so every one is drawn: one with no state read yet draws as unknown. Given a
- * parent's subtree set, each names the tickets it is linked on.
+ * A row's `pullRequests`. A leaf's: every linked pull request, the ones still moving first
+ * (open, draft, unknown, then merged and closed), newest first within a state. A GitHub pull
+ * request is all a link can be, so every one is drawn: one with no state read yet draws as
+ * unknown. A parent's (given its subtree set, `subtree-pull-requests.ts`): the ones with
+ * failing checks first, then the same order, only the first `PARENT_ROW_PULL_REQUESTS`, each
+ * naming the tickets it is linked on, and `pullRequestCounts` over the whole set.
  */
-export function rowPullRequests(linked: readonly (LinkedPullRequest | SubtreePullRequest)[] | undefined): { pullRequests?: RowPullRequest[] } {
+export function rowPullRequests(linked: readonly (LinkedPullRequest | SubtreePullRequest)[] | undefined): {
+  pullRequests?: RowPullRequest[];
+  pullRequestCounts?: RowPullRequestCounts;
+} {
   const drawable = (linked ?? []).filter((pr) => pr.providerId === "github" && pr.number !== null);
   if (!drawable.length) return {};
   const stateOf = (pr: LinkedPullRequest): RowState => (ROW_STATES.includes(pr.state as RowState) && pr.state !== "unknown" ? (pr.state as RowState) : "unknown");
-  return {
-    pullRequests: [...drawable]
-      .sort((a, b) => ROW_STATES.indexOf(stateOf(a)) - ROW_STATES.indexOf(stateOf(b)) || b.number! - a.number!)
-      .map((pr) => ({
-        provider: "github",
-        number: pr.number!,
-        url: pr.url,
-        state: stateOf(pr),
-        title: pr.title,
-        updatedAt: pr.fetchedAt,
-        ...(pr.checks ? { checks: pr.checks.state } : {}),
-        ...("tickets" in pr ? { tickets: pr.tickets.map((ticket) => ticket.identifier) } : {}),
-      })),
-  };
+  const failing = (pr: LinkedPullRequest) => (pr.state === "open" || pr.state === "draft") && pr.checks?.state === "failing";
+  const parent = drawable.some((pr) => "tickets" in pr);
+  const rank = (pr: LinkedPullRequest) => (parent && failing(pr) ? -1 : ROW_STATES.indexOf(stateOf(pr)));
+  const sorted = [...drawable].sort((a, b) => rank(a) - rank(b) || b.number! - a.number!);
+  const row = (pr: LinkedPullRequest | SubtreePullRequest): RowPullRequest => ({
+    provider: "github",
+    number: pr.number!,
+    url: pr.url,
+    state: stateOf(pr),
+    title: pr.title,
+    updatedAt: pr.fetchedAt,
+    ...(pr.checks ? { checks: pr.checks.state } : {}),
+    ...("tickets" in pr ? { tickets: pr.tickets.map((ticket) => ticket.identifier) } : {}),
+  });
+  if (!parent) return { pullRequests: sorted.map(row) };
+  const counts: RowPullRequestCounts = { total: drawable.length, failing: 0, open: 0, draft: 0, unknown: 0, merged: 0, closed: 0, inside: 0 };
+  for (const pr of drawable) {
+    counts[stateOf(pr)] += 1;
+    if (failing(pr)) counts.failing += 1;
+    if ("own" in pr && !pr.own) counts.inside += 1;
+  }
+  return { pullRequests: sorted.slice(0, PARENT_ROW_PULL_REQUESTS).map(row), pullRequestCounts: counts };
 }

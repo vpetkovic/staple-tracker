@@ -1202,6 +1202,9 @@ type _CrossBlockerShapeMatchesInterface = Expect<
 const linkedPullRequestShape = z.object({
   resourceId: z.string(),
   providerId: z.string(),
+  ref: z
+    .object({ providerId: z.string(), host: z.string(), scopeId: z.string(), containerId: z.string(), id: z.string(), kind: z.literal("pull_request") })
+    .describe("The provider identity, as an external link's resource ref: which connection reads it"),
   key: z.string().describe("owner/repo#12"),
   url: z.string(),
   number: z.number().nullable(),

@@ -102,6 +102,10 @@ describe("a parent's subtree pull requests on every surface", () => {
     // The agent pane shows exactly what get_task answers, field for field.
     const pane = await http(`/api/agent-context?ws=app&ref=${refs.epic}`);
     expect(pane.subtreePullRequests).toEqual(shown.subtreePullRequests);
+    // And the detail and the ticket card carry the very same entries.
+    expect((await http(`/api/issue?ws=app&ref=${refs.epic}`)).subtreePullRequests).toEqual(shown.subtreePullRequests);
+    const card = await mcp.call("show_ticket", { ref: refs.epic, ws: "app" });
+    expect((card.structuredContent as { ticket: { subtreePullRequests: unknown } }).ticket.subtreePullRequests).toEqual(shown.subtreePullRequests);
 
     expect((await cliJson("show", refs.a)).subtreePullRequests).toBeUndefined();
     expect(((await mcp.call("get_task", { ref: refs.a, ws: "app" })).structuredContent as Record<string, unknown>).subtreePullRequests).toBeUndefined();
@@ -141,6 +145,9 @@ describe("a parent's subtree pull requests on every surface", () => {
   it("the detail carries the set and the row draws it; a leaf row keeps its own", async () => {
     const detail = await http(`/api/issue?ws=app&ref=${refs.epic}`);
     expect(brief(detail.subtreePullRequests)).toEqual(expected());
+    // Each names its provider identity as an own link does, so its connection can be found.
+    expect(detail.subtreePullRequests[0].ref).toEqual(detail.externalLinks.find((l: { resource: { key: string } }) => l.resource.key === "team/repo#10").resource.ref);
+    expect(detail.subtreePullRequests[2].ref).toEqual({ providerId: "github", host: "github.com", scopeId: "host", containerId: "42", id: "30", kind: "pull_request" });
     expect((await http(`/api/issue?ws=app&ref=${refs.b}`)).subtreePullRequests).toBeUndefined();
 
     const rows = (await http("/api/issues?ws=app")) as Array<{ issue: { identifier: string }; pullRequests?: Array<{ number: number; state: string; tickets?: string[] }> }>;
@@ -151,6 +158,9 @@ describe("a parent's subtree pull requests on every surface", () => {
       [20, "merged", [refs.a]],
     ]);
     expect(row(refs.b).pullRequests!.map((p) => p.number)).toEqual([30]);
+    // A parent's row counts its whole set; a leaf's carries no counts.
+    expect((row(refs.epic) as unknown as { pullRequestCounts: unknown }).pullRequestCounts).toEqual({ total: 3, failing: 0, open: 1, draft: 1, unknown: 0, merged: 1, closed: 0, inside: 2 });
+    expect("pullRequestCounts" in row(refs.b)).toBe(false);
     // No checks were read on these: the field is absent, not null.
     expect(rows.flatMap((r) => r.pullRequests ?? []).some((p) => "checks" in p)).toBe(false);
     expect(row(refs.quiet).pullRequests).toBeUndefined();
@@ -215,6 +225,11 @@ describe("a parent's subtree pull requests on every surface", () => {
       // The row carries the checks' state too, on the parent and on the child's own row.
       expect(await rowOf(second.identifier)).toEqual([[60, "open", "failing"]]);
       expect(await rowOf(child.identifier)).toEqual([[60, "open", "failing"]]);
+      // The terminal and the card text say so too, a leaf's card included.
+      expect((await cli("show", second.identifier)).stdout).toContain(`  open    team/repo#60  PR 60 · checks failing: test · ${child.identifier}`);
+      const said = async (ref: string) => ((await mcp.call("show_ticket", { ref, ws: "app" })).content as Array<{ text: string }>)[0]!.text;
+      expect(await said(second.identifier)).toContain(`Pull requests: team/repo#60 open, checks failing: test (${child.identifier}).`);
+      expect(await said(child.identifier)).toContain("Pull requests: team/repo#60 open, checks failing: test.");
       store.externalLinks().remember({ ...pr(60, "merged"), fetchedAt: "2026-11-25T14:00:00.000Z" });
       await changed();
       expect(await rowOf(second.identifier)).toEqual([[60, "merged"]]);

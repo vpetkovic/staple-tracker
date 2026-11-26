@@ -1,4 +1,5 @@
 import type { ExternalLink, ExternalRowSummary } from "../../../../core/integrations/link-store.js";
+import type { RowPullRequestCounts } from "../../../../core/integrations/pr-discovery.js";
 import type { SubtreePullRequest } from "../../../../core/subtree-pull-requests.js";
 import type { TicketBranch } from "../../../../core/ticket-branch.js";
 import type { HorizonData, IdeaData, IdeaDetailData, PlanStepData } from "./plan-types.js";
@@ -865,21 +866,10 @@ export interface PullRequestRef {
 }
 
 /**
- * A parent row's whole subtree set, counted. The row carries only the first of its pull
- * requests (the ones that need a person first); these say how many there are in all.
+ * A parent row's whole subtree set, counted (core/integrations/pr-discovery.ts). The row
+ * carries only the first of its pull requests; these say how many there are in all.
  */
-export interface PullRequestCounts {
-  total: number;
-  /** Open or draft with failing checks; they count in `open` or `draft` too. */
-  failing: number;
-  open: number;
-  draft: number;
-  unknown: number;
-  merged: number;
-  closed: number;
-  /** How many are not recorded on the row's own ticket: above zero, the set reaches into the children. */
-  inside: number;
-}
+export type PullRequestCounts = RowPullRequestCounts;
 
 /** GET /api/issues */
 /**
@@ -972,7 +962,11 @@ export interface IssueRow {
    * freezing it into the entity would be a lie waiting to happen.
    */
   pullRequests?: PullRequestRef[];
-  /** On a parent's row: its subtree set counted, when `pullRequests` holds only the first of it. */
+  /**
+   * On a parent's row only: counts by state over its whole subtree set, of which
+   * `pullRequests` lists the first eight (failing checks first). `inside` counts the ones
+   * only its descendants carry. Absent on a leaf's row and on a row with none.
+   */
   pullRequestCounts?: PullRequestCounts;
   externalLinks?: ExternalRowSummary;
   /**

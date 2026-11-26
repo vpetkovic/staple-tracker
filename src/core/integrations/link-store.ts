@@ -27,6 +27,8 @@ export interface ExternalResource extends ResolvedExternalItem {
 export interface LinkedPullRequest {
   resourceId: string;
   providerId: string;
+  /** The provider identity, as an own link's `resource.ref`: which connection reads it. */
+  ref: { providerId: string; host: string; scopeId: string; containerId: string; id: string; kind: "pull_request" };
   key: string;
   url: string;
   /** The provider's number, from the key (`owner/repo#12` is 12); null when the key names none. */
@@ -299,18 +301,20 @@ export class ExternalLinkStore {
    * it to those tickets (a parent's subtree, `subtree-pull-requests.ts`), still one query.
    */
   pullRequests(issueIds?: readonly string[]): Map<string, LinkedPullRequest[]> {
-    const rows = this.db.prepare(`SELECT l.issue_id,l.created_at AS linked_at,r.id,r.provider_id,r.display_key,r.url,
+    const rows = this.db.prepare(`SELECT l.issue_id,l.created_at AS linked_at,r.id,r.provider_id,r.host,r.scope_id,r.container_id,r.remote_id,r.display_key,r.url,
         CASE WHEN p.fetched_at IS NOT NULL AND (r.fetched_at IS NULL OR p.fetched_at>=r.fetched_at) THEN p.title ELSE r.title END AS title,
         CASE WHEN p.fetched_at IS NOT NULL AND (r.fetched_at IS NULL OR p.fetched_at>=r.fetched_at) THEN p.status_json ELSE r.status_json END AS status_json,
         CASE WHEN p.fetched_at IS NOT NULL AND (r.fetched_at IS NULL OR p.fetched_at>=r.fetched_at) THEN p.fetched_at ELSE r.fetched_at END AS fetched_at
       FROM external_links l JOIN external_resources r ON r.id=l.resource_id LEFT JOIN external_private_cache p ON p.resource_id=r.id
       WHERE r.kind='pull_request' AND (? IS NULL OR l.issue_id IN (SELECT value FROM json_each(?)))
-      ORDER BY l.issue_id,l.position,l.created_at,l.rowid`).all(...Array(2).fill(issueIds === undefined ? null : JSON.stringify(issueIds))) as Array<{issue_id:string;linked_at:string;id:string;provider_id:string;display_key:string;url:string;title:string|null;status_json:string|null;fetched_at:string|null}>;
+      ORDER BY l.issue_id,l.position,l.created_at,l.rowid`).all(...Array(2).fill(issueIds === undefined ? null : JSON.stringify(issueIds))) as Array<{issue_id:string;linked_at:string;id:string;provider_id:string;host:string;scope_id:string;container_id:string;remote_id:string;display_key:string;url:string;title:string|null;status_json:string|null;fetched_at:string|null}>;
     const result = new Map<string, LinkedPullRequest[]>();
     for (const row of rows) {
       const number = Number(/#([1-9][0-9]*)$/.exec(row.display_key)?.[1]);
       const list = result.get(row.issue_id) ?? [];
-      list.push({ resourceId: row.id, providerId: row.provider_id, key: row.display_key, url: row.url,
+      list.push({ resourceId: row.id, providerId: row.provider_id,
+        ref: { providerId: row.provider_id, host: row.host, scopeId: row.scope_id, containerId: row.container_id, id: row.remote_id, kind: "pull_request" },
+        key: row.display_key, url: row.url,
         number: Number.isSafeInteger(number) ? number : null, state: readStatus(row.status_json)?.id ?? null, title: row.title,
         checks: readExtras(row.status_json).pullRequest?.checks ?? null, fetchedAt: row.fetched_at, linkedAt: row.linked_at });
       result.set(row.issue_id, list);
