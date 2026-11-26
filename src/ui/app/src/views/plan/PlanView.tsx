@@ -212,6 +212,7 @@ function WorkspacePlan({ workspace, onAuthError }: { workspace: string; onAuthEr
           capture={capture}
           folded={folded}
           onFold={fold}
+          landing={session.milestoneFocus}
         />
       </TabsContent>
       </Tabs>

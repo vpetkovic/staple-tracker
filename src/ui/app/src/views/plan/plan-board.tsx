@@ -29,6 +29,8 @@ export interface BoardProps {
   /** The Horizons lens's folds as the person chose them (plan memory), and how one is chosen. */
   folded?: Record<string, boolean>;
   onFold?: (changes: Record<string, boolean>) => void;
+  /** The horizon a link landed on (its identifier or id; the address's `focus`): the Horizons lens scrolls to it, unfolds it for the visit and marks it. */
+  landing?: string | null;
   /** Captures a raw idea; the Ideas lens draws its field at the top of Raw. */
   capture?: (title: string) => Promise<boolean>;
 }

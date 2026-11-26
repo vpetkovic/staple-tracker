@@ -173,3 +173,30 @@ it("puts the control at the right end of the outline's first line where the tool
     }
   }
 }, 30_000);
+
+it("lands a link to a horizon on its section: unfolded for the visit, marked, and nothing remembered changes", async () => {
+  const { page, close } = await onHorizons(1600);
+  try {
+    await toolbarControl(page).click();
+    await expect.poll(() => rows(page)).toEqual([]);
+    // The address a row's horizon chip writes: the focus names the horizon.
+    await page.goto(route(`&ws=larkspur&plan-lens=horizons&focus=${next.identifier}`));
+    await page.locator(`[data-plan-horizon="${next.identifier}"]`).waitFor();
+    await expect.poll(() => rows(page)).toEqual([onNext]);
+    const section = page.locator(`[data-plan-column="h:${next.id}"]`);
+    expect(await section.getAttribute("data-plan-landed")).toBe("");
+    // The mark goes; the section stays unfolded for the visit.
+    await expect.poll(() => section.getAttribute("data-plan-landed"), { timeout: 4000 }).toBeNull();
+    expect(await rows(page)).toEqual([onNext]);
+    // Folding it by hand ends the visit's unfold.
+    await page.locator(`[data-plan-horizon-fold="${next.identifier}"]`).click();
+    await expect.poll(() => rows(page)).toEqual([]);
+    // Without the focus the lens is as it was remembered: everything folded.
+    await page.goto(route("&ws=larkspur&plan-lens=horizons"));
+    await page.locator(`[data-plan-horizon="${now.identifier}"]`).waitFor();
+    expect(await rows(page)).toEqual([]);
+    expect(await toolbarControl(page).innerText()).toBe("Expand all");
+  } finally {
+    await close();
+  }
+}, 30_000);

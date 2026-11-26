@@ -35,7 +35,13 @@ interface LensContext {
   /** The folds the person chose, by horizon id and `NONE`; how one is chosen. */
   folded: Record<string, boolean>;
   onFold: (changes: Record<string, boolean>) => void;
+  /** The horizon a link landed on: unfolded for this visit (`visit`) and marked for a moment (`landed`). */
+  visit: string | null;
+  landed: string | null;
 }
+
+/** How long a landed section stays marked: the Milestones outline's own. */
+const LANDED_MS = 1600;
 
 /** What the lens calls the place a record with no horizon sits: the section, the drop rail and the move menu. */
 const NOT_SCHEDULED = "Not scheduled";
@@ -93,14 +99,36 @@ export function FoldAll({ plan, folded, onFold, filtering, quiet = false }: { pl
   );
 }
 
-export function HorizonsBoard({ plan, write, onOpen, selected, filtering = false, folded = {}, onFold = () => {} }: BoardProps) {
+export function HorizonsBoard({ plan, write, onOpen, selected, filtering = false, folded = {}, onFold = () => {}, landing = null }: BoardProps) {
   const columns = lensColumns(plan);
   const [dragging, setDragging] = useState<IdeaData | null>(null);
-  const lens: LensContext = { plan, columns, write, onOpen, selected, filtering, dragging, onDrag: setDragging, folded, onFold };
+  // A link to a horizon lands on its section: scrolled to the top, unfolded for the visit without
+  // changing what is remembered, and marked for a moment. A fold the person makes ends the visit's.
+  const target = landing === null ? null : (plan.horizons.find((horizon) => horizon.identifier === landing || horizon.id === landing)?.id ?? null);
+  const [visit, setVisit] = useState<string | null>(null);
+  const [landed, setLanded] = useState<string | null>(null);
+  const board = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (target === null) return;
+    setVisit(target);
+    setLanded(target);
+    // After the page has put back the scroll position it remembers for this lens.
+    const scroll = window.setTimeout(() => board.current?.querySelector(`[data-plan-column="h:${CSS.escape(target)}"]`)?.scrollIntoView({ block: "start" }), 80);
+    const mark = window.setTimeout(() => setLanded((current) => (current === target ? null : current)), LANDED_MS);
+    return () => {
+      window.clearTimeout(scroll);
+      window.clearTimeout(mark);
+    };
+  }, [target]);
+  const fold = (changes: Record<string, boolean>) => {
+    setVisit(null);
+    onFold(changes);
+  };
+  const lens: LensContext = { plan, columns, write, onOpen, selected, filtering, dragging, onDrag: setDragging, folded, onFold: fold, visit, landed };
   return (
     <div className="relative flex h-full min-h-0 flex-col">
       {dragging ? <DropRail lens={lens} /> : null}
-      <div className="min-h-0 flex-1 overflow-y-auto pb-6" data-plan-board>
+      <div ref={board} className="min-h-0 flex-1 overflow-y-auto pb-6" data-plan-board>
         <ReadySection lens={lens} column={columns[0]!} />
         {columns.slice(1).map((column) => (
           <HorizonSection key={column.key} lens={lens} column={column} />
@@ -225,11 +253,24 @@ function HorizonSection({ lens, column }: { lens: LensContext; column: BoardColu
   const rows = planTree({ horizonId: horizon.id, ideas: lens.plan.ideas, horizons: lens.plan.horizons });
   const done = horizonDone(horizon);
   // Never folded while a filter is on, so every match shows; nothing is applied or chosen then.
-  const folded = !lens.filtering && isFolded(lens.folded, horizon.id, done);
+  const folded = !lens.filtering && lens.visit !== horizon.id && isFolded(lens.folded, horizon.id, done);
   const fold = () => lens.onFold({ [horizon.id]: !folded });
   const { mark, handlers, state } = useDropTarget(lens, column);
+  const marked = lens.landed === horizon.id;
   return (
-    <section aria-label={horizon.name} data-plan-column={column.key} data-plan-drop={state} {...handlers} className="border-b">
+    <section
+      aria-label={horizon.name}
+      data-plan-column={column.key}
+      data-plan-drop={state}
+      data-plan-landed={marked ? "" : undefined}
+      {...handlers}
+      className={cn(
+        "relative border-b",
+        // The landing mark: a ring over the whole section that fades; none with reduced motion.
+        "after:pointer-events-none after:absolute after:inset-0 after:z-20 after:opacity-0 after:shadow-[inset_0_0_0_2px_var(--color-ring)] after:transition-opacity after:duration-700 after:content-[''] motion-reduce:after:hidden",
+        marked && "after:opacity-100 after:duration-150",
+      )}
+    >
       <HorizonHeader horizon={horizon} today={lens.plan.today} write={lens.write} onOpen={lens.onOpen} done={done} folded={folded} onFold={lens.filtering ? null : fold} drop={mark} />
       {done && lens.filtering ? (
         // While filtering the section shows every match and cannot fold: the line only says it landed.
