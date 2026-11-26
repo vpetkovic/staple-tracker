@@ -1,1102 +1,557 @@
 /**
- * The Queue destination — R2d (STA-169), design/queue.md, redesigned.
+ * The Queue page: the order agents take work in, one workspace at a time or every workspace's
+ * plan in its own section on All workspaces.
  *
- * ── WHAT THIS VIEW IS, AND THE TWO THINGS IT USED TO BE ───────────────────────────────
+ * THE PAGE is one dense list, the full width of the content card and its one scroller, like
+ * the Inbox. Under each header the first row is the pinned next row: what an agent asking now
+ * would be handed, and why that one. Then the plan's entries in order; a container entry rolls
+ * up its tasks and opens to them (paged, first five), with an epic caption above the tasks it
+ * holds. Then the band of open work after the plan, folded. The words for every state are
+ * queue-words.ts; which rows are drawn is queue-lines.ts; the rows are QueueRow.tsx and
+ * QueueParts.tsx.
  *
- * It was two panes over one payload: THE PLAN on the left and THE EFFECTIVE ORDER on the
- * right. Both were correct and, put side by side against a real plan, they were the same
- * list twice — every right-hand row already appeared on the left carrying the same numbers.
- * The second pane read as a duplicate rather than as a second question answered, and the
- * relationship between the two was spelled out per row in monospace (`expands to 8`,
- * `pickup #10`, `#2 · from plan #1`): three numbering scales in one list.
+ * THE DATA is `use-workspace-queue.ts`: `useWorkspaceQueue` for a workspace page, `useHubQueue`
+ * plus `sectionRead` and `useQueueSection` per section on All workspaces. Nothing about order
+ * or eligibility is decided here; every write goes through the section's own callbacks.
  *
- * A first redesign made the left pane a real tree and turned the right pane into a rail that
- * read whichever row you selected. That fixed the duplication and kept a defect: the rail's
- * verbs did not survive contact with the data. "Add to plan" sat on a DESCENDANT that was
- * already going to be worked — it is in the effective order because its parent is queued — so
- * the button a reader was most likely to press was the one that read as a contradiction. And
- * a panel whose contents change by selection is a second place to look for actions that the
- * row's own `⋯` already owns.
+ * REORDER. Drag the plan number (queue-drag.ts), Alt and an arrow, Alt Home or End, or the
+ * row's menu: every path ends in the section's `move(from, to)` or `moveToEdge`. A move is
+ * announced politely once the plan answers.
  *
- * So there is now ONE THING ON THIS PAGE: the pickup order, full width, as a tree.
- *
- *   THE ORDER is the plan in plan order, with every queued container's expansion nested
- *   underneath it on the tree view's own connector rails. "This is a descendant of that" is
- *   read from the SHAPE. That is the whole redesign: the old flat list forced a reader to
- *   guess whether an indented row was a subtask, a blocker or something the row above was
- *   blocking, and the answer — it is a descendant, always — was nowhere on screen.
- *
- *   THE BAND across the top is the one fact a panel was never needed for: the row an agent
- *   asking right now would be handed.
- *
- *   THE `⋯` MENU is where every row action lives, here and on the tree, so there is exactly
- *   one place to look for them.
- *
- * ── WORK THAT IS ALREADY IN FLIGHT ────────────────────────────────────────────────────
- *
- * An agent claiming a row while you are looking at it changes NOTHING about where the row is.
- * design/queue.md: "Rows are never dropped for being ineligible", and `queue-store.ts` gives it
- * `eligibility: "claimed"` with the store's own sentence (`held by codex-1`) and the holder in
- * `detail`. So the row keeps its place, wears the app's existing live treatment, and its
- * ordinal dims — a number that is no longer a turn that is coming. Nothing moves under the
- * cursor, nothing disappears, nothing is on a timer: the 1.5s poll re-reads and the row
- * corrects itself. A view that lifted claimed work into a section of its own would make the
- * order rearrange itself while somebody was reading it, which is the one thing an order must
- * not do.
- *
- * ── ONE NUMBER, ON THE ROWS IT DESCRIBES ──────────────────────────────────────────────
- *
- * A leaf prints its effective position and nothing else. A container prints `step N` — its
- * place in the plan — and no ordinal, because it is never a checkout target and inventing a
- * position for it would be the lie `row-cues.ts` refuses to tell. `from plan #N` is gone:
- * the row is drawn UNDERNEATH the plan row it came from. See `rowOrdinal` in queue-model.ts.
- *
- * ── THE PLAN IS SHOWN WHOLE, RESOLVED ROWS INCLUDED ───────────────────────────────────
- *
- * The read is `all: true` unconditionally, and no longer follows the page's Done filter.
- * Following it was a real defect rather than a preference: the resolver reserves a plan
- * position for a resolved entry, so filtering the entry out of `entries` left the list
- * numbered `1, 3, 4, 5` with nothing on screen explaining the gap — and hid the Prune
- * control at the same time, because `entries.filter(resolved)` was empty once the entries
- * were gone. Resolved rows are dimmed in place instead. The plan is a thing a human wrote;
- * a view of it that silently omits a step is not a view of it.
- *
- * ── WHAT DID NOT CHANGE, DELIBERATELY ─────────────────────────────────────────────────
- *
- * ONE ATOMIC REORDER PATH. Drag, alt+arrow, alt+Home/End and the menu's two moves all
- * end in `applyOrder(order)`, which is one `POST /api/queue/reorder` carrying
- * `baseRevision: view.revision`. The drag is still `settings/form/ReorderList`, which
- * already funnels its pointer and keyboard paths into a single `onMove(from, to)`. There is
- * still deliberately no second write path.
- *
- * A STALE REORDER. `revision_conflict` still means the store changed nothing, so the
- * server's order is still the truth: the view drops what it was showing, re-reads, and puts
- * the conflict up with the same TWO deliberate ways out — Reload and Retry my order.
- *
- * NOTHING ABOUT ORDER OR ELIGIBILITY IS DERIVED HERE. Expansion, the unqueued band and the
- * ladder are `store.queue().effectiveQueue()`'s, on every surface. This view joins, shapes
- * and words what it is sent.
- *
- * The presentational pieces take everything as props and read no context, so
- * `queue-render.test.tsx` renders them to static markup.
+ * THE KEYBOARD. Every row of every open section is one tab stop (`useRovingFocus`): Up and
+ * Down (and k, j) move, Home and End jump, Right and Left open and fold a container, Enter or
+ * Space opens the task, Alt and the arrows move an entry. Alt and an arrow on a task under an
+ * entry does nothing (`nestedRowKey`).
  */
-import { ChevronRight, ListOrdered, RefreshCw } from "lucide-react";
-import { useCallback, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
-import { GuardRefusal } from "@/components/GuardRefusal";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { QueueRowMenu, queueRowMenuState } from "@/components/QueueRowMenu";
-import type { RowMenuControl } from "@/components/task-list/TaskRowLine";
-import { useRowPlan } from "@/components/task-list/useRowPlan";
-import {
-  clampIndex,
-  onRowItself,
-  resolveTaskListConfig,
-  TaskRowLine,
-  useRovingFocus,
-  type TaskRow,
-} from "@/components/task-list";
-import { Button } from "@/components/ui/button";
-import { SearchableSelect, type SelectOption } from "@/components/ui/searchable-select";
-import { ReorderList } from "@/settings/form/ReorderList";
+import { onRowItself, useRovingFocus, type RovingFocus } from "@/components/task-list/roving";
+import type { TaskRow } from "@/components/task-list";
 import type { AuthError } from "@/lib/api";
+import { useRuns } from "@/lib/runs";
 import { useSession } from "@/lib/session";
-import type { EffectiveQueueRow, IssueRow, QueueEligibility, QueueView as QueueViewData } from "@/lib/types";
-import { cn } from "@/lib/utils";
-import { EmptyState, ErrorState, LoadingState } from "@/views/ViewChrome";
-import { ChooseWorkspace } from "@/views/ChooseWorkspace";
-import "./queue.css";
+import { openSettings } from "@/lib/shell-events";
+import type { Issue, WorkspaceRef } from "@/lib/types";
+import { useIsDesk } from "@/lib/use-media";
+import { ErrorState } from "@/views/ViewChrome";
 import { workspaceScope } from "@/views/workspace-scope";
-import {
-  ELIGIBILITY_PRESENTATION,
-  EXPANSION_PREVIEW_LIMIT,
-  previewOf,
-  reasonLabel,
-  rowOrdinal,
-  UNQUEUED_PREVIEW_LIMIT,
-  type EffectivePreview,
-  type PlanRow,
-} from "./queue-model";
+import { FailedBanner } from "@/views/attention/InboxParts";
+import "./queue.css";
+import { useEntryDrag } from "./queue-drag";
 import { nestedRowKey } from "./queue-keys";
-import { queueTreeRows, type QueueTreeRow } from "./queue-tree";
-import { useWorkspaceQueue, type QueueWriteFailure } from "./use-workspace-queue";
-import { BUCKET_ORDER, BUCKET_WORDS, queueSummary, summarySentence, type QueueBucket } from "./queue-summary";
-import { ProgressStrip } from "@/views/ProgressStrip";
-import { PROGRESS_COLOR } from "@/views/progress-palette";
-import { EmptyState as PlainEmptyState } from "@/components/plain/States";
-
-/**
- * THE ROW, EVERYWHERE ON THIS VIEW.
- *
- * `tree` rather than `panel`, which is the redesign in one line: the queue draws the same
- * row the tree draws, at the same density, with the same glyphs and the same connectors. The
- * two overrides are both subtractions — there is no multi-select here, and the `⋯` would be
- * a second way to reach actions the rail already owns for the selected row.
- */
-const QUEUE_ROW_COLUMNS = { select: false, disclosure: true, actions: true } as const;
-
-/** The queue row at this width — the tree's own ladder (row-layout.ts), so the two agree. */
-function useQueueRowConfig() {
-  const plan = useRowPlan();
-  // `desk`: the tree's desktop row on a line plan, so the two lists read as one system.
-  return useMemo(() => resolveTaskListConfig("tree", { columns: QUEUE_ROW_COLUMNS, plan, desk: true }), [plan]);
-}
-
-/**
- * The resolver's sentence for a row, as its caption — except, on the desk row, what the row
- * already says: a claim (the who cue: "Working", "Quiet 1h") and a blocker (the "Blocked by 1"
- * cue). "STA-313 is held by dux-shell" beside the holder's avatar would say it twice.
- */
-export function queueCaption(
-  effective: EffectiveQueueRow | null,
-  config: { desk?: boolean; plan?: { layout: string } },
-  row: Pick<TaskRow, "claim" | "issue"> & { deps?: TaskRow["deps"] },
-): string | undefined {
-  if (!effective) return undefined;
-  const desk = config.desk && config.plan?.layout === "line";
-  // Only when the who cue really names the holder; a row built from the plan alone may not.
-  const whoSaysIt = Boolean(row.claim?.heldBy ?? row.issue.checkoutAgent);
-  if (desk && effective.eligibility === "claimed" && whoSaysIt) return undefined;
-  // Likewise a blocker: the row's "Blocked by 1" cue says it, and names them on hover.
-  if (desk && effective.eligibility === "blocked" && (row.deps?.blockedBy.length ?? 0) > 0) return undefined;
-  return reasonLabel(effective) ?? undefined;
-}
+import { NO_FOLDS, revealKey, revealOf, rowKey, sectionLayout, withReveal, type RowPlace, type SectionFolds } from "./queue-lines";
+import { queueSummary } from "./queue-summary";
+import { issueFromEffective } from "./queue-tree";
+import { hasOpenWork, moveAnnouncement, nothingPickable, whyNext } from "./queue-words";
+import {
+  AddToQueue,
+  AllStrip,
+  AutopilotLink,
+  EmptyPlan,
+  FoldAllButton,
+  KeyHint,
+  PageStrip,
+  PolicyTag,
+  QueueSkeleton,
+  SectionHeader,
+  Standing,
+  type NextState,
+} from "./QueueParts";
+import { SectionBody } from "./QueueSection";
+import { sectionRead, useHubQueue, useQueueSection, useWorkspaceQueue, type QueueSection } from "./use-workspace-queue";
 
 export type { QueueWriteFailure } from "./use-workspace-queue";
-
-/** Everything the `⋯` on a queue row can do. Built by the view, one closure per row. */
-export type QueueRowActions = (row: TaskRow, trigger: ReactNode, control?: RowMenuControl) => ReactNode;
-
-/** Is somebody holding this row right now — the resolver's answer, or the page's claim. */
-function inFlight(effective: EffectiveQueueRow | null, row: TaskRow): boolean {
-  return effective?.eligibility === "claimed" || row.claim !== null;
-}
-
-// ---------- small pieces ----------
-
-/**
- * THE PICKUP NUMBER, marked as one.
- *
- * `#` is the EFFECTIVE scale throughout this app — `row-cues.ts` spells a plan position
- * `plan #2` and a pickup position `#2` precisely so the two can never be read as one — and
- * the queue's gutter now holds both scales at different indents: a plan entry prints its
- * plan position bare, a nested descendant prints its pickup number with the `#`. Without the
- * mark the column read `1 / 10 / 4 / 14`, which is two scales wearing the same clothes.
- */
-function ordinalLabel(row: EffectiveQueueRow | null): ReactNode {
-  const at = rowOrdinal(row);
-  return at === null ? null : `#${at}`;
-}
-
-/** Glyph AND word, never colour alone. `data-queue-eligibility` is what a test keys on. */
-export function EligibilityBadge({ eligibility }: { eligibility: QueueEligibility }) {
-  const { glyph, label } = ELIGIBILITY_PRESENTATION[eligibility];
-  return (
-    <span
-      data-queue-eligibility={eligibility}
-      className="inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] font-medium"
-    >
-      <span aria-hidden className="font-mono">
-        {glyph}
-      </span>
-      {label}
-    </span>
-  );
-}
-
-/**
- * THE ORDINAL GUTTER — one fixed-width column down the whole list, so every number shares a
- * right edge and the rows underneath a container line up with the rows beside it.
- *
- * It holds at most one thing per row and is EMPTY rather than absent when there is nothing
- * to say: a container's row, a bracket, an unqueued row. Reserved width is what keeps the
- * task rows on one left edge, which is the alignment the whole tree language depends on.
- */
-function Gutter({ children, dim = false }: { children?: ReactNode; dim?: boolean }) {
-  return (
-    <span
-      aria-hidden={children ? undefined : true}
-      className={cn(
-        "staple-queue-gutter w-12 shrink-0 pr-2 text-right font-mono text-[11px] tabular-nums text-text-tertiary",
-        // IN FLIGHT: somebody is holding this row, so its number is not a turn that is
-        // coming. The number stays — it is still where the row sits — it just stops
-        // advertising. See the header.
-        dim && "opacity-45",
-      )}
-    >
-      {children}
-    </span>
-  );
-}
-
-/**
- * WHAT AN AGENT ASKING RIGHT NOW WOULD BE HANDED.
- *
- * A band rather than a panel. It is one fact, it never changes by selection, and it is the
- * only thing the deleted rail said that a reader could not get from the list itself.
- */
-export function NextUpBand({
-  next,
-  onOpen,
-  desk = false,
-}: {
-  next: EffectiveQueueRow | null;
-  onOpen: (identifier: string) => void;
-  /** The desktop card: the same fact, with a sentence saying what it means. */
-  desk?: boolean;
-}) {
-  if (desk) {
-    return (
-      <section
-        data-queue-next-up
-        data-queue-next={next ? "eligible" : "none"}
-        className="staple-queue-next flex min-w-0 items-center gap-4 rounded-xl border bg-card px-4 py-3"
-      >
-        <div className="min-w-0 flex-1">
-          <div className="text-label font-medium text-muted-foreground">Next up</div>
-          {next ? (
-            <>
-              <div className="mt-0.5 flex min-w-0 items-baseline gap-2">
-                <span className="min-w-0 truncate text-title font-medium" title={next.title}>
-                  {next.title}
-                </span>
-                <span data-queue-next-ref className="shrink-0 text-label tabular-nums text-text-tertiary">
-                  {next.identifier}
-                </span>
-              </div>
-              <p className="mt-0.5 text-label text-muted-foreground">
-                An agent asking for work right now would get this task.
-              </p>
-            </>
-          ) : (
-            <p className="mt-0.5 text-body text-muted-foreground">
-              Nothing can be picked up right now: every task in the plan is waiting on something.
-            </p>
-          )}
-        </div>
-        {next ? (
-          /* The same drawn 24px and touch target as the phone band's Open. */
-          <Button
-            variant="outline"
-            size="xs"
-            data-queue-next-open
-            className="relative px-3 pointer-coarse:before:absolute pointer-coarse:before:inset-x-0 pointer-coarse:before:-inset-y-[11px] pointer-coarse:before:content-['']"
-            onClick={() => onOpen(next.identifier)}
-          >
-            Open
-          </Button>
-        ) : null}
-      </section>
-    );
-  }
-  return (
-    <section
-      data-queue-next-up
-      data-queue-next={next ? "eligible" : "none"}
-      className="flex min-w-0 items-center gap-3 rounded-md border px-3 py-2"
-    >
-      <span className="shrink-0 text-[11px] font-medium uppercase tracking-wide text-text-tertiary">
-        Next up
-      </span>
-      {next ? (
-        <>
-          <span data-queue-next-ref className="shrink-0 font-mono text-[12px] text-text-tertiary">
-            {next.identifier}
-          </span>
-          <span className="min-w-0 flex-1 truncate text-[13px]">{next.title}</span>
-          {/* Drawn at 24px so the strip stays one line; on touch a ::before carries a 46px target. */}
-          <Button variant="outline" size="xs" data-queue-next-open className="relative pointer-coarse:before:absolute pointer-coarse:before:inset-x-0 pointer-coarse:before:-inset-y-[11px] pointer-coarse:before:content-['']" onClick={() => onOpen(next.identifier)}>
-            Open
-          </Button>
-        </>
-      ) : (
-        <span className="min-w-0 flex-1 text-[13px] text-muted-foreground">
-          Nothing is pickable right now — every row is waiting on something.
-        </span>
-      )}
-    </section>
-  );
-}
-
-/**
- * ONE ROW OF THE QUEUE TREE: the gutter, then the shared task row.
- *
- * Clicking it SELECTS rather than opens. That is the deliberate difference from the tree
- * view, and it is what makes the rail work: this view's question is "what is this and what
- * do I do with it", and answering it in a rail beside the list beats throwing a drawer over
- * the order the reader is trying to read. Opening is still one click away — the arrow button
- * on the row, and the rail's own Open.
- */
-export function QueueTreeLine({
-  entry,
-  ordinal,
-  focused,
-  now,
-  actions,
-  onOpen,
-  onToggle,
-  onFocus,
-  onKeyDown,
-  registerRef,
-}: {
-  entry: QueueTreeRow;
-  ordinal: ReactNode;
-  focused: boolean;
-  now: Date;
-  actions?: QueueRowActions;
-  onOpen: () => void;
-  onToggle?: () => void;
-  onFocus?: () => void;
-  onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
-  registerRef?: (element: HTMLDivElement | null) => void;
-}) {
-  const identifier = entry.row.issue.identifier;
-  const live = inFlight(entry.effective, entry.row);
-  const config = useQueueRowConfig();
-  return (
-    <div
-      data-queue-tree-row={identifier}
-      data-queue-bracket={entry.effective === null ? "true" : undefined}
-      data-queue-inflight={live ? "true" : undefined}
-      className="flex min-w-0 items-center rounded-md"
-    >
-      <Gutter dim={live}>{ordinal}</Gutter>
-      <div className="min-w-0 flex-1">
-        {/*
-          `list` SEMANTICS, NOT `bare` — and the difference is the whole keyboard story.
-          `bare` means "the host is already the option and already owns focus", which is true
-          of cmdk and was NOT true here: the host was a plain `<li>`, so the rows had no role,
-          no tab stop and no key handling. `list` gives the row `role="option"`, the roving
-          `tabIndex` and the arrow keys, which is what this list actually is: a set of things,
-          pick one.
-        */}
-        <TaskRowLine
-          row={entry.row}
-          config={config}
-          semantics="list"
-          now={now}
-          isExpanded={entry.row.isExpanded}
-          isFocused={focused}
-          /*
-           * THE RESOLVER'S OWN SENTENCE, ON THE ROW. `caption` is exactly the slot for it (see
-           * TaskRowLine): one muted trailing sentence inside the title cell, costing no height
-           * and eating only space the title was going to have. "Why can nobody take this" is a
-           * question a reader asks while SCANNING, and an answer that needs a click first is
-           * an answer they will not get.
-           */
-          caption={queueCaption(entry.effective, config, entry.row)}
-          onOpen={onOpen}
-          onFocus={onFocus}
-          onKeyDown={onKeyDown}
-          onToggleExpand={onToggle}
-          actionsMenu={actions ? (trigger, control) => actions(entry.row, trigger, control) : undefined}
-          registerRef={registerRef}
-        />
-      </div>
-    </div>
-  );
-}
-
-/**
- * ONE LISTBOX OF QUEUE ROWS, with the tab stop and the arrow keys the tree already owes.
- *
- * `useRovingFocus` is the SAME hook `TreeGrid` and `TaskList` use — exactly one row in the
- * list is tabbable and the arrows move which one — so a reader who has learned the tree has
- * learned this. Enter and Space open the focused row's details, as `TaskList` does.
- */
-function QueueRowList({
-  label,
-  rows,
-  ordinalOf,
-  now,
-  actions,
-  onOpen,
-  onToggle,
-  testAttr,
-}: {
-  label: string;
-  rows: readonly QueueTreeRow[];
-  ordinalOf: (entry: QueueTreeRow) => ReactNode;
-  now: Date;
-  actions?: QueueRowActions;
-  onOpen: (identifier: string) => void;
-  onToggle?: (identifier: string) => void;
-  testAttr?: Record<string, string>;
-}) {
-  const keys = useMemo(() => rows.map((entry) => entry.row.issue.identifier), [rows]);
-  const focus = useRovingFocus(keys);
-
-  return (
-    <div role="listbox" aria-label={label} className="flex flex-col" {...testAttr}>
-      {rows.map((entry, index) => {
-        const identifier = entry.row.issue.identifier;
-        return (
-          <QueueTreeLine
-            key={identifier}
-            entry={entry}
-            ordinal={ordinalOf(entry)}
-            focused={focus.activeKey === identifier}
-            now={now}
-            actions={actions}
-            onOpen={() => onOpen(identifier)}
-            onToggle={entry.row.hasChildren && onToggle ? () => onToggle(identifier) : undefined}
-            onFocus={() => focus.set(identifier)}
-            registerRef={focus.register(identifier)}
-            onKeyDown={(event) => {
-              const at = (i: number) => keys[clampIndex(i, keys.length)]!;
-              const action = nestedRowKey(event, onRowItself(event));
-              if (action === null) return;
-              event.preventDefault();
-              // Alt and an arrow is a move of the plan entry this list hangs under (its
-              // reorder row listens for it); a nested row is not that entry (queue-keys.ts).
-              if (action === "swallow") event.stopPropagation();
-              else if (action === "next") focus.go(at(index + 1));
-              else if (action === "previous") focus.go(at(index - 1));
-              else onOpen(identifier);
-            }}
-          />
-        );
-      })}
-    </div>
-  );
-}
-
-/**
- * WHAT A QUEUED CONTAINER EXPANDS TO, nested under the container's own row.
- *
- * Capped, with the remainder counted rather than hidden, exactly as before: a queued epic
- * can be a dozen children deep and a plan of five epics would otherwise be sixty rows of
- * somebody else's problem. What changed is only the SHAPE — the rows shown are the same
- * rows, in the same effective order, drawn on the tree's rails so their relationship to the
- * container is visible instead of stated.
- */
-function PlanRowExpansion({
-  plan,
-  known,
-  workspace,
-  now,
-  collapsed,
-  actions,
-  onOpen,
-  onToggle,
-}: {
-  plan: PlanRow;
-  known: ReadonlyMap<string, IssueRow>;
-  workspace: string;
-  now: Date;
-  collapsed: ReadonlySet<string>;
-  actions?: QueueRowActions;
-  onOpen: (identifier: string) => void;
-  onToggle: (identifier: string) => void;
-}) {
-  const { shown, hidden } = useMemo(
-    () => previewOf(plan.expansion, EXPANSION_PREVIEW_LIMIT),
-    [plan.expansion],
-  );
-  /*
-   * MEMOISED. This builds a forest, a walk and one synthesised `Issue` per row, and the view
-   * re-renders on every keystroke in the add box, every selection and every fold — not only
-   * on the 1.5s poll. Without this, typing in the search field rebuilt the whole expansion of
-   * every queued container per character.
-   */
-  const rows = useMemo(
-    () => queueTreeRows(shown, { known, workspace, root: plan.entry.identifier, collapsed }),
-    [shown, known, workspace, plan.entry.identifier, collapsed],
-  );
-  return (
-    <div data-queue-expansion={plan.entry.identifier}>
-      <QueueRowList
-        label={`What ${plan.entry.identifier} expands to`}
-        rows={rows}
-        ordinalOf={(entry) => ordinalLabel(entry.effective)}
-        now={now}
-        actions={actions}
-        onOpen={onOpen}
-        onToggle={onToggle}
-      />
-      {hidden > 0 ? (
-        <p data-queue-expansion-more className="px-2 pb-1 pl-16 text-[11px] text-text-tertiary">
-          and {hidden} more under {plan.entry.identifier}
-        </p>
-      ) : null}
-    </div>
-  );
-}
-
-/**
- * NOT PLANNED — the unqueued band, folded.
- *
- * design/queue.md: "the queue is a prefix, not a filter", and this is that sentence as a
- * control. Folded by default because it is every other open leaf in the workspace and would
- * otherwise be most of the screen; open it and the rows are the same tree rows, so a reader
- * comparing planned work to unplanned work is comparing like with like.
- */
-export function UnqueuedSection({
-  preview,
-  known,
-  workspace,
-  now,
-  open,
-  actions,
-  onToggleOpen,
-  onOpen,
-}: {
-  preview: EffectivePreview;
-  known: ReadonlyMap<string, IssueRow>;
-  workspace: string;
-  now: Date;
-  open: boolean;
-  actions?: QueueRowActions;
-  onToggleOpen: () => void;
-  onOpen: (identifier: string) => void;
-}) {
-  const total = preview.unqueued.length + preview.unqueuedHidden;
-  // Memoised for the reason `PlanRowExpansion`'s is; empty while folded costs nothing.
-  const rows = useMemo(
-    () => (open ? queueTreeRows(preview.unqueued, { known, workspace, root: null }) : []),
-    [open, preview.unqueued, known, workspace],
-  );
-  if (total === 0) return null;
-  return (
-    <section data-queue-unqueued-section className="mt-3 border-t pt-2">
-      <button
-        type="button"
-        data-queue-unqueued-toggle
-        aria-expanded={open}
-        onClick={onToggleOpen}
-        className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-[12px] text-muted-foreground outline-none hover:bg-surface-hover focus-visible:bg-surface-hover"
-      >
-        <ChevronRight
-          aria-hidden
-          className={cn("size-3.5 transition-transform", open && "rotate-90")}
-        />
-        <span className="font-medium">Not planned</span>
-        <span data-queue-unqueued-count className="text-text-tertiary">
-          {total} {total === 1 ? "item" : "items"} · picked up after the plan
-        </span>
-      </button>
-      {open ? (
-        <>
-          <QueueRowList
-            label="Work that is not in the plan"
-            rows={rows}
-            /* No ordinal: these rows are not in the plan, and the section says so once. */
-            ordinalOf={() => null}
-            now={now}
-            actions={actions}
-            onOpen={onOpen}
-            testAttr={{ "data-queue-unqueued": "true" }}
-          />
-          {preview.unqueuedHidden > 0 ? (
-            <p data-queue-unqueued-more className="px-2 py-1 pl-16 text-[11px] text-text-tertiary">
-              and {preview.unqueuedHidden} more
-            </p>
-          ) : null}
-        </>
-      ) : null}
-    </section>
-  );
-}
-
-/**
- * ONE PLAN ENTRY.
- *
- * The bordered position `<input>` that used to sit here is gone: it put a form control on
- * every row of a list, which is what made the plan read as a form rather than as an order.
- * Moving a row is drag, alt+arrow, alt+Home/End and the `⋯`'s two moves — four paths, all
- * landing in the one `reorder` write.
- */
-function PlanRowContent({
-  plan,
-  now,
-  busy,
-  expanded,
-  actions,
-  onOpen,
-  onToggleExpand,
-  onMoveToEdge,
-}: {
-  plan: PlanRow;
-  now: Date;
-  busy: boolean;
-  expanded: boolean;
-  actions?: QueueRowActions;
-  onOpen: (workspace: string, identifier: string) => void;
-  onToggleExpand: () => void;
-  onMoveToEdge: (identifier: string, edge: "first" | "last") => void;
-}) {
-  const { entry } = plan;
-  /*
-   * A queued CONTAINER gets the ordinary chevron, driven by the ordinary fold state — the same
-   * control the tree uses, doing the same thing. `hasChildren` is the EXPANSION rather than the
-   * issue's real children: what folds here is what this entry contributes to the pickup order,
-   * which is the only thing this view is drawing.
-   */
-  const foldable = plan.expansion.length > 0;
-  const row = foldable
-    ? { ...plan.row, hasChildren: true, isExpanded: expanded, childCount: plan.expansion.length }
-    : plan.row;
-  const live = inFlight(plan.effective, plan.row);
-  const config = useQueueRowConfig();
-  return (
-    <div
-      data-queue-entry={entry.identifier}
-      data-queue-resolved={entry.resolved ? "true" : undefined}
-      data-queue-inflight={live ? "true" : undefined}
-      className={cn("flex min-w-0 flex-1", entry.resolved && "opacity-55")}
-      /*
-       * alt+Home / alt+End, the two moves alt+arrow cannot express. They are on the CONTENT
-       * rather than on the reorder row because the row is `ReorderList`'s and it owns
-       * alt+arrow; a keydown from any control inside this div bubbles through here first, and
-       * neither handler answers the other's keys.
-       */
-      onKeyDown={(event) => {
-        if (!event.altKey || busy) return;
-        if (event.key === "Home") {
-          event.preventDefault();
-          onMoveToEdge(entry.identifier, "first");
-        } else if (event.key === "End") {
-          event.preventDefault();
-          onMoveToEdge(entry.identifier, "last");
-        }
-      }}
-    >
-      <div className="flex min-w-0 flex-1 items-center rounded-md">
-        {/*
-          THE PLAN POSITION, always, and bare. Every top-level row prints the same scale, so the
-          column reads 1, 2, 3, 4, 5 with no gaps — resolved rows included, which is the
-          numbering hole this redesign set out to close. Pickup numbers live one indent in,
-          wearing a `#`.
-        */}
-        <Gutter dim={live}>{entry.planPosition}</Gutter>
-        <div className="min-w-0 flex-1">
-          <TaskRowLine
-            row={row}
-            config={config}
-            semantics="bare"
-            now={now}
-            isExpanded={expanded}
-            caption={queueCaption(plan.effective, config, row)}
-            onOpen={() => onOpen(plan.row.workspace, entry.identifier)}
-            onToggleExpand={foldable ? onToggleExpand : undefined}
-            actionsMenu={actions ? (trigger, control) => actions(row, trigger, control) : undefined}
-          />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ---------- the board ----------
-
-export function QueueBoard({
-  view,
-  rows,
-  preview,
-  known,
-  workspace,
-  now,
-  busy,
-  failure,
-  candidates,
-  collapsed,
-  unqueuedOpen,
-  actions,
-  onOpen,
-  onToggleCollapsed,
-  onToggleUnqueued,
-  onMove,
-  onMoveToEdge,
-  onAdd,
-  onPrune,
-  onReload,
-  onRetry,
-  onDismissFailure,
-  desk = false,
-}: {
-  view: QueueViewData;
-  rows: readonly PlanRow[];
-  preview: EffectivePreview;
-  known: ReadonlyMap<string, IssueRow>;
-  workspace: string;
-  now: Date;
-  busy: boolean;
-  failure: QueueWriteFailure | null;
-  candidates: readonly SelectOption[];
-  collapsed: ReadonlySet<string>;
-  unqueuedOpen: boolean;
-  actions?: QueueRowActions;
-  onOpen: (workspace: string, identifier: string) => void;
-  onToggleCollapsed: (identifier: string) => void;
-  onToggleUnqueued: () => void;
-  onMove: (from: number, to: number) => void;
-  onMoveToEdge: (identifier: string, edge: "first" | "last") => void;
-  onAdd: (ref: string) => void;
-  onPrune: () => void;
-  onReload: () => void;
-  onRetry: () => void;
-  onDismissFailure: () => void;
-  /** The desktop page (the shell's desk breakpoint and up): a centred column, plain words and a progress summary. */
-  desk?: boolean;
-}) {
-  const resolved = view.entries.filter((entry) => entry.resolved).length;
-  const summary = useMemo(() => queueSummary(view.effective), [view.effective]);
-  return (
-    <div
-      data-queue-board
-      data-desk={desk ? "" : undefined}
-      className={cn(
-        "flex h-full min-h-0 w-full flex-col",
-        desk ? "staple-queue-desk mx-auto max-w-wide gap-4 px-page pt-6 pb-3" : "gap-3 px-4 py-3",
-      )}
-    >
-      {desk ? (
-        <header className="flex items-start gap-3">
-          <div className="min-w-0 flex-1">
-            <h2 className="text-heading font-semibold">Pickup order</h2>
-            <p className="mt-1 text-body text-muted-foreground">
-              The order your agents take work in. They start at the top and skip anything that is
-              waiting on something else.
-            </p>
-          </div>
-          {resolved > 0 ? (
-            <Button variant="outline" size="sm" disabled={busy} onClick={onPrune} title="Remove finished tasks from the plan">
-              Clear {resolved} finished
-            </Button>
-          ) : null}
-        </header>
-      ) : null}
-      {desk ? (
-        <section
-          data-queue-summary
-          aria-label="How the plan stands"
-          className="rounded-xl border bg-card px-4 py-3.5"
-        >
-          <p data-queue-summary-sentence className={cn("text-reading", summary.planned > 0 && "mb-3")}>
-            {summarySentence(summary)}
-          </p>
-          {summary.planned === 0 ? null : (
-          <ProgressStrip
-            testId="queue-progress"
-            label={summarySentence(summary)}
-            segments={BUCKET_ORDER.map((bucket) => ({
-              key: bucket,
-              count: summary.counts[bucket],
-              word: BUCKET_WORDS[bucket],
-              color: BUCKET_COLOR[bucket],
-            }))}
-          />
-          )}
-        </section>
-      ) : null}
-      {desk ? null : (
-      <header className="flex items-start gap-2">
-        <div className="min-w-0 flex-1">
-          <h2 className="text-[15px] font-semibold tracking-[var(--tracking-heading)]">Pickup order</h2>
-          <div className="mt-0.5 text-[12px] text-muted-foreground">
-            <span data-queue-revision={view.revision}>
-              {view.entries.length} {view.entries.length === 1 ? "entry" : "entries"} · revision{" "}
-              {view.revision}
-            </span>
-          </div>
-        </div>
-        {resolved > 0 ? (
-          <Button variant="outline" size="xs" disabled={busy} onClick={onPrune}>
-            Prune {resolved} resolved
-          </Button>
-        ) : null}
-      </header>
-      )}
-
-      <NextUpBand next={preview.next} onOpen={(identifier) => onOpen(workspace, identifier)} desk={desk} />
-
-      {/* The one sentence that answers "so what happens to these" without a tour. */}
-      {desk ? null : (
-        <p data-queue-legend className="text-[12px] text-muted-foreground">
-          Agents take work from the top down. Rows nested under an entry are what that entry
-          expands to — its own open descendants.
-        </p>
-      )}
-
-      {failure ? (
-        failure.kind === "conflict" ? (
-          <div
-            role="alert"
-            data-queue-conflict
-            className="status-chip flex flex-wrap items-center gap-2 rounded-md border px-3 py-2 text-[13px]"
-            data-status="blocked"
-          >
-            <span className="min-w-0 flex-1">
-              <span className="font-medium">The plan changed elsewhere — nothing was written.</span>{" "}
-              {failure.refusal.message} The order below is the server's.
-            </span>
-            <Button variant="outline" size="xs" disabled={busy} onClick={onReload}>
-              <RefreshCw aria-hidden />
-              Reload
-            </Button>
-            {failure.intended ? (
-              <Button variant="outline" size="xs" disabled={busy} onClick={onRetry}>
-                Retry my order
-              </Button>
-            ) : null}
-          </div>
-        ) : (
-          <GuardRefusal refusal={failure.refusal} onDismiss={onDismissFailure} />
-        )
-      ) : null}
-
-      {/*
-        THE ADD CONTROL IS THE APP'S TASK PICKER, not one of its own.
-        
-        This was a bare `<Input>` plus a hand-rolled match list — the third dropdown in the
-        app and the only one that filtered, ranked and rendered tasks its own way. The create
-        dialog already asks this exact question three times (parent, blocked by, blocking) and
-        answers it with `SearchableSelect`: a cmdk-backed popover over tasks THAT EXIST, so a
-        ref cannot be wrong; its own order-preserving `filterOptions` rather than cmdk's fuzzy
-        reordering; a status icon, a title hint and a workspace pill per row; and a `modal`
-        popover so the list scrolls. All of that was already built and unit-tested next door.
-
-        NO `onCreate`. `searchable-select.tsx` is explicit that a relation field must never
-        offer to invent `STA-999`, and a queue entry is a relation: the store resolves the ref
-        and would refuse it, which is the late, silent failure the control exists to remove.
-
-        `selected` is ALWAYS EMPTY. Picking here is an ACT, not a state — the pick becomes a
-        plan entry and the list below is where it now lives. Holding it as a chip in the
-        control as well would show the same fact twice and invite somebody to "deselect" it,
-        which is not what removing an entry from the plan is.
-      */}
-      <div data-queue-add>
-        <SearchableSelect
-          name="queue-add"
-          id="queue-add"
-          options={candidates}
-          selected={[]}
-          onChange={([ref]) => {
-            if (ref) onAdd(ref);
-          }}
-          placeholder="Queue a task, epic or milestone…"
-          actionLabel="Queue another…"
-          searchPlaceholder={desk ? "Search by title or reference…" : "search or type an identifier…"}
-          emptyText="nothing matches — or it is already in the plan"
-          disabled={busy}
-          mono
-          note="A plan is per workspace, so this lists this workspace's work."
-        />
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {desk && rows.length > 0 ? (
-          <p data-queue-legend className="mb-2 text-label text-muted-foreground">
-            Drag a row, or use Alt and the arrow keys, to change the order. Rows nested under an
-            entry are the open tasks inside it.
-          </p>
-        ) : null}
-        {rows.length === 0 ? (
-          desk ? (
-            <div data-queue-empty>
-              <PlainEmptyState compact icon={ListOrdered} title="Nothing is in the plan yet">
-                Until you add something above, agents take open work in list order. Add a task, an
-                epic or a milestone to put it first.
-              </PlainEmptyState>
-            </div>
-          ) : (
-            <EmptyState>
-              nothing is queued — agents take work in presentation order until you put something here
-            </EmptyState>
-          )
-        ) : (
-          <ReorderList
-            items={rows}
-            getId={(plan) => plan.entry.identifier}
-            getLabel={(plan) => plan.entry.identifier}
-            disabled={busy}
-            onMove={onMove}
-            renderItem={(plan) => (
-              <PlanRowContent
-                plan={plan}
-                now={now}
-                busy={busy}
-                expanded={!collapsed.has(plan.entry.identifier)}
-                actions={actions}
-                onOpen={onOpen}
-                onToggleExpand={() => onToggleCollapsed(plan.entry.identifier)}
-                onMoveToEdge={onMoveToEdge}
-              />
-            )}
-            renderBelow={(plan) => (
-              <>
-                {plan.entry.note ? (
-                  <p data-queue-note className="pl-12 text-[11px] text-muted-foreground">
-                    {plan.entry.note}
-                  </p>
-                ) : null}
-                {plan.expansion.length > 0 && !collapsed.has(plan.entry.identifier) ? (
-                  <PlanRowExpansion
-                    plan={plan}
-                    known={known}
-                    workspace={workspace}
-                    now={now}
-                    collapsed={collapsed}
-                    actions={actions}
-                    onOpen={(identifier) => onOpen(plan.row.workspace, identifier)}
-                    onToggle={onToggleCollapsed}
-                  />
-                ) : null}
-              </>
-            )}
-          />
-        )}
-
-        <UnqueuedSection
-          preview={preview}
-          known={known}
-          workspace={workspace}
-          now={now}
-          open={unqueuedOpen}
-          actions={actions}
-          onToggleOpen={onToggleUnqueued}
-          onOpen={(identifier) => onOpen(workspace, identifier)}
-        />
-        {desk ? (
-          <details className="mt-4 text-label text-muted-foreground" data-technical-details="">
-            <summary className="cursor-pointer select-none py-1">Show details</summary>
-            <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5">
-              <dt>Plan entries</dt>
-              <dd className="tabular-nums">{view.entries.length}</dd>
-              <dt>Plan revision</dt>
-              <dd className="font-mono" data-queue-revision={view.revision}>
-                {view.revision}
-              </dd>
-            </dl>
-          </details>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-/** The shared palette (`views/progress-palette.ts`): the same colour means the same thing everywhere. */
-const BUCKET_COLOR: Readonly<Record<QueueBucket, string>> = {
-  done: PROGRESS_COLOR.done,
-  active: PROGRESS_COLOR.active,
-  ready: PROGRESS_COLOR.ready,
-  waiting: PROGRESS_COLOR.waiting,
-};
-
-// ---------- the view ----------
 
 export function QueueView({ onAuthError }: { onAuthError: (error: AuthError) => void }) {
   const session = useSession();
   const scope = workspaceScope(session.mode, session.ws, session.workspaces);
-  if (scope.kind === "choose") {
-    return (
-      <ChooseWorkspace
-        page="Queue"
-        sentence="Each workspace keeps its own pickup order, so there is no single queue for all of them. Choose a workspace to see and change its order."
-        workspaces={scope.workspaces}
-        onChoose={session.setWs}
-      />
-    );
-  }
-  // Keyed, so switching workspace starts the page clean (collapsed rows, a failed write).
+  if (scope.kind === "choose") return <AllWorkspacesQueue onAuthError={onAuthError} />;
+  // Keyed, so switching workspace starts the page clean (folds, a failed write).
   return <WorkspaceQueue key={scope.slug} workspace={scope.slug} onAuthError={onAuthError} />;
 }
 
-/**
- * ONE WORKSPACE'S PAGE. The data, the derived plan and every write are `useWorkspaceQueue`'s
- * (use-workspace-queue.ts); this keeps only what is the view's own: folds, the unqueued
- * section's state, the layout, and the row menu built from the section's writes.
- */
+// ---------- the page frame: one scroller, one roving list, one live region ----------
+
+interface PageRows {
+  roving: RovingFocus;
+  report: (workspace: string, keys: readonly string[]) => void;
+  announce: (text: string) => void;
+}
+
+function usePageRows(order: readonly string[]): PageRows & { keys: string[]; announcement: string } {
+  const [reported, setReported] = useState<Record<string, readonly string[]>>({});
+  const [announcement, setAnnouncement] = useState("");
+  const keys = useMemo(() => order.flatMap((workspace) => reported[workspace] ?? []), [order, reported]);
+  const roving = useRovingFocus(keys);
+  const report = useCallback((workspace: string, next: readonly string[]) => {
+    setReported((current) => {
+      const now = current[workspace];
+      if (now && now.length === next.length && now.every((key, i) => key === next[i])) return current;
+      return { ...current, [workspace]: next };
+    });
+  }, []);
+  return { keys, roving, report, announce: setAnnouncement, announcement };
+}
+
+/** The phone shell's slot beside the page title (AppShell), or null on the desk. */
+function usePhoneHeaderSlot(): HTMLElement | null {
+  const desk = useIsDesk();
+  const [slot, setSlot] = useState<HTMLElement | null>(null);
+  useLayoutEffect(() => setSlot(desk ? null : document.querySelector<HTMLElement>("[data-phone-header-slot]")), [desk]);
+  return slot;
+}
+
+function QueuePage({ label, rows, children }: { label: string; rows: ReturnType<typeof usePageRows>; children: ReactNode }) {
+  const { keys, roving } = rows;
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const key = (event.target as HTMLElement).dataset.queueRow;
+    if (key === undefined || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+    const at = keys.indexOf(key);
+    let to: string | undefined;
+    if (event.key === "ArrowDown" || event.key === "j") to = keys[Math.min(keys.length - 1, at + 1)];
+    else if (event.key === "ArrowUp" || event.key === "k") to = keys[Math.max(0, at - 1)];
+    else if (event.key === "Home") to = keys[0];
+    else if (event.key === "End") to = keys.at(-1);
+    else return;
+    event.preventDefault();
+    if (to) roving.go(to);
+  };
+  return (
+    <div
+      role="region"
+      aria-label={label}
+      data-queue-board
+      className="q-page"
+      onKeyDown={onKeyDown}
+      onFocus={(event) => {
+        const row = (event.target as HTMLElement).closest<HTMLElement>("[data-queue-row]");
+        if (row?.dataset.queueRow) roving.set(row.dataset.queueRow);
+      }}
+    >
+      {children}
+      <KeyHint />
+      <div aria-live="polite" className="sr-only" data-queue-announce="">
+        {rows.announcement}
+      </div>
+    </div>
+  );
+}
+
+// ---------- a workspace page ----------
+
 function WorkspaceQueue({ workspace, onAuthError }: { workspace: string; onAuthError: (error: AuthError) => void }) {
   const session = useSession();
   const queue = useWorkspaceQueue(workspace, onAuthError);
-  const layout = useRowPlan().layout;
-  // The desktop page from 720px up; the phone keeps the board exactly as it shipped.
-  const desk = layout === "line";
-  /**
-   * On a phone the row's own up/down arrows are not drawn (queue.css) — they cost the title
-   * its width — so the one-step moves join the `⋯`, which long-press also opens.
-   */
-  const compact = layout === "compact";
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
-  const [unqueuedOpen, setUnqueuedOpen] = useState(false);
-  const { view, busy, queuedIds, indexOf, add, remove, move, moveToEdge } = queue;
-  const preview = useMemo<EffectivePreview>(() => {
-    const band = previewOf(queue.unqueued, UNQUEUED_PREVIEW_LIMIT);
-    return { unqueued: band.shown, unqueuedHidden: band.hidden, next: queue.next };
-  }, [queue.unqueued, queue.next]);
+  const order = useMemo(() => [workspace], [workspace]);
+  const rows = usePageRows(order);
+  const slot = usePhoneHeaderSlot();
+  const prefix = session.workspaces.find((ref) => ref.slug === workspace)?.prefix ?? "";
 
-  const onOpen = useCallback(
-    (rowWorkspace: string, identifier: string) => session.open(rowWorkspace || workspace, identifier),
+  if (queue.error) {
+    return (
+      <div className="q-page px-4" data-queue-board>
+        <ErrorState error={queue.error} />
+      </div>
+    );
+  }
+  const add = (
+    <AddToQueue
+      workspace={workspace}
+      options={queue.candidates}
+      onPick={(ref) => queue.add(ref)}
+      disabled={queue.busy || queue.view === null}
+      primary
+      compact={slot === null}
+    />
+  );
+  return (
+    <QueuePage label={`${workspace} queue`} rows={rows}>
+      {slot ? createPortal(add, slot) : null}
+      <SectionController queue={queue} mode="page" prefix={prefix} rows={rows} folded={false} add={slot ? null : add} />
+    </QueuePage>
+  );
+}
+
+// ---------- All workspaces ----------
+
+function AllWorkspacesQueue({ onAuthError }: { onAuthError: (error: AuthError) => void }) {
+  const hub = useHubQueue(onAuthError);
+  const session = useSession();
+  const slot = usePhoneHeaderSlot();
+  const slugs = useMemo(() => hub.workspaces.map((section) => section.slug), [hub.workspaces]);
+  const rows = usePageRows(slugs);
+  const [folded, setFolded] = useState<ReadonlySet<string>>(() => new Set());
+  const allFolded = slugs.length > 0 && slugs.every((slug) => folded.has(slug));
+  const onFoldAll = () => setFolded(allFolded ? new Set() : new Set(slugs));
+  const toggle = useCallback(
+    (slug: string, open?: boolean) =>
+      setFolded((current) => {
+        const next = new Set(current);
+        if (open === true || (open === undefined && next.has(slug))) next.delete(slug);
+        else next.add(slug);
+        return next;
+      }),
+    [],
+  );
+
+  if (hub.error) {
+    return (
+      <div className="q-page px-4" data-queue-board>
+        <ErrorState error={hub.error} />
+      </div>
+    );
+  }
+  const plans = hub.workspaces.filter((section) => section.entries.length > 0).length;
+  const total = hub.workspaces.length + hub.failed.length;
+  const foldAll = <FoldAllButton allFolded={allFolded} onFoldAll={onFoldAll} />;
+  return (
+    <QueuePage label="Every workspace's queue" rows={rows}>
+      {slot && slugs.length > 0 ? createPortal(foldAll, slot) : null}
+      {hub.failed.map((failure) => (
+        <FailedBanner key={failure.workspace} workspace={failure.workspace} message={failure.message} />
+      ))}
+      {hub.loading && slugs.length === 0 ? (
+        <QueueSkeleton rows={9} />
+      ) : (
+        <>
+          {slot ? null : <AllStrip plans={plans} workspaces={total} allFolded={allFolded} onFoldAll={onFoldAll} />}
+          {hub.workspaces.map((section) => (
+            <HubSection
+              key={section.slug}
+              hub={hub}
+              slug={section.slug}
+              prefix={section.prefix || refPrefix(session.workspaces, section.slug)}
+              rows={rows}
+              folded={folded.has(section.slug)}
+              onFold={toggle}
+            />
+          ))}
+        </>
+      )}
+    </QueuePage>
+  );
+}
+
+function refPrefix(workspaces: readonly WorkspaceRef[], slug: string): string {
+  return workspaces.find((ref) => ref.slug === slug)?.prefix ?? "";
+}
+
+function HubSection({
+  hub,
+  slug,
+  prefix,
+  rows,
+  folded,
+  onFold,
+}: {
+  hub: ReturnType<typeof useHubQueue>;
+  slug: string;
+  prefix: string;
+  rows: PageRows;
+  folded: boolean;
+  onFold: (slug: string, open?: boolean) => void;
+}) {
+  const queue = useQueueSection(slug, sectionRead(hub, slug));
+  return <SectionController queue={queue} mode="all" prefix={prefix} rows={rows} folded={folded} onFold={onFold} />;
+}
+
+// ---------- one section: its folds, its keys, its drag, its menu ----------
+
+function SectionController({
+  queue,
+  mode,
+  prefix,
+  rows,
+  folded,
+  onFold,
+  add,
+}: {
+  queue: QueueSection;
+  mode: "page" | "all";
+  prefix: string;
+  rows: PageRows;
+  folded: boolean;
+  onFold?: (slug: string, open?: boolean) => void;
+  /** The workspace page's own Add, when it is not on the phone title line. */
+  add?: ReactNode;
+}) {
+  const session = useSession();
+  const runs = useRuns();
+  const { workspace, view } = queue;
+  const { roving, report, announce } = rows;
+  const [folds, setFolds] = useState<SectionFolds>(() => ({ ...NO_FOLDS, containersOpen: mode === "page" }));
+  const listRef = useRef<HTMLDivElement>(null);
+
+  const layout = useMemo(
+    () =>
+      sectionLayout(
+        { workspace, view: view ?? { effective: [], entries: [] }, rows: queue.rows, unqueued: queue.unqueued, next: queue.next, known: queue.known },
+        folds,
+      ),
+    [workspace, view, queue.rows, queue.unqueued, queue.next, queue.known, folds],
+  );
+  const drawnKeys = folded || !view ? "" : layout.keys.join("\n");
+  useEffect(() => report(workspace, drawnKeys ? drawnKeys.split("\n") : []), [report, workspace, drawnKeys]);
+
+  const open = useCallback(
+    (identifier: string) => {
+      const owner = session.workspaces.find((ref) => ref.prefix && identifier.startsWith(`${ref.prefix}-`))?.slug ?? workspace;
+      session.open(owner || workspace, identifier);
+    },
     [session, workspace],
   );
 
-  const onToggleCollapsed = useCallback((identifier: string) => {
-    setCollapsed((current) => {
-      const next = new Set(current);
-      if (next.has(identifier)) next.delete(identifier);
-      else next.add(identifier);
-      return next;
-    });
-  }, []);
-
-  /**
-   * THE `⋯`, on every row of this view — the same menu the tree hangs, plus the two moves,
-   * which are offered here because here there IS an order on screen to move within.
-   */
-  const actions = useCallback<QueueRowActions>(
-    (row, trigger, control) => {
-      const ref = row.issue.identifier;
-      const at = compact ? indexOf(ref) : -1;
-      const count = view?.entries.length ?? 0;
-      return (
-        <QueueRowMenu
-          trigger={trigger}
-          open={control?.open}
-          onOpenChange={control?.onOpenChange}
-          identifier={ref}
-          state={queueRowMenuState(row, queuedIds)}
-          disabled={busy || view === null}
-          onOpen={() => onOpen(row.workspace, ref)}
-          onQueueNext={() => add(ref, 1)}
-          onQueueLast={() => add(ref)}
-          onDequeue={() => remove(ref)}
-          onMoveToTop={() => moveToEdge(ref, "first")}
-          onMoveToBottom={() => moveToEdge(ref, "last")}
-          onMoveUp={at > 0 ? () => move(at, at - 1) : undefined}
-          onMoveDown={at >= 0 && at < count - 1 ? () => move(at, at + 1) : undefined}
-        />
-      );
+  // ---- showing a row: open what hides it, then scroll to it, focus it and flash it ----
+  const [showing, setShowing] = useState<{ key: string; tick: number } | null>(null);
+  const show = useCallback(
+    (identifier: string) => {
+      const reveal = revealOf(queue, identifier);
+      if (!reveal) {
+        open(identifier);
+        return;
+      }
+      if (folded) onFold?.(workspace, true);
+      setFolds((current) => withReveal(current, reveal));
+      setShowing((current) => ({ key: revealKey(workspace, reveal), tick: (current?.tick ?? 0) + 1 }));
     },
-    [add, busy, compact, indexOf, move, moveToEdge, onOpen, queuedIds, remove, view],
+    [folded, onFold, open, queue, workspace],
+  );
+  useEffect(() => {
+    if (!showing) return;
+    const element = document.querySelector<HTMLElement>(`[data-queue-row="${CSS.escape(showing.key)}"]`);
+    if (!element) return;
+    setShowing(null);
+    const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    roving.set(showing.key);
+    element.focus({ preventScroll: true });
+    element.scrollIntoView({ block: "center", behavior: still ? "auto" : "smooth" });
+    if (!still) {
+      element.removeAttribute("data-flash");
+      void element.offsetWidth;
+      element.setAttribute("data-flash", "");
+      window.setTimeout(() => element.removeAttribute("data-flash"), 1500);
+    }
+  }, [showing, layout, roving]);
+
+  // ---- moves: every path ends in move/moveToEdge; the answer is announced ----
+  const moved = useRef<string | null>(null);
+  const move = useCallback(
+    (from: number, to: number) => {
+      const identifier = view?.entries[from]?.identifier;
+      if (!identifier || queue.busy) return;
+      moved.current = identifier;
+      queue.move(from, to);
+    },
+    [queue, view],
+  );
+  const moveToEdge = useCallback(
+    (identifier: string, edge: "first" | "last") => {
+      if (queue.busy) return;
+      moved.current = identifier;
+      queue.moveToEdge(identifier, edge);
+    },
+    [queue],
+  );
+  useEffect(() => {
+    const identifier = moved.current;
+    if (!identifier || queue.busy || !view) return;
+    moved.current = null;
+    if (queue.failure) return;
+    const at = view.entries.findIndex((entry) => entry.identifier === identifier);
+    if (at < 0) return;
+    announce(moveAnnouncement(identifier, at, view.entries.length));
+    // A row React moved in the DOM can lose focus on the way: give it back.
+    const key = rowKey(workspace, "entry", identifier);
+    const element = document.querySelector<HTMLElement>(`[data-queue-row="${CSS.escape(key)}"]`);
+    if (element && (document.activeElement === null || document.activeElement === document.body)) {
+      roving.set(key);
+      element.focus({ preventScroll: true });
+    }
+    element?.scrollIntoView({ block: "nearest" });
+  }, [announce, queue.busy, queue.failure, roving, view, workspace]);
+
+  const drag = useEntryDrag(listRef, { disabled: queue.busy, onMove: move });
+
+  const toggleContainer = useCallback(
+    (identifier: string) =>
+      setFolds((current) => {
+        const flipped = new Set(current.flipped);
+        if (flipped.has(identifier)) flipped.delete(identifier);
+        else flipped.add(identifier);
+        return { ...current, flipped };
+      }),
+    [],
   );
 
-  if (queue.error) return <ErrorState error={queue.error} />;
-  if (!view) return <LoadingState />;
+  const onRowKey = (event: KeyboardEvent<HTMLDivElement>, key: string, place: RowPlace, identifier: string) => {
+    const self = onRowItself(event);
+    if (place === "entry") {
+      const block = layout.entries.find((candidate) => candidate.key === key);
+      if (!block) return;
+      if (event.altKey && !event.ctrlKey && !event.metaKey) {
+        const from = block.index;
+        const last = layout.entries.length - 1;
+        if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+          event.preventDefault();
+          const to = from + (event.key === "ArrowUp" ? -1 : 1);
+          if (to >= 0 && to <= last) move(from, to);
+        } else if (event.key === "Home" || event.key === "End") {
+          event.preventDefault();
+          if ((event.key === "Home" && from > 0) || (event.key === "End" && from < last)) moveToEdge(identifier, event.key === "Home" ? "first" : "last");
+        }
+        return;
+      }
+      if (!self) return;
+      if ((event.key === "ArrowRight" && block.container && !block.open) || (event.key === "ArrowLeft" && block.open)) {
+        event.preventDefault();
+        toggleContainer(identifier);
+      } else if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        open(identifier);
+      }
+      return;
+    }
+    const action = nestedRowKey(event, self);
+    if (action === "swallow") event.preventDefault();
+    else if (action === "open") {
+      event.preventDefault();
+      open(identifier);
+    }
+  };
+
+  const menu = (place: RowPlace, identifier: string, trigger: ReactNode) => {
+    const at = place === "entry" ? queue.indexOf(identifier) : -1;
+    const last = (view?.entries.length ?? 0) - 1;
+    return (
+      <QueueRowMenu
+        plan
+        trigger={trigger}
+        identifier={identifier}
+        state={menuState(queue, identifier, place === "entry" ? queue.queuedIds : NOTHING)}
+        disabled={queue.busy || view === null}
+        onOpen={() => open(identifier)}
+        onQueueNext={() => queue.add(identifier, 1)}
+        onQueueLast={() => queue.add(identifier)}
+        onDequeue={() => queue.remove(identifier)}
+        onMoveToTop={at > 0 ? () => moveToEdge(identifier, "first") : undefined}
+        onMoveUp={at > 0 ? () => move(at, at - 1) : undefined}
+        onMoveDown={at >= 0 && at < last ? () => move(at, at + 1) : undefined}
+        onMoveToBottom={at >= 0 && at < last ? () => moveToEdge(identifier, "last") : undefined}
+      />
+    );
+  };
+
+  const policy = queue.policy ?? "advisory";
+  const policyTag = <PolicyTag policy={policy} workspace={workspace} onOpenSettings={() => openSettings({ section: "queue", workspace })} />;
+  const summary = useMemo(() => queueSummary(view?.effective ?? []), [view]);
+  const finished = view ? view.entries.filter((entry) => entry.resolved).length : 0;
+  const standing = view ? <Standing summary={summary} finished={finished} busy={queue.busy} onPrune={queue.prune} /> : null;
+  const live = runs.live.find((entry) => entry.workspace === workspace && entry.run.scope.kind === "queue");
+  const hasPlan = (view?.entries.length ?? 0) > 0;
+
+  const header =
+    mode === "page" ? (
+      <PageStrip
+        policy={policyTag}
+        standing={standing}
+        autopilot={live ? <AutopilotLink onOpen={() => session.openRun(live.run.id)} /> : undefined}
+        add={add}
+      />
+    ) : (
+      <SectionHeader
+        workspace={workspace}
+        prefix={prefix}
+        folded={folded}
+        onToggle={() => onFold?.(workspace)}
+        policy={policyTag}
+        standing={standing}
+        add={<AddToQueue workspace={workspace} options={queue.candidates} onPick={(ref) => queue.add(ref)} disabled={queue.busy || view === null} compact />}
+      />
+    );
+
+  let next: NextState = { kind: "empty" };
+  if (view && queue.next) next = { kind: "pick", row: queue.next, why: whyNext(queue.next, queue.skipped, hasPlan) };
+  else if (view && hasOpenWork(view.effective)) next = { kind: "none", text: nothingPickable(view.effective) };
 
   return (
-    <QueueBoard
-      view={view}
-      rows={queue.rows}
-      preview={preview}
-      known={queue.known}
-      workspace={workspace}
-      now={queue.now}
-      busy={busy}
-      failure={queue.failure}
-      candidates={queue.candidates}
-      collapsed={collapsed}
-      unqueuedOpen={unqueuedOpen}
-      actions={actions}
-      onOpen={onOpen}
-      onToggleCollapsed={onToggleCollapsed}
-      onToggleUnqueued={() => setUnqueuedOpen((on) => !on)}
-      onMove={move}
-      onMoveToEdge={moveToEdge}
-      onAdd={add}
-      onPrune={queue.prune}
-      onReload={queue.reload}
-      onRetry={queue.retry}
-      onDismissFailure={queue.dismissFailure}
-      desk={desk}
-    />
+    <section
+      className="q-sec"
+      aria-label={`${workspace} queue`}
+      data-queue-section={workspace}
+      data-folded={folded ? "" : undefined}
+      data-queue-revision={view?.revision}
+      data-page={mode === "page" ? "" : undefined}
+    >
+      {header}
+      {!view ? (
+        queue.error ? (
+          <div className="px-4">
+            <ErrorState error={queue.error} />
+          </div>
+        ) : (
+          <QueueSkeleton header={false} />
+        )
+      ) : (
+        <SectionBody
+          workspace={workspace}
+          layout={layout}
+          next={next}
+          folded={folded}
+          hasPlan={hasPlan}
+          busy={queue.busy}
+          pending={queue.pending}
+          failure={queue.failure}
+          activeKey={roving.activeKey}
+          register={roving.register}
+          onOpen={open}
+          onShow={show}
+          onToggle={toggleContainer}
+          onWhole={(identifier) =>
+            setFolds((current) => {
+              const whole = new Set(current.whole);
+              if (whole.has(identifier)) whole.delete(identifier);
+              else whole.add(identifier);
+              return { ...current, whole };
+            })
+          }
+          onBand={() => setFolds((current) => ({ ...current, bandOpen: !(layout.band?.open ?? false) }))}
+          onBandWhole={() => setFolds((current) => ({ ...current, bandWhole: !current.bandWhole }))}
+          onAdd={(identifier) => queue.add(identifier)}
+          onRetry={queue.retry}
+          onDismiss={queue.dismissFailure}
+          onRowKey={onRowKey}
+          menu={menu}
+          drag={drag}
+          listRef={listRef}
+          empty={
+            mode === "page" ? (
+              <EmptyPlan
+                add={<AddToQueue workspace={workspace} options={queue.candidates} onPick={(ref) => queue.add(ref)} disabled={queue.busy} primary />}
+              />
+            ) : undefined
+          }
+        />
+      )}
+    </section>
   );
+}
+
+const NOTHING: ReadonlySet<string> = new Set();
+
+/**
+ * What the row menu may offer for a row (`queueRowMenuState`): the page's own issue when it
+ * has it, else the plan entry's or the wire's, with the holder the queue names, so a claimed
+ * row's menu still says who holds it.
+ */
+function menuState(queue: QueueSection, identifier: string, queuedIds: ReadonlySet<string>) {
+  const wire = queue.view?.effective.find((row) => row.identifier === identifier);
+  const issue: Issue | undefined =
+    queue.known.get(identifier)?.issue ??
+    queue.rows.find((plan) => plan.entry.identifier === identifier)?.row.issue ??
+    (wire ? issueFromEffective(wire) : undefined);
+  if (!issue) return { queued: queuedIds.has(identifier), heldBy: null };
+  const holder = issue.checkoutAgent ?? wire?.claim?.heldBy ?? (typeof wire?.detail?.heldBy === "string" ? wire.detail.heldBy : null);
+  const row: Pick<TaskRow, "issue"> = { issue: { ...issue, checkoutAgent: holder } };
+  return queueRowMenuState(row, queuedIds);
 }

@@ -26,9 +26,8 @@ import type { WorkspaceSettingsEnvelope } from "@/lib/settings";
 import { applyRowStatus, plainRowRefusal, rowStatusChoices, type StatusChoice } from "@/components/task-list/row-status";
 import { MilestoneDetailPane, MilestoneListPane } from "../milestones/MilestonesView";
 import { memberListRows, sortMilestones } from "../milestones/milestones-model";
-import { QueueBoard } from "../queue/QueueView";
-import { effectivePreview, planRows } from "../queue/queue-model";
-import { queueSummary, summarySentence } from "../queue/queue-summary";
+import { Standing } from "../queue/QueueParts";
+import { queueSummary } from "../queue/queue-summary";
 import { TreeGrid } from "./TreeGrid";
 import { attachRowCues, buildRowCueIndex } from "@/components/task-list/row-cues";
 
@@ -315,42 +314,14 @@ describe("the queue in plain words", () => {
     expect(summary.notPlanned).toBe(queue.effective.filter((r) => r.unqueued).length);
   });
 
-  it("says it on the desktop page as a sentence and a bar, and keeps the revision under Show details", () => {
-    const html = renderToStaticMarkup(
-      <QueueBoard
-        view={queue}
-        rows={planRows(queue, issues, SCENARIO_WS)}
-        preview={effectivePreview(queue)}
-        known={new Map()}
-        workspace={SCENARIO_WS}
-        now={NOW}
-        busy={false}
-        failure={null}
-        candidates={[]}
-        collapsed={new Set()}
-        unqueuedOpen={false}
-        onOpen={noop}
-        onToggleCollapsed={noop}
-        onToggleUnqueued={noop}
-        onMove={noop}
-        onMoveToEdge={noop}
-        onAdd={noop}
-        onPrune={noop}
-        onReload={noop}
-        onRetry={noop}
-        onDismissFailure={noop}
-        desk
-      />,
-    );
-    expect(html).toContain(summarySentence(queueSummary(queue.effective)));
-    expect(html).toContain('data-testid="queue-progress"');
+  it("says it on the queue page's header as counts and a meter in the progress palette", () => {
+    const summary = queueSummary(queue.effective);
+    const html = renderToStaticMarkup(<Standing summary={summary} finished={0} busy={false} onPrune={noop} />);
+    expect(html).toContain(`<b>${summary.planned}</b> in the plan:`);
+    expect(html).toMatch(new RegExp(`<b>${summary.counts.waiting}</b> <span class="q-wide">waiting</span>`));
     expect(html).toContain('data-segment="active"');
-    expect(html).toContain('data-segment="waiting"');
     // One palette: waiting is the blocked red, ready the to-do amber, as on the rows' glyphs.
     expect(html).toMatch(/data-segment="waiting" style="flex-grow:\d+;background:var\(--status-task-blocked\)"/);
-    expect(html).toMatch(/data-legend="ready"[^>]*><span class="staple-progress-dot" style="background:var\(--status-task-todo\)"/);
-    expect(html).toMatch(/<details[^>]*data-technical-details[\s\S]*data-queue-revision="\d+"/);
-    expect(html).not.toContain("entries · revision");
   });
 });
 
