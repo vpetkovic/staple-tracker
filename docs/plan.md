@@ -159,7 +159,9 @@ You never add an idea's work to the horizon's milestone by hand. The work of eve
 horizon is the milestone's membership, so moving the idea moves its work. A ticket you put in a
 milestone yourself stays where you put it.
 
-Add, rename, date and remove horizons from the column header and **+ Horizon**. Removing one
+Add, rename, date and remove horizons from the column header and **+ Horizon**. Each horizon
+has its own name, in any case, so `idea ls --horizon <name>` and `list_ideas` know which one you
+mean; they list what the horizon carries, sub-ideas following a parent on it included. Removing one
 returns its ideas to Unscheduled. A horizon that still holds open work, or sits in the queue,
 cannot be removed until you move that work or take it off the queue. The refusal names what to
 move.

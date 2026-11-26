@@ -12,7 +12,7 @@ import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { parseArgs } from "node:util";
 import { configuredHumanName } from "../mcp-view-actions.js";
-import type { HorizonView, IdeaDetail, IdeaView, PlanView, PlanWriteOptions, ScaffoldPreview } from "../core/plan-store.js";
+import { ideasOnHorizon, type HorizonView, type IdeaDetail, type IdeaView, type PlanView, type PlanWriteOptions, type ScaffoldPreview } from "../core/plan-store.js";
 import { splitDepends, type BreakdownRowInput, type PlanPatch } from "../core/plan-sections.js";
 import { resolveWorkspace } from "../core/workspace.js";
 import { StapleError } from "../core/types.js";
@@ -205,12 +205,8 @@ export function runIdeaCommand(rest: string[]): void {
   switch (sub) {
     case "ls": {
       const view = plan.view();
-      let ideas = view.ideas;
+      let ideas = values.horizon ? ideasOnHorizon(view, values.horizon) : view.ideas;
       if (values.maturity) ideas = ideas.filter((idea) => idea.maturity === values.maturity);
-      if (values.horizon) {
-        const horizon = view.horizons.find((h) => h.identifier === values.horizon!.toUpperCase() || h.id === values.horizon || h.name.toLowerCase() === values.horizon!.toLowerCase());
-        ideas = ideas.filter((idea) => idea.horizonId === (horizon?.id ?? null));
-      }
       if (values.json) return console.log(JSON.stringify(ideas));
       if (ideas.length === 0) return console.log("no ideas");
       for (const idea of ideas) console.log(ideaLine(idea, view));

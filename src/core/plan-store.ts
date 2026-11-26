@@ -2247,11 +2247,18 @@ export class PlanStore {
     return issue.id;
   }
 
+  /** A name names one horizon: the surfaces that take a horizon by name (`--horizon`, list_ideas) resolve it. */
+  private assertHorizonNameFree(name: string, except: string | null): void {
+    const taken = this.horizonRows().find((row) => row.id !== except && row.title.trim().toLowerCase() === name.toLowerCase());
+    if (taken) throw new StapleError("validation", `A horizon is already named ${taken.title} (${taken.identifier}); give this one another name.`, { horizon: taken.identifier });
+  }
+
   /** A dated horizon goes in date order among the dated ones; an undated one goes last. */
   createHorizon(input: { name: string; date?: string | null }, actor: string | null, options: PlanWriteOptions = {}): HorizonView {
     this.assertEnabled();
     this.steer("horizons", null, options);
     const name = oneLine(input.name ?? "", "A horizon's name");
+    this.assertHorizonNameFree(name, null);
     const date = input.date ? parsePlanDate(input.date) : null;
     const id = this.store.journaled(() => {
       const rows = this.horizonRows();
@@ -2269,8 +2276,10 @@ export class PlanStore {
     if (patch.name !== undefined) this.allowHorizon(row, "rename");
     if (patch.date !== undefined) this.allowHorizon(row, "date");
     if (patch.before !== undefined) this.allowHorizon(row, "reorder");
+    const name = patch.name === undefined ? undefined : oneLine(patch.name, "A horizon's name");
+    if (name !== undefined) this.assertHorizonNameFree(name, row.id);
     this.store.journaled(() => {
-      if (patch.name !== undefined) this.store.updateIssue(row.id, { title: oneLine(patch.name, "A horizon's name") }, actor, undefined, { plan: true });
+      if (name !== undefined) this.store.updateIssue(row.id, { title: name }, actor, undefined, { plan: true });
       if (patch.date !== undefined) {
         this.store.milestones().update(row.id, { targetDate: patch.date === null ? null : parsePlanDate(patch.date) }, actor, { plan: true });
       }
@@ -2483,6 +2492,30 @@ export function mergeSections(base: PlanSections, patch: PlanPatch): PlanSection
 }
 
 /** The shaped gate as a refusal: what the plan still needs, named. */
+/**
+ * The horizon a reference names: its id, its identifier or its name, in any case. A name that
+ * names none, or that several horizons carry (two devices can each create one), is refused
+ * rather than read as no horizon, which would answer the unscheduled records instead.
+ */
+export function horizonNamed(view: Pick<PlanView, "horizons">, ref: string): HorizonView {
+  const wanted = ref.trim().toLowerCase();
+  const exact = view.horizons.find((horizon) => horizon.id === ref || horizon.identifier.toLowerCase() === wanted);
+  if (exact) return exact;
+  const named = view.horizons.filter((horizon) => horizon.name.trim().toLowerCase() === wanted);
+  if (named.length === 1) return named[0]!;
+  if (named.length > 1) {
+    throw new StapleError("validation", `${named.length} horizons are named "${ref}": ${named.map((horizon) => horizon.identifier).join(", ")}. Name one by its identifier.`, { horizons: named.map((horizon) => horizon.identifier) });
+  }
+  const known = view.horizons.map((horizon) => `${horizon.name} (${horizon.identifier})`).join(", ");
+  throw new StapleError("not_found", `No horizon is named "${ref}". The horizons are: ${known || "none"}.`);
+}
+
+/** The records a horizon carries (`carriedBy`): scheduled on it, or following a parent scheduled on it. As its column and counts read them. */
+export function ideasOnHorizon(view: PlanView, ref: string): IdeaView[] {
+  const horizon = horizonNamed(view, ref);
+  return view.ideas.filter((idea) => idea.carriedBy === horizon.id);
+}
+
 /** The first line with text in it, trimmed; null for none. */
 function firstLine(text: string | null): string | null {
   return text?.split("\n").map((line) => line.trim()).find((line) => line !== "") ?? null;

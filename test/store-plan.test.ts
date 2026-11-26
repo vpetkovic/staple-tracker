@@ -10,7 +10,7 @@ import { formerHolders, pendingIdentifierMoves } from "../src/core/identifier-mo
 import { parseIdentifier } from "../src/core/ids.js";
 import { MILESTONE_KIND } from "../src/core/milestones.js";
 import { IDEA_KIND, PLAN_KINDS_MISSING_MESSAGE, isDraftIdentifier } from "../src/core/plan.js";
-import type { PlanStore } from "../src/core/plan-store.js";
+import { ideasOnHorizon, type PlanStore } from "../src/core/plan-store.js";
 import { migrateWorkspace } from "../src/core/schema.js";
 import { WorkspaceStore } from "../src/core/store.js";
 import { StapleError } from "../src/core/types.js";
@@ -80,6 +80,30 @@ describe("the plan read", () => {
     expect(line(written)).toBe("Let integrators call the API from a browser.");
     expect(line(unwritten)).toBeNull();
     expect(line(emptied)).toBeNull();
+  });
+});
+
+describe("a horizon's name names one horizon", () => {
+  it("refuses a second horizon by the same name, whatever its case, and a rename onto one", () => {
+    const now = plan.view().horizons.find((h) => h.name === "Now")!;
+    expect(refused(() => plan.createHorizon({ name: " now " }, "vp", PERSON)).message).toContain(now.identifier);
+    expect(refused(() => plan.updateHorizon(horizon("Next"), { name: "NOW" }, "vp", PERSON)).message).toContain(now.identifier);
+    expect(plan.updateHorizon(horizon("Now"), { name: "now" }, "vp", PERSON).name).toBe("now");
+    expect(plan.createHorizon({ name: "Q2" }, "vp", PERSON).name).toBe("Q2");
+  });
+
+  it("lists the ideas a horizon carries by its identifier or name, and refuses a name that matches none or several", () => {
+    const now = horizon("Now");
+    const parent = idea("Parent on Now", { horizon: now });
+    const follower = idea("Follows its parent", { parent });
+    idea("Unscheduled");
+    const identifier = plan.view().horizons.find((h) => h.id === now)!.identifier;
+    for (const ref of ["now", identifier.toLowerCase(), now]) expect(ideasOnHorizon(plan.view(), ref).map((record) => record.id)).toEqual([parent, follower]);
+    expect(refused(() => ideasOnHorizon(plan.view(), "Nwo"), "not_found").message).toContain("Now");
+    // Another device can still bring a second horizon of the same name: a name then names neither.
+    store.db.prepare("UPDATE issues SET title = 'Now' WHERE id = ?").run(horizon("Next"));
+    expect(refused(() => ideasOnHorizon(plan.view(), "now")).message).toMatch(/2 horizons are named "now"/);
+    expect(ideasOnHorizon(plan.view(), identifier).map((record) => record.id)).toEqual([parent, follower]);
   });
 });
 
