@@ -621,4 +621,17 @@ describe.skipIf(Boolean(reason))("All workspaces' Milestones, pressed in a real 
     expect(await order.locator("[data-milestone-facts-due]").count()).toBe(1);
     await context.close();
   });
+
+  it("says a workspace without the milestone kind is not turned on, with a 28px button and a 32px tap on a phone", async () => {
+    const { page, context } = await open("", "bare", { width: 390, height: 844 }, true);
+    const button = page.locator("[data-milestones-turn-on]");
+    const { drawn, tap } = await button.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      const before = getComputedStyle(element, "::before");
+      return { drawn: box.height, tap: before.position === "absolute" ? Math.max(box.height, parseFloat(before.height)) : box.height };
+    });
+    expect(drawn).toBeCloseTo(28, 0);
+    expect(tap).toBeGreaterThanOrEqual(32);
+    await context.close();
+  });
 });

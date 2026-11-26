@@ -307,8 +307,9 @@ export function MilestonesOff({ workspace }: { workspace: string }) {
           <Button
             variant="outline"
             size="sm"
-            // 28px at every width; on a phone a 32px tap through an invisible inset.
-            className="relative h-7 min-h-0 self-start max-md:before:absolute max-md:before:-inset-y-0.5 max-md:before:inset-x-0 max-md:before:content-['']"
+            // 28px at every width; on a phone a 32px tap through an invisible inset. The inset
+            // counts from inside the border, so 4px a side, not 2, makes the 32.
+            className="relative h-7 min-h-0 self-start max-md:before:absolute max-md:before:-inset-y-1 max-md:before:inset-x-0 max-md:before:content-['']"
             data-milestones-turn-on={workspace}
             onClick={() => turnOnMilestones(workspace)}
           >
