@@ -1,0 +1,25 @@
+/*
+ * The Autopilot page's one animation: the dot of a live run that is working breathes out a
+ * ring. Nothing else on the page moves, and under reduced motion this does not either.
+ */
+@keyframes autopilot-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--plain-ok-fg) 55%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+.autopilot-pulse {
+  animation: autopilot-pulse 2s infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .autopilot-pulse {
+    animation: none;
+  }
+}
