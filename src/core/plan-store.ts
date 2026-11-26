@@ -1721,8 +1721,10 @@ export class PlanStore {
     if (moves) {
       const action = maturityAction({ state: before, maturity: readMaturity(row.plan_maturity) }, maturity);
       if (action !== null) allow(action);
-      // Shaped only when the plan, as this write leaves it, passes the gate.
-      if (action === "shape") assertShaped(displayRef(row), this.gateOf(row.id, sections));
+      // Shaped only when the plan, as this write leaves it, passes the gate: marked shaped, or restored into shaped.
+      if (action === "shape" || (action === "restore" && maturity === "shaped")) assertShaped(displayRef(row), this.gateOf(row.id, sections));
+      // Restored into raw, it is raw: what it holds follows the table, as a capture into raw does (never scheduled, no dates).
+      if (action === "restore" && maturity === "raw") assertRestorableToRaw(row);
       // The rest of one write is held to the state its maturity change leads to: shaping a raw idea
       // and scheduling it is one decision. A started or shipped record keeps its state.
       if (before !== "started" && before !== "shipped") state = maturity;
@@ -2478,6 +2480,22 @@ export function mergeSections(base: PlanSections, patch: PlanPatch): PlanSection
 }
 
 /** The shaped gate as a refusal: what the plan still needs, named. */
+/**
+ * A dropped record keeps its horizon and planned dates. Raw holds neither (it offers no schedule
+ * and no plan dates), and a record restored into raw could not shed them: so it is restored to
+ * exploring or shaped instead, which hold both.
+ */
+function assertRestorableToRaw(row: Pick<PlanRow, "identifier" | "title" | "plan_horizon_id" | "plan_start" | "plan_target">): void {
+  const held = [row.plan_horizon_id !== null ? "a horizon" : null, row.plan_start !== null || row.plan_target !== null ? "planned dates" : null].filter((part): part is string => part !== null);
+  if (held.length === 0) return;
+  const subject = displayRef(row);
+  throw new StapleError(
+    "validation",
+    `${subject.charAt(0).toUpperCase()}${subject.slice(1)} cannot be restored to raw while it holds ${held.join(" and ")}, which a raw idea never has: restore it to exploring or shaped.`,
+    { state: "dropped", action: "restore", held },
+  );
+}
+
 function assertShaped(subject: string, missing: readonly string[]): void {
   if (missing.length === 0) return;
   throw new StapleError("validation", `${subject.charAt(0).toUpperCase()}${subject.slice(1)} cannot be marked shaped yet: ${gateSentence(missing)}.`, { missing });

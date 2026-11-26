@@ -60,7 +60,9 @@ stateDiagram-v2
 ```
 
 Steps marked (person) are the person's. Restoring a dropped idea can return it to raw,
-exploring or shaped. A horizon's state follows the work on it.
+exploring or shaped: to raw only while it holds no horizon and no planned dates (a raw idea has
+neither), to shaped only when its plan passes the shaped gate. The Plan view restores to
+exploring. A horizon's state follows the work on it.
 
 ## 1. Turn it on
 

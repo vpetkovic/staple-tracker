@@ -108,6 +108,34 @@ describe("a parent's own state is its own; its sub-ideas' work is a rollup", () 
     expect(plan.ideaView(child).state).toBe("started");
   });
 
+  it("holds a restore to what the state it restores into may carry, as a capture into that state is", () => {
+    const now = horizon("Now");
+    // Scheduled and dated while shaped, then dropped: a raw idea holds no horizon and no dates.
+    const scheduled = idea("Scheduled then dropped");
+    plan.update(scheduled, { horizon: now, plannedStart: "2026-11-10", plannedTarget: "2026-12-01" }, "vp", PERSON);
+    plan.update(scheduled, { maturity: "dropped" }, "vp", PERSON);
+    expect(refused(() => plan.update(scheduled, { maturity: "raw" }, "vp", PERSON)).message).toMatch(/cannot be restored to raw.*restore it to exploring or shaped/);
+    expect(plan.ideaView(scheduled)).toMatchObject({ state: "dropped", horizonId: now });
+    expect(plan.update(scheduled, { maturity: "exploring" }, "vp", PERSON)).toMatchObject({ state: "exploring", horizonId: now, carriedBy: now });
+    // Dated only: the same.
+    const dated = plan.capture({ title: "Dated then dropped", maturity: "exploring", plannedTarget: "2026-12-01" }, "vp", PERSON).id;
+    plan.update(dated, { maturity: "dropped" }, "vp", PERSON);
+    expect(refused(() => plan.update(dated, { maturity: "raw" }, "vp", PERSON)).message).toMatch(/cannot be restored to raw/);
+    // Neither: back to raw, as the lifecycle allows.
+    const loose = idea("Loose then dropped", "raw");
+    plan.update(loose, { maturity: "dropped" }, "vp", PERSON);
+    expect(plan.update(loose, { maturity: "raw" }, "vp", PERSON).state).toBe("raw");
+    // Into shaped only through the shaped gate, as marking it shaped is.
+    const empty = plan.capture({ title: "Never planned" }, "vp", PERSON).id;
+    plan.update(empty, { maturity: "dropped" }, "vp", PERSON);
+    expect(refused(() => plan.update(empty, { maturity: "shaped" }, "vp", PERSON)).message).toContain("cannot be marked shaped yet");
+    expect(plan.ideaView(empty).state).toBe("dropped");
+    expect(plan.update(empty, { maturity: "exploring" }, "vp", PERSON).state).toBe("exploring");
+    const ready = idea("Ready then dropped");
+    plan.update(ready, { maturity: "dropped" }, "vp", PERSON);
+    expect(plan.update(ready, { maturity: "shaped" }, "vp", PERSON).state).toBe("shaped");
+  });
+
   it("keeps no baseline for a parent that has not started itself", () => {
     const parent = plan.capture({ title: "Dated parent", maturity: "exploring", plannedStart: "2026-11-01", plannedTarget: "2026-12-01" }, "vp", PERSON).id;
     childWithWork(parent, false);

@@ -425,6 +425,13 @@ already has is no change and succeeds as one, in any state; out of dropped is re
 exploring is going back from shaped and exploring otherwise; to raw is going back to raw, an
 action (`back_to_raw`) that no state offers, so its refusal says so in those words.
 
+A restore lands the record in the state it restores into, so it is held to what that state may
+carry, as a capture straight into a maturity is: into shaped only through the shaped gate, into
+raw only while it holds no horizon and no planned dates (raw offers neither schedule nor plan
+dates, and a dropped record keeps both). Otherwise it is refused, naming what it holds and that
+exploring or shaped hold it. The page's Restore, in the drawer and the Dropped shelf alike, is the
+offered `restore` action, which restores to exploring.
+
 ### Delivered outside the tracker
 
 Work that shipped before the tracker existed, or somewhere it does not reach, is a record the person

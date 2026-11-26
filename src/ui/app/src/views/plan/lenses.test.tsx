@@ -8,7 +8,8 @@ import { describe, expect, it } from "vitest";
 import type { HorizonData, IdeaData, PlanData } from "@/lib/plan-types";
 import { Markdown } from "@/lib/markdown";
 import { ShippedMark } from "@/detail/ShippedMark";
-import { cardMenuItems, DeliveryChips, HorizonsBoard, IdeasBoard, ThinkingChips } from "./PlanBoards";
+import { planActionItems, planPrimary } from "@/detail/plain-actions";
+import { cardMenuItems, DeliveryChips, HorizonsBoard, IdeasBoard, shelfRestore, ThinkingChips } from "./PlanBoards";
 import { DependencyArrows, PlanTimeline } from "./PlanTimeline";
 import { RunSettingForm, runSettingLabel } from "./RunSetting";
 import { dependencyEdges, horizonDone, horizonsColumns, ideasColumns, inHorizonsLens, inIdeasLens } from "./plan-model";
@@ -302,7 +303,6 @@ describe("shipped is one mark", () => {
     expect(html).not.toContain('data-plan-shipped-cap="started"');
     expect(html).toContain('aria-label="Idea shipped shipped"');
   });
-});
 
   it("caps a record that landed with no recorded start, as one delivered outside the tracker, on the day it landed", () => {
     const delivered = idea("delivered", { maturity: "shaped", stage: "shipped", state: "shipped", horizonId: "now", actual: { start: null, end: "2026-10-03", forecastEnd: null }, delivered: { on: "2026-10-03", note: null } });
@@ -312,6 +312,7 @@ describe("shipped is one mark", () => {
     expect(html).toContain('data-plan-shipped-cap="delivered"');
     expect(html).not.toContain('data-plan-undated-idea="delivered"');
   });
+});
 
 describe("dependencies on the timeline", () => {
   const a = idea("a", { planned: { start: "2026-10-01", target: "2026-10-10" } });
@@ -428,5 +429,17 @@ describe("a card's menu", () => {
     const columns = ideasColumns(plan([offered]));
     const menu = cardMenuItems(offered, columns.find((column) => column.key === "m:exploring")!, columns);
     expect(menu.others.map((item) => item.id)).toEqual(["shape", "drop"]);
+  });
+});
+
+describe("the Dropped shelf", () => {
+  it("restores through the restore the record offers, the same write as the drawer's Restore", () => {
+    const gone = idea("gone", { maturity: "dropped", stage: "dropped", state: "dropped", horizonId: "now", actions: [{ id: "restore", label: "Restore", who: "person" }] });
+    const drawer = planPrimary(planActionItems("", gone));
+    expect(drawer?.id).toBe("restore");
+    expect(shelfRestore(gone)?.call).toEqual(drawer?.call);
+    // Never straight to raw: a dropped record that holds a horizon cannot be raw.
+    expect(shelfRestore(gone)?.call).toMatchObject({ verb: "update", body: { ref: "gone", maturity: "exploring" } });
+    expect(shelfRestore(idea("held", { maturity: "dropped", stage: "dropped", state: "dropped", actions: [{ id: "restore", label: "Restore", who: "person", disabledReason: "not now" }] }))?.call).toBeUndefined();
   });
 });
