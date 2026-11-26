@@ -7,6 +7,7 @@ import { configuredHumanName } from "./mcp-view-actions.js";
 import { parseArgs } from "node:util";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { readStdinToEnd } from "./onboarding/prompts.js";
+import { readInputFile } from "./core/input-file.js";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { join, resolve } from "node:path";
@@ -2745,7 +2746,7 @@ function main() {
       }
       if (values.put !== undefined) {
         const body =
-          values.put === "-" ? readStdinToEnd() : readFileSync(values.put, "utf8");
+          values.put === "-" ? readStdinToEnd() : readInputFile(values.put, "--put", "utf8");
         const result = store.putDocument(ref, key, body, {
           baseRevision: values.base ? Number(values.base) : undefined,
           changeSummary: values.summary,

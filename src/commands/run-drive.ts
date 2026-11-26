@@ -11,9 +11,9 @@
  * an MCP call answers and returns, and a driver is a process that owns child sessions for
  * hours. `run_status` shows an attached driver, and `stop_run` stops it.
  */
-import { readFileSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { readInputFile } from "../core/input-file.js";
 import { DRIVE_PROVIDERS, PLACEHOLDERS, type DriveEvent, assertNoLiveDriver, drive, sessionCommand } from "../core/run-driver.js";
 import { runInstructionKey, withRunInstructions } from "../core/instructions.js";
 import { buildBrief, type DriveFinish } from "../core/run-brief.js";
@@ -154,7 +154,7 @@ export function runDriveCommand(rest: string[]): void {
   if (retryAfter !== null && retryAfter <= 0) throw new StapleError("validation", `--retry-after takes a number of seconds above 0; got "${values["retry-after"]}".`);
   const poll = seconds(values.poll, "--poll") ?? 5;
   if (poll <= 0) throw new StapleError("validation", `--poll takes a number of seconds above 0; got "${values.poll}".`);
-  const instructionFile = values.instructions === undefined ? null : readFileSync(values.instructions, "utf8");
+  const instructionFile = values.instructions === undefined ? null : readInputFile(values.instructions, "--instructions", "utf8");
   // A run this drive starts keeps the file as its own instructions; an attached drive only briefs with it.
   const runInstructions = values.scope !== undefined && instructionFile !== null ? [{ key: runInstructionKey(values.instructions!), body: instructionFile }] : [];
   const instructions = values.scope !== undefined ? null : instructionFile;
