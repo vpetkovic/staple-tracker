@@ -320,6 +320,8 @@ const SCENARIOS: readonly Scenario[] = [
   { method: "WorkspaceStore.recordAttemptEvent", name: "pause an attempt", run: (w) => void w.a.store.recordAttemptEvent(w.ids["Attempted"]!, "pause", "agent-b", { reason: "checkpoint_before_reset" }) },
   { method: "WorkspaceStore.recordAttemptEvent", name: "resume an attempt", run: (w) => void w.a.store.recordAttemptEvent(w.ids["Attempted"]!, "resume", "agent-b") },
   { method: "WorkspaceStore.recordAttemptEvent", name: "record an attempt milestone", run: (w) => void w.a.store.recordAttemptEvent(w.ids["Attempted"]!, "milestone", "agent-b", { label: "tests green" }) },
+  // Machine-local: it changes no synchronized column, so every device still reads the same state.
+  { method: "WorkspaceStore.recordAttemptEvent", name: "record an attempt heartbeat", run: (w) => void w.a.store.recordAttemptEvent(w.ids["Attempted"]!, "heartbeat", "agent-b") },
   { method: "WorkspaceStore.recordAttemptEvent", name: "report an interruption", run: (w) => void w.a.store.recordAttemptEvent(w.ids["Attempted"]!, "interrupt", "agent-b", { reason: "provider_limit" }) },
   {
     method: "WorkspaceStore.openOrchestratorAttempt",

@@ -20,13 +20,23 @@ const sourcePull = z.object({
   head: z.object({ ref: z.string().min(1).max(255), sha: z.string().regex(/^[0-9a-f]{40,64}$/), repo: z.object({ id: identifier }).nullable() }),
 });
 const checkRuns = z.object({
+  total_count: z.number().int().nonnegative(),
   check_runs: z.array(z.object({ name: z.string().max(512), status: z.string(), conclusion: z.string().nullable(), completed_at: z.string().nullable() })),
+});
+/** The combined status: the latest status of each context, as older CI reports them. */
+const commitStatuses = z.object({
+  total_count: z.number().int().nonnegative(),
+  statuses: z.array(z.object({ context: z.string().max(512), state: z.string(), updated_at: z.string().nullable().optional() })),
 });
 type Repository = z.infer<typeof repository>;
 type SourceIssue = z.infer<typeof sourceIssue>;
 type SourcePull = z.infer<typeof sourcePull>;
 /** Conclusions that mean the check did not pass. `neutral` and `skipped` are not failures. */
 const FAILED_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled", "action_required", "startup_failure"]);
+/** Conclusions that pass. Any other, `stale` (GitHub could not confirm the run) or a new one, is pending. */
+const PASSED_CONCLUSIONS = new Set(["success", "neutral", "skipped"]);
+/** At most this many pages of 100 check runs or statuses per commit; past it the summary is pending, never passing. */
+const CHECK_PAGES = 10;
 /** How many of a repository's most recently updated pull requests a branch lookup reads: one request. */
 const PULL_WINDOW = 100;
 const PAGE_SIZE = 50;
@@ -221,25 +231,61 @@ export class GitHubCliAdapter implements IntegrationAdapter {
     };
   }
 
-  /** The latest run of each check on a commit, summed up. Null when the commit has none. */
+  /**
+   * The latest run of each check on a commit and its commit statuses, summed up as one: any
+   * failure fails, else anything running, unconfirmed or unread is pending. Null when the commit
+   * has neither, or when the part that could be read shows no failure but the rest is unknown.
+   */
   private async checks(repo: Repository, sha: string, options?: ProviderReadOptions): Promise<PullRequestChecks | null> {
-    let runs: z.infer<typeof checkRuns>["check_runs"];
-    try {
-      runs = (await this.get(`repos/${repo.full_name}/commits/${sha}/check-runs?filter=latest&per_page=100`, checkRuns, options)).check_runs;
-    } catch (error) {
-      // An account that may read the pull request but not its checks (a token without Checks: read)
-      // still reads the pull request; its checks are unknown. Rate limits and sign-in still fail the read.
-      if (error instanceof StapleError && (error.code === "forbidden" || error.code === "not_found" || error.code === "unavailable")) return null;
-      throw error;
-    }
-    if (runs.length === 0) return null;
-    const failed = runs.filter(run => run.status === "completed" && FAILED_CONCLUSIONS.has(run.conclusion ?? ""));
-    const finished = (failed.length ? failed : runs).map(run => run.completed_at).filter((at): at is string => at !== null && Number.isFinite(Date.parse(at))).sort();
+    const base = `repos/${repo.full_name}/commits/${sha}`;
+    const [runs, statuses] = await Promise.all([
+      this.everyPage(page => `${base}/check-runs?filter=latest&per_page=100&page=${page}`, checkRuns, body => body.check_runs, options),
+      this.everyPage(page => `${base}/status?per_page=100&page=${page}`, commitStatuses, body => body.statuses, options),
+    ]);
+    const outcomes = [
+      ...(runs?.items ?? []).map(run => ({
+        name: run.name, at: run.completed_at,
+        state: run.status !== "completed" ? "pending" : FAILED_CONCLUSIONS.has(run.conclusion ?? "") ? "failing" : PASSED_CONCLUSIONS.has(run.conclusion ?? "") ? "passing" : "pending",
+      })),
+      ...(statuses?.items ?? []).map(status => ({
+        name: status.context, at: status.state === "pending" ? null : status.updated_at ?? null,
+        state: status.state === "failure" || status.state === "error" ? "failing" : status.state === "success" ? "passing" : "pending",
+      })),
+    ];
+    const failed = outcomes.filter(outcome => outcome.state === "failing");
+    // A source that could not be read is unknown: it cannot make a known failure pass, nor let the rest pass.
+    if (!failed.length && (!runs || !statuses || outcomes.length === 0)) return null;
+    const finished = (failed.length ? failed : outcomes).map(outcome => outcome.at).filter((at): at is string => at !== null && Number.isFinite(Date.parse(at))).sort();
+    const incomplete = !runs?.complete || !statuses?.complete;
     return {
-      state: failed.length ? "failing" : runs.some(run => run.status !== "completed") ? "pending" : "passing",
-      failing: [...new Set(failed.map(run => run.name))].slice(0, 10),
+      state: failed.length ? "failing" : incomplete || outcomes.some(outcome => outcome.state === "pending") ? "pending" : "passing",
+      failing: [...new Set(failed.map(outcome => outcome.name))].slice(0, 10),
       completedAt: finished.at(-1) ?? null,
     };
+  }
+
+  /**
+   * Every page of a list that says its `total_count`, up to CHECK_PAGES: a page only while the
+   * count says more remain. Null when the first page cannot be read: an account that may read the
+   * pull request but not its checks or statuses (a token without Checks: read) still reads the
+   * pull request. A later page that cannot be read, or the page cap, leaves the list incomplete.
+   * Rate limits and sign-in still fail the read.
+   */
+  private async everyPage<T, Item>(endpoint: (page: number) => string, schema: z.ZodType<T & { total_count: number }>, items: (body: T) => Item[], options?: ProviderReadOptions): Promise<{ items: Item[]; complete: boolean } | null> {
+    const read: Item[] = [];
+    for (let page = 1; page <= CHECK_PAGES; page++) {
+      let body: T & { total_count: number };
+      try {
+        body = await this.get(endpoint(page), schema, options);
+      } catch (error) {
+        if (!(error instanceof StapleError && (error.code === "forbidden" || error.code === "not_found" || error.code === "unavailable"))) throw error;
+        return page === 1 ? null : { items: read, complete: false };
+      }
+      const found = items(body);
+      read.push(...found);
+      if (read.length >= body.total_count || found.length === 0) return { items: read, complete: read.length >= body.total_count };
+    }
+    return { items: read, complete: false };
   }
 
   /**

@@ -34,11 +34,11 @@ import { invalidBindings } from "../core/telemetry/config.js";
 import { parseArgs } from "node:util";
 import { spawnSync } from "node:child_process";
 import { accessSync, constants, existsSync, statSync, statfsSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { openSqlite } from "../core/sqlite.js";
 import { effectiveConfig, readConfig, resolveHome, setHomeOverride, stapleHome } from "../config/index.js";
-import { Hub, absentRowRefusal, isAbsentRow } from "../core/hub.js";
+import { Hub, absentRowRefusal, describeAbsentRow, isAbsentRow } from "../core/hub.js";
 import {
   classifyRegisteredPath,
   describeSecondClaimant,
@@ -55,9 +55,14 @@ import {
   resolveRollbackRequired,
   legacyDbPathFor,
   currentDbPathFor,
+  LEGACY_WORKSPACE_DBNAME,
+  LEGACY_WORKSPACE_DIRNAME,
+  WORKSPACE_DBNAME,
+  WORKSPACE_DIRNAME,
 } from "../core/path-migration.js";
 import { hubSchemaState, workspaceSchemaState } from "../core/schema.js";
-import { findWorkspace } from "../core/workspace.js";
+import { type FoundWorkspace, findWorkspace } from "../core/workspace.js";
+import { assertInTestSandbox } from "../core/test-sandbox.js";
 import { QUARANTINE_DIVERGENCE_MS, divergedQuarantine, readQuarantine } from "../core/cloud/quarantine.js";
 import { recordedRepositoryPrefix } from "../core/cloud/repository-prefix.js";
 import { readMeta, snapshotPathFor } from "../core/open.js";
@@ -462,10 +467,10 @@ function checkHubRegistrations(): CheckResult {
 }
 
 /** The current directory's workspace: layout, ambiguity, schema, identity. */
-function checkWorkspace(dir: string): CheckResult {
+function checkWorkspace(dir: string, find: FindWorkspace): CheckResult {
   const found = (() => {
     try {
-      return { workspace: findWorkspace(dir), error: null as StapleError | null };
+      return { workspace: find(dir), error: null as StapleError | null };
     } catch (error) {
       return { workspace: null, error: error as StapleError };
     }
@@ -479,7 +484,8 @@ function checkWorkspace(dir: string): CheckResult {
       "Current workspace",
       "fail",
       found.error.message,
-      { dir, code: found.error.code, ambiguous: true },
+      // A workspace --db or --ws named and doctor could not find is not an ambiguity.
+      found.error.detail?.named ? { dir, code: found.error.code, named: found.error.detail.named } : { dir, code: found.error.code, ambiguous: true },
     );
   }
   if (!found.workspace) {
@@ -562,10 +568,10 @@ function checkWorkspace(dir: string): CheckResult {
  * and the error a user just hit agree. `data.code` is the stable, machine-
  * readable reason; `data.repair` is the preview.
  */
-function checkSchema(dir: string): CheckResult {
+function checkSchema(dir: string, find: FindWorkspace): CheckResult {
   let found;
   try {
-    found = findWorkspace(dir);
+    found = find(dir);
   } catch {
     return result("schema", "Schema compatibility", "skip", "The current workspace does not resolve.", { dir });
   }
@@ -645,10 +651,10 @@ function checkSchema(dir: string): CheckResult {
 }
 
 /** Does the hub agree with the workspace the current directory actually resolves to? */
-function checkWorkspaceHubLink(dir: string): CheckResult {
+function checkWorkspaceHubLink(dir: string, find: FindWorkspace): CheckResult {
   let found;
   try {
-    found = findWorkspace(dir);
+    found = find(dir);
   } catch {
     return result("workspace-hub-link", "Hub link", "skip", "The current workspace does not resolve.", { dir });
   }
@@ -996,12 +1002,12 @@ function checkOrphanWorkspaces(dir: string): CheckResult {
  * no repair — a rank is renumbered by the next ordinary `queue mv`, and an
  * orphan is not something doctor should silently delete.
  */
-function checkQueue(dir: string): CheckResult {
+function checkQueue(dir: string, find: FindWorkspace): CheckResult {
   const id = "queue";
   const title = "Pickup queue";
   let found;
   try {
-    found = findWorkspace(dir);
+    found = find(dir);
   } catch {
     return result(id, title, "skip", "The current workspace does not resolve.", { dir });
   }
@@ -1085,12 +1091,12 @@ function checkQueue(dir: string): CheckResult {
  * or raced another device to be first — is reported here rather than repointed, with both
  * prefixes, so a person can see which identifiers are this machine's alone.
  */
-function checkRepositoryPrefix(dir: string): CheckResult {
+function checkRepositoryPrefix(dir: string, find: FindWorkspace): CheckResult {
   const id = "repository-prefix";
   const title = "Repository prefix";
   let found;
   try {
-    found = findWorkspace(dir);
+    found = find(dir);
   } catch {
     return result(id, title, "skip", "The current workspace does not resolve.", { dir });
   }
@@ -1128,12 +1134,12 @@ function checkRepositoryPrefix(dir: string): CheckResult {
  * (`cloud/quarantine.ts`); it lands once what it names arrives. Listed here, with what each
  * names, so a person can see what is waiting and on what.
  */
-function checkSyncQuarantine(dir: string): CheckResult {
+function checkSyncQuarantine(dir: string, find: FindWorkspace): CheckResult {
   const id = "sync-quarantine";
   const title = "Synchronized entities waiting";
   let found;
   try {
-    found = findWorkspace(dir);
+    found = find(dir);
   } catch {
     return result(id, title, "skip", "The current workspace does not resolve.", { dir });
   }
@@ -1303,8 +1309,69 @@ function checkHarnesses(): CheckResult {
 
 // ------------------------------------------------------------------ the run
 
-export function runDiagnostics(options: { dir?: string } = {}): DoctorReport {
-  const dir = options.dir ?? process.cwd();
+/**
+ * How a check finds the workspace it diagnoses: the walk up from `dir` (`findWorkspace`), or
+ * the workspace `--db` or `--ws` named. A named one doctor cannot find throws, so each check
+ * reports it the way it reports a walk up that does not resolve.
+ */
+type FindWorkspace = (dir: string) => FoundWorkspace | null;
+
+/**
+ * The workspace `--db <path>` or `--ws <slug|prefix>` names, found the way `resolveWorkspace`
+ * finds it (`--db` wins) but never opened for writing: the hub is read read-only and the
+ * database only has to exist. Its root (the directory holding `.staple/` or `.tasks/`, else
+ * the database's own directory) is what the directory checks then look at.
+ */
+function namedWorkspace(named: { db?: string; ws?: string }): FoundWorkspace {
+  const target = named.db ?? `--ws ${named.ws}`;
+  const refuse = (message: string) => new StapleError("not_found", message, { named: target });
+  let dbPath: string;
+  if (named.db !== undefined) {
+    dbPath = resolve(named.db);
+  } else {
+    if (!hubPresent()) throw refuse(`No workspace "${named.ws}" in the hub: there is no hub database yet.`);
+    const hub = Hub.openReadOnly();
+    try {
+      const entry = hub.get(named.ws!);
+      if (!entry) throw refuse(`No workspace "${named.ws}" in the hub. Run staple hub ls.`);
+      if (isAbsentRow(entry)) throw refuse(describeAbsentRow(entry.slug));
+      dbPath = resolve(entry.path);
+    } finally {
+      hub.close();
+    }
+  }
+  assertInTestSandbox(dbPath, "workspace database");
+  if (!existsSync(dbPath)) throw refuse(`No workspace at ${dbPath}.`);
+  const parent = dirname(dbPath);
+  const legacy = basename(parent) === LEGACY_WORKSPACE_DIRNAME && basename(dbPath) === LEGACY_WORKSPACE_DBNAME;
+  const repo = legacy || (basename(parent) === WORKSPACE_DIRNAME && basename(dbPath) === WORKSPACE_DBNAME);
+  const root = repo ? dirname(parent) : parent;
+  return { dbPath, layout: legacy ? "legacy" : "current", root, report: describeLayout(root) };
+}
+
+export function runDiagnostics(options: { dir?: string; db?: string; ws?: string } = {}): DoctorReport {
+  return diagnose(options).report;
+}
+
+/** The report, and the directory it diagnosed (what `--fix` then repairs). */
+function diagnose(options: { dir?: string; db?: string; ws?: string }): { report: DoctorReport; dir: string } {
+  let find: FindWorkspace = findWorkspace;
+  let namedRoot: string | null = null;
+  if (options.db !== undefined || options.ws !== undefined) {
+    let named: FoundWorkspace | StapleError;
+    try {
+      named = namedWorkspace(options);
+    } catch (error) {
+      if (!(error instanceof StapleError)) throw error;
+      named = error;
+    }
+    find = () => {
+      if (named instanceof StapleError) throw named;
+      return named;
+    };
+    if (!(named instanceof StapleError)) namedRoot = named.root;
+  }
+  const dir = options.dir ?? namedRoot ?? process.cwd();
   const checks: CheckResult[] = [
     guard("node-runtime", "Node runtime", checkNodeRuntime),
     guard("home", "Machine home", checkHome),
@@ -1313,14 +1380,14 @@ export function runDiagnostics(options: { dir?: string } = {}): DoctorReport {
     guard("locator", "Bootstrap locator", checkLocator),
     guard("hub-database", "Hub database", checkHubDatabase),
     guard("hub-registrations", "Hub registrations", checkHubRegistrations),
-    guard("workspace", "Current workspace", () => checkWorkspace(dir)),
-    guard("schema", "Schema compatibility", () => checkSchema(dir)),
-    guard("workspace-hub-link", "Hub link", () => checkWorkspaceHubLink(dir)),
+    guard("workspace", "Current workspace", () => checkWorkspace(dir, find)),
+    guard("schema", "Schema compatibility", () => checkSchema(dir, find)),
+    guard("workspace-hub-link", "Hub link", () => checkWorkspaceHubLink(dir, find)),
     guard("migration-journal", "Migration journal", () => checkMigrationJournal(dir)),
     guard("orphan-workspaces", "Unregistered databases", () => checkOrphanWorkspaces(dir)),
-    guard("queue", "Pickup queue", () => checkQueue(dir)),
-    guard("repository-prefix", "Repository prefix", () => checkRepositoryPrefix(dir)),
-    guard("sync-quarantine", "Synchronized entities waiting", () => checkSyncQuarantine(dir)),
+    guard("queue", "Pickup queue", () => checkQueue(dir, find)),
+    guard("repository-prefix", "Repository prefix", () => checkRepositoryPrefix(dir, find)),
+    guard("sync-quarantine", "Synchronized entities waiting", () => checkSyncQuarantine(dir, find)),
     guard("ui-port", "UI port", checkUiPort),
     guard("runtime", "Installed runtime", checkRuntime),
     guard("ui-assets", "UI bundle", checkUiAssets),
@@ -1330,7 +1397,7 @@ export function runDiagnostics(options: { dir?: string } = {}): DoctorReport {
   const summary: Record<CheckStatus, number> = { pass: 0, warn: 0, fail: 0, skip: 0 };
   for (const check of checks) summary[check.status] += 1;
 
-  return { schemaVersion: 1, ok: summary.fail === 0, summary, checks };
+  return { report: { schemaVersion: 1, ok: summary.fail === 0, summary, checks }, dir };
 }
 
 // --------------------------------------------------------------- the repairs
@@ -1485,14 +1552,22 @@ export function runDoctorCommand(argv: string[]): void {
       // The plan gives --home to the configuration and diagnostic commands, and
       // doctor is the diagnostic one.
       home: { type: "string" },
+      // The global workspace flags: diagnose that workspace instead of the one found from here.
+      db: { type: "string" },
+      ws: { type: "string" },
     },
   });
+  if (values.dir !== undefined && (values.db !== undefined || values.ws !== undefined)) {
+    throw new StapleError(
+      "validation",
+      `--dir is where doctor walks up from, and --${values.db !== undefined ? "db" : "ws"} names the workspace itself. Give one of them.`,
+    );
+  }
 
   // Same seam `config` and `install` use.
   if (values.home !== undefined) setHomeOverride(values.home);
 
-  const dir = values.dir ?? process.cwd();
-  const report = runDiagnostics({ dir });
+  const { report, dir } = diagnose({ dir: values.dir, db: values.db, ws: values.ws });
 
   // Diagnostics ALWAYS run first, including under --fix. Plan §7: "`doctor
   // --fix` FIRST RUNS DIAGNOSTICS, previews each proposed repair, and applies

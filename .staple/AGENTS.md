@@ -17,11 +17,11 @@ retired and its `.tasks/tasks.db` is not this workspace.
 
 From this repository's main checkout, the default database is
 `/Users/vpetkovic/VPDrive/Workshop/personal/projects/oss-libs/staple-tracker/.staple/staple.db`.
-From a worktree, pass that absolute path as `--db` after the command's other
-arguments. Use `--json` for every live tracker read and write.
+From a worktree, pass `--ws staple` (or that absolute path as `--db`), before or
+after the command. Use `--json` for every live tracker read and write.
 
-If the runtime and database disagree, run `~/.local/bin/staple doctor --json`
-from the **main checkout**. Doctor is read-only and does not accept `--db`.
+If the runtime and database disagree, run `~/.local/bin/staple doctor --ws staple --json`
+from anywhere, worktrees included. Doctor is read-only.
 Read the `schema` check's `data.database`, `data.running`, `data.selected`, and
 `data.repair` fields. When `data.repair.command` is present, use that exact
 command only after checking its named runtime understands the database schema.
@@ -151,11 +151,11 @@ request.
 
 ## Act under one identity, all session
 
-Set `STAPLE_AGENT` (or MCP `actor`) and **use the
-same value you claimed with for the entire session.**
+Set `STAPLE_AGENT` (or pass `--agent`, which every write accepts before or after the
+command, or MCP `actor`) and **use the same value you claimed with for the entire session.**
 
 This is not bookkeeping. Liveness is derived from your claim plus the newest
-event or comment *by the holder*. Write a comment under a different name and it
+event, comment, document revision or attempt heartbeat *by the holder*. Write a comment under a different name and it
 does not count as your activity: your own task reads as silent, and you look
 stealable to the next agent that walks past. Set it once, at the top:
 
@@ -279,6 +279,19 @@ Every `in_progress` task shows its claim: `ls` and `show` print
 `held 2h · silent 45m`, and `--json` / the MCP `claim` object carry `heldBy`,
 `lastActivityAt`, `heldSeconds`, `idleSeconds`. That is how you tell an agent
 that is working from one a usage limit killed hours ago.
+
+Silence counts the holder only: their events, comments and document revisions
+on the task, and the heartbeat of their **open** attempt. A long interactive
+session or stretch of work that writes nothing (a build, a test run, a long
+edit) stays live if you run `staple attempt heartbeat <ref>` (MCP
+`record_attempt_event` with `event: "heartbeat"`) every few minutes.
+`staple run drive` does it for you: while a session it launched is alive, the
+driver beats that session's attempt on its poll. When the process exits the
+beats stop and the claim goes quiet, which is the point. A heartbeat is machine-local: it
+writes no event or transition and does not sync, so another machine still judges
+your claim by your synced writes (comments, the worklog). Another actor's
+heartbeat or read never refreshes your claim, and an ended attempt's heartbeat
+never counts.
 
 Taking over is **explicit and opt-in**:
 

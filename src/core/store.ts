@@ -1001,6 +1001,39 @@ export interface TimingQualityQuery extends PageRequest {
   readonly excludeReasons?: readonly string[];
 }
 
+/**
+ * The newest instant the claim's HOLDER produced on an issue: the one definition of a claim's
+ * liveness, which `claimActivityFor` (a page) and `claimActivity` (one issue) both read, so
+ * show/get_task, attention's silent claims, the queue, the stale badge and the steal guards
+ * cannot disagree. Correlated on `i.id` and `i.checkout_agent`; NULL when the holder left
+ * nothing, and the caller floors it at the checkout.
+ *
+ * The sources, each counted only when written by the holder (another agent commenting on your
+ * ticket, or beating its own attempt, must not make a dead holder look alive):
+ *
+ *   - their events, comments and document revisions on the issue. Comments and revisions
+ *     replicate while events do not, so reading them keeps a device that read the tail on the
+ *     writer's instant; a deleted comment still counts, through its `comment_added` event;
+ *   - the heartbeat of their OPEN attempt on the issue (`staple attempt heartbeat`, migration
+ *     025): a session working without writing stays live, and one that exited goes quiet. An
+ *     ended attempt's heartbeat never counts. Heartbeats are machine-local, so this source
+ *     holds where the attempt lives.
+ *
+ * One correlated MAX per source rather than a join onto their union, so each is an index
+ * lookup on `issue_id` instead of a scan of every table per call (the union defeats the
+ * indexes; it was most of a timing read's cost).
+ */
+const HOLDER_LAST_ACTIVITY = `(SELECT MAX(t) FROM (
+     SELECT MAX(e.created_at) AS t FROM events e WHERE e.issue_id = i.id AND e.actor = i.checkout_agent
+     UNION ALL
+     SELECT MAX(c.created_at) FROM comments c WHERE c.issue_id = i.id AND c.author = i.checkout_agent
+     UNION ALL
+     SELECT MAX(r.created_at) FROM document_revisions r WHERE r.issue_id = i.id AND r.author = i.checkout_agent
+     UNION ALL
+     SELECT MAX(h.at) FROM attempts a JOIN attempt_heartbeats h ON h.attempt_id = a.id
+      WHERE a.issue_id = i.id AND a.agent = i.checkout_agent AND a.state <> 'ended'
+   ))`;
+
 export class WorkspaceStore {
   externalLinks(): ExternalLinkStore { return new ExternalLinkStore(this); }
 
@@ -1156,7 +1189,7 @@ export class WorkspaceStore {
   }
 
   /**
-   * `staple attempt pause|resume|milestone|interrupt <ref>` and MCP `record_attempt_event`:
+   * `staple attempt pause|resume|milestone|heartbeat|interrupt <ref>` and MCP `record_attempt_event`:
    * one store method for every surface. Returns the attempt as it now reads.
    */
   recordAttemptEvent(
@@ -5524,29 +5557,15 @@ export class WorkspaceStore {
   // ---------- claim liveness (derived, never stored) ----------
 
   /**
-   * Newest timestamp the HOLDER produced on this issue: their own events, their
-   * own comments and their own document revisions, floored at the checkout itself.
-   * Comments and revisions replicate while their events do not, so reading them
-   * keeps a device that read the tail on the writer's instant. A deleted comment
-   * still counts: the writer's `comment_added` event outlives the deletion. One query, computed at
-   * read time — there is no `last_activity_at` column and deliberately so, since
+   * Newest timestamp the HOLDER produced on this issue, floored at the checkout itself — the
+   * single-issue form of {@link HOLDER_LAST_ACTIVITY}, the one definition both reads share.
+   * Computed at read time: there is no `last_activity_at` column and deliberately so, since
    * every write path would have to remember to touch it.
-   *
-   * Only `actor = holder` / `author = holder` rows count. Another agent
-   * commenting on your ticket must not make a dead holder look alive.
    */
   private lastActivityOf(issueId: string, holder: string, checkoutAt: string): string {
     const row = this.db
-      .prepare(
-        `SELECT MAX(t) AS t FROM (
-           SELECT MAX(created_at) AS t FROM events   WHERE issue_id = ? AND actor  = ?
-           UNION ALL
-           SELECT MAX(created_at) AS t FROM comments WHERE issue_id = ? AND author = ?
-           UNION ALL
-           SELECT MAX(created_at) AS t FROM document_revisions WHERE issue_id = ? AND author = ?
-         )`,
-      )
-      .get(issueId, holder, issueId, holder, issueId, holder) as { t: string | null } | undefined;
+      .prepare(`WITH i (id, checkout_agent) AS (SELECT ?, ?) SELECT ${HOLDER_LAST_ACTIVITY} AS t FROM i`)
+      .get(issueId, holder) as { t: string | null } | undefined;
     const newest = row?.t ?? null;
     // ISO-8601 UTC from nowIso() sorts lexicographically == chronologically.
     return newest && newest > checkoutAt ? newest : checkoutAt;
@@ -5591,21 +5610,10 @@ export class WorkspaceStore {
     const placeholders = issueIds.map(() => "?").join(",");
     const rows = this.db
       .prepare(
-        /*
-         * The holder's latest act on the issue: an event, a comment or a document revision by
-         * them. One correlated MAX per source rather than a join onto their union, so each is
-         * an index lookup on `issue_id` instead of a scan of all three tables per call (the
-         * union defeats the indexes; it was most of a timing read's cost).
-         */
+        // The holder's latest act on the issue (HOLDER_LAST_ACTIVITY), in the same query as the page.
         `SELECT i.id AS id, i.checkout_agent AS holder, i.checkout_at AS checkout_at,
                 COALESCE(
-                  (SELECT MAX(t) FROM (
-                     SELECT MAX(e.created_at) AS t FROM events e WHERE e.issue_id = i.id AND e.actor = i.checkout_agent
-                     UNION ALL
-                     SELECT MAX(c.created_at) FROM comments c WHERE c.issue_id = i.id AND c.author = i.checkout_agent
-                     UNION ALL
-                     SELECT MAX(r.created_at) FROM document_revisions r WHERE r.issue_id = i.id AND r.author = i.checkout_agent
-                  )),
+                  ${HOLDER_LAST_ACTIVITY},
                   i.checkout_at
                 ) AS last_activity_at
            FROM issues i

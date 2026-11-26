@@ -55,7 +55,10 @@ prints the reason and exits 0. Non-zero only for a driver error.
                       in_review (default; a person closes it) or done
   --ticket-timeout D  end a session after D (90m, 2h); the ticket fails
   --retry-after S     seconds to sleep on a wait, above 0 (default: the answer's)
-  --poll S            seconds between reads of the run while a session works (5)
+  --poll S            seconds between reads of the run while a session works (5);
+                      on the same tick, at most every 10s, the session's attempt
+                      gets a heartbeat, so a live session's claim never reads as
+                      stale; it stops when the session's process exits
   --instructions F    with --scope: the run's own instructions, stored on the run it
                       starts and handed to every ticket like any instruction
                       document (keyed by the file name). With --run: appended to
@@ -84,7 +87,7 @@ brief tells each session to leave its work on a branch (autopilot/<ref>, each
 off the last: a stack) for a person to take in.
 
   --json              one JSON object per line: attached, take, session_started,
-                      session_ended, wait, stop`;
+                      attempt_heartbeat_failed, session_ended, wait, stop`;
 
 function seconds(raw: string | undefined, flag: string): number | null {
   if (raw === undefined) return null;
@@ -319,6 +322,8 @@ function printEvent(event: DriveEvent): void {
       return console.log(`take     ${event.ref} ${event.title}${event.resumed ? " (resumed)" : ""}`);
     case "session_started":
       return console.log(`session  pid ${event.pid}: ${event.command.length > 160 ? `${event.command.slice(0, 157)}...` : event.command}\n         stdout ${event.stdout}\n         stderr ${event.stderr}`);
+    case "attempt_heartbeat_failed":
+      return console.error(`warning  ${event.ref}: the attempt heartbeat failed, the session goes on: ${event.message}`);
     case "session_ended": {
       const how = event.ended === "exited" ? `exited ${event.exitCode ?? event.signal}` : event.ended;
       return console.log(`ended    ${event.ref} ${how} after ${event.seconds}s${event.outcome ? ` -> ${event.outcome}: ${event.reason}` : " -> the tracker reads the outcome"}`);

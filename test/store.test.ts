@@ -412,6 +412,8 @@ describe("schema migration against a live database", () => {
         "run_tickets",
         // Migration 016 (milestone goal mode): one more table. Its `runs` columns go with `runs`.
         "milestone_criterion_marks",
+        // Migration 025 (the attempt heartbeat): one more table.
+        "attempt_heartbeats",
       ]) {
         legacyDb.exec(`DROP TABLE IF EXISTS ${table}`);
       }

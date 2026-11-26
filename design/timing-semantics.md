@@ -2215,7 +2215,7 @@ Each is a choice the rules above are built on, with the alternative it rules out
      service all read. The Worker imports that file, so it is deployed before any
      client writes those reasons;
    - `--role orchestrator` (or `--attempt ID`) on `staple attempt
-     pause|resume|milestone|interrupt` and MCP `record_attempt_event`, required
+     pause|resume|milestone|heartbeat|interrupt` and MCP `record_attempt_event`, required
      when the actor holds an attempt in each lane;
    - the concurrency context and the presence counts split by `role`;
    - budget-sample linking (`attemptLinkerFor`) preferring the worker attempt when

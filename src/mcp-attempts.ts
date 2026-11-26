@@ -76,9 +76,9 @@ export function withAttemptResult<T extends object>(store: WorkspaceStore, paylo
 /** `record_attempt_event`'s input. */
 export const recordAttemptEventInput = {
   event: z
-    .enum(["pause", "resume", "milestone", "interrupt", "open", "end"])
+    .enum(["pause", "resume", "milestone", "heartbeat", "interrupt", "open", "end"])
     .describe(
-      "pause: running -> paused, keeps the claim (reason: checkpoint_before_reset, awaiting_reset, awaiting_input, operator, other). resume: paused -> running. milestone: a one-line checkpoint (label). interrupt: ends the attempt as interrupted (reason: provider_limit, harness_exit, operator_stop, unknown); the claim stays, and a later checkout opens a new attempt that names this one. open (role orchestrator, required): open an orchestrator attempt on the issue you coordinate, usually the parent or epic; no claim, no status change, never agent work. end (role orchestrator): end it (coordination_ended).",
+      "pause: running -> paused, keeps the claim (reason: checkpoint_before_reset, awaiting_reset, awaiting_input, operator, other). resume: paused -> running. milestone: a one-line checkpoint (label). heartbeat: the session is still alive; keeps your claim's lastActivityAt fresh without a comment or a milestone, on your own open attempt only (running or paused); machine-local, so it writes no event or transition and does not sync. interrupt: ends the attempt as interrupted (reason: provider_limit, harness_exit, operator_stop, unknown); the claim stays, and a later checkout opens a new attempt that names this one. open (role orchestrator, required): open an orchestrator attempt on the issue you coordinate, usually the parent or epic; no claim, no status change, never agent work. end (role orchestrator): end it (coordination_ended).",
     ),
   role: z
     .enum(["worker", "orchestrator"])
