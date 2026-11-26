@@ -9,10 +9,71 @@
  * WAVE 2: use `useResource` for anything you fetch. It participates in the refresh for
  * free, and it hands AuthError up to the shell instead of swallowing it.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { AuthError, getPoll } from "./api";
 
 const POLL_INTERVAL_MS = 1500;
+/**
+ * A poll that has not answered by now is given up and the next one asked. Without it a
+ * request lost to a network change (a phone on the tailnet waking up) hangs until the
+ * browser's own timeout, minutes later, and the page stops refreshing for that long.
+ */
+export const POLL_TIMEOUT_MS = 8000;
+
+// ---------------------------------------------------------------- is the server answering
+
+/** Whether the page's data is current: the server is answering its polls, or it is not. */
+export type Connection = "live" | "reconnecting";
+
+/**
+ * How long the polls must go unanswered before the page says so. Over three poll
+ * intervals, so one dropped or slow poll never flashes "reconnecting".
+ */
+export const RECONNECTING_AFTER_MS = 5000;
+
+/**
+ * The page's polls, as the one fact the connection state needs: since when has it been
+ * waiting for an answer? Set by the first attempt after an answer, cleared by the next
+ * answer. A poll that fails and one that hangs count alike, and the time between polls
+ * (stretched while the tab is in the background) never counts, because no attempt is open.
+ */
+export function createConnectionTracker(threshold: number = RECONNECTING_AFTER_MS) {
+  let waitingSince: number | null = null;
+  return {
+    attempted(now: number): void {
+      waitingSince ??= now;
+    },
+    answered(): void {
+      waitingSince = null;
+    },
+    state(now: number): Connection {
+      return waitingSince !== null && now - waitingSince >= threshold ? "reconnecting" : "live";
+    },
+  };
+}
+
+let connection: Connection = "live";
+const connectionListeners = new Set<() => void>();
+
+function publishConnection(next: Connection): void {
+  if (next === connection) return;
+  connection = next;
+  for (const listener of connectionListeners) listener();
+}
+
+function subscribeConnection(listener: () => void): () => void {
+  connectionListeners.add(listener);
+  return () => connectionListeners.delete(listener);
+}
+
+/**
+ * Is the server answering the page's polls? "reconnecting" once they have gone unanswered
+ * for `RECONNECTING_AFTER_MS`, "live" again at the first answer. The counts, dots and live
+ * runs on screen are the last ones heard while it says "reconnecting".
+ */
+export function useConnection(): Connection {
+  return useSyncExternalStore(subscribeConnection, () => connection, () => "live");
+}
 
 /**
  * Ticks whenever the workspace data changed under us. Also exposes a manual bump, so a
@@ -49,10 +110,16 @@ export function useDataVersion(onAuthError: (error: AuthError) => void): {
 
   useEffect(() => {
     let alive = true;
+    const tracker = createConnectionTracker();
+    // Checked between polls too: a poll that hangs has no answer to report itself with.
+    const watch = window.setInterval(() => publishConnection(tracker.state(Date.now())), 1000);
     const tick = async () => {
+      tracker.attempted(Date.now());
       try {
-        const { fingerprint: next } = await getPoll();
+        const { fingerprint: next } = await getPoll(AbortSignal.timeout(POLL_TIMEOUT_MS));
         if (!alive) return;
+        tracker.answered();
+        publishConnection("live");
         // The first fingerprint only establishes the baseline — the views already
         // loaded current data, so refetching on it would be a wasted round trip.
         if (fingerprint.current !== null && fingerprint.current !== next) advance();
@@ -62,7 +129,9 @@ export function useDataVersion(onAuthError: (error: AuthError) => void): {
           authRef.current(error);
           return; // stop polling: every subsequent tick would fail the same way
         }
-        // Anything else is the server being briefly busy. Try again next tick.
+        // Anything else is the server being briefly busy, or out of reach. Try again next
+        // tick; the tracker decides when it has been long enough to say so.
+        if (alive) publishConnection(tracker.state(Date.now()));
       }
       if (alive) timer = window.setTimeout(tick, POLL_INTERVAL_MS);
     };
@@ -70,6 +139,7 @@ export function useDataVersion(onAuthError: (error: AuthError) => void): {
     return () => {
       alive = false;
       window.clearTimeout(timer);
+      window.clearInterval(watch);
     };
   }, [advance]);
 

@@ -144,3 +144,29 @@ describe("the rail's Tasks row", () => {
     });
   });
 });
+
+describe("the page's poll", () => {
+  it("gives up a poll that hangs, so the page keeps refreshing", async () => {
+    await withPage(DESK, async (page) => {
+      // The first poll only sets the page's baseline; let one be answered.
+      await page.waitForResponse((response) => response.url().includes("/api/poll"));
+      // The next poll is lost on the way (a network change): it is never answered.
+      let held = false;
+      await page.route("**/api/poll*", async (route) => {
+        if (!held) {
+          held = true;
+          return; // neither answered nor failed
+        }
+        await route.continue();
+      });
+      await expect.poll(() => held, { timeout: 5000 }).toBe(true);
+      const { store } = openWorkspace(dbPath);
+      try {
+        store.createIssue({ title: "Written while a poll hung" });
+      } finally {
+        store.db.close();
+      }
+      await page.getByText("Written while a poll hung").first().waitFor({ timeout: 15_000 });
+    });
+  }, 30_000);
+});
