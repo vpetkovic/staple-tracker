@@ -83,16 +83,18 @@ export function inboxOrder(rows: readonly Pick<AttentionRow, "workspace" | "ref"
  * It goes by ROW, not by ticket: an approved gate whose ticket is now listed again as in
  * review has still been dealt with. Its row is its first in the list, as in `inboxOrder`.
  * Null when there is nothing to do: nothing open, the row is still listed, the ticket was
- * not listed before, or nothing else is left (the drawer stays on what was just done).
+ * not listed before, nothing else is left (the drawer stays on what was just done), or the
+ * read could not reach the ticket's workspace (`unread`: its rows are missing, not gone).
  */
 export function afterRowLeft(
   before: readonly Pick<AttentionRow, "key" | "workspace" | "ref">[],
   after: readonly Pick<AttentionRow, "key" | "workspace" | "ref">[],
   open: NavTarget | null,
+  unread: ReadonlySet<string> = new Set(),
 ): NavTarget | null {
   const target = (row: Pick<AttentionRow, "workspace" | "ref">): NavTarget | null => (row.ref === null ? null : { workspace: row.workspace, ref: row.ref });
   const at = before.findIndex((row) => sameTarget(target(row), open));
-  if (at < 0) return null;
+  if (at < 0 || unread.has(open!.workspace)) return null;
   const listed = new Set(after.map((row) => row.key));
   if (listed.has(before[at]!.key)) return null;
   const elsewhere = (row: Pick<AttentionRow, "key" | "workspace" | "ref">) => listed.has(row.key) && target(row) !== null && !sameTarget(target(row), open);

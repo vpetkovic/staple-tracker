@@ -26,6 +26,10 @@ beforeAll(async () => {
   home = mkdtempSync(join(tmpdir(), "staple-run-hub-"));
   process.env.STAPLE_HOME = home;
   process.env.NODE_NO_WARNINGS = "1";
+  // Registered first, and unreadable: its runs table is gone (fixture).
+  const broken = initWorkspace({ global: true, slug: "broken" }).store;
+  broken.db.exec("DROP TABLE run_tickets; DROP TABLE runs;");
+  broken.db.close();
   initWorkspace({ global: true, slug: "app" }).store.db.close();
   const web = initWorkspace({ global: true, slug: "web" }).store;
   try {
@@ -51,7 +55,7 @@ afterAll(async () => {
 });
 
 describe("GET /api/run on a hub", () => {
-  it("finds the run in whichever workspace holds it when no workspace is named", async () => {
+  it("finds the run in whichever workspace holds it when no workspace is named, past one it cannot read", async () => {
     const { status, body } = await get(`/api/run?id=${runId}`);
     expect(status).toBe(200);
     expect(body).toMatchObject({ workspace: "web", title: "Checkout flow", run: { id: runId, state: "stopped", stop: { reason: "failure_streak" } } });
@@ -69,5 +73,9 @@ describe("GET /api/run on a hub", () => {
     const elsewhere = await get(`/api/run?id=${runId}&ws=app`);
     expect(elsewhere.status).toBe(404);
     expect(elsewhere.body.message).toContain("in app");
+    // Named, the unreadable workspace says why rather than "not found".
+    const unreadable = await get(`/api/run?id=${runId}&ws=broken`);
+    expect([404, 200]).not.toContain(unreadable.status);
+    expect(unreadable.body.message).not.toContain("No autopilot run");
   });
 });

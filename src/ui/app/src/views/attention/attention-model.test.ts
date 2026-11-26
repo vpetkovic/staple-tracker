@@ -85,4 +85,10 @@ describe("the Inbox's order for the drawer", () => {
     // Same ref, another workspace: not the open ticket.
     expect(afterRowLeft(before, [row("APP-2")], at("APP-1", "web"))).toBeNull();
   });
+
+  it("stays put when the open ticket's workspace could not be read: its rows are missing, not gone", () => {
+    const before = [row("APP-1", "gate_pending", "web"), row("APP-2")];
+    expect(afterRowLeft(before, [row("APP-2")], at("APP-1", "web"), new Set(["web"]))).toBeNull();
+    expect(afterRowLeft(before, [row("APP-2")], at("APP-1", "web"))).toEqual(at("APP-2"));
+  });
 });

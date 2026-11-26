@@ -14,7 +14,7 @@ import { RunHistoryItem } from "@/components/autopilot/RunHistoryDialog";
 import { RunStatePill } from "@/components/autopilot/RunParts";
 import type { AuthError } from "@/lib/api";
 import { endedStateText, isLiveRun, liveStateText } from "@/lib/run-text";
-import { useRunEntry, useRuns } from "@/lib/runs";
+import { currentRef, useRunEntry, useRuns } from "@/lib/runs";
 import { isAllWorkspaces, useSession } from "@/lib/session";
 import { runHref } from "@/lib/session-url";
 import type { RunEntry } from "@/lib/types";
@@ -97,7 +97,7 @@ function OneRun({ runId, onAuthError }: { runId: string; onAuthError: (error: Au
         <>
           <h1 className="m-0 text-title font-semibold">{entry.title}</h1>
           <ul className="m-0 list-none p-0">
-            <RunHistoryItem entry={entry} showWorkspace={isAllWorkspaces(session)} onOpenTicket={(workspace, ref) => session.open(workspace, ref)} />
+            <RunHistoryItem entry={entry} showWorkspace={isAllWorkspaces(session)} onOpenTicket={(workspace, ref) => session.open(workspace, currentRef(entry, ref))} />
           </ul>
         </>
       ) : loading ? (

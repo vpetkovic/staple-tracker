@@ -85,7 +85,8 @@ export function useAttention(): AttentionState {
   useEffect(() => {
     publishVisibleOrder(order);
     // A workspace switch narrows the rows; it is a navigation that closes the drawer, not a row leaving.
-    const next = shown.current.ws === ws ? afterRowLeft(shown.current.rows, rows, selection) : null;
+    const unread = new Set(scoped?.list.failed.map((failure) => failure.workspace));
+    const next = shown.current.ws === ws ? afterRowLeft(shown.current.rows, rows, selection, unread) : null;
     shown.current = { ws, rows };
     if (next) open(next.workspace, next.ref);
     // Only a new order moves the drawer; opening another ticket by hand does not.

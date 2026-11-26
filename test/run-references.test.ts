@@ -4,6 +4,7 @@
  */
 import { beforeEach, describe, expect, it } from "vitest";
 import { openDb } from "../src/core/db.js";
+import { recordIdentifierMove } from "../src/core/identifier-moves.js";
 import { runReferences } from "../src/core/run-references.js";
 import type { RunStore } from "../src/core/run-store.js";
 import { migrateWorkspace } from "../src/core/schema.js";
@@ -101,6 +102,23 @@ describe("the issues a run names", () => {
     expect(ticket).toMatchObject({ identifier: "TST-90", title: "A" });
   });
 
+  it("never lends a ticket's old identifier to the issue that holds that number now", () => {
+    const epic = issue("Epic", { kind: "epic" });
+    const a = issue("A", { parent: epic });
+    issue("B", { parent: epic });
+    const run = runs.start({ actor: BOT, scope: epic });
+    cont();
+    cont({ outcome: "failed", reason: "one" });
+    cont({ outcome: "failed", reason: "two" });
+    // Sync renumbers the ticket the run took, and another issue arrives on its old number.
+    store.db.prepare("UPDATE issues SET identifier = 'TST-90' WHERE id = ?").run(idOf(a));
+    const other = store.createIssue({ title: "Someone else's" });
+    store.db.prepare("UPDATE issues SET identifier = ? WHERE id = ?").run(a, other.id);
+    const references = runReferences(store, runs.status(run.id));
+    expect(references.issues.some((entry) => entry.issueId === other.id)).toBe(false);
+    expect(references.issues.find((entry) => entry.issueId === idOf("TST-90"))).toMatchObject({ identifier: "TST-90", title: "A" });
+  });
+
   it("resolves the identifiers a stop names, and leaves out what no longer exists", () => {
     const epic = issue("Epic", { kind: "epic" });
     const a = issue("A", { parent: epic });
@@ -116,5 +134,10 @@ describe("the issues a run names", () => {
     // A stop naming an identifier nobody has any more (deleted since) resolves to nothing.
     const gone = runReferences(store, { ...status, run: { ...status.run, stop: { ...status.run.stop!, detail: { tickets: ["TST-404"] } } } });
     expect(gone.issues.some((entry) => entry.identifier === "TST-404")).toBe(false);
+    // One that moved here, held by nobody now: the issue that moved off it.
+    const moved = store.createIssue({ title: "Moved" });
+    recordIdentifierMove(store.db, { issueId: moved.id, from: "TST-405", to: moved.identifier, at: "2026-11-26T00:00:00.000Z" });
+    const followed = runReferences(store, { ...status, run: { ...status.run, stop: { ...status.run.stop!, detail: { gates: ["TST-405"] } } } });
+    expect(followed.issues.find((entry) => entry.issueId === moved.id)).toMatchObject({ identifier: moved.identifier, title: "Moved" });
   });
 });

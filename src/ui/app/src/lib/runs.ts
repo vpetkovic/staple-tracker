@@ -12,7 +12,7 @@
  * nothing (core settles its open ticket), so its rows wear no badge.
  */
 import { createContext, useCallback, useContext } from "react";
-import { type AuthError, getRun } from "./api";
+import { AuthError, getRun } from "./api";
 import { isLiveRun } from "./run-text";
 import { useSession } from "./session";
 import type { RunEntry } from "./types";
@@ -156,10 +156,46 @@ export function useRunEntry(runId: string | null, onAuthError: (error: AuthError
   const { version } = useSession();
   const listed = runId === null ? null : (entries.find((entry) => entry.run.id === runId) ?? null);
   const fetch = runId !== null && listed === null;
-  const load = useCallback(() => (fetch && runId !== null ? getRun({ id: runId }) : Promise.resolve(null)), [fetch, runId]);
-  const fetched = useResource<RunEntry | null>(load, [fetch, runId, version], onAuthError);
+  // Each answer names the id it answers, the refusal included, so a link followed after a
+  // not-found one is not told the first was not found while its own read is under way.
+  const load = useCallback(
+    (): Promise<RunAnswer | null> =>
+      fetch && runId !== null
+        ? getRun({ id: runId }).then(
+            (entry): RunAnswer => ({ id: runId, entry, error: undefined }),
+            (error: unknown): RunAnswer => {
+              if (error instanceof AuthError) throw error;
+              return { id: runId, entry: null, error: error instanceof Error ? error : new Error(String(error)) };
+            },
+          )
+        : Promise.resolve(null),
+    [fetch, runId],
+  );
+  const fetched = useResource(load, [fetch, runId, version], onAuthError);
   if (runId === null) return { entry: null, error: undefined, loading: false };
   if (listed) return { entry: listed, error: undefined, loading: false };
-  const entry = fetched.data?.run.id === runId ? fetched.data : null;
-  return { entry, error: entry ? undefined : fetched.error, loading: entry === null && fetched.error === undefined };
+  return runAnswerFor(runId, fetched.data ?? null);
+}
+
+interface RunAnswer {
+  id: string;
+  entry: RunEntry | null;
+  error: Error | undefined;
+}
+
+/** What the read says about `runId`: its answer when it is the one for this id, else still loading. */
+export function runAnswerFor(runId: string, answer: RunAnswer | null): RunRead {
+  if (answer === null || answer.id !== runId) return { entry: null, error: undefined, loading: true };
+  return { entry: answer.entry, error: answer.error, loading: false };
+}
+
+/**
+ * The identifier a run's ticket has NOW, from the one the run recorded when it took it: a
+ * renumber from another device moves it, and the old number may name another issue since.
+ * Joined through the ticket's issueId and the entry's `issues`; the recorded one when the
+ * issue is gone (the detail then says so).
+ */
+export function currentRef(entry: Pick<RunEntry, "run" | "issues">, recorded: string): string {
+  const ticket = entry.run.tickets.find((candidate) => candidate.identifier === recorded);
+  return (ticket && entry.issues.find((issue) => issue.issueId === ticket.issueId)?.identifier) ?? recorded;
 }

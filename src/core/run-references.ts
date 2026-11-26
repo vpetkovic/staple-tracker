@@ -15,6 +15,9 @@
  *
  * Every issue the run's status names, wherever it names it: the scope, the tickets taken, the
  * facts (workable, waiting, gates, person blocks), the stop's detail, the decision and the goal.
+ * An identifier the run recorded for one of its tickets is that ticket (by its issueId), even
+ * once another issue holds the number; any other identifier is the issue holding it now, else
+ * the issue that moved off it (`identifier-moves.ts`).
  * Each is read once, now, with its CURRENT identifier, title, status and category. A ticket
  * records the identifier it had when it was taken, which a renumber from another device
  * moves; the page joins on `issueId` and opens what this list says. An issue deleted since is
@@ -24,6 +27,7 @@
  * any string that is an issue identifier. Adding a field that names an issue to a run's status
  * then needs nothing here.
  */
+import { aliasedIssueId } from "./identifier-moves.js";
 import type { Run, RunStatus } from "./run-store.js";
 import type { WorkspaceStore } from "./store.js";
 import type { StatusCategory } from "./types.js";
@@ -117,9 +121,17 @@ export function runReferences(store: WorkspaceStore, status: RunStatus): RunRefe
   collect({ run: status.run, decision: status.decision, facts: status.facts, goal: status.goal }, ids, identifiers);
   if (status.run.scope.kind !== "queue") ids.add(status.run.scope.issueId);
 
+  // An identifier the run recorded for a ticket it took means THAT ticket, which its issueId
+  // already names: after a renumber another issue may hold the number, and is not the ticket.
+  const taken = new Set(status.run.tickets.map((ticket) => ticket.identifier));
   const byId = rowsWhere(store, "id", [...ids]);
   const known = new Set([...byId.values()].map((row) => row.identifier));
-  const rows = withParents(store, new Map([...byId, ...rowsWhere(store, "identifier", [...identifiers].filter((ref) => !known.has(ref)))]), status.run);
+  const asked = [...identifiers].filter((ref) => !known.has(ref) && !taken.has(ref));
+  const byIdentifier = rowsWhere(store, "identifier", asked);
+  // One nobody holds any more is the issue that moved off it, if it still exists.
+  const held = new Set([...byIdentifier.values()].map((row) => row.identifier));
+  const moved = asked.filter((ref) => !held.has(ref)).flatMap((ref) => aliasedIssueId(store.db, ref) ?? []);
+  const rows = withParents(store, new Map([...byId, ...byIdentifier, ...rowsWhere(store, "id", moved)]), status.run);
 
   const issues = [...rows.values()].map((row) => ({
     issueId: row.id,

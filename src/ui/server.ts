@@ -5144,13 +5144,20 @@ export function startUiServer(options: UiOptions): UiHandle {
         if (id === "") throw new StapleError("validation", "Name the run: id is required.");
         const wanted = url.searchParams.get("ws") ?? undefined;
         const targets = options.hub && !wanted ? allHandles() : [handleFor(wanted)];
+        // A workspace that cannot be read does not hide the run from the next one.
+        let unread: unknown = null;
         for (const h of targets) {
-          const found = h.store.runs().list({ all: true }).find((run) => run.id === id);
-          if (found) {
-            json(res, 200, runEntry(h, h.store.runs().status(found.id)));
+          try {
+            const status = h.store.runs().status(id);
+            // `status` also takes an id prefix; a link names the whole id.
+            if (status.run.id !== id) continue;
+            json(res, 200, runEntry(h, status));
             return;
+          } catch (error) {
+            if (!(error instanceof StapleError && error.code === "not_found")) unread ??= error;
           }
         }
+        if (unread !== null && targets.length === 1) throw unread;
         throw new StapleError("not_found", `No autopilot run ${id}${targets.length === 1 ? ` in ${targets[0]!.slug}` : " in any workspace"}.`);
       }
 
