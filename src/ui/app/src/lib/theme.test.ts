@@ -73,6 +73,13 @@ describe("the theme", () => {
     expect(store.isDark()).toBe(true);
   });
 
+  it("sets the page's class itself when it starts, whatever the boot script guessed", () => {
+    // index.html reads any stored value that is not "dark" as light; this store reads it as no pick.
+    const page = fakeEnv("blue", true);
+    expect(createThemeStore(page.env).isDark()).toBe(true);
+    expect(page.classes.has("dark")).toBe(true);
+  });
+
   it("starts from a stored pick whatever the system says", () => {
     const store = createThemeStore(fakeEnv("light", true).env);
     expect(store.isDark()).toBe(false);

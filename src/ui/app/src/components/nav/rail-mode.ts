@@ -17,7 +17,7 @@
  */
 import { useCallback, useSyncExternalStore } from "react";
 import { useMediaQuery } from "@/lib/use-media";
-import { RAIL_STORAGE_KEY } from "./nav-model";
+import { RAIL_STORAGE_KEY, decodeRailCollapsed } from "./nav-model";
 
 export type RailMode = "full" | "narrow";
 export type RailSizeClass = "compact" | "wide";
@@ -37,7 +37,7 @@ const isMode = (value: unknown): value is RailMode => value === "full" || value 
  * that has never stored v2.
  */
 export function decodeRailModes(v2: string | null, v1: string | null): RailModes {
-  if (v2 === null) return v1 === null ? {} : { wide: v1 === "collapsed" ? "narrow" : "full" };
+  if (v2 === null) return v1 === null ? {} : { wide: decodeRailCollapsed(v1) ? "narrow" : "full" };
   try {
     const parsed: unknown = JSON.parse(v2);
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};

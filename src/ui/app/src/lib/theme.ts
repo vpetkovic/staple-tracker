@@ -49,18 +49,19 @@ export function createThemeStore(env: ThemeEnvironment): ThemeStore {
     }
   };
   let choice = readChoice();
-  let dark = resolveDark(choice, env.media?.matches ?? false);
+  const isDark = () => resolveDark(choice, env.media?.matches ?? false);
   const listeners = new Set<() => void>();
-  const apply = (next: boolean) => {
-    dark = next;
-    env.root?.toggle("dark", next);
+  const apply = () => {
+    env.root?.toggle("dark", isDark());
     for (const listener of listeners) listener();
   };
+  // The boot script's first paint was a guess at the same rule; from here this store decides.
+  env.root?.toggle("dark", isDark());
   const onSystemChange = () => {
-    if (choice === null) apply(env.media?.matches ?? false);
+    if (choice === null) apply();
   };
   return {
-    isDark: () => dark,
+    isDark,
     choose: (next) => {
       choice = next ? "dark" : "light";
       try {
@@ -68,7 +69,7 @@ export function createThemeStore(env: ThemeEnvironment): ThemeStore {
       } catch {
         /* private mode: the pick lasts for this page load */
       }
-      apply(next);
+      apply();
     },
     subscribe: (listener) => {
       if (listeners.size === 0) env.media?.addEventListener("change", onSystemChange);

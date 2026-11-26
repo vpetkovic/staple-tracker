@@ -37,7 +37,7 @@ export const RECONNECTING_AFTER_MS = 5000;
  * answer. A poll that fails and one that hangs count alike, and the time between polls
  * (stretched while the tab is in the background) never counts, because no attempt is open.
  */
-export function createConnectionTracker(threshold: number = RECONNECTING_AFTER_MS) {
+export function createConnectionTracker() {
   let waitingSince: number | null = null;
   return {
     attempted(now: number): void {
@@ -47,7 +47,7 @@ export function createConnectionTracker(threshold: number = RECONNECTING_AFTER_M
       waitingSince = null;
     },
     state(now: number): Connection {
-      return waitingSince !== null && now - waitingSince >= threshold ? "reconnecting" : "live";
+      return waitingSince !== null && now - waitingSince >= RECONNECTING_AFTER_MS ? "reconnecting" : "live";
     },
   };
 }
@@ -111,14 +111,18 @@ export function useDataVersion(onAuthError: (error: AuthError) => void): {
   useEffect(() => {
     let alive = true;
     const tracker = createConnectionTracker();
-    // Checked between polls too: a poll that hangs has no answer to report itself with.
-    const watch = window.setInterval(() => publishConnection(tracker.state(Date.now())), 1000);
+    // One timer per unanswered stretch, armed when it starts and cleared by the next answer: a
+    // poll that hangs has no answer to report itself with. Nothing runs while the server answers.
+    let watch: number | undefined;
     const tick = async () => {
       tracker.attempted(Date.now());
+      watch ??= window.setTimeout(() => publishConnection("reconnecting"), RECONNECTING_AFTER_MS);
       try {
         const { fingerprint: next } = await getPoll(AbortSignal.timeout(POLL_TIMEOUT_MS));
         if (!alive) return;
         tracker.answered();
+        window.clearTimeout(watch);
+        watch = undefined;
         publishConnection("live");
         // The first fingerprint only establishes the baseline — the views already
         // loaded current data, so refetching on it would be a wasted round trip.
@@ -139,7 +143,7 @@ export function useDataVersion(onAuthError: (error: AuthError) => void): {
     return () => {
       alive = false;
       window.clearTimeout(timer);
-      window.clearInterval(watch);
+      window.clearTimeout(watch);
     };
   }, [advance]);
 

@@ -57,12 +57,12 @@ const DESK = { viewport: { width: 1440, height: 900 } } satisfies BrowserContext
 async function withPage(
   options: BrowserContextOptions,
   run: (page: Page) => Promise<void>,
-  at: { server?: () => UiHandle; search?: string; ready?: (page: Page) => Promise<void> } = {},
+  at: { server?: UiHandle; search?: string; ready?: (page: Page) => Promise<void> } = {},
 ): Promise<void> {
   const context = await browser.newContext(options);
   try {
     const page = await context.newPage();
-    const target = (at.server ?? (() => ui))();
+    const target = at.server ?? ui;
     await page.goto(`http://127.0.0.1:${(target.server.address() as AddressInfo).port}/?token=${target.token}${at.search ?? ""}`, { waitUntil: "networkidle" });
     await (at.ready ?? ((ready) => ready.getByText("A task to list").first().waitFor()))(page);
     await run(page);
@@ -156,7 +156,7 @@ describe("choosing a workspace from Usage", () => {
         expect(await page.locator('[data-nav-workspace="navfocus"]').getAttribute("aria-current")).toBe("true");
         expect(await page.locator("[data-nav-item='view:tree']").getAttribute("aria-current")).toBe("page");
       },
-      { server: () => hubUi, search: "&view=budget", ready: (page) => page.locator('[data-nav-workspace="navfocus"]').waitFor() },
+      { server: hubUi, search: "&view=budget", ready: (page) => page.locator('[data-nav-workspace="navfocus"]').waitFor() },
     );
   });
 });

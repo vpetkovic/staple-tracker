@@ -563,7 +563,6 @@ function TopRows({ onSelect, onNavigate }: { onSelect: (view: ViewName) => void;
 
 /** The theme, as a switch: a row on the phone, an icon beside Settings on a desk. */
 function ThemeToggle({ asRow }: { asRow: boolean }) {
-  // One state for every theme control; only a click records a pick (lib/theme.ts).
   const [dark, choose] = useTheme();
   const props = {
     type: "button" as const,

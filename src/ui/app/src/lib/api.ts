@@ -236,7 +236,7 @@ const qs = (params: Record<string, string | number | undefined>): string => {
 
 export const getBootstrap = () => request<Bootstrap>("/api/bootstrap");
 
-export const getPoll = (signal?: AbortSignal) => request<Poll>("/api/poll", signal ? { signal } : undefined);
+export const getPoll = (signal?: AbortSignal) => request<Poll>("/api/poll", { signal });
 
 /**
  * This machine's cloud state — the same `CloudSurfaceReport` the CLI prints and
