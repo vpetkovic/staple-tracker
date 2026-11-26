@@ -27,7 +27,7 @@
  */
 import { ALL_FILTER_DIMENSIONS } from "./filter-dimensions";
 import { emptyFilters, type FilterState } from "./filters";
-import { VIEWS, type ViewName } from "./session";
+import { DEFAULT_VIEW, VIEWS, isMachineView, type ViewName } from "./session";
 
 /** The address word for each view. `tree` and `calibration` are internal ids a reader never sees. */
 export const VIEW_SLUGS: Record<ViewName, string> = {
@@ -158,13 +158,18 @@ export function runHref(href: string, runId: string): string {
  * lib/view-prefs.ts). A milestone focus does not travel: it names a milestone of the
  * workspace you left, and pointing the new workspace's plan at it would show nothing. Nor
  * does a run, for the same reason.
+ *
+ * A view about this computer (Usage) is in no workspace and reads the same whichever is
+ * chosen, so keeping it would make the choice change nothing on screen. From there the
+ * switch lands on the workspace's default page instead.
  */
 export function afterWorkspaceSwitch(
   current: Pick<ShellUrlState, "view">,
   target: string,
   filtersFor: (ws: string, view: ViewName) => FilterState,
 ): ShellUrlState {
-  return { ws: target, view: current.view, focus: null, run: null, filters: filtersFor(target, current.view) };
+  const view = isMachineView(current.view) ? DEFAULT_VIEW : current.view;
+  return { ws: target, view, focus: null, run: null, filters: filtersFor(target, view) };
 }
 
 /**

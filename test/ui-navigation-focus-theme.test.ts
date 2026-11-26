@@ -2,8 +2,8 @@
 /**
  * Navigation behaviour that only a browser can show: where keyboard focus goes when the rail
  * is hidden or shown, whether the phone drawer keeps focus inside itself, whether the theme
- * follows the system until a person picks one, and what the rail's Tasks row means once a
- * project has narrowed the list. None of this is visible to a string
+ * follows the system until a person picks one, what the rail's Tasks row means once a
+ * project has narrowed the list, and where choosing a workspace from Usage lands. None of this is visible to a string
  * render (no jsdom in this suite), so this drives the built page.
  */
 import { once } from "node:events";
@@ -24,6 +24,7 @@ const { chromium } = await import("playwright-core");
 
 let browser: Browser;
 let ui: UiHandle;
+let hubUi: UiHandle;
 let home: string;
 let projectId: string;
 let dbPath: string;
@@ -38,24 +39,33 @@ beforeAll(async () => {
   ws.store.db.close();
   ui = startUiServer({ port: 0, hub: false, db: dbPath });
   await once(ui.server, "listening");
+  hubUi = startUiServer({ port: 0, hub: true });
+  await once(hubUi.server, "listening");
   browser = await chromium.launch();
 }, 60_000);
 
 afterAll(async () => {
   await browser?.close();
   ui?.close();
+  hubUi?.close();
   if (home) rmSync(home, { recursive: true, force: true });
 });
 
 const DESK = { viewport: { width: 1440, height: 900 } } satisfies BrowserContextOptions;
 const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true } satisfies BrowserContextOptions;
 
-async function withPage(options: BrowserContextOptions, run: (page: Page) => Promise<void>): Promise<void> {
+/** Opens the single-workspace page on Tasks, or `at.search` on `at.server` (the hub page), and waits for `at.ready`. */
+async function withPage(
+  options: BrowserContextOptions,
+  run: (page: Page) => Promise<void>,
+  at: { server?: () => UiHandle; search?: string; ready?: (page: Page) => Promise<void> } = {},
+): Promise<void> {
   const context = await browser.newContext(options);
   try {
     const page = await context.newPage();
-    await page.goto(`http://127.0.0.1:${(ui.server.address() as AddressInfo).port}/?token=${ui.token}`, { waitUntil: "networkidle" });
-    await page.getByText("A task to list").first().waitFor();
+    const target = (at.server ?? (() => ui))();
+    await page.goto(`http://127.0.0.1:${(target.server.address() as AddressInfo).port}/?token=${target.token}${at.search ?? ""}`, { waitUntil: "networkidle" });
+    await (at.ready ?? ((ready) => ready.getByText("A task to list").first().waitFor()))(page);
     await run(page);
   } finally {
     await context.close();
@@ -194,4 +204,21 @@ describe("the page's poll", () => {
       await page.getByText("Written while a poll hung").first().waitFor({ timeout: 15_000 });
     });
   }, 30_000);
+});
+
+describe("choosing a workspace from Usage", () => {
+  it("lands on the workspace's Tasks, since Usage reads the same in every workspace", async () => {
+    await withPage(
+      DESK,
+      async (page) => {
+        expect(await page.locator("[data-nav-workspace][aria-current]").count()).toBe(0);
+        await page.locator('[data-nav-workspace="navfocus"]').click();
+        await expect.poll(() => new URL(page.url()).searchParams.get("view")).toBe("tasks");
+        expect(new URL(page.url()).searchParams.get("ws")).toBe("navfocus");
+        expect(await page.locator('[data-nav-workspace="navfocus"]').getAttribute("aria-current")).toBe("true");
+        expect(await page.locator("[data-nav-item='view:tree']").getAttribute("aria-current")).toBe("page");
+      },
+      { server: () => hubUi, search: "&view=budget", ready: (page) => page.locator('[data-nav-workspace="navfocus"]').waitFor() },
+    );
+  });
 });

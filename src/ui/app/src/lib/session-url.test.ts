@@ -129,6 +129,11 @@ describe("switching workspace keeps the page", () => {
   it("lands on All workspaces with the view unchanged", () => {
     expect(afterWorkspaceSwitch({ view: "milestones" }, "", () => emptyFilters()).view).toBe("milestones");
   });
+
+  it("leaves a view about this computer for the workspace's default page, so the choice shows", () => {
+    expect(afterWorkspaceSwitch({ view: "budget" }, "pinecone", () => emptyFilters()).view).toBe("tree");
+    expect(afterWorkspaceSwitch({ view: "budget" }, "", () => emptyFilters()).view).toBe("tree");
+  });
 });
 
 describe("the Inbox and the Autopilot page", () => {

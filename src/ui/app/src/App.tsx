@@ -549,8 +549,9 @@ export function App() {
 
   /**
    * SWITCHING WORKSPACE KEEPS THE PAGE — `afterWorkspaceSwitch` in lib/session-url.ts. The
-   * view stays; the milestone focus (a milestone of the workspace being left) does not; the
-   * filters are the target scope's own, which `filtersForScope` resolves on the next render.
+   * view stays (except Usage, which is in no workspace and gives way to Tasks); the milestone
+   * focus (a milestone of the workspace being left) does not; the filters are the target
+   * scope's own, which `filtersForScope` resolves on the next render.
    * A chosen workspace is also remembered as the default for "which workspace?" questions
    * asked later from All workspaces (lib/session-workspace.ts).
    */
@@ -558,6 +559,7 @@ export function App() {
     (next: string) => {
       const landing = afterWorkspaceSwitch({ view }, next, () => filters);
       setWsState(landing.ws);
+      setView(landing.view);
       setMilestoneFocus(landing.focus);
       setRun(landing.run);
       if (next) rememberWorkspace(next);
