@@ -124,3 +124,23 @@ describe("the theme", () => {
     });
   });
 });
+
+describe("the rail's Tasks row", () => {
+  it("shows every task again after a project narrowed the list, and keeps the other filters", async () => {
+    await withPage(DESK, async (page) => {
+      await page.locator(`[data-nav-project="${projectId}"]`).click();
+      await expect.poll(() => new URL(page.url()).searchParams.getAll("project")).toEqual([projectId]);
+      expect(await page.locator(`[data-nav-project="${projectId}"]`).getAttribute("aria-current")).toBe("true");
+      // Another filter on the same page, which the Tasks row must leave alone.
+      const withDone = new URL(page.url());
+      withDone.searchParams.set("done", "1");
+      await page.goto(withDone.toString(), { waitUntil: "networkidle" });
+
+      await page.locator("[data-nav-item='view:tree']").click();
+      await expect.poll(() => new URL(page.url()).searchParams.getAll("project")).toEqual([]);
+      expect(new URL(page.url()).searchParams.get("done")).toBe("1");
+      expect(await page.locator(`[data-nav-project="${projectId}"]`).getAttribute("aria-current")).toBeNull();
+      expect(await page.locator("[data-nav-item='view:tree']").getAttribute("aria-current")).toBe("page");
+    });
+  });
+});

@@ -77,6 +77,7 @@ function session(over: Partial<StapleSession> = {}): StapleSession {
     openRun: noop,
     projects: { data: [], error: undefined, loading: false, reload: noop },
     focusProject: noop,
+    showAllTasks: noop,
     ws: "",
     setWs: noop,
     issues: { data: issues, error: undefined, loading: false, reload: noop },

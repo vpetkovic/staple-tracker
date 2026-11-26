@@ -20,6 +20,7 @@ import {
   sortScopeKey,
   VIEW_PREFS_STORAGE_KEY,
   withFiltersForScope,
+  withScopeProjects,
   withSortForScope,
   type GroupBy,
   type ViewPrefs,
@@ -407,5 +408,28 @@ describe("the filter preference", () => {
     const raw = encodeViewPrefs({ groupBy: "none", sort: {}, filters: { [tree]: gated } });
     expect(JSON.parse(raw).version).toBe(3);
     expect(JSON.parse(raw).filters[tree].dims).toEqual({ pickup: ["gated"] });
+  });
+});
+
+describe("withScopeProjects", () => {
+  const tasks = sortScopeKey("staple", "tree");
+  const narrowed = { ...emptyFilters(), dims: { project: ["p1"], status: ["todo"] }, showDone: true };
+
+  it("drops the project from one scope and keeps the rest of its filters", () => {
+    const next = withScopeProjects({ [tasks]: narrowed }, tasks, emptyFilters(), []);
+    expect(next[tasks]).toEqual({ ...narrowed, dims: { status: ["todo"] } });
+  });
+
+  it("reads an unfiltered scope through the legacy fallback, as the page does", () => {
+    const next = withScopeProjects({}, tasks, narrowed, []);
+    expect(next[tasks]!.dims).toEqual({ status: ["todo"] });
+    expect(next[tasks]!.showDone).toBe(true);
+  });
+
+  it("replaces the selection with the project clicked, and leaves other scopes alone", () => {
+    const graph = sortScopeKey("staple", "graph");
+    const next = withScopeProjects({ [tasks]: narrowed, [graph]: narrowed }, tasks, emptyFilters(), ["p2"]);
+    expect(next[tasks]!.dims.project).toEqual(["p2"]);
+    expect(next[graph]).toBe(narrowed);
   });
 });

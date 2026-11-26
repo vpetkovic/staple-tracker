@@ -95,6 +95,7 @@ import {
   sortForScope,
   sortScopeKey,
   withFiltersForScope,
+  withScopeProjects,
   withSortForScope,
   type GroupBy,
   type ViewPrefs,
@@ -533,22 +534,18 @@ export function App() {
    * graph and then left it. Replaces the project selection rather than toggling it, for
    * the reason the palette's dimension command gives: a click is an absolute request.
    */
-  const focusProject = useCallback(
-    (projectId: string) => {
-      const scope = sortScopeKey(ws, "tree");
-      setFilterPrefs((current) =>
-        withFiltersForScope(
-          current,
-          scope,
-          withDimension(filtersForScope(current, scope, legacyFilters), "project", [projectId]),
-        ),
-      );
+  const showTasksOf = useCallback(
+    (projects: readonly string[]) => {
+      setFilterPrefs((current) => withScopeProjects(current, sortScopeKey(ws, "tree"), legacyFilters, projects));
       setMilestoneFocus(null);
       setRun(null);
       setView("tree");
     },
     [ws, legacyFilters],
   );
+  const focusProject = useCallback((projectId: string) => showTasksOf([projectId]), [showTasksOf]);
+  /** The rail's Tasks row: Tasks with no project narrowing it, whatever else is filtered. */
+  const showAllTasks = useCallback(() => showTasksOf([]), [showTasksOf]);
 
   /**
    * SWITCHING WORKSPACE KEEPS THE PAGE — `afterWorkspaceSwitch` in lib/session-url.ts. The
@@ -694,6 +691,7 @@ export function App() {
       openRun,
       projects,
       focusProject,
+      showAllTasks,
       ws,
       setWs,
       issues,
@@ -730,6 +728,7 @@ export function App() {
     openRun,
     projects,
     focusProject,
+    showAllTasks,
     ws,
     issues,
     filters,

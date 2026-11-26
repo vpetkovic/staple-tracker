@@ -605,7 +605,9 @@ export function NavRail({
   const session = useSession();
   const phone = useCompactHeader();
   const select = (view: ViewName) => {
-    session.setView(view);
+    // Tasks from the rail is every task in scope: it leaves a project the page was narrowed to.
+    if (view === "tree") session.showAllTasks();
+    else session.setView(view);
     onNavigate?.();
   };
   const views = navGroup("views");

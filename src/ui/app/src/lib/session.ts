@@ -248,6 +248,12 @@ export interface StapleSession {
    * and a click from the graph would otherwise filter the graph and then leave it.
    */
   focusProject: (projectId: string) => void;
+  /**
+   * The rail's Tasks row: switch to Tasks AND drop its project narrowing, so Tasks means
+   * every task in scope. Every other filter stays. Written into the Tasks scope for the
+   * same reason as `focusProject`.
+   */
+  showAllTasks: () => void;
 
   /**
    * "" means every workspace, and is only reachable in hub mode. It is its OWN state:
