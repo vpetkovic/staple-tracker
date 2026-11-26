@@ -811,10 +811,16 @@ Timeline's name column narrows; under 1100px the filter folds to a button. Scrip
 know a width (the Timeline's pixels per day, an outline's default fold) measures its element
 with a ResizeObserver (`useElementWidth`), never the viewport.
 
+On the phone shell the lens tabs leave the toolbar for the page's title row: the shell's phone
+header has an empty slot beside the page name (`data-phone-header-slot` in
+`components/AppShell.tsx`, not drawn while empty) and `PlanView` portals a compact
+`DetailTabStrip` into it, so the toolbar is one row of at most 44px with the pills, the filter and
+**+ Idea**. In the desk shell the tabs stay in the toolbar at every width.
+
 **The toolbar** (`PlanBar`) holds the lens tabs with their counts (Ideas: the records the lens
 holds; Horizons: `horizons.length`; Timeline: none), the **Show only** pills, the lens's tools
-(**+ Horizon** on Horizons, drawn at the end of the outline under 620px), the filter and,
-outside Ideas, **+ Idea**: a popover with the capture field that leaves the lens where it is and
+(**+ Horizon** on Horizons, drawn at the end of the outline under 900px), the filter and,
+outside Ideas, **+ Idea**, an icon under 900px: a popover with the capture field that leaves the lens where it is and
 answers *Captured to Raw* with a link to Ideas. The focus and the filter are
 `views/plan/plan-focus.ts`. Each pill reads one payload flag: needs you is
 `nextStep.who === "person"`, late is `late` on a record not shipped, not started is
@@ -848,7 +854,9 @@ Marked shaped, a record moves to Horizons.
 **Horizons is delivery** (`views/plan/HorizonsLens.tsx`): one scroller of stacked sections.
 First **Not scheduled**, the shaped, started and shipped records no horizon carries; with
 none it is one line on the sunken surface, still the drop target that unschedules. Then a
-section per horizon in plan order: a sticky header and the horizon's outline (below). A section
+section per horizon in plan order: a sticky header and the horizon's outline (below). Under
+760px only the header's first line sticks (the fold, the name, the date, the server's percent
+and the menu, at most 44px); its bar, flags and counts scroll away with the rows. A section
 holds the records its horizon carries (`carriedBy`: scheduled on it, or a sub-idea scheduled on
 none under one that is), the way its counts read them. The header (`HorizonHeader.tsx`) is the
 fold, `HorizonSummary` with the inline rename and date editors, and on the right **Queue** (held
