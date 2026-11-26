@@ -53,6 +53,21 @@ it("uses singular counts on the horizon header and drawer", () => {
   }
 });
 
+it("keeps an otherwise empty horizon's group on the timeline while a member was placed on it by hand", () => {
+  const plan = store.plan().view();
+  const horizon = plan.horizons.find((h) => h.name === "Now")!;
+  const groups = (view: PlanData) => [...displays(view).timeline.matchAll(/data-plan-timeline-group="([^"]*)"/g)].map((match) => match[1]);
+  // No idea on it, and no member: nothing to draw.
+  Object.assign(horizon, { memberCount: 0 });
+  expect(groups(plan)).not.toContain(horizon.id);
+  // A member placed by hand, still no idea: its group row stays, with its name.
+  Object.assign(horizon, { memberCount: 1 });
+  expect(groups(plan)).toContain(horizon.id);
+  const timeline = displays(plan).timeline;
+  const group = timeline.slice(timeline.indexOf(`data-plan-timeline-group="${horizon.id}"`));
+  expect(plain(group)).toContain("Now");
+});
+
 describe("D review integration", () => {
   it("uses the server's complete horizon counts and progress on board, drawer and timeline", () => {
     const plan = store.plan();
