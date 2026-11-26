@@ -66,7 +66,7 @@ export function SubtreeLinkSection({ entries, workspace, shownId }: { entries: r
                   ) : null}
                 </span>
               </a>
-              <span className="flex shrink-0 items-center justify-end gap-1 pr-2 pl-2 @min-[520px]:w-[144px] @max-[519px]:items-end @max-[519px]:pb-2">
+              <span className="flex shrink-0 items-center justify-end gap-1 pr-2 pl-2 @min-[520px]:w-[152px] @max-[519px]:items-end @max-[519px]:pb-2">
                 <TicketButtons workspace={workspace} tickets={shown} />
                 {tickets.length > shown.length ? (
                   <span className="text-label text-text-tertiary" title={tickets.slice(MAX_TICKETS).map((ticket) => ticket.identifier).join(", ")}>
