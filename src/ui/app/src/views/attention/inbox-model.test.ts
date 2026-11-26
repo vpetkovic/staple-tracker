@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 import type { AttentionRow } from "@/lib/types";
 import { attentionSections } from "./attention-model";
-import { actionWord, conflictValue, drawerOrder, drawnRows, inboxKey, oldestAge, subjectCell, unblockTodo } from "./inbox-model";
+import { actionWord, conflictValue, drawnRows, inboxKey, oldestAge, subjectCell, unblockTodo } from "./inbox-model";
 
 function row(over: Partial<AttentionRow> & Pick<AttentionRow, "key" | "kind">): AttentionRow {
   return {
@@ -81,14 +81,6 @@ describe("the drawn rows", () => {
 
   it("leave out a folded section's rows", () => {
     expect(drawnRows(sections, { in_review: true }).map((r) => r.key)).toEqual(["a", "c", "d"]);
-  });
-
-  it("give the drawer its tickets in that order, skipping a row with no ticket", () => {
-    expect(drawerOrder(drawnRows(sections, {}))).toEqual([
-      { workspace: "app", ref: "APP-1" },
-      { workspace: "web", ref: "APP-2" },
-      { workspace: "app", ref: "APP-3" },
-    ]);
   });
 });
 

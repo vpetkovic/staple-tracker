@@ -24,7 +24,7 @@
  * and close a conflict. The focused row's buttons follow it in the tab order.
  */
 import { Inbox } from "lucide-react";
-import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { useState, type KeyboardEvent } from "react";
 import { GuardRefusal } from "@/components/GuardRefusal";
 import { EmptyState } from "@/components/plain/States";
 import { useRovingFocus } from "@/components/task-list/roving";
@@ -34,7 +34,7 @@ import { type Selection, useSession } from "@/lib/session";
 import type { AttentionList, AttentionRow } from "@/lib/types";
 import { ErrorState } from "@/views/ViewChrome";
 import { attentionSections } from "./attention-model";
-import { drawerOrder, drawnRows, inboxKey } from "./inbox-model";
+import { drawnRows, inboxKey } from "./inbox-model";
 import { ElsewhereLine, FailedBanner, InboxRow, InboxSection, InboxSkeleton, actOnRow } from "./InboxParts";
 import { type AttentionHandlers, useAttention } from "./use-attention";
 import "@/components/task-list/task-list.css";
@@ -85,7 +85,6 @@ export function AttentionLists({
   isNew,
   elsewhere = 0,
   onShowAll,
-  onVisibleOrder,
 }: {
   list: AttentionList;
   busy: string | null;
@@ -99,8 +98,6 @@ export function AttentionLists({
   /** Rows waiting in the other workspaces, for a one-workspace page. */
   elsewhere?: number;
   onShowAll?: () => void;
-  /** The drawer's previous and next walk the rows on screen (lib/session.ts `publishVisibleOrder`). */
-  onVisibleOrder?: (order: readonly Selection[]) => void;
 }) {
   const sections = attentionSections(list.rows);
   const [folded, setFolded] = useState<Record<string, boolean>>({});
@@ -109,12 +106,6 @@ export function AttentionLists({
   const drawn = drawnRows(sections, folded);
   const roving = useRovingFocus(drawn.map((row) => row.key));
 
-  const order = useMemo(() => drawerOrder(drawnRows(attentionSections(list.rows), folded)), [list.rows, folded]);
-  useEffect(() => {
-    onVisibleOrder?.(order);
-  }, [onVisibleOrder, order]);
-  // Unmount only: a list no longer on screen leaves the drawer nothing to walk.
-  useEffect(() => () => onVisibleOrder?.([]), [onVisibleOrder]);
 
   const expand = (key: string) => (open: boolean) => setExpanded(open ? key : null);
 

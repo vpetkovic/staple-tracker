@@ -5,7 +5,6 @@
  * Nothing here switches on a row's kind. A kind the registry adds tomorrow renders by its
  * verb, its label and its flags, so the page needs no change for it.
  */
-import type { Selection } from "@/lib/session";
 import type { AttentionRow } from "@/lib/types";
 import type { AttentionSection } from "./attention-model";
 
@@ -44,14 +43,9 @@ export function oldestAge(rows: readonly Pick<AttentionRow, "ageSeconds">[]): nu
   return Math.max(...rows.map((row) => row.ageSeconds));
 }
 
-/** The rows on screen, in order: a folded section draws none. The keyboard and the drawer walk these. */
+/** The rows on screen, in order: a folded section draws none. The keyboard walks these. */
 export function drawnRows(sections: readonly AttentionSection[], folded: Readonly<Record<string, boolean>>): AttentionRow[] {
   return sections.flatMap((section) => (folded[section.kind] ? [] : section.rows));
-}
-
-/** The drawer's previous and next walk these: the drawn rows that name a ticket, in order. */
-export function drawerOrder(rows: readonly AttentionRow[]): Selection[] {
-  return rows.flatMap((row) => (row.ref ? [{ workspace: row.workspace, ref: row.ref }] : []));
 }
 
 /** What a key does on the focused row. */
