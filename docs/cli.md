@@ -20,11 +20,18 @@ To look something up from the terminal:
 
 ## Global flags and `--json`
 
+A global flag goes before the command or after it, with the same meaning:
+`staple --json --ws <slug> show <ref>` is `staple show <ref> --json --ws <slug>`. A value
+flag before the command takes the next word as its value (`staple --db x.db ls`). A flag
+before the command that is not one of these is refused by name; a command's own options
+go after the command.
+
 | Flag | What it does |
 |---|---|
 | `--json` | Machine-readable output: the full objects, ISO-8601 timestamps. `events` prints one JSON object per line. An error is one JSON line on stderr. |
-| `--db <path>` | Use this workspace database instead of the one found by walking up from the current directory. |
-| `--ws <slug\|prefix>` | Use a registered workspace by name or prefix, from anywhere. It wins over `STAPLE_DB`; `--db` wins over it. |
+| `--db <path>` | Use this workspace database instead of the one found by walking up from the current directory. `doctor` diagnoses it. |
+| `--ws <slug\|prefix>` | Use a registered workspace by name or prefix, from anywhere. It wins over `STAPLE_DB`; `--db` wins over it. `doctor` diagnoses it. |
+| `--agent <name>` | Who acts, on any write. It wins over `STAPLE_AGENT`. A verb's own spelling (`comment --author`, `queue next --actor`, `run --actor`, `integrations --actor`) still works and wins when both are given. After `run drive`, `--agent` names the harness instead. |
 
 The workspace is the first of: `--db`, `--ws`, `STAPLE_DB`, then the walk up from the
 current directory.
@@ -34,8 +41,7 @@ workspace of the repository's main checkout, as if you had run the command there
 worktree whose main checkout cannot be located is refused rather than resolved to a workspace
 in some parent directory; pass `--ws` or `--db`.
 
-Writes are recorded under `STAPLE_AGENT`, else `$USER`. `start`, `done`, `cancel`,
-`status`, `estimate` and `release` also take `--agent <name>` to say who acts.
+Writes are recorded under `--agent`, else `STAPLE_AGENT`, else `$USER`.
 
 Durations (`--estimate`, `--if-stale`, `--steal-if-stale`) are `90s`, `30m`, `2h`,
 `3d`, or a number of seconds. `run start --until` takes a duration or an ISO time with
@@ -57,7 +63,7 @@ Guide: [Install and first workspace](getting-started.md).
 | `staple` | Set this repository up if it needs it, then open the web UI. `--yes` takes the defaults. |
 | `staple init [--yes] [--slug s]` | Create and register a workspace, write `.staple/AGENTS.md` for agents, and exit. `--global <slug>` makes one outside any repository. |
 | `staple install [--yes] [--update-path]` | Install a runtime so `staple` is on your PATH. `install status` shows it; `--rollback` returns to the previous one. |
-| `staple doctor [--json]` | Check the home, config, workspace, UI port and runtime, read-only. Exits 1 when a check fails and prints the repair. |
+| `staple doctor [--json] [--db <path> \| --ws <slug>]` | Check the home, config, workspace, UI port and runtime, read-only. Without `--db` or `--ws` it checks the workspace found from the current directory (`--dir` names another directory). Exits 1 when a check fails and prints the repair. |
 | `staple doctor --fix --only <check> --yes` | Apply one named repair. |
 | `staple mcp` | Start the MCP server on stdio. Your agent's client runs it ([Connect your agent](connect-your-agent.md)). |
 | `staple config` | This machine's settings and where each came from. |

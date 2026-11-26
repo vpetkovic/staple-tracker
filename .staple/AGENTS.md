@@ -17,11 +17,11 @@ retired and its `.tasks/tasks.db` is not this workspace.
 
 From this repository's main checkout, the default database is
 `/Users/vpetkovic/VPDrive/Workshop/personal/projects/oss-libs/staple-tracker/.staple/staple.db`.
-From a worktree, pass that absolute path as `--db` after the command's other
-arguments. Use `--json` for every live tracker read and write.
+From a worktree, pass `--ws staple` (or that absolute path as `--db`), before or
+after the command. Use `--json` for every live tracker read and write.
 
-If the runtime and database disagree, run `~/.local/bin/staple doctor --json`
-from the **main checkout**. Doctor is read-only and does not accept `--db`.
+If the runtime and database disagree, run `~/.local/bin/staple doctor --ws staple --json`
+from anywhere, worktrees included. Doctor is read-only.
 Read the `schema` check's `data.database`, `data.running`, `data.selected`, and
 `data.repair` fields. When `data.repair.command` is present, use that exact
 command only after checking its named runtime understands the database schema.
@@ -151,8 +151,8 @@ request.
 
 ## Act under one identity, all session
 
-Set `STAPLE_AGENT` (or MCP `actor`) and **use the
-same value you claimed with for the entire session.**
+Set `STAPLE_AGENT` (or pass `--agent`, which every write accepts before or after the
+command, or MCP `actor`) and **use the same value you claimed with for the entire session.**
 
 This is not bookkeeping. Liveness is derived from your claim plus the newest
 event or comment *by the holder*. Write a comment under a different name and it
