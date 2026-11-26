@@ -12,6 +12,7 @@
  * Only a parent has a subtree set: a ticket with no visible child gets none, and its own pull
  * requests stay where they always were. Two queries for any number of parents, never one per child.
  */
+import type { PullRequestChecks } from "./integrations/contracts.js";
 import type { LinkedPullRequest } from "./integrations/link-store.js";
 import { IDEA_KIND } from "./plan.js";
 import type { WorkspaceStore } from "./store.js";
@@ -115,4 +116,17 @@ export function subtreePullRequests(store: WorkspaceStore, issueId: string): Sub
 export function subtreePullRequestsField(store: WorkspaceStore, issueId: string): { subtreePullRequests?: SubtreePullRequest[] } {
   const set = subtreePullRequests(store, issueId);
   return set === null ? {} : { subtreePullRequests: set };
+}
+
+/**
+ * A pull request's checks in words, only when they need attention, as the web UI says them:
+ * `checks failing: test, lint` (three names, then `and N more`) or `checks pending`. Null
+ * when they pass or none were read.
+ */
+export function checksPhrase(checks: PullRequestChecks | null): string | null {
+  if (checks?.state === "pending") return "checks pending";
+  if (checks?.state !== "failing") return null;
+  const names = checks.failing.slice(0, 3).join(", ");
+  const more = checks.failing.length > 3 ? ` and ${checks.failing.length - 3} more` : "";
+  return names ? `checks failing: ${names}${more}` : "checks failing";
 }

@@ -28,7 +28,7 @@ import { stapleHome } from "./config/home.js";
 import { MILESTONE_KIND } from "./core/milestones.js";
 import type { WorkspaceStore } from "./core/store.js";
 import type { LinkedPullRequest } from "./core/integrations/link-store.js";
-import { type SubtreePullRequest, subtreePullRequests } from "./core/subtree-pull-requests.js";
+import { checksPhrase, type SubtreePullRequest, subtreePullRequests } from "./core/subtree-pull-requests.js";
 import { branchPointer, ticketBranch } from "./core/ticket-branch.js";
 import type { GateDecision, IssueGate, QueuedBy } from "./core/types.js";
 import { DECISION_VIEWS } from "./mcp-view-actions.js";
@@ -231,11 +231,12 @@ export function ticketCardText(card: TicketCard): string {
   }
   if (card.branch) lines.push(`Branch ${card.branch.name}${card.branch.base ? ` (base ${card.branch.base})` : ""}.`);
   // A parent's line is its whole subtree's, its own included, each naming its tickets; a leaf's its own.
+  const said = (pr: LinkedPullRequest) => [`${pr.key} ${pr.state ?? "state unknown"}`, checksPhrase(pr.checks)].filter(Boolean).join(", ");
   if (card.subtreePullRequests?.length) {
-    const each = card.subtreePullRequests.map((pr) => `${pr.key} ${pr.state ?? "state unknown"} (${pr.tickets.map((t) => t.identifier).join(", ")})`);
+    const each = card.subtreePullRequests.map((pr) => `${said(pr)} (${pr.tickets.map((t) => t.identifier).join(", ")})`);
     lines.push(`Pull requests: ${each.join("; ")}.`);
   } else if (card.subtreePullRequests === null && card.pullRequests.length) {
-    lines.push(`Pull requests: ${card.pullRequests.map((pr) => `${pr.key} ${pr.state ?? "state unknown"}`).join("; ")}.`);
+    lines.push(`Pull requests: ${card.pullRequests.map(said).join("; ")}.`);
   }
   const { estimatedSeconds, elapsedSeconds } = card.timing;
   if (estimatedSeconds !== null || elapsedSeconds) {

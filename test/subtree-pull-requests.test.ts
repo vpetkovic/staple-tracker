@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExternalItem } from "../src/core/integrations/contracts.js";
-import { subtreePullRequests, subtreePullRequestsFor } from "../src/core/subtree-pull-requests.js";
+import { checksPhrase, subtreePullRequests, subtreePullRequestsFor } from "../src/core/subtree-pull-requests.js";
 import { initWorkspace } from "../src/core/workspace.js";
 
 const dirs: string[] = [];
@@ -134,5 +134,15 @@ describe("a parent's subtree pull requests", () => {
     expect(sets.get(roots[0]!.id)).toHaveLength(20);
     expect(sets.get(roots[1]!.id)!.map((p) => p.key)).toEqual(sets.get(roots[0]!.id)!.map((p) => p.key));
     store.db.close();
+  });
+
+  it("says a pull request's checks only when they need attention", () => {
+    const failing = (names: string[]) => ({ state: "failing" as const, failing: names, completedAt: null });
+    expect(checksPhrase(failing(["test", "lint"]))).toBe("checks failing: test, lint");
+    expect(checksPhrase(failing(["a", "b", "c", "d", "e"]))).toBe("checks failing: a, b, c and 2 more");
+    expect(checksPhrase(failing([]))).toBe("checks failing");
+    expect(checksPhrase({ state: "pending", failing: [], completedAt: null })).toBe("checks pending");
+    expect(checksPhrase({ state: "passing", failing: [], completedAt: null })).toBeNull();
+    expect(checksPhrase(null)).toBeNull();
   });
 });

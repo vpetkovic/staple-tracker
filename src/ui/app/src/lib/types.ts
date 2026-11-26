@@ -1,4 +1,5 @@
 import type { ExternalLink, ExternalRowSummary } from "../../../../core/integrations/link-store.js";
+import type { RowPullRequestCounts } from "../../../../core/integrations/pr-discovery.js";
 import type { SubtreePullRequest } from "../../../../core/subtree-pull-requests.js";
 import type { TicketBranch } from "../../../../core/ticket-branch.js";
 import type { HorizonData, IdeaData, IdeaDetailData, PlanStepData } from "./plan-types.js";
@@ -955,6 +956,12 @@ export interface IssueRow {
    * freezing it into the entity would be a lie waiting to happen.
    */
   pullRequests?: PullRequestRef[];
+  /**
+   * On a parent's row only: counts by state over its whole subtree set, of which
+   * `pullRequests` lists the first eight (failing checks first). `inside` counts the ones
+   * only its descendants carry. Absent on a leaf's row and on a row with none.
+   */
+  pullRequestCounts?: RowPullRequestCounts;
   externalLinks?: ExternalRowSummary;
   /**
    * The review gate ON this row, and the gate this row is QUEUED BEHIND

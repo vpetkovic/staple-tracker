@@ -217,9 +217,33 @@ describe("finding the pull requests opened for a ticket's branch", () => {
 
 describe("the row's pull requests", () => {
   it("draws every pull request, one never read as unknown, the ones still moving first", () => {
-    const linked = (n: number, state: string | null) => ({ resourceId: String(n), providerId: "github", key: `t/r#${n}`, url: `https://github.com/t/r/pull/${n}`, number: n, state, title: null, checks: null, fetchedAt: null, linkedAt: "" });
+    const linked = (n: number, state: string | null) => ({ resourceId: String(n), providerId: "github", ref: { ...ref(n), kind: "pull_request" as const }, key: `t/r#${n}`, url: `https://github.com/t/r/pull/${n}`, number: n, state, title: null, checks: null, fetchedAt: null, linkedAt: "" });
     expect(rowPullRequests([linked(1, "merged"), linked(2, null), linked(3, "open")]).pullRequests!.map((p) => [p.number, p.state])).toEqual([[3, "open"], [2, "unknown"], [1, "merged"]]);
     expect(rowPullRequests([])).toEqual({});
+  });
+
+  it("lists a parent's first eight, failing checks first, and counts its whole set", () => {
+    const failingChecks = { state: "failing" as const, failing: ["test"], completedAt: null };
+    const entry = (n: number, state: string | null, own = false, checks: typeof failingChecks | null = null) => ({
+      resourceId: String(n), providerId: "github", ref: { ...ref(n), kind: "pull_request" as const }, key: `t/r#${n}`, url: `https://github.com/t/r/pull/${n}`,
+      number: n, state, title: null, checks, fetchedAt: null, linkedAt: "", own, tickets: [{ id: `i${n}`, identifier: `T-${n}`, title: "", childId: own ? null : `i${n}` }],
+    });
+    const set = [
+      entry(1, "open", true), entry(2, "merged"), entry(3, "draft", false, failingChecks), entry(4, "closed"), entry(5, null),
+      entry(6, "open", false, failingChecks), entry(7, "merged"), entry(8, "open"), entry(9, "draft"), entry(10, "merged"),
+      // Merged with a failing check left from before: merged, not failing.
+      entry(11, "merged", false, failingChecks),
+    ];
+    const row = rowPullRequests(set);
+    expect(row.pullRequests!.map((p) => [p.number, p.state, p.checks ?? null])).toEqual([
+      [6, "open", "failing"], [3, "draft", "failing"], [8, "open", null], [1, "open", null], [9, "draft", null], [5, "unknown", null], [11, "merged", "failing"], [10, "merged", null],
+    ]);
+    expect(row.pullRequests![0]!.tickets).toEqual(["T-6"]);
+    expect(row.pullRequestCounts).toEqual({ total: 11, failing: 2, open: 3, draft: 2, unknown: 1, merged: 4, closed: 1, inside: 10 });
+    // A leaf's row keeps every pull request in state order and carries no counts.
+    const leaf = rowPullRequests(set.map(({ own: _own, tickets: _tickets, ...pr }) => pr));
+    expect(leaf.pullRequestCounts).toBeUndefined();
+    expect(leaf.pullRequests!.map((p) => p.number)).toEqual([8, 6, 1, 9, 3, 5, 11, 10, 7, 2, 4]);
   });
 
   it("sends no sync operation for a shared pull request a read finds unchanged", async () => {

@@ -117,8 +117,10 @@ its child was closed does not stay open on the parent.
   the set is under **More details**.
 - `staple show <parent>` prints the set under `pull requests (this ticket and its descendants):`.
   `staple show --json`, MCP `get_task` and `/api/agent-context` carry it as
-  `subtreePullRequests`: each pull request with `own` and `tickets`, and each ticket with
-  `childId`, the parent's direct child it sits under (null for the parent itself). `show_ticket`
+  `subtreePullRequests`: each pull request with `own`, `tickets`, `checks` and its provider
+  `ref`, and each ticket with `childId`, the parent's direct child it sits under (null for the
+  parent itself). The terminal and the card text add `checks failing: <names>` or
+  `checks pending` after a pull request's state, and nothing when its checks pass. `show_ticket`
   has the same field, null on a ticket with no children, and every card also carries the
   ticket's own `pullRequests`.
 - A ticket with no children is unchanged and has no `subtreePullRequests`. A parent with no

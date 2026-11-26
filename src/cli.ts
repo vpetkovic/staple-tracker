@@ -40,7 +40,7 @@ import { runCloudCommand } from "./commands/cloud.js";
 import { runIntegrationsCommand } from "./commands/integrations.js";
 import { runBranchCommand } from "./commands/branch.js";
 import { runCheckpointCommand } from "./commands/checkpoint.js";
-import { subtreePullRequests, subtreePullRequestsField } from "./core/subtree-pull-requests.js";
+import { checksPhrase, subtreePullRequests, subtreePullRequestsField } from "./core/subtree-pull-requests.js";
 import { ticketBranch } from "./core/ticket-branch.js";
 import { runFileCommand } from "./commands/file.js";
 import { runHubRegistryCommand } from "./commands/hub-registry.js";
@@ -1785,7 +1785,8 @@ function main() {
       if (subtree?.length) {
         console.log("pull requests (this ticket and its descendants):");
         for (const pr of subtree) {
-          console.log(`  ${(pr.state ?? "unknown").padEnd(7)} ${pr.key}${pr.title ? `  ${pr.title}` : ""} · ${pr.tickets.map((t) => t.identifier).join(", ")}`);
+          const checks = checksPhrase(pr.checks);
+          console.log(`  ${(pr.state ?? "unknown").padEnd(7)} ${pr.key}${pr.title ? `  ${pr.title}` : ""}${checks ? ` · ${checks}` : ""} · ${pr.tickets.map((t) => t.identifier).join(", ")}`);
         }
       }
       if (i.description) console.log(`\n${i.description}`);
