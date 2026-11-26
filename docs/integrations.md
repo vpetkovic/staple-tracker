@@ -89,8 +89,17 @@ It only reads. It never unlinks, never writes to GitHub, and never changes a tic
 A `gh` that is not signed in, a connection in another failing state, or a workspace with no
 GitHub repository mapped finds nothing: the answer names the connection's state and what to do,
 and the connection's status in Settings shows the same. A repository outside the workspace's
-mapping is never read, and a branch of the same name in a fork does not count. Check results are
-GitHub check runs (`gh api .../check-runs`); legacy commit statuses are not read.
+mapping is never read, and a branch of the same name in a fork does not count.
+
+Check results come from both places GitHub keeps them: every check run on the head commit
+(`gh api .../check-runs`, a page of 100 at a time until its `total_count` is read, at most ten
+pages) and the commit statuses older CI still reports (`gh api .../status`). They sum up as one
+result. Any failing run (`failure`, `timed_out`, `cancelled`, `action_required`,
+`startup_failure`) or failing status (`failure`, `error`) fails it; otherwise a run still going,
+a run concluded `stale` or with a conclusion Staple does not know, a `pending` status, or more
+check runs than ten pages hold leaves it pending, never passing. A commit with neither check runs
+nor statuses has no checks. When the account cannot read one of the two, a failure in the other
+still fails, and otherwise the checks are unknown.
 
 ### A parent's pull requests
 

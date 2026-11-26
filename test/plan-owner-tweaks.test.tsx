@@ -28,7 +28,9 @@ describe("the owner's plan tweaks", () => {
     const { db, store, plan } = fixture();
     try {
       const later = plan.createHorizon({ name: "Later" }, "Mira", PERSON);
-      const dated = plan.createHorizon({ name: "Later", date: "2027-02-01" }, "Mira", PERSON);
+      // An older build let two horizons share a name; today's createHorizon refuses it, so the dated one is named as that build left it.
+      const dated = plan.createHorizon({ name: "Later (dated)", date: "2027-02-01" }, "Mira", PERSON);
+      db.prepare("UPDATE issues SET title = 'Later' WHERE id = ?").run(dated.id);
       const raw = plan.capture({ title: "Undecided", maturity: "exploring", horizon: later.id }, "Mira", PERSON);
       const idea = plan.capture({ title: "Merchant checkout", maturity: "shaped", plan: READY_PLAN, horizon: later.id }, "Mira", PERSON);
       const task = store.createIssue({ title: "Take a payment" });

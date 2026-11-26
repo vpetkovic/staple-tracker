@@ -230,6 +230,11 @@ export function cardMenuItems(idea: IdeaData, column: BoardColumn, columns: Boar
   return { moves, others };
 }
 
+/** The Dropped shelf's Restore: the restore the record's state offers, the same write as the drawer's; null when it offers none. */
+export function shelfRestore(idea: IdeaData): PlanItem | null {
+  return planActionItems("", idea).find((item) => item.id === "restore") ?? null;
+}
+
 function MoveMenu({ idea, column, columns, write }: { idea: IdeaData; column: BoardColumn; columns: BoardColumn[]; write: Write }) {
   const { moves, others } = cardMenuItems(idea, column, columns);
   const move = (target: DropTarget) => void write("update", { ref: idea.id, ...dropBody(target) });
@@ -502,14 +507,19 @@ function DroppedShelf({ ideas, write }: { ideas: IdeaData[]; write: Write }) {
       </button>
       {open ? (
         <ul className="flex flex-col gap-1 pb-1">
-          {ideas.map((idea) => (
-            <li key={idea.id} className="flex items-center gap-2 text-label">
-              <span className="min-w-0 flex-1 truncate text-text-secondary line-through">{idea.title}</span>
-              <Button variant="ghost" size="sm" onClick={() => void write("update", { ref: idea.id, maturity: "raw" })}>
-                Restore
-              </Button>
-            </li>
-          ))}
+          {ideas.map((idea) => {
+            const call = shelfRestore(idea)?.call;
+            return (
+              <li key={idea.id} className="flex items-center gap-2 text-label">
+                <span className="min-w-0 flex-1 truncate text-text-secondary line-through">{idea.title}</span>
+                {call?.route === "plan" ? (
+                  <Button variant="ghost" size="sm" onClick={() => void write(call.verb, call.body)}>
+                    Restore
+                  </Button>
+                ) : null}
+              </li>
+            );
+          })}
         </ul>
       ) : null}
     </div>

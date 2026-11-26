@@ -59,6 +59,7 @@ function idea(state: keyof typeof OFFERED, patch: Partial<IdeaData> = {}): IdeaD
     kind: "idea",
     title: "Coach shares a program",
     description: null,
+    briefLine: null,
     maturity: state === "raw" || state === "dropped" ? state : "shaped",
     stage: state as IdeaData["stage"],
     parentId: null,

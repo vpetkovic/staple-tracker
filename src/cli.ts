@@ -1258,7 +1258,9 @@ The plan (experimental; features.planning defaults off)
               not-started counts
   idea ls [--maturity M] [--horizon H]  ideas with stage, horizon and progress; ideas are
               never queued, checked out, picked by next or listed by ls. An idea has
-              no ticket number until it is promoted: its <ref> is the id idea ls prints
+              no ticket number until it is promoted: its <ref> is the id idea ls prints.
+              --horizon H (identifier or name) lists what H carries, sub-ideas
+              following a parent on H included, and the dropped ideas on H
   idea new <title> [--brief T] [--parent REF]
               capture a raw idea (an agent captures raw ideas only)
   idea show <ref>                       stage, windows, plan sections, questions, decisions, links
