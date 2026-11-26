@@ -194,12 +194,21 @@ export function popOverlay(id: string): void {
 /**
  * Close every overlay by stepping back past all of their entries, then run `then` — the
  * navigation that was waiting for a clean page to push onto.
+ *
+ * `then` keeps this call's place in the queue: it runs as soon as the step back lands,
+ * ahead of the writes queued while this call waited. Those were made after the navigation
+ * was asked for (the page re-rendering onto the new view writes its address again), and
+ * run first they would replace the page being left instead of following the new one.
  */
 export function leaveOverlays(then: () => void): void {
   afterHistorySettles(() => {
     const count = openIds(window.history.state).length;
-    if (count > 0) traverse(-count, "navigation");
-    afterHistorySettles(then);
+    if (count === 0) {
+      then();
+      return;
+    }
+    traverse(-count, "navigation");
+    queue.unshift(then);
   });
 }
 
