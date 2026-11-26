@@ -925,7 +925,7 @@ export function MilestoneDetailPane({
           horizon={decision.detail.horizonPlan.horizon}
           ideas={decision.detail.horizonPlan.ideas}
           horizons={decision.detail.horizonPlan.horizons}
-          className="rounded-xl border bg-card px-4 py-4"
+          className="shrink-0 overflow-hidden rounded-xl border bg-card"
         />
       ) : null}
       {desk ? null : gateBlock}

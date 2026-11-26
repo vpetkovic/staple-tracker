@@ -81,11 +81,22 @@ on, staple adds the `idea` and `milestone` kinds and two undated horizons, Now a
 Agents can read the setting with `staple settings get features.planning`, the `get_setting`
 tool or `show_about`. They cannot change it: the tool refuses and tells them to ask you.
 
+### The toolbar
+
+**Plan** has one toolbar. Its tabs choose the lens: **Ideas** and **Horizons**, each with its
+count, and **Timeline**. **Show only** narrows every lens to **Needs you** (ideas whose next
+step is yours, such as questions to answer), **Late** (late and not shipped) or **Not started**.
+Each pill shows how many ideas it keeps and is left out when that is none; press it again to
+turn it off. **Filter the plan…** keeps the ideas whose titles hold what you type. Both keep each
+match's parent ideas and fold nothing away, and a lens left empty offers **Clear filter**.
+
 ## 2. Capture an idea
 
-Open **Plan**. Type in **Capture an idea** in the **Ideas** lens and press Enter. The idea starts
-**raw**. It is not a task: it never appears in Tasks, the queue or an agent's `next`, and it takes
-no ticket number. On the command line you name an idea by the id `staple idea ls` prints:
+Open **Plan**. In the **Ideas** lens, type in **Capture an idea…** at the top of the Raw list and
+press Enter. On Horizons and the Timeline, **+ Idea** opens the same field: the idea lands in
+Raw, you stay on the lens you are on, and **View** takes you to it. The idea starts **raw**. It
+is not a task: it never appears in Tasks, the queue or an agent's `next`, and it takes no ticket
+number. On the command line you name an idea by the id `staple idea ls` prints:
 
 ```bash
 staple idea new "Gift cards at checkout" --brief "Buyers pay with a card balance, alone or split with a card"
@@ -98,10 +109,14 @@ payload an agent reads) and **Time** sit beside it. Sub-ideas go under a parent 
 
 ## 3. Explore it
 
-Move the idea to **Exploring** while questions are open: drag it, or use the card's ⋯ menu. An
-exploring idea can reserve a horizon (it stays in the Ideas lens with a ◇ chip such as ◇ Next)
-and get planned dates. Ask questions, answer them, record decisions. Agents help here: they can
-add questions, answer them and fill in the plan.
+Move the idea to **Exploring** while questions are open: press **Explore** on its Raw row, drag
+it to Exploring, or use its ⋯ menu. An exploring idea can reserve a horizon (it stays in the
+Ideas lens with a ◇ chip such as ◇ Next) and get planned dates. Ask questions, answer them,
+record decisions. Agents help here: they can add questions, answer them and fill in the plan.
+
+An exploring card says what shaping still needs (**To shape:** …), how much of the plan is
+written (`7/10 written`, the required sections first on its meter), its open questions and the
+horizon it is aimed at. Once the plan passes the gate it offers **Mark shaped**.
 
 ## 4. Shape it
 
@@ -128,13 +143,19 @@ An idea is a plan an agent can build from. The **Plan** tab has ten sections:
   depends-on cycle (a cycle is named by its rows, `1 → 2 → 1`);
 - every open question answered or **deferred**, which leaves it open on purpose.
 
-The meter at the top of the Plan tab says what is still missing. A row without its own "done
-when" **inherits** the plan's acceptance criteria. The plan shows that, and when the task is
-created it carries the label `acceptance-inherited` until someone writes a sharper one.
+The Plan tab opens on **Where it stands**: a checklist of what the gate still asks for, the
+required sections already written ticked, and the open questions with **Answered** and
+**Defer**. Under it are the properties (Horizon, Part of, Planned) and a row of chips, one per
+section, that scroll to it. The breakdown is a table (#, Task, Est., After); a row opens in place
+to edit, and **+ Task** adds one. Sections not written yet wait as chips on one line.
 
-A shaped idea moves from the Ideas lens to the **Horizons** lens. If someone later edits it so
-it no longer passes, it stays shaped and reads **shaped · plan incomplete**, with Scaffold held
-back until the plan passes again.
+A row without its own "done when" **inherits** the plan's acceptance criteria. The plan shows
+that, and when the task is created it carries the label `acceptance-inherited` until someone
+writes a sharper one.
+
+A shaped idea moves from the Ideas lens to **Not scheduled** at the top of the
+**Horizons** lens. If someone later edits it so it no longer passes, it stays shaped and reads
+**shaped · plan incomplete**, with Scaffold held back until the plan passes again.
 
 A plan you already have as a file comes in whole:
 
@@ -149,37 +170,42 @@ its sub-ideas, then mark it shaped.
 
 ## 5. Schedule it on a horizon
 
-The **Horizons** lens has one column per horizon, then **Unscheduled**, which means no horizon
-yet. Drag a shaped idea into a horizon. Give a horizon a date (**add a date**) and it becomes a
-release line: it shows on the Timeline and in **Milestones**, and ideas planned past it are
-flagged. A horizon without a date is a grouping you chose, like Now or Next. It keeps the same
-lifecycle but stays out of the Milestones list.
+The **Horizons** lens is an outline: **Not scheduled**, the shaped, started and shipped ideas
+with no horizon, then a section per horizon. Drag a shaped idea onto a horizon's section, or use
+its ⋯ menu. While you drag, a rail of targets pins to the top so a far horizon is in reach, and
+only the places the idea's state allows light up. Dragging takes a mouse or a pen and a Plan area at least
+760 px wide; otherwise use the ⋯ menu.
+
+Give a horizon a date (**add a date**) and it becomes a release line: it shows on the Timeline
+and in **Milestones**, and ideas planned past it are flagged. A horizon without a date is a
+grouping you chose, like Now or Next. It keeps the same lifecycle but stays out of the
+Milestones list.
 
 You never add an idea's work to the horizon's milestone by hand. The work of every idea on a
 horizon is the milestone's membership, so moving the idea moves its work. A ticket you put in a
 milestone yourself stays where you put it.
 
-Add, rename, date and remove horizons from the column header and **+ Horizon**. Each horizon
-has its own name, in any case, so `idea ls --horizon <name>` and `list_ideas` know which one you
-mean; they list what the horizon carries, sub-ideas following a parent on it included, and the dropped
-ideas scheduled on it. Removing one
-returns its ideas to Unscheduled. A horizon that still holds open work, or sits in the queue,
-cannot be removed until you move that work or take it off the queue. The refusal names what to
-move.
+Add a horizon with **+ Horizon** (on a phone, at the end of the outline); rename, date and remove
+it from its header and ⋯ menu. Each horizon has its own name, in any case, so
+`idea ls --horizon <name>` and `list_ideas` know which one you mean; they list what the horizon carries, sub-ideas
+following a parent on it included, and the dropped ideas scheduled on it. Removing one leaves its
+ideas with no horizon. A horizon that still holds open work, or sits in the queue, cannot be
+removed until you move that work or take it off the queue. The refusal names what to move.
 
 ### How a horizon reads
 
-A horizon reads the same in three places: its column in the **Horizons** lens, its drawer, and
-its detail in **Milestones**. Each shows the same header and the same tree.
+A horizon reads the same in three places: its section in the **Horizons** lens, its drawer, and
+its detail in **Milestones**. Each shows the same header and the same outline.
 
-The header says `3 ideas (+1 parent) · 2 members`: the ideas on it, with parent ideas counted
-apart, and the tickets in its milestone. Below that are its ideas by state
-(`1 shipped · 1 started · 1 exploring`), a bar split into done, open and planned work with its
-percentage, and **Needs you: n** when n of its next steps wait on you.
+The header gives the name and date (`Mar 5, 2027 · in 99 days`); a bar split into done, open
+and planned work with its percentage, **Needs you: n** when n of its next steps wait on you, and
+its late, not started and shipped counts; then `3 ideas (+1 parent) · 2 members`, the ideas on
+it with parent ideas counted apart and the tickets in its milestone, and its ideas by state
+(`1 shipped · 1 started · 1 exploring`).
 
-Under the header each parent idea is a group. Its sub-ideas sit indented under it, always
-visible on a desk. Each one shows its own state, its own bar, its open questions and what it needs
-next, in a few words:
+Each idea is a row: **Idea** (with late or not started), **Progress** (a bar, or the state in
+words such as *Shaped · 9 planned*), **Next** and **Planned** (`Nov 10 – Jan 9`). A parent is a
+group with its sub-ideas indented under it. Next says what the idea needs, in a few words:
 
 | it reads | meaning |
 |---|---|
@@ -192,21 +218,23 @@ next, in a few words:
 
 A sub-idea scheduled on another horizon, or on none, is shown dimmed with *on Later* or
 *unscheduled*. It counts there, not here. An idea still being explored that you scheduled on the
-horizon shows as a **reserved row**: its state and questions, with no card and no drag. It is also
-still a card in the **Ideas** lens. An idea delivered outside the tracker shows ✓ Shipped with
-*outside the tracker*.
+horizon shows as a **reserved row**: its state and questions, with no ⋯ menu and no drag. It is
+also still a card in the **Ideas** lens. An idea delivered outside the tracker shows *Shipped*
+with *outside the tracker*. Two or more shipped sub-ideas under one parent gather into one line,
+`3 shipped: …`, which opens to show them.
 
-On a phone, each group starts folded. **Show sub-ideas** opens it, and nothing is dragged; use
-a card's ⋯ menu to move it. Every number comes from the server, so the three places always agree.
-A horizon at `100% incomplete` stays open and is never folded away.
+The arrow keys move between rows and open or fold a group; Enter opens the idea. Below 760 px of
+Plan width each row takes two lines, groups start folded, and nothing is dragged. Every number
+comes from the server, so the three places always agree. A horizon at `100% incomplete` stays
+open and is never folded away.
 
 ## 6. Scaffold, or adopt what exists
 
-Open a shaped idea and press **Scaffold epic and tasks**. It shows a preview first: the epic
-(this same record, now with a ticket number) and one task per breakdown row with its estimate,
-blockers from depends-on and its done-when. Confirm, and it creates exactly that preview. Each
-task also gets a context page, so an agent can work it from the ticket alone. If the plan
-changed after the preview, the confirm is refused and you preview again.
+Open a shaped idea and press **Scaffold epic and tasks**. The preview opens in **Where it
+stands**: the epic (this same record, now with a ticket number) and one task per breakdown row
+with its estimate, blockers from depends-on and its done-when. Confirm, and it creates exactly
+that preview. Each task also gets a context page, so an agent can work it from the ticket alone.
+If the plan changed after the preview, the confirm is refused and you preview again.
 
 ```bash
 staple idea scaffold <id>                    # preview, prints the fingerprint
@@ -236,7 +264,7 @@ Two alternatives:
 Once it is scaffolded, promoted or linked to work, the idea reads **started**. Its progress and
 real dates now come from that work, and it reads **shipped**, with ✓ and the date, when all of it
 is done. A horizon reads **active** while it holds open work and **shipped** when its milestone is
-done; its column then folds to a ✓ summary.
+done; its section then folds to a ✓ summary.
 
 **What progress counts.** Progress counts work items. A ticket counts once it exists, done or
 open, and each breakdown row of an idea that has no tickets yet counts as one **planned** item.
@@ -270,9 +298,10 @@ plan** in the ⋯ menu makes the current window the new baseline.
 ### Delivered outside the tracker
 
 Some work shipped before the tracker existed, or somewhere it does not reach. Mark the idea
-**delivered outside the tracker** instead of inventing a ticket for it. Open it, and in the Plan
-tab set the day it was delivered and, if you like, a note about where and how. It then reads
-**shipped**, with ✓, the day and *outside the tracker* on its card, and takes no ticket number.
+**delivered outside the tracker** instead of inventing a ticket for it. Open it, press
+**Delivered outside the tracker…** at the end of its Plan tab, and set the day it was delivered
+and, if you like, a note about where and how. It then reads **shipped**, with ✓, the day and
+*outside the tracker*, and takes no ticket number. The mark sits in **Where it stands**.
 
 ```bash
 staple idea set <id> --delivered 2026-10-03 --note "Shipped by hand before the tracker" --person
@@ -296,16 +325,27 @@ The **Timeline** lens draws each idea on a month axis, grouped by the horizon th
 **Horizons** places it: a sub-idea scheduled on no horizon of its own sits under its parent in its
 parent's horizon. Then the ideas no horizon carries.
 
-- **planned**: the window you set. Drag the bar to move it, drag its ends to change the dates;
-- **actual**: a solid bar from the first start to the last finish of its work, then dashed to
-  the forecast end, hatched where it runs past the plan. Work that landed with no start on
-  record, and an idea delivered outside the tracker, mark the day it landed;
-- **baseline**: an outline behind the bar when the plan moved after the work started.
+- **planned**: the window you set, or a diamond when it has only a target. With a mouse or a
+  pen, drag the bar to move it and its ends to change the dates, or move a focused bar a week
+  with the arrow keys. On a touch screen a finger pans the chart; tap the idea and change its
+  dates under **Planned**;
+- **actual**: a solid line under the bar from the first start to the last finish of its work,
+  then dashed to the forecast end, hatched where it runs past the plan. Work that landed with no
+  start on record, and an idea delivered outside the tracker, mark the day it landed;
+- **baseline**: a dashed outline behind the bar when the plan moved after the work started.
 
-Vertical lines mark today and each dated horizon. An arrow runs from an idea to every idea that
-depends on it, red when the dependent one starts first. A dependency counts only when a line of
-the Dependencies section starts with the other idea's ticket number, the key its title starts
-with (C2 in "C2 Checkout API"), or a row key from its breakdown (42.1). A key two ideas share
+A label after each bar says where it ends (`shipped Nov 14`, `to Jan 30`, or in red `61d past Sep
+26`). **Range** fits 3 mo, 6 mo, a Year or All across; **Today** scrolls back to the red Today
+line, and each dated horizon has a dashed line with a ◆ tag. Ideas with no dates are listed at
+the end of their group. Below 760 px of Plan width each name sits above its bar.
+
+Links show for the row you hover or select, and the other rows dim; **Show all links** draws
+every one. An arrow runs from an idea to every idea that depends on it, red when the dependent
+one starts first; until it ships, that idea carries a red notch at the start of its bar.
+
+A dependency counts only when a line of the Dependencies section starts with the other idea's
+ticket number, the key its title starts with (C2 in "C2 Checkout API"), or a row key from its
+breakdown (42.1). A key two ideas share
 counts for neither, except that a sub-idea's title key wins over the same key on a row of any of
 its ancestors: when a parent's rows are keyed R1, R2 like its sub-ideas, a sibling's "R1" names
 the sub-idea. An idea never depends on its own parent or sub-ideas, at any depth: the parent's

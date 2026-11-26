@@ -98,6 +98,11 @@
   --color-surface-overlay: var(--surface-overlay);
   --color-scrim: var(--scrim);
   --color-text-secondary: var(--text-secondary);
+
+  /* plan flags: text on a tag tinted with its own hue (text-flag-late, -todo, -you) */
+  --color-flag-late: var(--flag-late);
+  --color-flag-todo: var(--flag-todo);
+  --color-flag-you: var(--flag-you);
 }
 
 :root {
@@ -120,6 +125,12 @@
   /* A second text step between foreground and tertiary, for supporting sentences. */
   --text-secondary: var(--ds-gray-900);
 
+  /* Flag text, AA on its own tint (destructive, todo amber, in-progress blue) over a card or
+     a sunken surface. The hues themselves are too light for text in light mode. */
+  --flag-late: #b42328;
+  --flag-todo: #8a5100;
+  --flag-you: #0058c2;
+
   --focus-ring-color: var(--ring);
   --focus-ring-width: 2px;
   --focus-ring-offset: 2px;
@@ -131,6 +142,9 @@
   --surface-sunken: color-mix(in oklab, #000 18%, var(--card));
   --scrim: rgb(0 0 0 / 0.55);
   --text-secondary: var(--ds-gray-800);
+  --flag-late: var(--ds-red-800);
+  --flag-todo: var(--ds-amber-700);
+  --flag-you: var(--ds-blue-800);
 }
 
 @media (min-width: 1280px) {

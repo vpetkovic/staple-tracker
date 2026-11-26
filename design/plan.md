@@ -9,7 +9,7 @@ undecided work in the task list. It has two records and one path into the tracke
 - an **idea**, which has a *maturity* (`raw`, `exploring`, `shaped` or `dropped`), a brief, plan
   sections with a structured task breakdown, open questions, decisions, an optional parent idea
   and an optional planned window. An idea has no ticket number;
-- a **horizon**, which is a milestone the plan shows as a column, such as Now or Next. A dated
+- a **horizon**, which is a milestone the plan shows as a section, such as Now or Next. A dated
   horizon is a release line;
 - **Scaffold** turns a shaped idea into an epic and its breakdown into tasks, on the same record.
   **Promote** does the conversion without the tasks, and **Adopt** links work that already exists.
@@ -76,7 +76,7 @@ An idea **is an issue** of the reserved kind `idea`. Title, description, parent,
 comments, files, events and sync come from the issue (`PLAN_KINDS`, `isPlanKind`).
 
 A horizon **is a milestone** ([milestones.md](milestones.md#identity-an-issue-of-the-milestone-kind)):
-an issue of the kind `milestone` with a plan rank. The rank is what makes it a column; a milestone
+an issue of the kind `milestone` with a plan rank. The rank is what puts it in the plan; a milestone
 without one (an autopilot milestone, say, or one made with `create_milestone`) is an ordinary
 milestone and never appears in the plan. Its name is the milestone's title and its date is the
 milestone's target date, so everything a milestone has (progress, state, the queue expanding it,
@@ -99,7 +99,7 @@ status, and the outcome does not depend on when rebuilds run.
 
 Unscheduled is the absence of a horizon (`plan_horizon_id = NULL`), not a milestone. New
 workspaces seed Now and Next. Named horizons may be undated: Now, Next or a person-created
-Research column describes an intentional grouping, while Unscheduled means no grouping has been
+Research horizon describes an intentional grouping, while Unscheduled means no grouping has been
 chosen. Requiring dates would invent deadlines for those groups without changing delivery. The
 same lifecycle, Tasks chip, grouping and filter, CLI and MCP operations apply with or without a
 date. Only **dated horizons** appear in the Milestones list, alongside plain milestones; clearing a
@@ -285,7 +285,7 @@ whoever takes it sharpens it and removes the label.
 failing the gate: a cleared goal, an emptied breakdown, an added or reopened question, a removed
 row, an old revision restored. Its maturity stays, because maturity is the person's and no edit
 moves it as a side effect. The record says so instead (`planIncomplete`), shown as "shaped · plan
-incomplete" with what it lacks in the drawer, on the card and in the For agents view; Scaffold and
+incomplete" with what it lacks in the drawer, on its Horizons row and in the For agents view; Scaffold and
 Promote are held back with that reason and refused at confirm, naming what is missing.
 
 **Estimates** read as a plan writes them: `3h`, `3 hours`, `3hrs`, `30m`, `30 mins`, `90s`,
@@ -398,7 +398,7 @@ horizon definition and the run setting) are the person's; the rest are anyone's.
 **Its own state against its rollup.** The state reads only the record's own facts: its maturity,
 whether it is promoted, and its own links. Its sub-ideas' work is its **rollup**: progress, the
 actual window, the forecast and the late and not-started flags read the record's work and every
-sub-record's, for the card, the header and the timeline. The rollup never changes the state or the
+sub-record's, for the lens row, the header and the timeline. The rollup never changes the state or the
 actions. So a raw parent whose sub-idea is underway stays raw, a parent whose sub-ideas all
 shipped can still be shaped and promoted, and a dropped parent stays dropped and restorable while
 its sub-ideas carry on. Maturity never cascades. A promoted record is an ordinary epic in the
@@ -472,8 +472,8 @@ person rule; the tracker's own edit of an idea's title or description, and queue
 the same table. Every plan payload carries each record's `state` and `actions` (id, label, who,
 disabledReason), so `get_idea`, `list_ideas`, `list_horizons` and `staple idea show` ("offers")
 read it, and the page renders from it: `plain-actions.ts` (`planActionItems`, `horizonActionItems`,
-`moveOffered`) turns exactly those offers into the drawer's buttons, the card's ⋯ menu, the
-board's drops, the timeline's drags and the command palette; it names which action a board move
+`moveOffered`) turns exactly those offers into the drawer's buttons, a row's or card's ⋯ menu,
+the lenses' drops, the timeline's drags and the command palette; it names which action a drop
 is, never whether it is allowed.
 
 ## Who steers: agents capture, the person decides
@@ -549,7 +549,7 @@ well as on (`test/planning-feature*.test.ts`).
 | dependencies | `dependsOn`: explicit references only (`resolveDependencies`), below |
 | plan steps | a carried record's `nextStep` and a horizon's `planSteps`: [Plan steps](#plan-steps), below |
 
-Late and not started are separate facts with separate counts, on cards, horizon headers and the
+Late and not started are separate facts with separate counts, on rows, horizon headers and the
 timeline, and never one number.
 
 ### Accounting
@@ -796,94 +796,243 @@ gate takes precedence over a completed progress bar in the board, the drawer and
 
 ### Lenses: thinking, delivery, time
 
-The Plan view has three lenses, each with one job (`views/plan/plan-model.ts`). Shaping is the
-hand-off between the first two: no record is a card in both. A record still being explored on a
-horizon also holds a reserved row there (below), which is not a card.
+The Plan view has three lenses, each with one job (`views/plan/plan-model.ts`), under one toolbar
+(`views/plan/PlanView.tsx`). Shaping is the hand-off between the first two: no record is a card
+in both. A record still being explored on a horizon also holds a reserved row there (below),
+which is not a card. The page computes no number: every count, unit, percent, state, flag and
+offered action is the payload's, and an action is drawn only where the record's state offers it.
 
-**Ideas is thinking.** It holds a record in its own raw or exploring state, in those two columns.
-A sub-idea still being explored under started work stays (`inIdeasLens` reads the record's own
-`state`, never the rollup). Its card shows how much of the plan is written (`★ 2/3 · 6/10
-written`, the payload's `completeness`), open questions and the horizon it is aimed at (`◇ Now`),
-and nothing about delivery. Marked shaped, it moves to Horizons.
+**Layout follows the Plan container, not the viewport.** The view is a container
+(`@container/plan`), because the same parts draw in the drawer and the Milestones view, which
+are narrow on a wide screen. Its widths are `PLAN_WIDTH` in `views/plan/plan-parts.tsx`: under
+620px the toolbar takes its phone form; under 760px Horizons rows take two lines, Ideas stacks
+its panes and the Timeline stacks its rows; under 1040px the Planned column drops and the
+Timeline's name column narrows; under 1100px the filter folds to a button. Script that must
+know a width (the Timeline's pixels per day, an outline's default fold) measures its element
+with a ResizeObserver (`useElementWidth`), never the viewport.
 
-**Horizons is delivery.** Unscheduled (*Ready, no horizon yet*), then one column per horizon,
-each drawn as its horizon's tree (below). A column holds the records its horizon carries
-(`carriedBy`: scheduled on it, or a sub-idea scheduled on none under one that is), the way its
-counts read them; Unscheduled holds the shaped, started and shipped records no horizon carries. A
-card shows where the work stands, its segmented bar and late or not started; a shaped record whose
-plan no longer passes the gate is flagged *plan incomplete*. A horizon's header takes every number
-from the server, which sees what the cards do not (a member added by hand, a record still being
-explored past its planned start): its date, its leaf ideas apart from its parents and its members
-(`records`, `memberCount`: `3 ideas (+1 parent) · 2 members`), its leaf ideas by state
-(`1 shipped · 1 started · 1 exploring`), a segmented bar (done, open and planned units, the
-server's `percent`, `100% incomplete` while not `complete`, [Accounting](#accounting)),
-*Needs you: n* (`needsYou`: its plan steps whose `who` is the person), `✓ n shipped`
-(`shippedCount`), late (`lateCount`) and not started (`notStartedCount`), *Waiting for your
-approval* while its close is gated (`awaitingApproval`), and two buttons from its offered actions:
-**Queue**, held back as *Queued* once it is in the queue, and its **run setting**. The drawer's
-horizon section and the Milestones view print the same header and the same tree; the timeline's
-group headers read the same counts, and the Milestones view's own bar reads the same percentage
-from the milestone's `progress`, with its planned units as a segment of it. A horizon is done only when the server says so (`horizonDone`: its milestone is done, `shipped`;
+On the phone shell the lens tabs leave the toolbar for the page's title row: the shell's phone
+header has an empty slot beside the page name (`data-phone-header-slot` in
+`components/AppShell.tsx`, not drawn while empty) and `PlanView` portals a compact
+`DetailTabStrip` into it, so the toolbar is one row of at most 44px with the pills, the filter and
+**+ Idea**. In the desk shell the tabs stay in the toolbar at every width.
+
+**The toolbar** (`PlanBar`) holds the lens tabs with their counts (Ideas: the records the lens
+holds; Horizons: `horizons.length`; Timeline: none), the **Show only** pills, the lens's tools
+(**+ Horizon** on Horizons, drawn at the end of the outline under 900px), the filter and,
+outside Ideas, **+ Idea**, an icon under 900px: a popover with the capture field that leaves the lens where it is and
+answers *Captured to Raw* with a link to Ideas. The focus and the filter are
+`views/plan/plan-focus.ts`. Each pill reads one payload flag: needs you is
+`nextStep.who === "person"`, late is `late` on a record not shipped, not started is
+`notStarted`. A pill counts the live records with its flag and is left out at none unless it is
+on. `focusPlan` narrows `ideas` to the records that match the focus and hold the filter text in
+their title, adds every ancestor of each, and every lens draws that plan. While either is on
+nothing folds away (groups, a parent's shipped leaves, a done horizon), and a lens with nothing
+left says *Nothing here matches.* with **Clear filter**. The focus is view state and is not
+remembered.
+
+**Ideas is thinking** (`views/plan/IdeasLens.tsx`, its words in `ideas-words.ts`). It holds a
+record in its own raw or exploring state. A sub-idea still being explored under started work
+stays (`inIdeasLens` reads the record's own `state`, never the rollup). From 760px it is two
+panes, each its own scroller; under that they stack in one scroller with sticky headings, and no
+lens has a column switcher. **Raw** is a list under the capture field, newest `createdAt` first:
+the state glyph, the title, *captured 8d ago* (a difference of `createdAt` and `plan.today`), open
+questions, late and not started, and **Explore**, the record's offered `explore` action in one
+click. The Dropped shelf sits under it. **Exploring** is a grid of cards: the parent's title,
+the title, `briefLine`, the shaping line, then the foot. The shaping line reads the `shape`
+action: with a `disabledReason` it prints *To shape:* and the reason, the server's *It needs …
+before it is shaped.* wrapper taken off; offered with none, *Ready to mark shaped. The plan
+passes the gate.*, a border in the done hue and a **Mark shaped** button that runs the action.
+The foot is the sections meter (`completeness`: `total` marks, the `starredTotal` required ones
+first and taller, filled to `starred` and to `filled - starred`), `filled/total written`, open
+questions, late and not started, the ◇ horizon it is aimed at and the ⋯ menu. Sub-ideas fold
+under the card behind their count and rollup words. **One rule changed on purpose:** a card
+shows late and not started (`late`, `notStarted`), because the Late and Not started pills pick
+cards by them, and a card picked by a flag shows it. It still shows nothing about delivery.
+Marked shaped, a record moves to Horizons.
+
+**Horizons is delivery** (`views/plan/HorizonsLens.tsx`): one scroller of stacked sections.
+First **Not scheduled**, the shaped, started and shipped records no horizon carries; with
+none it is one line on the sunken surface, still the drop target that unschedules. Then a
+section per horizon in plan order: a sticky header and the horizon's outline (below). Under
+760px only the header's first line sticks (the fold, the name, the date, the server's percent
+and the menu, at most 44px); its bar, flags and counts scroll away with the rows. A section
+holds the records its horizon carries (`carriedBy`: scheduled on it, or a sub-idea scheduled on
+none under one that is), the way its counts read them. The header (`HorizonHeader.tsx`) is the
+fold, `HorizonSummary` with the inline rename and date editors, and on the right **Queue** (held
+back as *Queued* once it is in the queue), the run setting (`runSettingLabel`) and the ⋯ menu;
+under 760px only the ⋯, which holds them as the horizon's offered actions. *add a date* and
+*clear* show only where `offers(horizon, "date")`. The rename writes once, on submit or on a blur
+that changed the name, and stays open when refused.
+
+`HorizonSummary` (`plan-parts.tsx`) is the horizon's header on every surface, in three lines:
+the name and the date with its distance from `plan.today` (`Mar 5, 2027 · in 99 days`); a
+segmented bar of done, open and planned `units` with the server's `percent` (`100% incomplete`
+while not `complete`, [Accounting](#accounting)) and its flags, *Waiting for your approval*
+(`awaitingApproval`), *Needs you: n* (`needsYou`: its plan steps whose `who` is the person), late
+(`lateCount`), not started (`notStartedCount`) and `✓ n shipped` (`shippedCount`); then its words,
+leaf ideas apart from parents and its members (`records`, `memberCount`:
+`3 ideas (+1 parent) · 2 members`), leaf ideas by state, and its units. The server sees what the
+rows do not (a member added by hand, a record still being explored past its planned start). A
+horizon is done only when the server says so (`horizonDone`: its milestone is done, `shipped`;
 never its progress, since every counted unit can land while a reopened member, a gated epic or an
-idea whose work sits on another horizon keeps it open); then its column folds to a ✓ summary.
+idea whose work sits on another horizon keeps it open); then its section starts folded behind
+*All n members landed*. The Timeline's group rows read the same fields, and the Milestones
+view's own bar reads the same percentage from the milestone's `progress`, with its planned units
+as a segment of it.
 
-**A horizon's plan is a tree** (`views/plan/plan-tree.ts`, drawn by `views/plan/PlanTree.tsx`),
-one component on three surfaces: the Horizons lens column, the horizon's drawer and the
-Milestones view's horizon detail, all fed by the server's payload alone. Records group parent to
-children in plan order. A parent is a group with its own state chip and its rollup's segmented
-bar (`units`); its sub-ideas are always visible, indented under it, each with its own state, its
-own bar (`own`), its open questions and its plan step in a few words: `wait` reads *starts
-<date>* or *waits on <record>*, `scaffold` *ready to scaffold*, `answer_questions` *needs you: n
-questions*, `write_plan` and `fix_plan` *plan needed*, `mark_shaped` *ready to mark shaped*,
-`brainstorm` *to develop*. A sub-idea another horizon carries, or none, is shown dimmed with
-*on <horizon>* or *unscheduled* and draws no bar there. A record still being explored on a horizon
-is a **reserved row** (VP changed the one-lens rule): its state and open questions, no delivery
-card, never dragged, and still a card in the Ideas lens. A record delivered outside the tracker
-carries the shipped mark with its caption. On the desk a delivery row drags to another column (a
-sub-idea's drag is its own); below 768px a group folds its sub-ideas behind *Show sub-ideas* and
-nothing is dragged. The page computes no number: every count, segment, percent and *Needs you* is
-the server's, each bar's segments growing by its unit counts; the one percent string is the
+**Drag to schedule.** A delivery row drags only on an outline at least 760px wide under a fine
+pointer. The lens keeps the dragged record from `dragstart` to `dragend`. A section, the Ready
+line included, is a target only when `dropChanges` and `moveOffered` both allow the move; one
+that would refuse gets no highlight and `dropEffect = "none"`. While a drag is on, a drop rail
+pins to the top of the lens with one target per section, Ready first, marked the same way, so a
+section far down is reachable without scrolling. A drop writes `dropBody` for its section.
+
+**A horizon's plan is an outline** (rows from `views/plan/plan-tree.ts`, visible lines and keys
+from `plan-outline.ts`, drawn by `views/plan/PlanTree.tsx`), one component on three surfaces: the
+Horizons lens section, the horizon's drawer and the Milestones view's horizon detail, all fed by
+the server's payload alone. It is a treegrid with the columns Idea, Progress, Next and Planned.
+Records group parent to children in plan order, and a parent folds its sub-ideas.
+
+- *Idea*: indent guides, the fold, `StateGlyph`, the title, *in <parent>* for a top row whose
+  parent is elsewhere, and late (unless shipped) and not started.
+- *Progress*: the record's segmented bar and `percent` where it has both, else its state in
+  words: *Shaped · 9 planned* (`units.planned`), *· unsized* (`unsized`), *Shipped Nov 13*
+  (`actual.end`) with *outside the tracker* (`delivered`).
+- *Next*: open questions unless the step asks them, *plan incomplete* (`planIncomplete`), and the
+  plan step in a few words (`nextStep`), in the foreground weight when it waits on the person:
+  `wait` reads *starts <date>* or *waits on <record>*, `scaffold` *ready to scaffold*,
+  `answer_questions` *needs you: n questions*, `write_plan` and `fix_plan` *plan needed*,
+  `mark_shaped` *ready to mark shaped*, `brainstorm` *to develop*. Started work with no step
+  reads `linkCount` and `units.open`.
+- *Planned*: the `planned` window, empty once shipped.
+
+A sub-idea another horizon carries, or none, is dimmed with *on <horizon>* or *unscheduled* and
+draws no bar there. A record still being explored on a horizon is a **reserved row** (VP changed
+the one-lens rule): its state and open questions, no ⋯ menu, never dragged, and still a card in
+the Ideas lens. Two or more shipped leaves under one parent gather into one line,
+`3 shipped: …`, until it is opened. The outline measures its own width (`@container/tree`), so a
+narrow drawer gets the compact form on a wide screen: under 760px a row is two lines, the title,
+then its state, percent, a short bar, flags, questions and step; indent is 16px per depth with a
+rule on child rows; groups start folded and say how many sub-ideas they hold; nothing drags.
+Rows are one tab stop with roving focus: Up, Down, Home and End move, Right opens a group or
+steps into it, Left folds it or goes to the parent, Enter or Space opens the record or the
+shipped line. Each bar's segments grow by its unit counts; the one percent string is the
 server's `percent` printed as the CLI's `percentText` prints it. A horizon with an unshipped
 scheduled record never folds: the fold reads `shipped`, which such a record holds false. With
 planning off none of it renders: the server sends no `horizonPlan`, and a plain milestone's
 Milestones view is byte for byte what it was.
 
-**Timeline is time.** Planned, baseline and actual windows on a month axis, today and dated
-horizon lines, a ✓ end-cap where a record shipped, and an arrow from each record to every record
-that waits on it, red when the record waiting starts before the one it waits on ends. Drag to move
-and resize, where the state offers plan dates. Rows group by the horizon that carries them
-(`carriedBy`), as the Horizons columns do, so a sub-idea following its parent's horizon sits under
-its parent there; then the records no horizon carries. An actual window with an end and no start
-(delivered outside the tracker, or work completed without a recorded start) is a row marking the
-day it landed, with its end-cap, never a "No dates yet" chip.
+**Timeline is time** (`views/plan/PlanTimeline.tsx`, each lane in `TimelineBars.tsx`, the
+arithmetic in `timeline-model.ts`). Rows group by the horizon that carries them
+(`timelineGroups`, `carriedBy`), as Horizons does, so a sub-idea following its parent's horizon
+sits under its parent there; then the records no horizon carries. A row draws the planned window
+(a 12px track, or a diamond for a target alone), the baseline as a dashed outline behind it when
+it differs, and the actual line under it from `actual`, dashed to `forecastEnd` and hatched past
+the planned end, with a ✓ end-cap where the record shipped. An actual window with an end and no
+start (delivered outside the tracker, or work completed without a recorded start) is a row
+marking the day it landed, with its end-cap. After each bar an end label (`endLabel`):
+*shipped Nov 14*, *forecast Dec 15 · 80d over* and *61d past Sep 26* in the destructive colour,
+*forecast Dec 6*, *to Jan 30*, each a difference of payload days. A bar's tooltip gives its state
+and percent, each window and what it waits on. Records without dates share one line at the end
+of their group, a chip each: one that offers `plan_dates` plans four weeks from `plan.today`, the
+rest open the record.
+
+- *Range*: 3 mo, 6 mo, Year or All. Pixels per day are the visible chart width over 92, 183 or
+  365 days, or the span fitted for All. The default is All from 760px and 3 mo under it; any
+  range but All brings today a third of the way in.
+- *Axis*: short month names on months wider than 44px, a letter down to 16px, the year in bold
+  on January and the first month; a *Today* tag and line, and a ◆ tag and dashed line per dated
+  horizon.
+- *Links* (`dependencyEdges`) show on demand (`linkView`): those touching the row hovered, the
+  bar focused or the record selected, with every row they do not touch dimmed, or all of them
+  with **Show all links** and nothing dimmed. Each is a right-angle elbow, red when the record
+  waiting starts before the one it waits on ends. That record, unless shipped, carries a red
+  notch at the start of its bar at all times (`notched`).
+- *Editing*: drag to move and resize, and the arrow keys' week nudge, run only for a mouse or a
+  pen and only where the record offers `plan_dates` (`startsDrag`, `nudge`). A finger pans the
+  chart, and a tap opens the record, whose Planned fields edit the dates.
+
+From 760px a name column (300px, 220px under 1040px) is pinned on the left with the range in the
+corner above it, and the key, **Today** and **Show all links** sit under the chart. Under 760px
+(`data-plan-timeline-stacked`) each row is a label line pinned over its own lane, with the end
+label at its right, so the chart takes the full width; links show for the selected record only,
+and the range, **Today** and a **Key** toggle sit under the chart. The frame
+(`data-plan-timeline-frame`) is the lens's one scroller.
+
+**Shared parts** (`views/plan/plan-parts.tsx`). `StateGlyph` draws a record's `state` as a 14px
+picture (raw a dotted ring, exploring a dashed amber ring with a dot, shaped a plain ring, started
+a wedge filled to `percent`, shipped the check), always beside the state word or in a row whose
+name says it, so state is never the colour alone. `Flag` is a filled tag for late, not started,
+needs you and waiting for your approval and nothing else; open questions are amber words. Each
+flag's text is a token that passes AA on its tint (`--flag-late`, `--flag-todo`, `--flag-you`).
+`SegmentedBar` and `HorizonSummary` are shared as above.
 
 **Shipped is one mark** (`detail/ShippedMark.tsx`): a check in the done hue's icon token and the
-words, `✓ Shipped Oct 3` or `✓ 4 shipped`, never the colour alone. The card, the horizon header,
-the drawer's state chip, status sentence and phases, a milestone's horizon section and the
+words, `✓ Shipped Oct 3` or `✓ 4 shipped`, never the colour alone. The state glyph, the horizon
+header, the drawer's status line and lifecycle track, a milestone's horizon section and the
 timeline's end-cap all draw it, and all read the record's own `state`.
 
 **Reading mode.** The brief and every text and list section of the Plan tab read as formatted
 Markdown (`lib/markdown.tsx`), with an **Edit** control only where the state offers the edit
-action; Edit opens the textarea, a blur saves what changed and Escape puts it back. An empty
-section offers to write it where edits are offered and says *Not written* where they are not.
+action; Edit opens the textarea, a blur saves what changed and Escape puts it back. Where edits
+are offered, the sections with no content wait on one *Not written yet* line of chips, each
+opening its editor in place; where they are not, an empty section is not drawn.
 
 ### The drawer
 
 An idea opens in the shared detail drawer (`detail/IssueDetailPanel.tsx`), as every issue does.
 The tab registry (`detail/tabs/registry.ts`) chooses the strip by kind and state through
-`available`: an unpromoted idea gets **Plan** in place of Details (the lifecycle as phases,
-Thinking, Started and Shipped, with maturity and horizon as separate facts; the completeness
-meter; Scaffold's preview and confirm; horizon, parent, planned and actual windows; the brief;
-every plan section, the breakdown a table on a desk and a tap-to-edit card per row on a phone;
-questions with defer; decisions; sub-ideas; linked work), **Connections**, Documents, Files,
-Activity, **For agents** (the `get_idea` payload) and **Time** (planned against actual against
-baseline). Its header shows the title, an "Idea · state" chip and a sentence, never a ticket
-number: the page addresses the record by its id. Each editor renders only when the state offers
-its action. Once promoted, the same record gets the epic's strip, with the Plan tab kept for the
-plan actions its state still offers. A horizon opens as the milestone it is, with its state, its
-offered actions and its plan as the tree above the milestone's own parts; its `horizonPlan`
-carries the records the tree draws (`horizonTreeRecords`: those it carries, their ancestors and
-their sub-ideas wherever they are) and every horizon's name.
+`available`: an unpromoted idea gets **Plan** in place of Details, **Connections**, Documents,
+Files, Activity, **For agents** (the `get_idea` payload) and **Time** (planned against actual
+against baseline). Its header shows the title and one status line, never a ticket number: the
+state glyph and words (`statusWords` in `detail/PlanActions.tsx`: the state, *n% done* once
+started, *aimed at ◇ <horizon>* while raw or exploring and *on* after, or *not scheduled*, and
+the planned window), *plan incomplete*, then late and not started; a record delivered outside
+the tracker shows its delivered mark instead. The page addresses the record by its id.
+
+The Plan tab (`detail/tabs/PlanTab.tsx`) reads as a document, in this order:
+
+1. **Where it stands** (`PlanStanding.tsx`). The lifecycle track: Thinking with its maturity,
+   Started, Shipped, or *Dropped* in their place. Raw and exploring: *To shape it* with
+   *n things left*, or *Ready to mark shaped*, over a checklist of the required sections written
+   (`planSectionsOf` in `plan-tab-model.ts`, each going to its section) and every entry of
+   `missingForShaped` verbatim with a capital first letter. Shaped: *Ready to scaffold* with the
+   task count and hours (`estimateHours`, only when every estimate is plain hours or days) and
+   Scaffold's preview and confirm (`ScaffoldSection`), which the header's Scaffold opens
+   (`onScaffoldRequest`). Started and shipped: the units in words, the bar and `percent`, the
+   start, forecast or ship day and the planned end, late, and for a record started while
+   exploring the checklist or a note that it can be marked shaped. Then the `planIncomplete`
+   warning, the delivered mark with its note and its clear, and the open questions, each with
+   Answered and Defer at its own position, the add field and the answered ones folded.
+2. **Properties**: Horizon, Part of and Planned edited in place where offered; Baseline when it
+   differs and Actual, read-only. Maturity is no row: the header and the track say it.
+3. For started and shipped records, **Work in the tracker**: a row per link with identifier,
+   title, status, bar and percent, and unlink where offered.
+4. **Section chips**, a sticky row named *Plan sections*: one chip per section in plan order,
+   filled where it has content, starred where shaping requires it, a count for lists, and the
+   server's `completeness` read out. A chip scrolls its section under the chips; one whose
+   section is not drawn is disabled.
+5. **The sections** (`PlanSections.tsx`): Markdown at 14/22, Edit on hover and focus. Brief and
+   Context fold past 700 characters behind *Show all*. The task breakdown is a table of #, Task,
+   Est. and After, *done when: inherits the plan's acceptance* under a row with none of its own;
+   a row opens in place to its notes, done-when and owner and to the row editor (inputs on a
+   desk, the tap-to-edit card on a phone). Sources shows three and *Show all n* past four;
+   decisions show the latest three with their leading ISO day, then *Show all n*. Then sub-ideas,
+   with the state glyph and flags.
+6. For raw, exploring and shaped records, Work in the tracker with the Adopt field.
+7. **Rare actions**: *Delivered outside the tracker…* opens its form (the day, a note, Mark
+   delivered) in place, only where `mark_delivered` is offered and no mark is set.
+
+The tab is its own container (`@container/plantab`) and takes its compact form under 512px of
+content, a 560px drawer less its gutters: the checklist goes to one column, the breakdown's After
+and a link's status are left out, and Edit shows always. Each editor renders only when the state offers its action. Once promoted, the
+same record gets the epic's strip, with the Plan tab kept for the plan actions its state still
+offers. A horizon opens as the milestone it is: its state, its offered actions (a held one with
+its reason), its run setting, then `HorizonSummary` with its risk flags and the outline, above
+the milestone's own parts. Its `horizonPlan` carries the records the outline draws
+(`horizonTreeRecords`: those it carries, their ancestors and their sub-ideas wherever they are)
+and every horizon's name.
 
 ### Tasks reads the same horizons
 
@@ -899,13 +1048,17 @@ milestone again (`placeForAxis`), and a **Horizon** filter keeps the work of the
 
 ### Returning to Plan
 
-Plan reuses the detail drawer's `DetailTabStrip`, Radix keys and accessibility; the phone uses its
-finger-sized segments and the desktop its underline strip. The last lens, open record, each lens's
-scroll axes and phone column are per-viewer preferences under `staple:plan:v1:<workspace>`.
-Filters use the existing workspace/view preference envelope and URL state. The shareable
-`plan-lens` and `issue` parameters take precedence on arrival; Back/Forward follows the URL, and
-an explicit drawer close clears the remembered record. Storage reads and writes fail safe. Search
-filters the ideas in every lens. A horizon's drawer and the Milestones detail link to each planned
+Plan reuses the detail drawer's `DetailTabStrip`, Radix keys and accessibility; under 620px of
+the Plan container it uses its finger-sized segments, wider its underline strip. The last lens,
+open record and each lens's scroll position are per-viewer preferences under
+`staple:plan:v1:<workspace>`. A lens has one scroller each position is kept for
+(`[data-plan-board]`, `[data-plan-timeline-frame]`, and `[data-plan-scroll-key]` on each Ideas
+pane); the phone column an earlier build kept is no longer read, since no lens has a column
+switcher. Filters use the existing workspace/view preference envelope and URL state. The
+shareable `plan-lens` and `issue` parameters take precedence on arrival; Back/Forward follows the
+URL, and an explicit drawer close clears the remembered record. Storage reads and writes fail
+safe. The filter text and the Show only focus narrow every lens; the focus starts again with
+each workspace and is not remembered. A horizon's drawer and the Milestones detail link to each planned
 record with `view=plan&issue=<stable id>`, and a promoted epic carries an "Open original idea in
 Plan" link.
 
@@ -992,10 +1145,11 @@ What converges, under both folds, on a tail device and a freshly hydrated one:
   `fingerprint`. Every write answers `{ plan, idea }`. `GET /api/issue` adds `planRecord` and
   `horizonPlan`.
 - **Web UI** the Plan view with its three lenses, the shared drawer, and the Tasks horizon chip,
-  grouping and filter ([web-ui.md](web-ui.md)). Cards never show a number; a promoted record's
-  detail does. A sub-idea in its parent's column folds under the parent's card; one in another
-  column shows there, labelled with its parent. Below 768px the boards are one column with a
-  switcher and the timeline scrolls inside its own frame with the names pinned.
+  grouping and filter ([web-ui.md](web-ui.md)). Cards and rows never show a number; a promoted
+  record's detail does. On Ideas a sub-idea in its parent's pane folds under the parent's card;
+  one in the other pane shows there, labelled with its parent. Under 760px of Plan width Ideas
+  stacks its panes, Horizons draws two-line rows and the Timeline pins each name over its lane;
+  the timeline scrolls inside its own frame.
 
 ## What the tests prove
 
@@ -1023,9 +1177,14 @@ What converges, under both folds, on a tail device and a freshly hydrated one:
 | `test/plan-steps-surfaces.test.ts` | `planSteps` and `nextStep` the same on the CLI, MCP and HTTP; `queue next` and `next_task` agree scoped and unscoped, with `horizon-plan` among the instructions; a horizon with only steps left reads `planned` with no Queue; with planning off, every pickup, milestone, task and issue surface answers byte for byte the same while the steps underneath change, with no step, field or instruction |
 | `test/cloud-plan-steps-sync.test.ts` | under both folds: two devices that change the facts under the steps offline, and a freshly hydrated one, read the same steps; reading them adds nothing to the outbox and no column stores them |
 | `test/plan-read-cost.test.ts`, `test/ui-server-keep-alive.test.ts` | a plan read derives once per state of the database, and ten more records add no more statements than they did before the umbrella gate; a warm plan read costs nothing more per record or per horizon, a pull that changed nothing a constant and no mutation, a horizon's milestone view what a plain milestone's costs plus a constant; kept-alive sockets outlive SQLite's busy timeout |
-| `views/plan/lenses.test.tsx`, `views/plan/plan-model.test.ts` | the lenses' membership, cards, headers, fold, shipped mark, timeline end-caps and arrows (none between a record and its ancestor), Markdown reading mode; board columns, nesting, timeline groups, range and dragging |
-| `views/plan/plan-tree.test.ts` | the tree with hand-written expectations: a parent with its sub-ideas, one carried elsewhere dimmed with where, one scheduled nowhere, one carried through its parent, dropped ones left out; reserved rows; the group's rollup and a leaf's own units; the same tree from the whole plan and from a horizon's detail; the Unscheduled column's; every step's words and whether it waits on the person; the header's words; `100% incomplete` |
-| `views/plan/plan-tree-render.test.tsx`, `views/milestones/milestones-flag-off.test.tsx` | the lens column, the horizon drawer and the Milestones view draw the same rows, header, bars, steps and "Needs you" for one payload; a reserved row is never a card or dragged and stays a card in Ideas; a horizon at 100% that is not complete never folds; on the desk sub-ideas show without a click and only delivery rows drag; below 768px a disclosure folds them and nothing drags; a plain milestone's Milestones view, and any with planning off, byte for byte the markup recorded before the tree |
+| `views/plan/lenses.test.tsx`, `views/plan/plan-model.test.ts` | the lenses' membership; an Ideas card's written sections, horizon, late and not started and nothing about work; a horizon section's header, Queue and run setting; the fold of a done horizon only; the shipped mark; the Timeline stacked under 760px, its default range, end labels, dimming by the selected record's links, the notch, the target diamond and the undated line; end-caps and arrows (none between a record and its ancestor); Markdown reading mode; board columns, nesting, timeline groups, range and dragging |
+| `views/plan/plan-view.test.tsx`, `views/plan/plan-focus.test.ts` | the toolbar's lens counts, the labelled Show only group with the payload's counts, a pill with none left out unless pressed, and + Idea on Horizons and the Timeline only; each pill's count from its payload flag; a focus or the filter text narrowing every lens to the matches and every ancestor of each, never a shipped late record or a dropped one; *Nothing here matches.* with Clear filter |
+| `views/plan/ideas-lens.test.tsx` | a raw row's capture age, newest first, and Explore only where offered, running that action's write; an exploring card's shaping line without the server's wrapper, Ready to mark shaped with Mark shaped running the shape action's write, the brief line and the sections meter from the server's counts; both panes at every width with no column switcher; the empty panes' words |
+| `views/plan/horizons-outline.test.tsx` | Not scheduled as one quiet line that still unschedules, or a section with its count, by that one name on the drop rail and in the move menu; a parent's shipped leaves gathered into one line ahead of the rest, opened on request, never fewer than two; a compact outline's groups folded with their count; a focus or filter folding nothing; the drop rail and sections marked only for a move the state offers and that moves the record; add a date and clear only where offered; the row keys |
+| `views/plan/plan-parts.test.tsx`, `views/plan/timeline-model.test.ts`, `styles/contrast.test.ts` | the state glyph hidden from assistive technology, its word on request, the started wedge from the server's percent, never empty or whole; flags in words; the horizon summary's date and distance, percent, flags, counts and units, a done horizon shipped without late or not started; the Timeline's pixels per day for each range, today a third in, every end label, links on demand and Show all links, the notch never on a shipped row, the elbow, drags for a mouse or a pen only where dates are offered, the week nudge, folding, the axis labels; the flags' text AA on their tint in both themes |
+| `views/plan/plan-tree.test.ts` | the tree with hand-written expectations: a parent with its sub-ideas, one carried elsewhere dimmed with where, one scheduled nowhere, one carried through its parent, dropped ones left out; reserved rows; the group's rollup and a leaf's own units; the same tree from the whole plan and from a horizon's detail; the records no horizon carries (Not scheduled); every step's words and whether it waits on the person; the header's words; `100% incomplete` |
+| `views/plan/plan-tree-render.test.tsx`, `views/milestones/milestones-flag-off.test.tsx` | the lens section, the horizon drawer and the Milestones view draw the same rows, header, bars, steps and "Needs you" for one payload; a reserved row is never a card or dragged and stays a card in Ideas; a horizon at 100% that is not complete never folds; on a wide outline sub-ideas show without a click and only delivery rows drag; on a compact one a disclosure folds them and nothing drags; a plain milestone's Milestones view, and any with planning off, byte for byte the markup recorded before the tree |
 | `test/plan-tree-payload.test.ts` | each record's `own`, `umbrella` and `carriedBy`, and each horizon's `needsYou`, the same on the CLI, MCP and HTTP; a horizon's detail carries every record its tree draws and the horizons' names; with planning off none of those fields on any surface that still answers |
 | `views/tree/horizon-axis.test.tsx`, `test/ui-horizon-chip.test.ts` | the Tasks horizon chip, grouping and filter |
 | `detail/plan-drawer.test.tsx`, `command-palette/commands.test.ts` | an idea's tab strip and the epic's once promoted, no ticket number anywhere, actions exactly as offered, a read-only title where no edit is offered; palette commands from the offered actions only |
+| `detail/idea-drawer.test.tsx` | the header's one status line; Where it stands in each state: `missingForShaped` verbatim beside the required sections written, ready to scaffold with hours only from plain estimates, the incomplete warning, work under way, the note for a record started while exploring, the delivered mark and its clear; open questions with Answered and Defer, none offered where asking is not; properties with no maturity row and the work's place by state; the section chips; Brief, Context, Sources and decisions folded; the breakdown as a table; *Not written yet* only where edits are offered; sub-ideas with the glyph and flags; the delivered form only where the mark is offered |

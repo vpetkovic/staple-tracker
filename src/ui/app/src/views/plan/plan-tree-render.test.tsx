@@ -173,8 +173,7 @@ function Milestones({ horizonView, desk = true }: { horizonView: HorizonData; de
 }
 
 const inSession = (node: React.ReactNode) => renderToStaticMarkup(<SessionContext.Provider value={fakeSession({ ws: "staple" })}>{node}</SessionContext.Provider>);
-// Now's column is the current one, so a phone, which shows one column, shows it too.
-const lens = (horizons?: HorizonData[]) => lensColumn(renderToStaticMarkup(<HorizonsBoard plan={plan(horizons)} write={async () => true} onOpen={noop} selected={null} currentColumn="h:now" />));
+const lens = (horizons?: HorizonData[]) => lensColumn(renderToStaticMarkup(<HorizonsBoard plan={plan(horizons)} write={async () => true} onOpen={noop} selected={null} />));
 const drawer = (h = NOW_H) => inSession(<Drawer horizonView={h} />);
 const milestones = (h = NOW_H) => inSession(<Milestones horizonView={h} />);
 
@@ -186,7 +185,9 @@ function atWidth(width: number, draw: () => string): string {
     matchMedia: (query: string) => {
       const min = /min-width:\s*(\d+)px/.exec(query);
       const max = /max-width:\s*(\d+)px/.exec(query);
-      return { matches: min ? width >= Number(min[1]) : max ? width <= Number(max[1]) : false, addEventListener: noop, removeEventListener: noop };
+      // A desk-width test runs with a mouse; a phone-width one with a finger.
+      const pointer = query.includes("pointer: fine") ? width >= 768 : false;
+      return { matches: min ? width >= Number(min[1]) : max ? width <= Number(max[1]) : pointer, addEventListener: noop, removeEventListener: noop };
     },
   };
   try {
@@ -226,12 +227,13 @@ describe("one tree on three surfaces", () => {
       const words = text(html);
       expect(html).toContain('data-plan-tree-bar="2/1/2"'); // the group's rollup
       expect(html).toContain('data-plan-tree-bar="2/1/0"'); // its sub-idea's own
-      expect(words).toContain("2 open questions");
+      // The step already asks the questions, so they are not counted twice.
       expect(words).toContain("needs you: 2 questions");
+      expect(html).not.toContain('data-plan-tree-questions="2"');
       expect(words).toContain("starts Dec 1");
       expect(words).toContain("ready to scaffold");
       expect(words).toContain("on Later");
-      expect(words).toContain("↳ Reports");
+      expect(words).toContain("in Reports");
       expect(words).toContain("Shipped Oct 3 outside the tracker");
       // A dimmed sub-idea draws no bar of its own on this horizon.
       expect(html).not.toContain('data-plan-tree-bar="0/0/3"');
@@ -269,7 +271,8 @@ describe("on the desk and on a phone", () => {
   it("shows sub-ideas without a click and drags delivery rows on the desk, never a reserved or dimmed one", () => {
     const column = atWidth(1280, () => lens());
     expect(column).toContain('data-plan-tree-row="cards"');
-    expect(column).not.toContain("data-plan-tree-disclosure");
+    // The group is open, and says so on its chevron.
+    expect(column).toMatch(/aria-expanded="true"[^>]*data-plan-tree-disclosure="checkout"/);
     expect(column).toMatch(/data-plan-tree-row="checkout"[^>]*draggable="true"/);
     expect(column).toMatch(/data-plan-tree-row="cards"[^>]*draggable="true"/);
     expect(column).not.toMatch(/data-plan-tree-row="refunds"[^>]*draggable/);
@@ -278,8 +281,8 @@ describe("on the desk and on a phone", () => {
 
   it("folds a parent's sub-ideas behind a disclosure below 768px and drags nothing, its chips and bars kept", () => {
     for (const html of [atWidth(390, () => lens()), atWidth(390, () => drawer())]) {
-      expect(html).toMatch(/data-plan-tree-disclosure="checkout"[^>]*>|aria-expanded="false"[^>]*data-plan-tree-disclosure="checkout"/);
-      expect(text(html)).toContain("Show sub-ideas");
+      expect(html).toMatch(/aria-label="Show sub-ideas" aria-expanded="false" data-plan-tree-disclosure="checkout"/);
+      expect(text(html)).toContain("2 sub-ideas");
       expect(html).not.toContain('data-plan-tree-row="cards"');
       expect(html).not.toContain("draggable");
       expect(html).toContain('data-plan-tree-bar="2/1/2"');

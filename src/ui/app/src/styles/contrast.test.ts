@@ -63,3 +63,36 @@ describe("dark-mode text contrast", () => {
     expect(ratio(over(muted, CARD, 0.8), CARD)).toBeGreaterThanOrEqual(4.5);
   });
 });
+
+/**
+ * The plan's flags: text in a hue on a tag tinted with that hue at 12% (16% for the amber),
+ * over a card or a sunken surface, in both themes. The text tokens live in system-tokens.css.
+ */
+describe("plan flag contrast", () => {
+  const system = readFileSync(fileURLToPath(new URL("./system-tokens.css", import.meta.url)), "utf8");
+  const systemLight = system.replace(/^\.dark\s*\{[^}]*\}/gm, "");
+  const systemDark = [...system.matchAll(/^\.dark\s*\{([^}]*)\}/gm)].map((m) => m[1]).join("\n");
+  // A flag token is a hex, or a Geist scale step resolved in the same theme.
+  const flag = (name: string, dark: boolean) => {
+    const raw = new RegExp(`${name}:\\s*([^;]+);`).exec(dark ? systemDark : systemLight)?.[1]?.trim() ?? "";
+    const ref = /var\((--[a-z0-9-]+)\)/.exec(raw)?.[1];
+    return rgb(ref ? hexOf(ref, dark ? darkRoot : lightRoot) : raw);
+  };
+  const themes = [
+    { dark: false, surfaces: [WHITE, SUNKEN], hues: { late: "--ds-red-700", todo: "--ds-amber-700", you: "--ds-blue-700" } },
+    // The dark card, and the sunken well 18% black over it.
+    { dark: true, surfaces: [rgb("#1f1f1f"), rgb("#191919")], hues: { late: "--ds-red-700", todo: "--ds-amber-700", you: "--ds-blue-700" } },
+  ] as const;
+
+  for (const theme of themes) {
+    it(`late, not started and needs you are AA on their own tint in ${theme.dark ? "dark" : "light"} mode`, () => {
+      for (const [tone, hue] of Object.entries(theme.hues)) {
+        const tint = rgb(hexOf(hue, theme.dark ? darkRoot : lightRoot));
+        const text = flag(`--flag-${tone}`, theme.dark);
+        for (const surface of theme.surfaces) {
+          expect(ratio(text, over(tint, surface, tone === "todo" ? 0.16 : 0.12)), `${tone} on ${surface}`).toBeGreaterThanOrEqual(4.5);
+        }
+      }
+    });
+  }
+});

@@ -318,6 +318,31 @@
   font-size: 14px;
 }
 
+/*
+ * The compact control: the Plan lenses beside the page name on a phone, and on their own row in a
+ * narrow Plan container. 36px segments in a 40px track, 13px labels. Each segment's tap reaches the
+ * track's edge (40px) through an invisible inset, so the smaller thumb is not a smaller target.
+ */
+.staple-detail-segments[data-size="compact"] {
+  height: 40px;
+  padding: 2px;
+  border-radius: 12px;
+}
+
+.staple-detail-segments[data-size="compact"] [role="tab"] {
+  height: 36px;
+  min-height: 36px;
+  padding-inline: 10px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.staple-detail-segments[data-size="compact"] [role="tab"]::before {
+  content: "";
+  position: absolute;
+  inset: -2px 0;
+}
+
 /* The strip is stuck and content scrolls under it: a hairline says where the strip ends. */
 .staple-detail-panel[data-mode="sheet"] [data-detail-tabs][data-stuck] {
   border-bottom-color: var(--border);
@@ -823,4 +848,124 @@
   text-decoration: underline;
   text-decoration-color: var(--border-strong, var(--border));
   text-underline-offset: 3px;
+}
+
+/*
+ * The idea's Plan tab, read as a document (tabs/PlanTab.tsx). Its layout follows the tab's own
+ * width (`@container/plantab`): compact under 512px of content, a 560px drawer less its gutters.
+ */
+.staple-plan-prose {
+  max-width: 68ch;
+}
+
+/* Long prose folds to about six lines, fading out, until "Show all". */
+.staple-plan-folded {
+  max-height: 132px;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(#000 60%, transparent);
+  mask-image: linear-gradient(#000 60%, transparent);
+}
+
+.staple-plan-prose-input {
+  font-size: 14px;
+  line-height: 22px;
+}
+
+/* The section chips stick under the drawer's tab strip and run edge to edge, like the strip. */
+.staple-plan-nav {
+  top: var(--plan-stick, 0px);
+  margin-inline: -24px;
+  padding-inline: 24px;
+  scrollbar-width: none;
+}
+
+.staple-plan-nav::-webkit-scrollbar {
+  display: none;
+}
+
+[data-detail-layout="sheet"] .staple-plan-nav {
+  margin-inline: -16px;
+  padding-inline: 16px;
+}
+
+/* A section's Edit shows on hover and focus at a desk; always where the tab is narrow or the pointer coarse. */
+.staple-plan-reveal {
+  opacity: 0;
+}
+
+.group\/section:hover .staple-plan-reveal,
+.group\/section:focus-within .staple-plan-reveal,
+.staple-plan-reveal:focus-visible {
+  opacity: 1;
+}
+
+@media (pointer: coarse) {
+  .staple-plan-reveal {
+    opacity: 1;
+  }
+}
+
+.staple-plan-track-rule {
+  width: 28px;
+  margin-inline: 8px;
+}
+
+/* An open question: its dot, its words at 14/21, and Answered and Defer beside them. */
+.staple-plan-question {
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+}
+
+.staple-plan-question-text {
+  font-size: 14px;
+  line-height: 21px;
+}
+
+/* A linked issue: identifier, title, status, bar, unlink. */
+.staple-plan-link {
+  grid-template-columns: 4.5rem minmax(0, 1fr) 5.5rem 8rem auto;
+}
+
+.staple-plan-link-wide {
+  grid-column: 1 / 5;
+}
+
+@container plantab (width < 512px) {
+  .staple-plan-reveal {
+    opacity: 1;
+  }
+
+  .staple-plan-wide {
+    display: none;
+  }
+
+  .staple-plan-track-rule {
+    width: 12px;
+    margin-inline: 6px;
+  }
+
+  .staple-plan-question {
+    grid-template-columns: 14px minmax(0, 1fr);
+  }
+
+  .staple-plan-question-actions {
+    grid-column: 2;
+  }
+
+  .staple-plan-link {
+    grid-template-columns: 4rem minmax(0, 1fr) auto;
+  }
+
+  .staple-plan-link-wide {
+    grid-column: 1 / 3;
+  }
+
+  .staple-plan-link-bar {
+    grid-column: 1 / 3;
+    grid-row: 2;
+  }
+
+  .staple-plan-link-unlink {
+    grid-column: 3;
+    grid-row: 1;
+  }
 }

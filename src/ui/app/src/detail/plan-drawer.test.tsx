@@ -167,7 +167,8 @@ describe("an idea in the shared drawer", () => {
       // are keys for code and tests, not text.
       const html = render(ideaDetail(idea("shaped")), presentation);
       const read = html.replace(/<[^>]*?(title="([^"]*)")?[^>]*>/g, " $2 ");
-      expect(read).toContain("Idea · Shaped");
+      // The state chip is one line now: the glyph and the state's words.
+      expect(read).toContain("Shaped · not scheduled");
       expect(read).not.toContain(ID);
       expect(read).not.toMatch(/\b[A-Z]{2,}-\d+\b/);
       expect(read).not.toContain("~");
@@ -340,9 +341,9 @@ describe("the Plan tab", () => {
     expect(sentence.replace(/<[^>]*>/g, "")).toContain("Delivered outside the tracker · Oct 12, 2026");
     // Not offered the clear: the mark is shown, the button is not.
     expect(renderTab(planned("raw", { ...marked.idea, actions: [] }))).not.toContain('data-plan-action="clear_delivered"');
+    // Where the state offers the mark, its form waits behind a quiet button at the end of the tab.
     const offered = renderTab(planned("shaped", { actions: [...OFFERED.shaped!, { id: "mark_delivered", label: "Mark delivered outside the tracker", who: "person" }] }));
-    expect(offered).toContain("data-plan-delivered-on");
-    expect(offered).toContain('data-plan-action="mark_delivered"');
+    expect(offered).toContain("data-plan-delivered-open");
     expect(renderTab(planned("shaped"))).not.toContain('data-plan-section="delivered"');
   });
 
@@ -371,8 +372,10 @@ describe("the Plan tab", () => {
   it("shows every plan section, the starred ones marked, the breakdown as rows, and what shaping still needs", () => {
     const html = renderTab(planned("raw", { state: "exploring", maturity: "exploring", stage: "exploring" }));
     expect(html).toContain('data-plan-completeness="3/3"');
-    expect(html).toContain("To shape it: 1 open question answered or deferred.");
-    for (const section of ["goal", "context", "breakdown", "acceptance", "dependencies", "out-of-scope", "risks", "sources"]) expect(html).toContain(`data-plan-section="${section}"`);
+    expect(html).toMatch(/data-plan-missing-item="">(<span[^>]*><\/span>)?1 open question answered or deferred<\/li>/);
+    for (const section of ["goal", "breakdown", "acceptance"]) expect(html).toContain(`data-plan-section="${section}"`);
+    // The sections not written yet wait on one line, each a chip that opens its editor.
+    for (const section of ["context", "dependencies", "out-of-scope", "risks", "sources"]) expect(html).toContain(`data-plan-section-empty="${section}"`);
     expect((html.match(/aria-label="required to shape"/g) ?? []).length).toBe(3);
     expect(html).toContain('data-plan-row="7.1"');
     expect(html).toContain('data-plan-row="7.2"');
@@ -384,7 +387,7 @@ describe("the Plan tab", () => {
   it("says what shaping still needs wherever Mark shaped is offered: a record started while exploring, not a shaped one", () => {
     const shape: OfferedAction = { id: "shape", label: "Mark shaped", who: "person" };
     const exploring = planned("started", { maturity: "exploring", actions: [...OFFERED.started!, shape] });
-    expect(renderTab(exploring)).toContain("To shape it: 1 open question answered or deferred.");
+    expect(renderTab(exploring)).toMatch(/data-plan-missing-item="">(<span[^>]*><\/span>)?1 open question answered or deferred<\/li>/);
     expect(renderTab(planned("started"))).not.toContain("To shape it");
   });
 
@@ -433,7 +436,7 @@ describe("the Plan tab", () => {
     expect(html).toContain("<blockquote");
     expect(html).not.toContain("**Window**");
     // The context section's numbered lines read as a numbered list (the phase strip is a list too).
-    expect(html).toMatch(/data-plan-section-read="context"><div[^>]*><ol[^>]*><li[^>]*><span>Generated, never edited<\/span>/);
+    expect(html).toMatch(/data-plan-section-read="context">(<div[^>]*>)+<ol[^>]*><li[^>]*><span>Generated, never edited<\/span>/);
     expect(html).not.toContain("data-plan-detail-brief");
     expect(html).not.toContain('data-plan-section-input="goal"');
     for (const section of ["brief", "goal", "context", "acceptance"]) expect(html).toContain(`data-plan-section-edit="${section}"`);

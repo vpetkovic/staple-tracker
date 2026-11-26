@@ -104,10 +104,12 @@ milestone is on pace for its date.
 
 **Plan** sits beside it once a person turns on the experimental planning setting
 (**Settings → Experimental**). It holds ideas that are not work yet, in three lenses.
-**Ideas** has the raw and exploring columns and a capture box; **Horizons** has each horizon
-(Now, Next or your own) and Unscheduled, with progress, shipped, late and not-started counts;
+**Ideas** has a Raw list with a capture field at its top and a pane of exploring cards that say
+what shaping still needs; **Horizons** is an outline of ideas ready for a horizon, then each
+horizon (Now, Next or your own) with progress, shipped, late and not-started counts;
 **Timeline** shows planned windows you drag and resize, with the real dates of started ideas
-beside them. An idea opens in the same panel as a task, with a Plan tab for its plan and only
+beside them. **Show only** narrows every lens to the ideas that need you, are late or are not
+started. An idea opens in the same panel as a task, with a Plan tab for its plan and only
 the actions its state offers, such as scaffolding a shaped idea into an epic and its tasks.
 With planning on, Tasks also shows each task's horizon as a ◇ chip and can group and filter by
 it. See [Planning](plan.md).

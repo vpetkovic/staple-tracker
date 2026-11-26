@@ -1956,7 +1956,7 @@ the rest are in [CONTRIBUTING.md](https://github.com/vpetkovic/staple-tracker/bl
 The Plan lenses use `detail/tabs/DetailTabStrip.tsx`, shared with `IssueDetailPanel`.
 Desktop tabs use its line treatment; phone tabs use its 48px segment track. Radix owns
 roving focus, arrow keys and tab/panel relationships. Scroll reveal and edge fades are shared.
-Plan remembers its lens, drawer, scroll and phone column per workspace, while filters use
+Plan remembers its lens, drawer and scroll per workspace, while filters use
 the shell's existing URL and per-viewer preferences. Every storage access fails safe.
 
 Unscheduled is the absence of a horizon. Optional-date named horizons remain available
