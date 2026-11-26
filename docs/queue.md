@@ -23,8 +23,8 @@ staple queue add APP-1      # then password reset
 staple queue add APP-7      # then the audit log
 ```
 
-MCP: `enqueue_task`. In the web UI, open the **Queue** view and use *Queue a task,
-epic or milestone…*, or a row's `⋯` menu.
+MCP: `enqueue_task`. In the web UI, open the **Queue** view and use *Add to queue*,
+or a row's `⋯` menu.
 
 ## 2. Read the order
 
@@ -76,7 +76,8 @@ staple queue rm APP-10                  # MCP dequeue_task
 staple queue prune                      # MCP prune_queue: drop finished
 ```
 
-In the Queue view, drag rows or use Alt-↑ and Alt-↓. Finished work stays in the plan,
+In the Queue view, drag an entry by its number, use Alt-↑ and Alt-↓ (Alt-Home and Alt-End
+for the ends), or the row's `⋯` menu. Finished work stays in the plan,
 skipped, until you prune it, so a ticket that is reopened gets its old place back.
 
 Leave the plan to people: `.staple/AGENTS.md` tells agents to follow the queue, not

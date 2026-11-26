@@ -27,14 +27,14 @@ surfaces that open on top of any of them.
 | [Inbox](#inbox) | What waits on a person: gates, reviews, blockers a person owns, stopped runs, silent claims, sync conflicts | The rail's first row and the first phone tab; "Go to Inbox"; `?view=inbox` (`?view=attention` lands there) |
 | [Autopilot](#autopilot-runs) | Every autopilot run and one run in full; a notice when one stops | The rail's second row and its live-run lines; the second phone tab; a task's run line; a stop notice; `?view=autopilot`, `?view=autopilot&run=<run id>` |
 | [Tasks](#tasks) | Every issue as one tree, parents over children, with grouping, sorting, filters, search and the pickup cues | Rail and tab bar *Tasks*; "Go to Tasks"; a project row under it; `?view=tasks` |
-| [Queue](#queue) | The pickup order as one tree: the plan, what each queued epic or milestone expands to, what comes next, and the editor for it | *Queue*; "Go to Queue"; `?view=queue` |
+| [Queue](#queue) | The pickup order as one dense list: what an agent would take next, the plan with what each queued epic or milestone expands to, the open work after it, and the editor for it; one section per workspace on *All workspaces* | *Queue*; "Go to Queue"; `?view=queue` |
 | [Graph](#graph) | Issues as a node graph: epics as containers, dependencies as edges | *Graph*; "Go to Graph"; `?view=graph` |
 | [Milestones](#milestones) | Milestones in plan order, each with progress, risk and members; **Open** leads to its goal | *Milestones*; "Go to Milestones"; a row's milestone marker; `?view=milestones` |
 | [Estimates](#estimates) | How long work took against its estimate, per group of similar work | *Estimates*; "Go to Estimates"; `?view=estimate-accuracy` |
 | [Usage](#usage) | This computer's provider limits and the pace against each one | *Usage* under *This computer*; "Go to Usage"; `?view=budget` |
 | [Task detail](#task-detail) | One issue: details, connections, documents, activity, the agent payload and time | Click or Enter on any row, node or reference |
 | [Settings](#settings) | Statuses, kinds, workflow settings, cloud, usage capture | The rail's *Settings*; the palette; `?settings` |
-| [Choose a workspace](#choose-a-workspace) | Shown in place of Queue or Estimates on *All workspaces* | Opening either view with no workspace chosen |
+| [Choose a workspace](#choose-a-workspace) | Shown in place of Estimates on *All workspaces* | Opening it with no workspace chosen |
 
 The command palette (`⌘K`), the New task dialog (`c`), the project dialog and
 the dependencies dialog also open over any view. **New task**
@@ -454,76 +454,82 @@ print, and a container is ranked on the effective scale rather than on its plan 
 
 ## Queue
 
-The Queue view (`views/queue/QueueView.tsx`) is the editor for the
-[pickup queue](queue.md): the order agents take work in, as one full-width tree.
-Everything on it comes from one `GET /api/queue?all=1` (`staple queue --json`),
-read whole regardless of the Done toggle, so resolved plan rows stay in place,
-dimmed, and the plan's numbering has no gaps. The view has no toolbar. On *All
-workspaces* it asks you to [choose a workspace](#choose-a-workspace): each
-workspace keeps its own order.
+The Queue view (`views/queue/`) is the editor for the [pickup queue](queue.md): the
+order agents take work in, as one dense list the full width of the content card, in
+the Inbox's register (sticky sunken headers, one scroller, one tab stop). Everything on
+it is the store's answer: `GET /api/queue?all=1&pickup=1` for a workspace, or
+`GET /api/queues` for every workspace at once (`use-workspace-queue.ts`). Resolved plan
+rows stay in place, dimmed and struck through, so the plan's numbering has no gaps.
+The page's own width decides its layout (a container query at 860px), not the window's.
 
-**The header.** *Pickup order*, a sentence saying what the order is for, and
-*Clear n finished* when the plan holds resolved rows (*Prune n resolved* on a
-phone), which prunes them. Under it, a summary card: *5 tasks are in the plan: 3
-ready to pick up, 1 being worked on and 1 waiting on something.* with a progress
-strip over the same counts (`views/queue/queue-summary.ts`). The plan's
-`revision` is behind *Show details*.
+**A workspace page** has a strip: the policy tag (*Advisory order*, or *Strict order*
+with a lock), a meter and *19 in the plan: 3 ready · 4 being worked on · 11 waiting · 1
+done*, *Clear n finished* when the plan holds resolved entries (it prunes them), *Autopilot
+is working this queue* while a live run works this workspace's queue, and **Add to
+queue**. The policy tag opens one paragraph on what the policy means and *Change in
+Settings*; it does not switch it. On a phone, Add to queue sits on the page's title line.
 
-**Next up.** A band across the top names the row an agent asking right now
-would be handed, with its title and *Open*. It is the first `eligible` row of
-the list below, which is what the resolver answers for a read with no actor, so
-the band and the list can never disagree. With nothing eligible it says
-*Nothing can be picked up right now: every task in the plan is waiting on
-something.*
+**All workspaces** lists every workspace's plan in its own section, in registry order:
+*4 plans across 6 workspaces. Each workspace keeps its own order.* with *Collapse all*
+(on the title line on a phone), then each section's sticky header (fold, the workspace,
+its policy, its counts, Add to queue). A workspace whose plan could not be read is a
+banner above the sections. Containers start folded here and open on a workspace page.
 
-**The order.** The plan's entries in plan order, each drawn with the same task
-row as the Tasks view, and each printing its **plan position** bare in a gutter
-(1, 2, 3, …). Under a queued epic or milestone, the rows it expands to are
-nested on the tree's own connector lines, in the order an agent meets them,
-each printing its **pickup number** with a `#` (`#5`). A container never gets a
-pickup number, because it is never a checkout target, and a resolved row loses
-its number. The expansion is capped at five rows with *and n more under
-STA-66*; the fold chevron opens and closes it. A row that is not pickable
-carries the store's sentence for why as its caption ("blocked by STA-35",
-"queued behind STA-66's review", "held by codex-1"). A claimed row keeps its
-place and its number dims: nothing moves while you are reading.
+**Next.** The first row under every header names the task an agent asking right now
+would be handed, and why that one: *First in the order*, or *#5 in the order · ahead of
+it: 4 being worked on, 1 waiting*, or, for a pick from the open work after the plan,
+that the plan has nothing ready or that there is no plan. A click shows that task in the
+list (opening its container and paging as needed) and flashes it; *Open* opens it. With
+nothing pickable it turns amber: *Nothing can be picked up right now*, with what is
+waiting and being worked on. It is the only place the word Next appears; the pick's own
+row in the list wears the same tint.
 
-**Not planned.** Every other open leaf follows in a folded section, *Not
-planned · n items · picked up after the plan*, in presentation sort, capped at
-ten with the rest counted.
+**The order.** The plan's entries in plan order. An entry's gutter is its plan position,
+which is also its drag handle. Each row has a state column with one vocabulary, a mark
+and words, never colour alone: *Ready*; *Working · holder* (with *quiet 8d* once idle for
+over an hour); *Waiting on STA-467, STA-470* (each a link to that row); *Blocked on a
+person*; *Needs your approval*; *In review*; *Another member's*; *Done*; or the store's
+own sentence. A queued epic or milestone rolls up as a meter and *10 tasks · 2 ready · 4
+being worked on*, and opens to its tasks in the order an agent meets them, each with its
+pickup number (`#5`, dimmed while claimed), under a caption for each epic between the
+entry and the task; five first, then *103 more in EXE-234 · Show all 108*. An entry the
+order already reached through an earlier one says *Already in the order at #76, inside
+EXE-234*. An entry's note is a line under it.
 
-**Reordering.** Drag (`@dnd-kit/core`, the reorder list the settings editors
-use), the per-row move buttons, Alt-↑ / Alt-↓, Alt-Home / Alt-End, and the row
-menu's *Move to top* / *Move to bottom* all end in one
-`POST /api/queue/reorder` carrying the view's `revision` as `baseRevision`. A
-move that would change nothing is never sent. Alt is required on the arrows and
-on Home/End so the plain keys stay with the list's own navigation.
+**After the plan.** Every other open task follows in one folded line, *After the plan ·
+61 open tasks · agents take these in list order once the plan runs out*; open, the same
+rows without numbers, each with *Add*, ten first. With no plan it is *Open work*, open on
+a workspace page, under a *No plan yet* block with Add to queue.
 
-**The row menu** (`components/QueueRowMenu.tsx`, the `⋯` on every row, also
-opened by a long press) is where every row action lives, here and on the Tasks
-list: *Open details*; on a queued row the moves and *Remove from queue*
-(`POST /api/queue/remove`), disabled while somebody holds the row, with the
-reason; on a row not in the plan *Queue next* (`POST /api/queue/enqueue` at
-position 1) and *Add to queue* (appended). A row that is only in the order
-because its container is queued counts as not queued, so it offers the add
-items. On *All workspaces* the menu names which workspace's queue it acts on.
+**Reordering.** Drag an entry by its number (a 2px line shows where it lands; pointer
+events, so a mouse and a finger are one path), Alt-↑ / Alt-↓ and Alt-Home / Alt-End on a
+focused entry, or the row menu's moves. Every path ends in one `POST /api/queue/reorder`
+carrying the plan's `revision` as `baseRevision`, and the new place is announced
+(*STA-465 is now 1 of 3*). While a section's write is out its handles are inert and the
+entry being written is dimmed. Alt and an arrow on a task under an entry does nothing.
 
-**Adding.** The picker above the list, *Queue a task, epic or milestone…*,
-lists this workspace's issues that are not already in the plan and adds the one
-you pick.
+**The keyboard.** The rows of every open section are one tab stop: ↑ / ↓ (and k / j),
+Home / End, → / ← to open and fold a container, Enter or Space to open the task.
 
-**A stale reorder.** Every write carries `baseRevision`, and the store refuses
-a stale one with `revision_conflict`, changing nothing, so the server's order is
-still the truth. The page re-reads and shows *The plan changed elsewhere —
-nothing was written.* with the store's sentence and two deliberate ways out:
-**Reload**, which abandons the move, and **Retry my order**, which re-applies
-the intent at the new revision, keeping whatever the other writer added and
-dropping whatever they removed. Neither happens on its own. Any other refusal
-is the store's own sentence in the shared refusal panel.
+**The row menu** (`components/QueueRowMenu.tsx`, the `⋯` on every row): on an entry
+*Open*, *Move to the top*, *Move up*, *Move down*, *Move to the bottom* with their keys,
+and *Remove from the plan*, disabled while somebody holds the row, naming them; on a task
+under an entry or after the plan *Open*, *Queue next* and *Queue last*.
+
+**Adding.** *Add to queue* opens a search over this workspace's open work that is not in
+the plan and adds the one you pick to the end. It never offers to create a task.
+
+**A stale reorder.** The store refuses a write built on an old `revision` and changes
+nothing, so the page re-reads and puts an amber line under the header: *The plan changed
+somewhere else, so your move was not saved. The order below is the current one.* with
+**Apply my move again** (re-applies the intent to the current plan, keeping what the
+other writer added and dropping what they removed) and **Dismiss**. Any other refusal is
+the store's own sentence in the shared refusal panel.
 
 `views/queue/queue-render.test.tsx` renders the pieces to static markup;
-`queue-model.test.ts`, `queue-tree.test.ts` and `queue-summary.test.ts` pin the
-numbering, the nesting and the summary.
+`queue-words.test.ts`, `queue-lines.test.ts`, `queue-drag.test.ts`, `queue-model.test.ts`
+and `queue-summary.test.ts` pin the words, which rows are drawn, the drop slot, the plan
+join and the counts.
 
 ## Graph
 
@@ -1298,15 +1304,14 @@ runs; `views/autopilot/*.test.*` cover the page.
 
 ## Choose a workspace
 
-Queue and Estimates are about one workspace at a time. On *All workspaces* with
-more than one workspace they show a **Choose a workspace** card instead
+Estimates is about one workspace at a time. On *All workspaces* with more than
+one workspace it shows a **Choose a workspace** card instead
 (`views/ChooseWorkspace.tsx`, `views/workspace-scope.ts`): a sentence saying why
-(*Each workspace keeps its own pickup order, so there is no single queue for all
-of them.*), a button per workspace with its prefix, and *What does this mean?*.
+(*Estimates are checked for each workspace on its own.*), a button per workspace with its prefix, and *What does this mean?*.
 Choosing one is the same as choosing it in the switcher, and it becomes the
 default answer when New task or Settings ask which workspace. Tasks and Graph
 show every workspace at once; Milestones shows its read-only all-workspaces
-list; Usage is not about a workspace at all.
+list; Queue shows a section per workspace; Usage is not about a workspace at all.
 
 ## Settings
 
