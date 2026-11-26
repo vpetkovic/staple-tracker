@@ -43,6 +43,8 @@ interface Entry {
     goal: unknown;
   };
   decision: { stop: boolean; reason?: string };
+  title: string;
+  issues: Array<{ issueId: string; identifier: string; title: string; status: string; category: string | null; kind: string }>;
   facts: unknown;
   driver: unknown;
   goal: unknown;
@@ -120,7 +122,11 @@ describe("GET /api/runs", () => {
     const { runId, epic, taken } = liveRun("reader");
     const entry = (await runs()).find((candidate) => candidate.run.id === runId)!;
     expect(entry).toBeDefined();
-    expect(Object.keys(entry).sort()).toEqual(["decision", "driver", "facts", "goal", "instructionsChanged", "run", "workspace"]);
+    expect(Object.keys(entry).sort()).toEqual(["decision", "driver", "facts", "goal", "instructionsChanged", "issues", "run", "title", "workspace"]);
+    // Named after its scope, and every issue it names with its status and title (core/run-references.ts).
+    expect(entry.title).toBe("reader epic");
+    expect(entry.issues.find((issue) => issue.identifier === taken)).toMatchObject({ title: expect.stringMatching(/^reader child /), category: "active" });
+    expect(entry.issues.find((issue) => issue.identifier === epic)).toMatchObject({ title: "reader epic" });
     expect(entry.workspace).toBe("runs");
     expect(entry.run.state).toBe("active");
     expect(entry.run.scope).toMatchObject({ kind: "issue", identifier: epic });
@@ -190,6 +196,25 @@ describe("GET /api/runs", () => {
 
   it("is a read: a POST is refused", async () => {
     expect((await post("/api/runs", {})).status).toBe(405);
+  });
+});
+
+describe("GET /api/run", () => {
+  it("answers one run as /api/runs answers it, ended runs past the list's limit included", async () => {
+    const old = liveRun("one-old");
+    expect((await post("/api/run/stop", { id: old.runId })).status).toBe(200);
+    // The list keeps no ended run at limit 0; a link to this one still opens it.
+    expect((await get("/api/runs?limit=0")).body.runs as Entry[]).not.toContainEqual(expect.objectContaining({ run: expect.objectContaining({ id: old.runId }) }));
+    const { status, body } = await get(`/api/run?id=${old.runId}`);
+    expect(status).toBe(200);
+    const listed = ((await get("/api/runs")).body.runs as Entry[]).find((entry) => entry.run.id === old.runId);
+    expect(body).toEqual(listed);
+    expect(body).toMatchObject({ workspace: "runs", title: "one-old epic", run: { state: "stopped" } });
+  });
+
+  it("names an unknown run, and refuses a missing id", async () => {
+    expect((await get("/api/run?id=00000000-0000-0000-0000-000000000000")).status).toBe(404);
+    expect((await get("/api/run")).status).toBe(409);
   });
 });
 

@@ -1,4 +1,5 @@
 import { attentionList, dismissAttention } from "../core/attention.js";
+import { runReferences } from "../core/run-references.js";
 import { IntegrationOperations, INTEGRATION_READ_ACTIONS, INTEGRATION_WRITE_ACTIONS, INTEGRATION_CONFIG_ACTIONS, type AdapterFactory } from "../core/integrations/operations.js";
 import { DISCOVERY_ACTOR, discoveryRuns, rowPullRequests } from "../core/integrations/pr-discovery.js";
 import { subtreePullRequestsField, subtreePullRequestsFor } from "../core/subtree-pull-requests.js";
@@ -1040,11 +1041,13 @@ export function startUiServer(options: UiOptions): UiHandle {
   }
 
   /**
-   * A workspace's runs as `/api/runs` and the run verbs answer them: the `run status --json`
-   * object (`{run, decision, facts, driver}`) with the workspace it lives in.
+   * A workspace's runs as `/api/runs`, `/api/run` and the run verbs answer them: the `run
+   * status --json` object (`{run, decision, facts, driver}`) with the workspace it lives in,
+   * the run's name and every issue it names as it stands now (core/run-references.ts), so the
+   * page shows a run by its name and each ticket with its status and title.
    */
   function runEntry(h: StoreHandle, status: RunStatus): Record<string, unknown> {
-    return { workspace: h.slug, ...status };
+    return { workspace: h.slug, ...status, ...runReferences(h.store, status) };
   }
 
   /**
@@ -5128,6 +5131,34 @@ export function startUiServer(options: UiOptions): UiHandle {
         // the same clock that wrote `endedAt`, not against a phone's skewed one.
         json(res, 200, { runs: out, now: new Date().toISOString() });
         return;
+      }
+
+      /**
+       * One run, by id: what a link to a run opens. The list above keeps only the newest ended
+       * runs, and a stopped run an Attention row names can be older than that. `ws` names the
+       * workspace; in hub mode without it, the run is looked for in every workspace (run ids
+       * are unique), so a link needs only the id.
+       */
+      if (url.pathname === "/api/run") {
+        const id = url.searchParams.get("id")?.trim() ?? "";
+        if (id === "") throw new StapleError("validation", "Name the run: id is required.");
+        const wanted = url.searchParams.get("ws") ?? undefined;
+        const targets = options.hub && !wanted ? allHandles() : [handleFor(wanted)];
+        // A workspace that cannot be read does not hide the run from the next one.
+        let unread: unknown = null;
+        for (const h of targets) {
+          try {
+            const status = h.store.runs().status(id);
+            // `status` also takes an id prefix; a link names the whole id.
+            if (status.run.id !== id) continue;
+            json(res, 200, runEntry(h, status));
+            return;
+          } catch (error) {
+            if (!(error instanceof StapleError && error.code === "not_found")) unread ??= error;
+          }
+        }
+        if (unread !== null && targets.length === 1) throw unread;
+        throw new StapleError("not_found", `No autopilot run ${id}${targets.length === 1 ? ` in ${targets[0]!.slug}` : " in any workspace"}.`);
       }
 
       /**

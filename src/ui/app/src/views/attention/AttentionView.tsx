@@ -23,7 +23,6 @@
  * renders them to static markup.
  */
 import { ArrowUpRight, ChevronDown, Inbox, X } from "lucide-react";
-import { useCallback, useState } from "react";
 import { GuardRefusal } from "@/components/GuardRefusal";
 import { EmptyState } from "@/components/plain/States";
 import { Button } from "@/components/ui/button";
@@ -33,50 +32,17 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { personActor } from "@/detail/parts/person";
-import { type AuthError, dismissAttention, getAttention, resolveCloudConflict } from "@/lib/api";
-import { describeRefusal, type Refusal } from "@/lib/refusal";
-import { useSession } from "@/lib/session";
-import { openRunHistory } from "@/lib/shell-events";
+import type { AuthError } from "@/lib/api";
 import type { AttentionList, AttentionRow } from "@/lib/types";
-import { useResource } from "@/lib/useStaple";
 import { ErrorState, LoadingState, SectionHeading } from "@/views/ViewChrome";
 import { ageText, attentionGo, attentionSections, rowSubject } from "./attention-model";
+import { type AttentionHandlers, useAttention } from "./use-attention";
 import "@/components/task-list/task-list.css";
 
-export function AttentionView({ onAuthError }: { onAuthError: (error: AuthError) => void }) {
-  const session = useSession();
-  // Every workspace when the page is on All workspaces; the server answers for the one named otherwise.
-  const ws = session.ws || undefined;
-  const load = useCallback(() => getAttention({ ws }), [ws]);
-  const resource = useResource(load, [ws, session.version], onAuthError);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [refusal, setRefusal] = useState<Refusal | null>(null);
-
-  const write = async (key: string, fn: () => Promise<unknown>) => {
-    setBusy(key);
-    setRefusal(null);
-    try {
-      await fn();
-      session.refresh();
-    } catch (error) {
-      setRefusal(describeRefusal(error));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const handlers: AttentionHandlers = {
-    act: (row) => {
-      const go = attentionGo(row);
-      if (go?.to === "issue") session.open(go.workspace, go.ref);
-      else if (go?.to === "run") openRunHistory({ runId: go.runId });
-    },
-    resolve: (row, take) =>
-      void write(row.key, () => resolveCloudConflict({ ws: row.workspace, id: row.conflictId!, take, actor: personActor() })),
-    dismiss: (row) =>
-      void write(row.key, () => dismissAttention({ ws: row.workspace, target: row.runId ?? row.ref ?? row.key, actor: personActor() })),
-  };
+// `onAuthError` is every view's prop; the Inbox's read is the root's (lib/attention.ts), which reports auth itself.
+export function AttentionView(_props: { onAuthError: (error: AuthError) => void }) {
+  // The rows, what each action does and the writes: use-attention.ts. This component renders.
+  const { resource, busy, refusal, clearRefusal, handlers } = useAttention();
 
   return (
     <div className="h-full overflow-y-auto" data-attention-view="">
@@ -84,7 +50,7 @@ export function AttentionView({ onAuthError }: { onAuthError: (error: AuthError)
         <p className="text-reading text-muted-foreground">
           Work only a person can move. The pickup queue is the plan and is not repeated here.
         </p>
-        {refusal ? <GuardRefusal refusal={refusal} onDismiss={() => setRefusal(null)} className="mt-3" /> : null}
+        {refusal ? <GuardRefusal refusal={refusal} onDismiss={clearRefusal} className="mt-3" /> : null}
         {resource.error ? <ErrorState error={resource.error} /> : null}
         {resource.data === undefined ? (
           resource.error ? null : <LoadingState />
@@ -96,11 +62,7 @@ export function AttentionView({ onAuthError }: { onAuthError: (error: AuthError)
   );
 }
 
-export interface AttentionHandlers {
-  act: (row: AttentionRow) => void;
-  resolve: (row: AttentionRow, take: "local" | "remote") => void;
-  dismiss: (row: AttentionRow) => void;
-}
+export type { AttentionHandlers };
 
 export function AttentionLists({ list, busy, handlers }: { list: AttentionList; busy: string | null; handlers: AttentionHandlers }) {
   const sections = attentionSections(list.rows);

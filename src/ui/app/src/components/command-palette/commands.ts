@@ -274,6 +274,7 @@ function issueCount(count: number): string {
  */
 /** Words the pages were once called, so muscle memory still finds them in the palette. */
 const FORMER_VIEW_NAMES: Partial<Record<ViewName, string>> = {
+  attention: "attention",
   calibration: "estimate accuracy calibration",
   budget: "budget limits",
 };

@@ -97,7 +97,7 @@ describe("writing the open ticket", () => {
 
   it("survives the page's own address writes, which keep parameters they do not own", () => {
     const open = withIssue(`${BASE}?ws=staple&view=tasks`, { workspace: "staple", ref: "STA-12" }, true);
-    const rewritten = withShellState(open, { ws: "staple", view: "tree", filters: { ...emptyFilters(), text: "login" }, focus: null });
+    const rewritten = withShellState(open, { ws: "staple", view: "tree", filters: { ...emptyFilters(), text: "login" }, focus: null, run: null });
     expect(readIssueUrl(search(rewritten))).toEqual({ ref: "STA-12", workspace: "staple" });
     expect(readShellUrl(search(rewritten))?.filters.text).toBe("login");
   });

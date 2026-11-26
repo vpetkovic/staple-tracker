@@ -91,7 +91,7 @@ export interface StopNotice {
   endedAt: string;
 }
 
-export function stopKey(entry: Pick<RunEntry, "workspace" | "run">): string {
+export function stopKey(entry: { workspace: string; run: Pick<Run, "id"> }): string {
   return `${entry.workspace}/${entry.run.id}`;
 }
 

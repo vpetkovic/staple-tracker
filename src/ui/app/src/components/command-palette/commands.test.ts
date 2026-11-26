@@ -179,7 +179,7 @@ describe("buildCommands", () => {
      * meaning "every view switch". The action type is what this test was always about.
      */
     const views = buildCommands(context({ view: "tree" })).filter((c) => c.action.type === "view");
-    expect(views.map((c) => c.id)).toEqual(["view:queue", "view:attention", "view:graph", "view:milestones", "view:plan", "view:calibration", "view:budget"]);
+    expect(views.map((c) => c.id)).toEqual(["view:queue", "view:attention", "view:autopilot", "view:graph", "view:milestones", "view:plan", "view:calibration", "view:budget"]);
   });
 
   it("names the calibration view in plain words, and still finds it by its old name", () => {
@@ -189,6 +189,12 @@ describe("buildCommands", () => {
     // The view id stays `calibration`, and the page's former name still reaches it.
     expect(command.keywords).toContain("calibration");
     expect(command.keywords).toContain("estimate accuracy");
+  });
+
+  it("calls the attention view Inbox, and still finds it by its old name", () => {
+    const command = buildCommands(context({ view: "tree" })).find((c) => c.id === "view:attention")!;
+    expect(command.label).toBe("Go to Inbox");
+    expect(command.keywords).toContain("attention");
   });
 
   it("offers no issue filter commands on the Estimates report, which is not an issue list", () => {

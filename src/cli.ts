@@ -1136,7 +1136,8 @@ Tasks
               --hub = all workspaces; --mine as for ls
   attention [--hub]                     the work waiting on a PERSON: gates, resubmitted
               gates, blockers a person owns, reviews, tickets made ready by closed
-              cross-workspace blockers, stopped runs, silent claims, sync conflicts;
+              cross-workspace blockers, stopped runs, live runs whose driver
+              stopped, silent claims, sync conflicts;
               each row: workspace, age, one action. Never the pickup queue;
               attention dismiss <ref|run-id>; staple attention --help
 

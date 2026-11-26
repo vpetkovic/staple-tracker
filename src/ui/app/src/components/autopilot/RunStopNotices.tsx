@@ -29,7 +29,6 @@ import { attentionIsOpen, attentionLabel, pendingStopNotices, type StopNotice } 
 import { markStopsSeen, reconcileStopSeen, useStopSeen } from "@/lib/stop-seen-store";
 import { useRuns } from "@/lib/runs";
 import { isAllWorkspaces, useSession } from "@/lib/session";
-import { openRunHistory } from "@/lib/shell-events";
 import { cn } from "@/lib/utils";
 import { RunStatePill } from "./RunParts";
 
@@ -252,7 +251,7 @@ export function RunStopNotices({ placement }: { placement: NoticePlacement }) {
       }}
       onDetails={(notice) => {
         markStopsSeen([notice.key]);
-        openRunHistory({ runId: notice.runId });
+        session.openRun(notice.runId);
       }}
       onDismiss={(notice) => markStopsSeen([notice.key])}
       onDismissAll={() => markStopsSeen(notices.map((notice) => notice.key))}

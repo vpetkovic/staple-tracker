@@ -33,6 +33,7 @@ function row(over: Partial<AttentionRow> & Pick<AttentionRow, "kind">): Attentio
     label,
     runId: null,
     conflictId: null,
+    conflict: null,
     title: "Title",
     detail: "detail",
     since: "2026-11-25T00:00:00.000Z",
@@ -107,7 +108,7 @@ describe("the model", () => {
 
   it("routes each action: a ticket opens its detail, a run its history, a conflict asks", () => {
     expect(attentionGo(EVERY_KIND[0]!)).toEqual({ to: "issue", workspace: "app", ref: "APP-1" });
-    expect(attentionGo(EVERY_KIND[5]!)).toEqual({ to: "run", runId: "0123456789ab" });
+    expect(attentionGo(EVERY_KIND[5]!)).toEqual({ to: "run", workspace: "app", runId: "0123456789ab" });
     expect(attentionGo(EVERY_KIND[7]!)).toEqual({ to: "resolve", workspace: "app", conflictId: "c-1" });
     expect(ageText({ ageSeconds: 90 })).toBe("waiting 1m");
   });

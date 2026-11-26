@@ -4632,6 +4632,10 @@ const attentionRowShape = {
   ref: z.string().nullable().describe("The ticket the row is about; null for a run over the whole queue"),
   runId: z.string().nullable(),
   conflictId: z.string().nullable(),
+  conflict: z
+    .object({ entity: z.string(), field: z.string(), localValue: z.unknown(), remoteValue: z.unknown() })
+    .nullable()
+    .describe("A sync conflict's field and both devices' values; null on every other row"),
   title: z.string(),
   detail: z.string().describe("Why it waits, in one line"),
   since: z.string().describe("When it started waiting"),
@@ -4648,7 +4652,7 @@ server.registerTool(
   "attention",
   {
     description:
-      "The work waiting on a PERSON, as rows: pending gates, resubmitted gates, blockers whose unblock owner is a person, tickets in review, tickets made ready because their cross-workspace blockers closed, stopped autopilot runs, claims silent past queue.silentClaimMinutes, and sync conflicts. Each row names its workspace, how long it has waited and one action. Gates and person-owned blockers first; within a kind the longest waiting first. The same rows as `staple attention` and the web view's Attention page. A ready ticket is never on it because it is in the pickup queue (that is inbox/list_queue). A silent claim is shown, never something to steal from here. Call it when a person asks what is waiting on them; it is not where an agent picks work.",
+      "The work waiting on a PERSON, as rows: pending gates, resubmitted gates, blockers whose unblock owner is a person, tickets in review, tickets made ready because their cross-workspace blockers closed, stopped autopilot runs, live autopilot runs whose driver process on this machine stopped, claims silent past queue.silentClaimMinutes, and sync conflicts. Each row names its workspace, how long it has waited and one action. Gates and person-owned blockers first; within a kind the longest waiting first. The same rows as `staple attention` and the web view's Attention page. A ready ticket is never on it because it is in the pickup queue (that is inbox/list_queue). A silent claim is shown, never something to steal from here. Call it when a person asks what is waiting on them; it is not where an agent picks work.",
     inputSchema: {
       hub: z.boolean().optional().describe("Every workspace this machine's hub knows, instead of one"),
       ws: wsSchema,

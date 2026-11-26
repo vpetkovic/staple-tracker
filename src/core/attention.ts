@@ -52,6 +52,8 @@ import { insertEvent } from "./event-log.js";
 import { Hub } from "./hub.js";
 import { holdingCrossBlockers } from "./hub-cross-blockers.js";
 import { isGoalRunGate } from "./milestones.js";
+import { databaseFile, readDriver } from "./run-attachment.js";
+import { runName } from "./run-references.js";
 import { LIVE_RUN_STATES } from "./run-store.js";
 import type { Run, RunStopReason } from "./run-store.js";
 import type { WorkspaceStore } from "./store.js";
@@ -88,6 +90,8 @@ export interface AttentionRow {
   runId: string | null;
   /** Set on a cloud-conflict row. */
   conflictId: string | null;
+  /** A cloud-conflict row's two values, as values (the detail line truncates them); null on every other row. */
+  conflict: AttentionConflict | null;
   title: string;
   /** One line saying why it waits: "awaiting VP", "held by eng-1 · silent 2h". */
   detail: string;
@@ -97,6 +101,14 @@ export interface AttentionRow {
   action: AttentionAction;
   /** A person may take it off the list without acting on it. */
   dismissible: boolean;
+}
+
+/** What two devices disagree about: one field of one record, and each side's value. */
+export interface AttentionConflict {
+  entity: string;
+  field: string;
+  localValue: unknown;
+  remoteValue: unknown;
 }
 
 /** What a kind's collector gets: one workspace, read at one instant. */
@@ -112,10 +124,11 @@ export interface AttentionContext {
   isPerson(name: string): boolean;
 }
 
-type RowDraft = Omit<AttentionRow, "key" | "workspace" | "kind" | "label" | "ageSeconds" | "dismissible" | "runId" | "conflictId"> & {
+type RowDraft = Omit<AttentionRow, "key" | "workspace" | "kind" | "label" | "ageSeconds" | "dismissible" | "runId" | "conflictId" | "conflict"> & {
   id: string;
   runId?: string;
   conflictId?: string;
+  conflict?: AttentionConflict;
 };
 
 export interface AttentionKindSpec {
@@ -340,13 +353,47 @@ export const ATTENTION_KINDS = [
           id: run.id,
           runId: run.id,
           ref: run.scope.kind === "queue" ? null : run.scope.identifier,
-          title: run.scope.kind === "queue" ? `Autopilot run by ${run.actor} over the queue` : `Autopilot run by ${run.actor}`,
-          detail: `stopped: ${REASON_WORDS[run.stop.reason] ?? run.stop.reason}`,
+          title: runName(context.store, run),
+          detail: `stopped: ${REASON_WORDS[run.stop.reason] ?? run.stop.reason} · run by ${run.actor}`,
           since: run.endedAt,
           action: { verb: "inspect", label: "Inspect", command: `staple run status ${run.id} ${ws(context)}` },
         });
       }
       return rows;
+    },
+  },
+  {
+    /**
+     * A live run whose `staple run drive` process on this machine ended without detaching
+     * (crashed, killed, the machine slept through it): the run is still live and takes nothing,
+     * and nothing else says so. A run with no driver at all is not one (a stop hook or a person
+     * keeps it going), nor is a driver on another machine, whose process this one cannot see.
+     * It holds until a driver attaches again or a person stops the run.
+     */
+    kind: "run_stalled",
+    label: "Autopilot runs whose driver stopped",
+    dismissible: false,
+    collect: (context) => {
+      const dbFile = databaseFile(context.store.db);
+      return context.store
+        .runs()
+        .list({ all: true })
+        .filter((run) => LIVE_RUN_STATES.includes(run.state))
+        .flatMap((run) => {
+          const driver = readDriver(dbFile, run.id);
+          if (driver?.alive !== false) return [];
+          return [
+            {
+              id: run.id,
+              runId: run.id,
+              ref: run.scope.kind === "queue" ? null : run.scope.identifier,
+              title: runName(context.store, run),
+              detail: `its ${driver.agent} driver stopped responding; it takes nothing until a driver attaches or it is stopped · run by ${run.actor}`,
+              since: driver.heartbeatAt || run.updatedAt,
+              action: { verb: "inspect" as const, label: "Inspect", command: `staple run status ${run.id} ${ws(context)}` },
+            },
+          ];
+        });
     },
   },
   {
@@ -390,6 +437,7 @@ export const ATTENTION_KINDS = [
         return {
           id: conflict.id,
           conflictId: conflict.id,
+          conflict: { entity: conflict.entity, field: conflict.field, localValue: conflict.localValue, remoteValue: conflict.remoteValue },
           ref: issue?.identifier ?? null,
           title: issue ? issue.title : `${conflict.entity} ${conflict.entityId}`,
           detail: `${conflict.field}: ${shortValue(conflict.localValue)} here, ${shortValue(conflict.remoteValue)} on another device`,
@@ -484,7 +532,7 @@ export function workspaceAttention(
   };
   const rows: AttentionRow[] = [];
   for (const spec of ATTENTION_KINDS as readonly AttentionKindSpec[]) {
-    for (const { id, runId, conflictId, ...draft } of spec.collect(context)) {
+    for (const { id, runId, conflictId, conflict, ...draft } of spec.collect(context)) {
       rows.push({
         key: `${workspace}/${spec.kind}/${id}`,
         workspace,
@@ -492,6 +540,7 @@ export function workspaceAttention(
         label: spec.label,
         runId: runId ?? null,
         conflictId: conflictId ?? null,
+        conflict: conflict ?? null,
         ...draft,
         ageSeconds: secondsBetween(draft.since, now),
         dismissible: spec.dismissible,

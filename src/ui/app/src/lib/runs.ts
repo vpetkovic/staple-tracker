@@ -11,9 +11,12 @@
  * took and has not recorded yet, keyed by workspace and issue id. A run that ended holds
  * nothing (core settles its open ticket), so its rows wear no badge.
  */
-import { createContext, useContext } from "react";
+import { createContext, useCallback, useContext } from "react";
+import { AuthError, getRun } from "./api";
 import { isLiveRun } from "./run-text";
+import { useSession } from "./session";
 import type { RunEntry } from "./types";
+import { useResource } from "./useStaple";
 
 /** How a row is on autopilot: its own ticket, the scope a run works, or a folded parent of a ticket. */
 export type AutopilotMark =
@@ -123,4 +126,76 @@ export function useRuns(): RunsState {
 /** The live run working this issue, or null. */
 export function useRunClaim(workspace: string, issueId: string): RunEntry | null {
   return useRuns().claimed.get(claimKey(workspace, issueId)) ?? null;
+}
+
+/**
+ * The run the Autopilot page shows when its address names none (a wide page's second pane):
+ * the newest live run, else the newest run. Shown, never written to the address: the address
+ * says what the reader chose, and the reader chose the page.
+ */
+export function defaultRun(entries: readonly RunEntry[]): RunEntry | null {
+  return entries.find((entry) => isLiveRun(entry.run)) ?? entries[0] ?? null;
+}
+
+export interface RunRead {
+  /** The run, or null: no id, still loading, or not found (`error` says which). */
+  entry: RunEntry | null;
+  error: Error | undefined;
+  loading: boolean;
+}
+
+/**
+ * ONE RUN BY ID, for `?view=autopilot&run=`. The page's own read when it lists the run, so a
+ * listed run follows the poll with every other surface; otherwise `/api/run`, which serves
+ * an ended run past the list's limit and, on a hub, finds the workspace that holds it (a
+ * link carries only the id). That read follows the poll too. An unknown id is a 404 in
+ * `error`. What a previous id loaded is never answered for the next.
+ */
+export function useRunEntry(runId: string | null, onAuthError: (error: AuthError) => void): RunRead {
+  const { entries } = useRuns();
+  const { version } = useSession();
+  const listed = runId === null ? null : (entries.find((entry) => entry.run.id === runId) ?? null);
+  const fetch = runId !== null && listed === null;
+  // Each answer names the id it answers, the refusal included, so a link followed after a
+  // not-found one is not told the first was not found while its own read is under way.
+  const load = useCallback(
+    (): Promise<RunAnswer | null> =>
+      fetch && runId !== null
+        ? getRun({ id: runId }).then(
+            (entry): RunAnswer => ({ id: runId, entry, error: undefined }),
+            (error: unknown): RunAnswer => {
+              if (error instanceof AuthError) throw error;
+              return { id: runId, entry: null, error: error instanceof Error ? error : new Error(String(error)) };
+            },
+          )
+        : Promise.resolve(null),
+    [fetch, runId],
+  );
+  const fetched = useResource(load, [fetch, runId, version], onAuthError);
+  if (runId === null) return { entry: null, error: undefined, loading: false };
+  if (listed) return { entry: listed, error: undefined, loading: false };
+  return runAnswerFor(runId, fetched.data ?? null);
+}
+
+interface RunAnswer {
+  id: string;
+  entry: RunEntry | null;
+  error: Error | undefined;
+}
+
+/** What the read says about `runId`: its answer when it is the one for this id, else still loading. */
+export function runAnswerFor(runId: string, answer: RunAnswer | null): RunRead {
+  if (answer === null || answer.id !== runId) return { entry: null, error: undefined, loading: true };
+  return { entry: answer.entry, error: answer.error, loading: false };
+}
+
+/**
+ * The identifier a run's ticket has NOW, from the one the run recorded when it took it: a
+ * renumber from another device moves it, and the old number may name another issue since.
+ * Joined through the ticket's issueId and the entry's `issues`; the recorded one when the
+ * issue is gone (the detail then says so).
+ */
+export function currentRef(entry: Pick<RunEntry, "run" | "issues">, recorded: string): string {
+  const ticket = entry.run.tickets.find((candidate) => candidate.identifier === recorded);
+  return (ticket && entry.issues.find((issue) => issue.issueId === ticket.issueId)?.identifier) ?? recorded;
 }

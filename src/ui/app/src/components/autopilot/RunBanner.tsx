@@ -23,13 +23,14 @@
 import { Bot, ChevronRight } from "lucide-react";
 import { bannerLine, driverText, liveStateText, nextText, progress, progressText, scopeText, stopRuleText } from "@/lib/run-text";
 import { useRuns } from "@/lib/runs";
-import { openRunHistory } from "@/lib/shell-events";
+import { useOptionalSession } from "@/lib/session";
 import type { RunEntry } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { RunStatePill, StopRunButton } from "./RunParts";
 
 /** The rail's card for one live run. */
 export function RunCard({ entry, showWorkspace = false, onNavigate }: { entry: RunEntry; showWorkspace?: boolean; onNavigate?: () => void }) {
+  const session = useOptionalSession();
   const { run, facts, decision, driver } = entry;
   const state = liveStateText(entry);
   const counted = progress(run, facts);
@@ -68,7 +69,7 @@ export function RunCard({ entry, showWorkspace = false, onNavigate }: { entry: R
           data-run-details={run.id}
           onClick={() => {
             onNavigate?.();
-            openRunHistory({ runId: run.id });
+            session?.openRun(run.id);
           }}
           className="inline-flex h-8 items-center gap-0.5 rounded-md px-2 text-label text-text-secondary hover:bg-surface-hover hover:text-foreground focus-ring pointer-coarse:h-11"
         >
@@ -85,6 +86,7 @@ export function RunCard({ entry, showWorkspace = false, onNavigate }: { entry: R
  * one live run says how many more; the line opens the history, which lists them all.
  */
 export function RunStrip() {
+  const session = useOptionalSession();
   const { live } = useRuns();
   const entry = live[0];
   if (!entry) return null;
@@ -98,7 +100,7 @@ export function RunStrip() {
     <div data-run-strip={entry.run.id} className="flex shrink-0 flex-wrap items-center gap-2 border-t bg-card py-1 pr-2 pl-1.5">
       <button
         type="button"
-        onClick={() => openRunHistory({ runId: entry.run.id })}
+        onClick={() => session?.openRun(entry.run.id)}
         aria-label={`${line}. ${state.text}. Show autopilot runs`}
         className={cn("flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 text-left focus-ring-inset active:bg-surface-hover")}
       >

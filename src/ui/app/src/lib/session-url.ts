@@ -11,7 +11,8 @@
  *
  * Readable on purpose: one parameter per filter dimension, repeated for each value (so a
  * label with a comma in it survives), `q` for the search box, `done=1` when finished work
- * is shown, `focus` for the milestone the Milestones view was pointed at. `ws` absent means
+ * is shown, `focus` for the milestone the Milestones view was pointed at, `run` for the run
+ * the Autopilot page is on (`?view=autopilot&run=<run id>`). `ws` absent means
  * every workspace. `view` is the one parameter the app ALWAYS writes, and its presence is
  * what says "this address describes a page": a bare `/` (a fresh tab, the printed launch
  * URL) says nothing, and the page then opens on what this browser last remembered.
@@ -32,7 +33,9 @@ import { VIEWS, type ViewName } from "./session";
 export const VIEW_SLUGS: Record<ViewName, string> = {
   tree: "tasks",
   queue: "queue",
-  attention: "attention",
+  // Called Inbox; `?view=attention` (the internal id, and its old address) still lands here.
+  attention: "inbox",
+  autopilot: "autopilot",
   graph: "graph",
   milestones: "milestones",
   plan: "plan",
@@ -50,7 +53,7 @@ export function viewFromSlug(slug: string | null): ViewName | null {
   return slug === null ? null : (SLUG_TO_VIEW.get(slug.toLowerCase()) ?? null);
 }
 
-export const URL_PARAMS = { ws: "ws", view: "view", text: "q", done: "done", focus: "focus" } as const;
+export const URL_PARAMS = { ws: "ws", view: "view", text: "q", done: "done", focus: "focus", run: "run" } as const;
 
 /** The Graph's own shareable layout parameter (views/graph/graph-share.ts). Kept only on the Graph. */
 export const GRAPH_PARAM = "graph";
@@ -67,6 +70,8 @@ export interface ShellUrlState {
   filters: FilterState;
   /** The milestone the Milestones view is pointed at, or null. */
   focus: string | null;
+  /** The run the Autopilot page is on (its full id), or null: the page, or any other view. */
+  run: string | null;
 }
 
 /**
@@ -95,6 +100,7 @@ export function readShellUrl(search: string): ShellUrlState | null {
       showDone: params.get(URL_PARAMS.done) === "1",
     },
     focus: params.get(URL_PARAMS.focus) || null,
+    run: view === "autopilot" ? params.get(URL_PARAMS.run)?.trim() || null : null,
   };
 }
 
@@ -123,8 +129,25 @@ export function withShellState(href: string, state: ShellUrlState, options: { pl
   if (state.filters.text.trim() !== "") next.set(URL_PARAMS.text, state.filters.text);
   if (state.filters.showDone) next.set(URL_PARAMS.done, "1");
   if (state.focus) next.set(URL_PARAMS.focus, state.focus);
+  // A run belongs to the Autopilot page: it is never written onto another view's address.
+  if (state.run && view === "autopilot") next.set(URL_PARAMS.run, state.run);
   for (const [key, value] of extra) next.append(key, value);
   url.search = next.toString();
+  return url.toString();
+}
+
+/**
+ * The address of one run on the Autopilot page, from the address the page is on: the same
+ * workspace and every other feature's parameters, the view and the run set, and no open
+ * ticket (the page is the run, not the ticket behind it). For a real link (open in a new
+ * tab, copy); a click navigates with `session.openRun`, which writes the same address.
+ */
+export function runHref(href: string, runId: string): string {
+  const url = new URL(href);
+  const params = url.searchParams;
+  for (const key of ["issue", "issue-ws", GRAPH_PARAM, "plan-lens", URL_PARAMS.focus, URL_PARAMS.text, URL_PARAMS.done, ...dimensionIds()]) params.delete(key);
+  params.set(URL_PARAMS.view, VIEW_SLUGS.autopilot);
+  params.set(URL_PARAMS.run, runId);
   return url.toString();
 }
 
@@ -133,14 +156,15 @@ export function withShellState(href: string, state: ShellUrlState, options: { pl
  * workspace, so switching from Graph on `staple` lands on Graph on `pinecone` — with that
  * workspace's own remembered filters (filters are kept per workspace and view, see
  * lib/view-prefs.ts). A milestone focus does not travel: it names a milestone of the
- * workspace you left, and pointing the new workspace's plan at it would show nothing.
+ * workspace you left, and pointing the new workspace's plan at it would show nothing. Nor
+ * does a run, for the same reason.
  */
 export function afterWorkspaceSwitch(
   current: Pick<ShellUrlState, "view">,
   target: string,
   filtersFor: (ws: string, view: ViewName) => FilterState,
 ): ShellUrlState {
-  return { ws: target, view: current.view, focus: null, filters: filtersFor(target, current.view) };
+  return { ws: target, view: current.view, focus: null, run: null, filters: filtersFor(target, current.view) };
 }
 
 /**
@@ -151,5 +175,6 @@ export function afterWorkspaceSwitch(
  */
 export function isNavigation(before: ShellUrlState | null, after: ShellUrlState): boolean {
   if (before === null) return false;
-  return before.ws !== after.ws || before.view !== after.view;
+  // Opening a run and going back to the runs are places too: Back from a run returns to the list.
+  return before.ws !== after.ws || before.view !== after.view || before.run !== after.run;
 }

@@ -847,11 +847,12 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/queue/reorder",
       "/api/revisions",
       /**
-       * Autopilot runs (design/runs.md): the page watches and stops, nothing more. One read
-       * (plural, GET-only) and three verbs under the singular prefix, the milestone
-       * family's shape; no start and no continue, which only an agent does.
-       * `test/ui-runs.test.ts` pins them.
+       * Autopilot runs (design/runs.md): the page watches and stops, nothing more. Two reads
+       * (`/api/runs` the list, `/api/run` one run by id for a link to it, both GET-only) and
+       * three verbs under the singular prefix, the milestone family's shape; no start and no
+       * continue, which only an agent does. `test/ui-runs.test.ts` pins them.
        */
+      "/api/run",
       "/api/run/pause",
       "/api/run/resume",
       "/api/run/stop",
