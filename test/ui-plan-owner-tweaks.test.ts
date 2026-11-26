@@ -93,7 +93,10 @@ for (const width of [1280, 390]) {
       expect(await strip.getAttribute("class")).toContain("staple-detail-tabstrip");
       if (width === 390) await page.locator("[data-plan-column-tab]").nth(1).click();
       await page.locator('[data-plan-lens="timeline"]').click();
-      await page.getByRole("textbox", { name: "Filter ideas", exact: true }).fill("Merchant");
+      // The filter folds behind a button when the Plan container is narrower than 1100px.
+      const filter = page.getByRole("textbox", { name: "Filter the plan", exact: true });
+      if (!(await filter.isVisible())) await page.locator("[data-plan-search-toggle]").click();
+      await filter.fill("Merchant");
       const frame = page.locator("[data-plan-timeline-frame]");
       await frame.waitFor();
       await page.locator(`[data-plan-timeline-row="${idea}"] button`).last().click();
@@ -106,7 +109,7 @@ for (const width of [1280, 390]) {
       await goView(page, "plan", width);
       await page.locator('[aria-label="Issue detail"]').waitFor();
       await expect.poll(() => page.locator('[data-plan-lens="timeline"]').getAttribute("aria-selected")).toBe("true");
-      expect(await page.locator('input[aria-label="Filter ideas"]').inputValue()).toBe("Merchant");
+      expect(await page.locator('input[aria-label="Filter the plan"]').inputValue()).toBe("Merchant");
       await expect.poll(() => frame.evaluate(el => Math.round(el.scrollTop))).toBe(Math.round(position.top));
       await expect.poll(() => frame.evaluate(el => Math.round(el.scrollLeft))).toBe(Math.round(position.left));
       await page.reload();
