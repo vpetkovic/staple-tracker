@@ -243,7 +243,7 @@ describe("a mark judged while another device edits the criteria", () => {
     await everyDevice(a, b, (device) => {
       const goal = device.store.milestones().get(milestone).goal;
       expect(goal.criteria.map((criterion) => criterion.verdict)).toEqual(["unknown", "unknown"]);
-      expect(goal.cleared).toEqual([{ criterion: "C", verdict: "met", markedBy: "bob", markedAt: expect.any(String) }]);
+      expect(goal.cleared).toEqual([{ criterion: "C", verdict: "met", markedBy: "bob", markedAt: expect.any(String), reason: "removed" }]);
     });
     // Rewriting the list with a new criterion at the orphan's old position does not inherit it as
     // a reword: the edit clears it and says so.
@@ -280,6 +280,76 @@ describe("a mark judged while another device edits the criteria", () => {
         ["B", "unknown"],
         ["C", "met"],
         ["D", "unmet"],
+      ]);
+    });
+  });
+
+  it("keeps the later of two judgements of one criterion and reports the earlier, never as a reword of another", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const a = fleet.machine("a");
+    a.use();
+    a.store.addKind({ id: "milestone", label: "Milestone" });
+    const created = a.store.milestones().create({ title: "October", acceptanceCriteria: ["A", "B", "C", "D"] }, "alice");
+    if (created.preview) throw new Error("unreachable");
+    const milestone = created.milestone.id;
+    await a.sync();
+    const b = fleet.machine("b");
+    await b.sync();
+    await tick();
+    a.use();
+    a.store.updateIssue(milestone, { removeCriteria: [1] }, "alice");
+    a.store.milestones().markCriterion(milestone, 2, { verdict: "unmet", evidence: ["C is not done"] }, "alice");
+    await tick();
+    b.use();
+    // Still on [A,B,C,D]: C is position 3 here, and this judgement is the later one.
+    b.store.milestones().markCriterion(milestone, 3, { verdict: "met", evidence: ["C shipped"] }, "bob");
+    await settle(a, b);
+    await everyDevice(a, b, (device) => {
+      const goal = device.store.milestones().get(milestone).goal;
+      expect(goal.criteria.map((criterion) => [criterion.text, criterion.verdict, criterion.markedBy, criterion.why])).toEqual([
+        ["B", "unknown", null, "not marked yet"],
+        ["C", "met", "bob", null],
+        ["D", "unknown", null, "not marked yet"],
+      ]);
+      expect(goal.cleared).toEqual([{ criterion: "C", verdict: "unmet", markedBy: "alice", markedAt: expect.any(String), reason: "superseded" }]);
+    });
+    // Judging D lands on D, and bob's judgement of C stands.
+    a.use();
+    a.store.milestones().markCriterion(milestone, 3, { verdict: "unmet", evidence: ["D not started"] }, "alice");
+    await settle(a, b);
+    expect(listConflicts(a.db).filter((conflict) => conflict.entity === "milestone")).toEqual([]);
+    await everyDevice(a, b, (device) => {
+      expect(device.store.milestones().get(milestone).goal.criteria.map((criterion) => [criterion.text, criterion.verdict, criterion.markedBy])).toEqual([
+        ["B", "unknown", null],
+        ["C", "met", "bob"],
+        ["D", "unmet", "alice"],
+      ]);
+    });
+  });
+
+  it("marking a criterion leaves a mark that reads elsewhere stored where it is, so it cannot conflict with a judgement of that one", async () => {
+    const { a, b, milestone } = await threeCriteria();
+    await tick();
+    b.use();
+    b.store.milestones().markCriterion(milestone, 3, { verdict: "met", evidence: ["C shipped"] }, "bob");
+    await tick();
+    a.use();
+    a.store.updateIssue(milestone, { removeCriteria: [1] }, "alice");
+    await settle(a, b);
+    // Bob's mark is stored at 3 and reads on C at 2. Alice judges B while bob re-judges C.
+    await tick();
+    a.use();
+    a.store.milestones().markCriterion(milestone, 1, { verdict: "met", evidence: ["B done"] }, "alice");
+    await tick();
+    b.use();
+    b.store.milestones().markCriterion(milestone, 2, { verdict: "unmet", evidence: ["C regressed"] }, "bob");
+    await settle(a, b);
+    expect(listConflicts(a.db).filter((conflict) => conflict.entity === "milestone")).toEqual([]);
+    expect(listConflicts(b.db).filter((conflict) => conflict.entity === "milestone")).toEqual([]);
+    await everyDevice(a, b, (device) => {
+      expect(device.store.milestones().get(milestone).goal.criteria.map((criterion) => [criterion.text, criterion.verdict])).toEqual([
+        ["B", "met"],
+        ["C", "unmet"],
       ]);
     });
   });

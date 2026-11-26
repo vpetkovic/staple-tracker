@@ -154,16 +154,24 @@ export function isGoalMet(counts: GoalCounts): boolean {
  * by position, and a device that edits the criteria moves the marks it holds; a mark judged
  * concurrently on another device still lands by its old position, where its words may no longer
  * be. So a mark reads by its words, the same rule an edit moves marks by
- * (`followCriterionMarks`): on its own position while that still holds its words, else on the
- * first position that holds them and no other mark, else on its own position as a reword
- * (reading unknown there). A mark left with no position (its criterion was removed, or its
- * position now holds a mark that moved there) is `cleared`. A function of the stored state alone,
- * so every device, a fresh one included, reads the same marks once they hold the same rows.
+ * (`followCriterionMarks`):
+ *
+ *  1. on its own position while that still holds its words;
+ *  2. else on the first position that holds them and no other mark;
+ *  3. else, when its words are a criterion that already holds a mark, it is a second judgement
+ *     of that criterion, made concurrently on another device: the later one (`markedAt`) reads
+ *     there and the earlier one is `superseded`. It is never read as a reword of another one;
+ *  4. else (its words are no criterion now) on its own position as a reword, reading unknown
+ *     there, while that position is in the list and holds no other mark;
+ *  5. else it is `cleared`: its criterion was removed.
+ *
+ * A function of the stored state alone, so every device, a fresh one included, reads the same
+ * marks once they hold the same rows.
  */
-export function placeCriterionMarks<T extends Pick<CriterionMark, "position" | "criterion">>(
+export function placeCriterionMarks<T extends Pick<CriterionMark, "position" | "criterion" | "markedAt" | "markedBy">>(
   criteria: readonly string[],
   marks: Iterable<T>,
-): { placed: Map<number, T>; cleared: T[] } {
+): { placed: Map<number, T>; superseded: T[]; cleared: T[] } {
   const ordered = [...marks].sort((a, b) => a.position - b.position);
   const placed = new Map<number, T>();
   const rest: T[] = [];
@@ -171,18 +179,39 @@ export function placeCriterionMarks<T extends Pick<CriterionMark, "position" | "
     if (criteria[mark.position - 1] === mark.criterion) placed.set(mark.position, mark);
     else rest.push(mark);
   }
+  const later = (a: T, b: T): boolean =>
+    a.markedAt !== b.markedAt ? a.markedAt > b.markedAt : a.markedBy !== b.markedBy ? a.markedBy > b.markedBy : a.position > b.position;
+  const superseded: T[] = [];
   const reworded: T[] = [];
   for (const mark of rest) {
     const index = criteria.findIndex((text, i) => text === mark.criterion && !placed.has(i + 1));
-    if (index >= 0) placed.set(index + 1, mark);
-    else reworded.push(mark);
+    if (index >= 0) {
+      placed.set(index + 1, mark);
+      continue;
+    }
+    // Its criterion is there but holds a mark already: the later judgement reads, against the
+    // earliest holder when the words stand more than once.
+    let held: number | null = null;
+    criteria.forEach((text, i) => {
+      if (text !== mark.criterion) return;
+      if (held === null || later(placed.get(held)!, placed.get(i + 1)!)) held = i + 1;
+    });
+    if (held === null) {
+      reworded.push(mark);
+    } else if (later(mark, placed.get(held)!)) {
+      superseded.push(placed.get(held)!);
+      placed.set(held, mark);
+    } else {
+      superseded.push(mark);
+    }
   }
   const cleared: T[] = [];
   for (const mark of reworded) {
     if (mark.position <= criteria.length && !placed.has(mark.position)) placed.set(mark.position, mark);
     else cleared.push(mark);
   }
-  return { placed, cleared };
+  superseded.sort((a, b) => a.position - b.position);
+  return { placed, superseded, cleared };
 }
 
 // ---------- marks across a criteria edit ----------

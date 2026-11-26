@@ -3,6 +3,7 @@ import { openDb } from "../src/core/db.js";
 import { migrateWorkspace } from "../src/core/schema.js";
 import { MILESTONE_KIND, type MilestoneProgress } from "../src/core/milestones.js";
 import {
+  placeCriterionMarks,
   goalCounts,
   goalPace,
   isGoalMet,
@@ -590,5 +591,29 @@ describe("a run over a milestone is a goal run", () => {
     expect(gateOf(m)).toMatchObject({ state: "pending", requestedBy: "vp" });
     // A person's pending gate is not replaced by another person.
     expect(refused(() => store.gateIssue(m, { owner: "Other" }, "other"), "conflict").message).toContain("already gated");
+  });
+});
+
+describe("where a stored mark reads", () => {
+  const mark = (position: number, criterion: string, markedAt: string, markedBy = "x") => ({ position, criterion, markedAt, markedBy });
+  const read = (criteria: string[], marks: ReturnType<typeof mark>[]) => {
+    const { placed, superseded, cleared } = placeCriterionMarks(criteria, marks);
+    return {
+      placed: Object.fromEntries([...placed].map(([at, m]) => [at, `${m.criterion}@${m.markedAt}`])),
+      superseded: superseded.map((m) => `${m.criterion}@${m.markedAt}`),
+      cleared: cleared.map((m) => `${m.criterion}@${m.markedAt}`),
+    };
+  };
+  it("follows its words to the criterion an edit moved, and stays in place as a reword when they are gone", () => {
+    expect(read(["B", "C"], [mark(3, "C", "t1")])).toEqual({ placed: { 2: "C@t1" }, superseded: [], cleared: [] });
+    expect(read(["A", "B2"], [mark(2, "B", "t1")])).toEqual({ placed: { 2: "B@t1" }, superseded: [], cleared: [] });
+    expect(read(["A", "B"], [mark(3, "C", "t1")])).toEqual({ placed: {}, superseded: [], cleared: ["C@t1"] });
+  });
+  it("reads the later of two judgements of one criterion, and never reads one as a reword of another", () => {
+    // [A,B,C,D] became [B,C,D]: one device judged C at 2 after the edit, the other at 3 before it.
+    expect(read(["B", "C", "D"], [mark(2, "C", "t1"), mark(3, "C", "t2")])).toEqual({ placed: { 2: "C@t2" }, superseded: ["C@t1"], cleared: [] });
+    expect(read(["B", "C", "D"], [mark(2, "C", "t2"), mark(3, "C", "t1")])).toEqual({ placed: { 2: "C@t2" }, superseded: ["C@t1"], cleared: [] });
+    // Two criteria with the same words keep a mark each.
+    expect(read(["X", "X"], [mark(1, "X", "t1"), mark(2, "X", "t2")])).toEqual({ placed: { 1: "X@t1", 2: "X@t2" }, superseded: [], cleared: [] });
   });
 });

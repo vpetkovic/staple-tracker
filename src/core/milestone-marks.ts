@@ -82,22 +82,33 @@ function rewriteMarks(
   return fields;
 }
 
+/** The held marks in the shape `placeCriterionMarks` reads, each carrying its stored value. */
+function readable(held: ReadonlyMap<number, CriterionMarkValue>) {
+  return [...held].map(([position, value]) => ({ position, criterion: value.criterion, markedAt: value.markedAt, markedBy: value.markedBy, value }));
+}
+
 /**
- * Store each mark where it reads (`placeCriterionMarks`) before a mark is written at a position,
- * so the write cannot land on a mark that reads elsewhere: a mark judged on another device by an
- * old position moves to its criterion. A mark that reads on no criterion stays stored (and
- * reported) unless it sits where a moved mark now goes; a criteria edit clears it. Returns the
- * fields that changed, for the journal.
+ * Before a mark is written at `position`, move the mark stored there to where it reads
+ * (`placeCriterionMarks`) when that is elsewhere, so the write cannot land on it: a mark judged on
+ * another device by an old position stays on its criterion. Only then are the marks rewritten
+ * where they read, so a write that lands on its own criterion's mark (or on an empty position)
+ * touches no other field and cannot conflict on a criterion nobody touched. A mark that reads on
+ * no criterion, or was superseded, stays stored (and reported) unless a moved mark now goes where
+ * it sits; a criteria edit clears it. Returns the fields that changed, for the journal.
  */
 export function placeMarksBeforeMark(
   db: DatabaseSync,
   issueId: string,
   criteria: readonly string[],
+  position: number,
 ): Record<string, CriterionMarkValue | null> {
   const held = heldMarks(db, issueId);
-  const { placed, cleared } = placeCriterionMarks(criteria, [...held].map(([position, value]) => ({ position, criterion: value.criterion, value })));
-  const next = new Map([...placed].map(([position, mark]) => [position, mark.value] as const));
-  for (const mark of cleared) if (!next.has(mark.position)) next.set(mark.position, mark.value);
+  const there = held.get(position);
+  if (there === undefined) return {};
+  const { placed, superseded, cleared } = placeCriterionMarks(criteria, readable(held));
+  if (placed.get(position)?.value === there) return {};
+  const next = new Map([...placed].map(([at, mark]) => [at, mark.value] as const));
+  for (const mark of [...superseded, ...cleared]) if (!next.has(mark.position)) next.set(mark.position, mark.value);
   return rewriteMarks(db, issueId, held, next);
 }
 
@@ -105,8 +116,8 @@ export function placeMarksBeforeMark(
  * Carry an issue's marks across an edit of its criteria (`followCriterionMarks` decides where each
  * goes), from where each reads now (`placeCriterionMarks`): the rows are rewritten here, and what
  * changed comes back as the fields a milestone update journals (`criterion<n>`, null where a
- * position lost its mark), so every device moves them alike. A mark that read on no criterion
- * before the edit is cleared by it, and named in `moves.cleared`.
+ * position lost its mark), so every device moves them alike. A mark that read on no criterion, or
+ * was superseded, before the edit is cleared by it, and named in `moves.cleared`.
  */
 export function followMarksAcrossEdit(
   db: DatabaseSync,
@@ -116,13 +127,13 @@ export function followMarksAcrossEdit(
   positions?: ReadonlyMap<number, number | null>,
 ): { moves: CriterionMarkMoves; fields: Record<string, CriterionMarkValue | null> } {
   const held = heldMarks(db, issueId);
-  const reading = placeCriterionMarks(before, [...held].map(([position, value]) => ({ position, criterion: value.criterion, value })));
+  const reading = placeCriterionMarks(before, readable(held));
   const placedMarks = [...reading.placed].map(([position, mark]) => ({ position, criterion: mark.criterion, verdict: mark.value.verdict, value: mark.value }));
   const { moves, placement } = followCriterionMarks(before, after, placedMarks, positions);
   const byPosition = new Map(placedMarks.map((mark) => [mark.position, mark.value] as const));
   const next = new Map<number, CriterionMarkValue>();
   for (const [from, to] of placement) if (to !== null) next.set(to, byPosition.get(from)!);
-  for (const mark of reading.cleared) moves.cleared.push({ criterion: mark.criterion, verdict: mark.value.verdict, position: mark.position });
+  for (const mark of [...reading.superseded, ...reading.cleared]) moves.cleared.push({ criterion: mark.criterion, verdict: mark.value.verdict, position: mark.position });
   moves.cleared.sort((a, b) => a.position - b.position);
   return { moves, fields: rewriteMarks(db, issueId, held, next) };
 }

@@ -1324,8 +1324,9 @@ function WorkspaceMilestones({ workspace, onAuthError }: { workspace: string; on
     />
   );
 
-  // No milestone listed: the list pane already says why and what to do; the right pane stays quiet.
-  const detailPane = sorted.length === 0 && list.data !== undefined ? null : !selectedRef ? (
+  // No milestone listed and none asked for: the list pane already says why and what to do; the
+  // right pane stays quiet. A focused milestone the list does not carry still shows.
+  const detailPane = sorted.length === 0 && list.data !== undefined && !selectedRef ? null : !selectedRef ? (
     desk ? (
       <PlainEmptyState compact icon={Milestone} title="Pick a milestone">
         Choose one on the left to see what is in it and how far it has got.
