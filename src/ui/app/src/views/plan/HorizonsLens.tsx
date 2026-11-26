@@ -3,7 +3,7 @@
  * the shipped mark and the horizon's Queue and Run. Each column draws its horizon's plan as one
  * tree; a top row is framed as its delivery card.
  */
-import { CalendarPlus, ChevronDown, ChevronRight, ListPlus, MoreHorizontal, Plus, SlidersHorizontal, Trash2, X } from "lucide-react";
+import { CalendarPlus, ChevronDown, ChevronRight, ListPlus, Milestone, MoreHorizontal, Plus, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -275,9 +275,11 @@ export function AddHorizon({ write }: { write: Write }) {
   };
   if (!open) {
     return (
-      <Button variant="outline" size="sm" className="h-8" onClick={() => setOpen(true)} data-plan-add-horizon>
-        <Plus aria-hidden />
-        Horizon
+      // On a phone-width toolbar it is an icon beside the pills, still named in words.
+      <Button variant="outline" size="sm" className="h-8 @max-[620px]/plan:w-8 @max-[620px]/plan:px-0" aria-label="Add a horizon" title="Add a horizon" onClick={() => setOpen(true)} data-plan-add-horizon>
+        <Plus aria-hidden className="@max-[620px]/plan:hidden" />
+        <Milestone aria-hidden className="hidden @max-[620px]/plan:block" />
+        <span className="@max-[620px]/plan:sr-only">Horizon</span>
       </Button>
     );
   }
