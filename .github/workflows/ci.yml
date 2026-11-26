@@ -11,9 +11,11 @@ permissions:
   contents: read
 
 # A newer push to a pull request makes the older run's result worthless, so it is
-# cancelled. Pushes to master are never cancelled: each one gets its full run.
+# cancelled. Pushes to master are never cancelled: each run is its own group (run_id),
+# because a shared group keeps only one pending run and would drop the middle one of
+# three quick pushes even without cancel-in-progress.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # The jobs below run in parallel and none waits on another, except the last one,

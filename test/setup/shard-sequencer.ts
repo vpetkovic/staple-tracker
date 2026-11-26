@@ -10,8 +10,8 @@
  * duration-aware split, so this sequencer supplies one.
  *
  * Every shard computes the same assignment from the same inputs, so every file runs
- * in exactly one shard: files are ordered by weight, heaviest first, then by the
- * same path hash vitest uses, and each goes to the shard with the least weight so
+ * in exactly one shard: files are ordered by weight, heaviest first, then by a hash
+ * of the path, as vitest's own split does, and each goes to the shard with the least weight so
  * far. The weights are only a balance hint. A file missing from the table counts as
  * DEFAULT_SECONDS, a stale entry costs balance and nothing else, and correctness does
  * not depend on any of the numbers.
