@@ -75,8 +75,9 @@ staple budget live [on|off] [--yes]                                     live pol
 staple budget unsetup [--yes] | status | collect [--max-files N]
 staple budget forget <reading-id>... [--yes]       remove wrong readings; without --yes only the preview (exit 2)
 
-staple attempt pause|resume|milestone|interrupt <ref> [--reason R] [-m label] [--role R | --attempt ID]
-                                                    report on the attempt you hold
+staple attempt pause|resume|milestone|heartbeat|interrupt <ref> [--reason R] [-m label] [--role R | --attempt ID]
+                                                    report on the attempt you hold; heartbeat keeps the claim
+                                                    from reading as silent (machine-local, no event)
 staple attempt open|end <ref> --role orchestrator   coordinate an issue without claiming it (orchestrationSeconds)
 staple attempt reconstruct                          rebuild attempts from events recorded before them
 staple attempts <ref> [--limit N] [--cursor C]      every attempt on the issue, as it reads now
