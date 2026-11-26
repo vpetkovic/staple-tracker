@@ -1,8 +1,8 @@
 /// <reference lib="dom" />
 /**
  * The Horizons outline in a real browser: the rows are one tab stop that the arrow keys walk and
- * fold, a refused rename keeps its editor open and writes once, and a drag marks only the
- * sections the idea's state may be moved to.
+ * fold, a refused rename keeps its editor open and writes once, a drag marks only the
+ * sections the idea's state may be moved to, and the header's small controls take a phone tap.
  */
 import { once } from "node:events";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
@@ -45,6 +45,8 @@ beforeAll(async () => {
   first = plan.capture({ title: "Card payments", maturity: "shaped", plan: READY_PLAN, horizon: launch.id, parent }, "Mira", person).id;
   second = plan.capture({ title: "Refunds", maturity: "shaped", plan: READY_PLAN, horizon: launch.id, parent }, "Mira", person).id;
   solo = plan.capture({ title: "Audit trail", maturity: "shaped", plan: READY_PLAN, horizon: launch.id }, "Mira", person).id;
+  // A dated horizon, so its header offers "clear" beside the first one's "add a date".
+  plan.updateHorizon(next.id, { date: "2099-03-05" }, "Mira", person);
   ws.store.db.close();
   ui = startUiServer({ port: 0, hub: true });
   await once(ui.server, "listening");
@@ -56,8 +58,8 @@ afterAll(async () => {
   if (home) rmSync(home, { recursive: true, force: true });
 });
 
-async function onHorizons(): Promise<{ page: Page; close: () => Promise<void> }> {
-  const context = await browser.newContext({ viewport: { width: 1280, height: 844 } });
+async function onHorizons(width = 1280): Promise<{ page: Page; close: () => Promise<void> }> {
+  const context = await browser.newContext({ viewport: { width, height: 844 } });
   const page = await context.newPage();
   page.setDefaultTimeout(5000);
   await page.goto(route("&ws=larkspur&plan-lens=horizons"));
@@ -148,5 +150,38 @@ it("marks during a drag only the sections the idea may move to, and clears them 
     await rail.waitFor({ state: "detached" });
   } finally {
     await close();
+  }
+}, 30_000);
+
+it("gives the header's fold, name, clear and add a date a tap area of at least 32px on a phone", async () => {
+  for (const width of [320, 414]) {
+    const { page, close } = await onHorizons(width);
+    try {
+      const controls = {
+        fold: `[data-plan-horizon-fold="${launch.identifier}"]`,
+        name: `[data-plan-horizon="${launch.identifier}"] h2 button`,
+        date: `[data-plan-horizon-date="${launch.identifier}"]`,
+        clear: `[data-plan-horizon-clear-date]`,
+      };
+      for (const [name, selector] of Object.entries(controls)) {
+        // A tap 16px either side of the control's centre still lands on it.
+        const reach = await page.locator(selector).first().evaluate((control) => {
+          const box = control.getBoundingClientRect();
+          const x = box.left + box.width / 2;
+          const y = box.top + box.height / 2;
+          const hits = (px: number, py: number) => document.elementFromPoint(px, py)?.closest("button") === control;
+          return { above: hits(x, y - 15.5), below: hits(x, y + 15.5), height: Math.round(box.height) };
+        });
+        expect(reach, `${name} at ${width}px`).toMatchObject({ above: true, below: true });
+      }
+      const fold = await page.locator(controls.fold).evaluate((control) => {
+        const box = control.getBoundingClientRect();
+        const y = box.top + box.height / 2;
+        return document.elementFromPoint(box.left + box.width / 2 + 15.5, y)?.closest("button") === control;
+      });
+      expect(fold, `fold sideways at ${width}px`).toBe(true);
+    } finally {
+      await close();
+    }
   }
 }, 30_000);

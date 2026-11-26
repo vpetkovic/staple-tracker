@@ -3,7 +3,8 @@
  * `HorizonSummary` with the inline rename and date editors, and on the right Queue, the run
  * setting and the `⋯` menu (only the `⋯` under 760px of the Plan container; the menu holds Queue
  * and the run setting too, as the horizon's offered actions). Every action is one the horizon's
- * state offers.
+ * state offers. Under 760px each small control (the fold, the name, clear, add a date) takes a
+ * 32px tap without changing how it looks.
  */
 import { CalendarPlus, ChevronDown, ChevronRight, ListPlus, MoreHorizontal, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -78,7 +79,7 @@ export function HorizonHeader({
                 aria-label={`${folded ? "Show" : "Hide"} ${horizon.name}`}
                 data-plan-horizon-fold={horizon.identifier}
                 onClick={onFold}
-                className="focus-ring -ml-1 inline-flex size-5 min-h-0 shrink-0 self-center items-center justify-center rounded text-text-tertiary hover:bg-surface-hover"
+                className="focus-ring relative -ml-1 inline-flex size-5 min-h-0 shrink-0 self-center items-center justify-center rounded text-text-tertiary hover:bg-surface-hover @max-[760px]/plan:before:absolute @max-[760px]/plan:before:-inset-1.5 @max-[760px]/plan:before:content-['']"
               >
                 {folded ? <ChevronRight className="size-3.5" aria-hidden /> : <ChevronDown className="size-3.5" aria-hidden />}
               </button>
@@ -88,7 +89,7 @@ export function HorizonHeader({
             ) : (
               <h2 className="m-0 min-w-0 text-title font-semibold">
                 {canRename ? (
-                  <button type="button" className="focus-ring min-h-0 max-w-full truncate rounded-sm text-left" onClick={() => setRenaming(true)} title="Rename">
+                  <button type="button" className="focus-ring min-h-0 max-w-full truncate rounded-sm text-left @max-[760px]/plan:-my-[5px] @max-[760px]/plan:py-[5px]" onClick={() => setRenaming(true)} title="Rename">
                     {horizon.name}
                   </button>
                 ) : (
@@ -116,13 +117,13 @@ export function HorizonHeader({
                 <>
                   <HorizonWhen date={horizon.date} today={today} />
                   {canDate ? (
-                    <button type="button" className="focus-ring flex min-h-6 items-center gap-0.5 rounded-sm underline-offset-2 hover:underline" onClick={() => void write("horizon-update", { ref: horizon.id, date: null })} aria-label={`Clear ${horizon.name} date`} data-plan-horizon-clear-date={horizon.identifier}>
+                    <button type="button" className="focus-ring flex min-h-6 items-center gap-0.5 rounded-sm underline-offset-2 hover:underline @max-[760px]/plan:-my-1 @max-[760px]/plan:min-h-8" onClick={() => void write("horizon-update", { ref: horizon.id, date: null })} aria-label={`Clear ${horizon.name} date`} data-plan-horizon-clear-date={horizon.identifier}>
                       <X className="size-3" aria-hidden /> clear
                     </button>
                   ) : null}
                 </>
               ) : canDate ? (
-                <button type="button" className="focus-ring flex min-h-6 items-center gap-1 rounded-sm underline-offset-2 hover:underline" onClick={() => setDating(true)} data-plan-horizon-date={horizon.identifier}>
+                <button type="button" className="focus-ring flex min-h-6 items-center gap-1 rounded-sm underline-offset-2 hover:underline @max-[760px]/plan:-my-1 @max-[760px]/plan:min-h-8" onClick={() => setDating(true)} data-plan-horizon-date={horizon.identifier}>
                   <CalendarPlus className="size-3" aria-hidden /> add a date
                 </button>
               ) : null}
