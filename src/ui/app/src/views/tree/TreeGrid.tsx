@@ -47,7 +47,7 @@ import {
   TaskRowLine,
   type TaskRow,
 } from "@/components/task-list";
-import { clampIndex, useRovingFocus } from "@/components/task-list/roving";
+import { clampIndex, onRowItself, useRovingFocus } from "@/components/task-list/roving";
 import type { RowMenuControl } from "@/components/task-list/TaskRowLine";
 import { useRowPlan } from "@/components/task-list/useRowPlan";
 import "@/components/task-list/task-list.css";
@@ -698,6 +698,7 @@ export function TreeGrid({
         }
 
         case "Enter":
+          if (!onRowItself(event)) return;
           event.preventDefault();
           if (item.kind === "group") expansion.toggleGroup(item.group);
           else openIssue(item.row);
@@ -705,7 +706,7 @@ export function TreeGrid({
 
         case " ":
           // The other half of the ghost's selection guard — see `extendTo` above.
-          if (item.kind !== "row" || item.row.ghost) return;
+          if (item.kind !== "row" || item.row.ghost || !onRowItself(event)) return;
           event.preventDefault();
           toggleSelect(item.row.issue.id);
           return;

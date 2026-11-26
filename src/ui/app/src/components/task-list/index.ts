@@ -26,7 +26,7 @@ export { StatusIcon } from "./StatusIcon";
  * `TaskList` were its only callers, and a third caller in another domain is exactly the
  * moment it stops being one.
  */
-export { useRovingFocus, clampIndex, type RovingFocus } from "./roving";
+export { useRovingFocus, clampIndex, onRowItself, type RovingFocus } from "./roving";
 /**
  * O1b (STA-125). Exported because the row is not the only surface with kinds on it: the
  * graph canvas draws one per node and O4b left an `EpicKindMark` placeholder for it. That

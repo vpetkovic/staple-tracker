@@ -33,7 +33,7 @@ import { TaskRowLine } from "./TaskRowLine";
 import { resolveTaskListConfig, type TaskListDensity, type TaskListPreset } from "./config";
 import { useRowPlan } from "./useRowPlan";
 import { flatRow, type TaskRow, type TaskSource } from "./model";
-import { clampIndex, useRovingFocus } from "./roving";
+import { clampIndex, onRowItself, useRovingFocus } from "./roving";
 import "./task-list.css";
 
 export function TaskList({
@@ -98,6 +98,7 @@ export function TaskList({
           return;
         case "Enter":
         case " ": {
+          if (!onRowItself(event)) return;
           event.preventDefault();
           const row = placed[index]!;
           onOpen(row.workspace, row.issue.identifier);

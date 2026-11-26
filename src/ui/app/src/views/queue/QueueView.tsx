@@ -88,6 +88,7 @@ import type { RowMenuControl } from "@/components/task-list/TaskRowLine";
 import { useRowPlan } from "@/components/task-list/useRowPlan";
 import {
   clampIndex,
+  onRowItself,
   resolveTaskListConfig,
   TaskRowLine,
   useRovingFocus,
@@ -468,9 +469,7 @@ function QueueRowList({
               } else if (event.key === "ArrowUp") {
                 event.preventDefault();
                 focus.go(at(index - 1));
-              } else if ((event.key === "Enter" || event.key === " ") && event.target === event.currentTarget) {
-                // Only a key on the row itself: Enter on the row's `⋯` (or inside its menu,
-                // whose events bubble here through the portal) belongs to that control.
+              } else if ((event.key === "Enter" || event.key === " ") && onRowItself(event)) {
                 event.preventDefault();
                 onOpen(identifier);
               }
