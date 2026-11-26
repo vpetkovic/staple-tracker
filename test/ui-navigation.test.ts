@@ -1,10 +1,10 @@
 /// <reference lib="dom" />
 /**
- * Navigation behaviour that only a browser can show: where keyboard focus goes when the rail
- * is hidden or shown, whether the phone drawer keeps focus inside itself, whether the theme
- * follows the system until a person picks one, what the rail's Tasks row means once a
- * project has narrowed the list, and where choosing a workspace from Usage lands. None of this is visible to a string
- * render (no jsdom in this suite), so this drives the built page.
+ * Navigation behaviour that only a browser can show: whether the theme follows the system
+ * until a person picks one, what the rail's Tasks row means once a project has narrowed the
+ * list, whether a poll that hangs stops the page refreshing, and where choosing a workspace
+ * from Usage lands. None of this is visible to a string render (no jsdom in this suite), so
+ * this drives the built page.
  */
 import { once } from "node:events";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
@@ -30,7 +30,7 @@ let projectId: string;
 let dbPath: string;
 
 beforeAll(async () => {
-  home = mkdtempSync(join(tmpdir(), "staple-nav-focus-"));
+  home = mkdtempSync(join(tmpdir(), "staple-navigation-"));
   process.env.STAPLE_HOME = home;
   const ws = initWorkspace({ global: true, slug: "navfocus" });
   ws.store.createIssue({ title: "A task to list" });
@@ -52,7 +52,6 @@ afterAll(async () => {
 });
 
 const DESK = { viewport: { width: 1440, height: 900 } } satisfies BrowserContextOptions;
-const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true } satisfies BrowserContextOptions;
 
 /** Opens the single-workspace page on Tasks, or `at.search` on `at.server` (the hub page), and waits for `at.ready`. */
 async function withPage(
@@ -71,14 +70,6 @@ async function withPage(
     await context.close();
   }
 }
-
-/** The focused element's accessible name, or "BODY" when focus has fallen out of the page's controls. */
-const focused = (page: Page) =>
-  page.evaluate(() => {
-    const element = document.activeElement;
-    if (!element || element === document.body) return "BODY";
-    return element.getAttribute("aria-label") ?? element.textContent?.trim() ?? element.tagName;
-  });
 
 describe("the theme", () => {
   const stored = (page: Page) => page.evaluate(() => localStorage.getItem("staple:theme"));
