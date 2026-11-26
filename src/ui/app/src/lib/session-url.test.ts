@@ -154,6 +154,14 @@ describe("the Inbox and the Autopilot page", () => {
     expect(new URL(withShellState(onRun, state({ view: "autopilot" }))).searchParams.has("run")).toBe(false);
   });
 
+  it("makes opening a milestone, moving to another and going back to the list a step Back returns from", () => {
+    const list = state({ ws: "staple", view: "milestones" });
+    expect(isNavigation(list, { ...list, focus: "STA-1" })).toBe(true);
+    expect(isNavigation({ ...list, focus: "STA-1" }, { ...list, focus: "STA-2" })).toBe(true);
+    expect(isNavigation({ ...list, focus: "STA-1" }, list)).toBe(true);
+    expect(isNavigation({ ...list, focus: "STA-1" }, { ...list, focus: "STA-1", filters: filters({ showDone: true }) })).toBe(false);
+  });
+
   it("makes going from the list to a run, from a run to the list, and between runs a step Back returns from", () => {
     const list = state({ view: "autopilot" });
     expect(isNavigation(list, { ...list, run: "a" })).toBe(true);

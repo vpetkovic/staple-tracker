@@ -18,6 +18,7 @@ import {
   NOT_QUEUED_LABEL,
   progressLabel,
   riskLabels,
+  selectedMilestone,
   sortMilestones,
   SPLIT_MIN_WIDTH_PX,
   STATE_PRESENTATION,
@@ -271,5 +272,26 @@ describe("visibleMilestones", () => {
   it("keeps the milestone the page is pointed at listed, finished or not", () => {
     expect(visibleMilestones([open, done], false).rows.map((r) => r.milestone.identifier)).toEqual(["STA-1"]);
     expect(visibleMilestones([open, done], false, [null, "STA-2"])).toMatchObject({ rows: [open, done], hiddenFinished: 0 });
+  });
+});
+
+describe("selectedMilestone", () => {
+  const first = listRow({ milestone: { identifier: "STA-1", state: "active" } });
+  const second = listRow({ milestone: { identifier: "STA-2", state: "active" } });
+  const all = [first, second];
+  it("is the address's focus, so a focus that changes while the page is open is what it shows", () => {
+    expect(selectedMilestone({ focus: "STA-1", all, listed: all, fillPane: true })).toBe("STA-1");
+    expect(selectedMilestone({ focus: "STA-2", all, listed: all, fillPane: true })).toBe("STA-2");
+    // Still loading: the focus stands rather than flashing the first row.
+    expect(selectedMilestone({ focus: "STA-2", all: undefined, listed: [], fillPane: true })).toBe("STA-2");
+  });
+  it("is nothing on a stacked page with no focus, so Back to the list stays on the list", () => {
+    expect(selectedMilestone({ focus: null, all, listed: all, fillPane: false })).toBeNull();
+  });
+  it("falls to the first listed milestone where an empty pane would say nothing, also past a focus that names none", () => {
+    expect(selectedMilestone({ focus: null, all, listed: all, fillPane: true })).toBe("STA-1");
+    expect(selectedMilestone({ focus: "STA-9", all, listed: all, fillPane: true })).toBe("STA-1");
+    expect(selectedMilestone({ focus: "STA-9", all, listed: all, fillPane: false })).toBeNull();
+    expect(selectedMilestone({ focus: null, all: [], listed: [], fillPane: true })).toBeNull();
   });
 });

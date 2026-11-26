@@ -207,19 +207,21 @@ export interface StapleSession {
   setView: (view: ViewName) => void;
 
   /**
-   * THE MILESTONE THE PAGE IS POINTED AT — R4c (STA-188).
+   * THE MILESTONE THE PAGE IS ON — R4c (STA-188), `?view=milestones&focus=<identifier>`.
    *
    * `focusMilestone` is one navigation primitive, exactly like `open` below: it switches to
    * the Milestones view AND records which milestone the reader asked for, so a row's
    * milestone marker can send somebody to the plan it names rather than to whichever
-   * milestone happened to sort first.
+   * milestone happened to sort first. It is also how the view itself selects one, and with
+   * null goes back to the list: the focus IS the selected milestone, so every change is a
+   * history step (`isNavigation`) and Back and Forward walk the milestones opened.
    *
    * It lives here for the reason `view` does — the row that dispatches it, the header tabs
    * and the palette must all drive navigation without any one of them owning it. Cleared to
    * `null` on any other view switch, so a stale focus cannot outlive the trip.
    */
   milestoneFocus: string | null;
-  focusMilestone: (ref: string) => void;
+  focusMilestone: (ref: string | null) => void;
 
   /**
    * THE RUN THE AUTOPILOT PAGE IS ON — `?view=autopilot&run=<run id>`, null on the page

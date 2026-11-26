@@ -513,7 +513,7 @@ export function App() {
     setView(next);
   }, []);
 
-  const focusMilestone = useCallback((ref: string) => {
+  const focusMilestone = useCallback((ref: string | null) => {
     setMilestoneFocus(ref);
     setRun(null);
     setView("milestones");
