@@ -51,7 +51,7 @@ const SECTION_FLAGS = new Set(["--done", "--next", "--files"]);
  * own options, so a forgotten value is still refused rather than swallowing `--json`.
  */
 function sectionArgs(args: readonly string[]): string[] {
-  const own = (word: string) => word === "-h" || (word.startsWith("--") && word.slice(2).split("=", 1)[0]! in OPTIONS);
+  const own = (word: string) => word === "-h" || (word.startsWith("--") && Object.hasOwn(OPTIONS, word.slice(2).split("=", 1)[0]!));
   const out: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const word = args[i]!;
