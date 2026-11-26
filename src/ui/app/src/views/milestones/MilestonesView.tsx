@@ -1154,7 +1154,6 @@ function WorkspaceMilestones({ workspace, onAuthError }: { workspace: string; on
   // row's milestone marker, Back and Forward all move it, and a reload lands on it.
   const selectedRef = selectedMilestone({
     focus: session.milestoneFocus,
-    all: list.data,
     listed: sorted,
     fillPane: layout === "split" || fullScreen,
   });

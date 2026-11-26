@@ -278,20 +278,19 @@ describe("visibleMilestones", () => {
 describe("selectedMilestone", () => {
   const first = listRow({ milestone: { identifier: "STA-1", state: "active" } });
   const second = listRow({ milestone: { identifier: "STA-2", state: "active" } });
-  const all = [first, second];
+  const listed = [first, second];
   it("is the address's focus, so a focus that changes while the page is open is what it shows", () => {
-    expect(selectedMilestone({ focus: "STA-1", all, listed: all, fillPane: true })).toBe("STA-1");
-    expect(selectedMilestone({ focus: "STA-2", all, listed: all, fillPane: true })).toBe("STA-2");
-    // Still loading: the focus stands rather than flashing the first row.
-    expect(selectedMilestone({ focus: "STA-2", all: undefined, listed: [], fillPane: true })).toBe("STA-2");
+    expect(selectedMilestone({ focus: "STA-1", listed, fillPane: true })).toBe("STA-1");
+    expect(selectedMilestone({ focus: "STA-2", listed, fillPane: true })).toBe("STA-2");
+    // Not listed (an undated horizon, or a list still loading): still that one, never another.
+    expect(selectedMilestone({ focus: "STA-9", listed, fillPane: true })).toBe("STA-9");
+    expect(selectedMilestone({ focus: "STA-9", listed: [], fillPane: false })).toBe("STA-9");
   });
   it("is nothing on a stacked page with no focus, so Back to the list stays on the list", () => {
-    expect(selectedMilestone({ focus: null, all, listed: all, fillPane: false })).toBeNull();
+    expect(selectedMilestone({ focus: null, listed, fillPane: false })).toBeNull();
   });
-  it("falls to the first listed milestone where an empty pane would say nothing, also past a focus that names none", () => {
-    expect(selectedMilestone({ focus: null, all, listed: all, fillPane: true })).toBe("STA-1");
-    expect(selectedMilestone({ focus: "STA-9", all, listed: all, fillPane: true })).toBe("STA-1");
-    expect(selectedMilestone({ focus: "STA-9", all, listed: all, fillPane: false })).toBeNull();
-    expect(selectedMilestone({ focus: null, all: [], listed: [], fillPane: true })).toBeNull();
+  it("is the first listed milestone with no focus where an empty pane would say nothing", () => {
+    expect(selectedMilestone({ focus: null, listed, fillPane: true })).toBe("STA-1");
+    expect(selectedMilestone({ focus: null, listed: [], fillPane: true })).toBeNull();
   });
 });

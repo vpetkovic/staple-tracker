@@ -424,20 +424,19 @@ export function layoutFor(widthPx: number): MilestonesLayout {
  * Which milestone the page shows, from the address's focus (`session.milestoneFocus`, which
  * selecting, Back and Forward all write). Derived, never stored: a focus that changes while
  * the page is open (a row's milestone marker, a drawer link, Back) is what the page shows.
- * The focus while the list is still loading or names a listed milestone; else, where an empty
- * detail pane would say nothing (a split layout, or full screen), the first listed one; else
- * none, and a stacked page shows the list.
+ * The focus always, listed or not (an undated horizon is not listed with planning on): a link
+ * to a milestone shows it, or says it is not there, and never quietly shows another. With no
+ * focus, where an empty detail pane would say nothing (a split layout, or full screen), the
+ * first listed one; else none, and a stacked page shows the list.
  */
 export function selectedMilestone<T extends Pick<MilestoneListRow, "milestone">>(input: {
   focus: string | null;
-  /** Every milestone read, finished ones included; undefined while the list loads. */
-  all: readonly T[] | undefined;
   /** The ones listed (`visibleMilestones`). */
   listed: readonly T[];
   fillPane: boolean;
 }): string | null {
-  const { focus, all, listed, fillPane } = input;
-  if (focus && (all === undefined || all.some((row) => row.milestone.identifier === focus))) return focus;
+  const { focus, listed, fillPane } = input;
+  if (focus) return focus;
   return fillPane ? (listed[0]?.milestone.identifier ?? null) : null;
 }
 
