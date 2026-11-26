@@ -41,9 +41,15 @@ interface SubtreeRow {
 /**
  * The subtree set of each given ticket that has a visible child, keyed by its id. A ticket
  * without one is absent from the map. Pull requests that cannot be drawn are listed all the
- * same: what a surface draws is its own choice (`rowPullRequests`).
+ * same: what a surface draws is its own choice (`rowPullRequests`). A caller that has already
+ * read the workspace's pull requests (`ExternalLinkStore.pullRequests()`) passes them as
+ * `linked`, and the subtree walk is the only query.
  */
-export function subtreePullRequestsFor(store: WorkspaceStore, rootIds: readonly string[]): Map<string, SubtreePullRequest[]> {
+export function subtreePullRequestsFor(
+  store: WorkspaceStore,
+  rootIds: readonly string[],
+  linked?: ReadonlyMap<string, readonly LinkedPullRequest[]>,
+): Map<string, SubtreePullRequest[]> {
   const result = new Map<string, SubtreePullRequest[]>();
   if (rootIds.length === 0) return result;
   const hideIdeas = store.planningOn() ? 0 : 1;
@@ -64,7 +70,7 @@ export function subtreePullRequestsFor(store: WorkspaceStore, rootIds: readonly 
     .all(JSON.stringify([...new Set(rootIds)]), hideIdeas, hideIdeas) as unknown as SubtreeRow[];
   if (rows.length === 0) return result;
 
-  const linked = store.externalLinks().pullRequests([...new Set(rows.map((row) => row.id))]);
+  const byTicket = linked ?? store.externalLinks().pullRequests([...new Set(rows.map((row) => row.id))]);
   let root: string | null = null;
   let byResource = new Map<string, SubtreePullRequest>();
   const finish = () => {
@@ -77,7 +83,7 @@ export function subtreePullRequestsFor(store: WorkspaceStore, rootIds: readonly 
       byResource = new Map();
     }
     const ticket = { id: row.id, identifier: row.identifier, title: row.title };
-    for (const pr of linked.get(row.id) ?? []) {
+    for (const pr of byTicket.get(row.id) ?? []) {
       const entry = byResource.get(pr.resourceId);
       if (entry) {
         if (!entry.tickets.some((t) => t.id === row.id)) entry.tickets.push(ticket);

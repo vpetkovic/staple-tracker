@@ -4036,9 +4036,10 @@ export function startUiServer(options: UiOptions): UiHandle {
           const worklogs = h.store.worklogSummaryFor(ids);
           const externalSummaries = h.store.externalLinks().summaries();
           // The row's pull request badge (PrBadge): every linked pull request, one query. A
-          // parent's badge draws its subtree's set instead, two queries for every parent on the page.
+          // parent's badge draws its subtree's set instead: one subtree walk for every parent
+          // on the page, over the same pull request read.
           const pullRequests = h.store.externalLinks().pullRequests();
-          const subtreePullRequests = subtreePullRequestsFor(h.store, ids);
+          const subtreePullRequests = subtreePullRequestsFor(h.store, ids, pullRequests);
           /**
            * O6 (STA-138): what each row is waiting on, and what is waiting on it.
            *

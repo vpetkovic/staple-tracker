@@ -17,7 +17,7 @@
  * background of the web UI's poll, where an error has nowhere to go.
  */
 import type { WorkspaceStore } from "../store.js";
-import type { SubtreePullRequest } from "../subtree-pull-requests.js";
+import { type SubtreePullRequest, subtreePullRequestsFor } from "../subtree-pull-requests.js";
 import { type TicketBranch, ticketBranches } from "../ticket-branch.js";
 import { StapleError } from "../types.js";
 import type { ConnectionHealthSnapshot, ConnectionState, ExternalItem } from "./contracts.js";
@@ -93,8 +93,12 @@ export async function discoverPullRequests(deps: DiscoveryDependencies, refs?: r
   };
   // Every open ticket's live linked pull requests are read again, branch or not; only the branch lookup needs one.
   const live = (pr: LinkedPullRequest) => pr.providerId === "github" && (pr.state === null || pr.state === "open" || pr.state === "draft");
+  // A finished child's pull requests are drawn on its open parent (subtree-pull-requests.ts), so
+  // they are read again while any ancestor is open. Discovery links only to open tickets, so
+  // what finished descendants carry is the same before and after the branch lookup.
   const linkedBefore = links.pullRequests();
-  if (working.length === 0 && !issues.some((issue) => (linkedBefore.get(issue.id) ?? []).some(live))) {
+  const drawnOnParents = [...subtreePullRequestsFor(store, issues.map((issue) => issue.id), linkedBefore).values()].flat();
+  if (working.length === 0 && !issues.some((issue) => (linkedBefore.get(issue.id) ?? []).some(live)) && !drawnOnParents.some(live)) {
     report.note = refs ? "This ticket has no branch. Record one with staple branch <ref> <branch>." : null;
     return finish();
   }
@@ -188,15 +192,15 @@ export async function discoverPullRequests(deps: DiscoveryDependencies, refs?: r
   }
 
   // Every open ticket's other linked pull requests that can still change: stacked ones on another
-  // branch, ones linked by hand, ones on a ticket with no branch. Only in mapped repositories,
-  // oldest saved copy first, so a failing check is read again until it passes.
+  // branch, ones linked by hand, ones on a ticket with no branch, ones on a finished descendant
+  // of an open parent. Only in mapped repositories, each once, oldest saved copy first, so a
+  // failing check is read again until it passes.
   const linkedNow = links.pullRequests();
-  const stale = issues
-    .flatMap((issue) => linkedNow.get(issue.id) ?? [])
-    .filter(live)
+  const once = new Set<string>();
+  const stale = [...issues.flatMap((issue) => linkedNow.get(issue.id) ?? []), ...drawnOnParents]
+    .filter((pr) => live(pr) && !once.has(pr.resourceId) && once.add(pr.resourceId))
     .map((pr) => ({ pr, resource: links.resource(pr.resourceId) }))
     .filter(({ resource }) => !seen.has(`${resource.ref.host}/${resource.ref.containerId}#${resource.ref.id}`))
-    .filter((entry, index, all) => all.findIndex((other) => other.resource.id === entry.resource.id) === index)
     .sort((a, b) => (a.pr.fetchedAt ?? "").localeCompare(b.pr.fetchedAt ?? ""))
     .slice(0, REFRESH_LIMIT);
   for (const { resource } of stale) {

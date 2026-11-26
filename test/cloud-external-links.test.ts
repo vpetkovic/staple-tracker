@@ -6,6 +6,7 @@ import { listConflicts, resolveConflict } from "../src/core/cloud/conflicts.js";
 import { createBackup, restoreFromBackup, setBackupConsent } from "../src/core/cloud/backup.js";
 import { differences, stateOf } from "./fixtures/synchronized-state.js";
 import { localInventory } from "../src/core/cloud/seed.js";
+import { subtreePullRequests } from "../src/core/subtree-pull-requests.js";
 
 const REPO = "a77a0000-0000-4000-8000-000000000501";
 const item = (id = "1", kind: "issue" | "pull_request" = "issue"): ExternalItem => ({
@@ -107,4 +108,43 @@ describe("external links across devices", () => {
     expect(differences("fresh",stateOf(b.db),stateOf(fresh.db))).toEqual([]);
   }, 60_000);
 
+
+  it("gives a parent the same pull requests on a second device and on a freshly hydrated one", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const a = fleet.machine("writer"), b = fleet.machine("reader");
+    await a.sync(); await b.sync(); a.use();
+    const epic = a.store.createIssue({ title: "Epic", kind: "epic" });
+    const one = a.store.createIssue({ title: "One", parent: epic.id });
+    const two = a.store.createIssue({ title: "Two", parent: epic.id });
+    const deep = a.store.createIssue({ title: "Deep", parent: one.id });
+    const elsewhere = a.store.createIssue({ title: "Elsewhere" });
+    const moved = a.store.createIssue({ title: "Moved", parent: elsewhere.id });
+    const links = a.store.externalLinks();
+    links.link(epic.id, item("1", "pull_request"), "writer");
+    links.link(deep.id, item("2", "pull_request"), "writer");
+    links.link(two.id, item("2", "pull_request"), "writer");
+    links.link(two.id, item("3", "pull_request"), "writer");
+    links.link(moved.id, item("4", "pull_request"), "writer");
+    const gone = links.link(one.id, item("5", "pull_request"), "writer");
+    links.unlink(one.id, gone.resource.id, "writer");
+    a.store.updateIssue(moved.identifier, { parent: epic.identifier }, "writer");
+    a.store.updateIssue(two.identifier, { status: "cancelled" }, "writer");
+    links.shareContext(links.find(item("3", "pull_request").ref)!.id, true, "writer");
+    const shape = (machine: typeof a) => subtreePullRequests(machine.store, epic.id)!.map((p) => [p.key, p.own, p.tickets.map((t) => t.identifier)]);
+    const written = shape(a);
+    expect(written).toEqual([
+      ["team/repo#1", true, [epic.identifier]],
+      ["team/repo#2", false, [deep.identifier, two.identifier]],
+      ["team/repo#3", false, [two.identifier]],
+      ["team/repo#4", false, [moved.identifier]],
+    ]);
+    await a.sync(); await b.sync();
+    const fresh = fleet.machine("fresh"); await fresh.sync();
+    for (const machine of [b, fresh]) {
+      machine.use();
+      expect(shape(machine)).toEqual(written);
+      // The state is the writer's private read unless shared: unknown here, the shared one read.
+      expect(subtreePullRequests(machine.store, epic.id)!.map((p) => p.state)).toEqual([null, null, "open", null]);
+    }
+  }, 60_000);
 });
