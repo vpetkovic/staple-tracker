@@ -41,7 +41,7 @@ const entry = (n: number, patch: Partial<PullRequestEntry> = {}): PullRequestEnt
 });
 
 describe("subtreeEntry", () => {
-  it("reads the server's pull request: key, url, title, own and tickets carried over", () => {
+  it("reads the server's pull request: key, url, title, own, tickets and where it lives carried over", () => {
     const tickets = [prTicket("ACME-2", "id-ACME-2")];
     const e = subtreeEntry(subtreePr(7, { own: true, tickets, checks: "passing" }));
     expect(e).toEqual({
@@ -54,6 +54,8 @@ describe("subtreeEntry", () => {
       failing: [],
       own: true,
       tickets,
+      ref: { providerId: "github", host: "github.com", scopeId: "host", containerId: "acme/shop", id: "7", kind: "pull_request" },
+      fetchedAt: "2026-11-24T11:00:00Z",
     });
   });
 
@@ -93,9 +95,13 @@ describe("linkEntry", () => {
 });
 
 describe("rowEntry", () => {
-  it("keys a row's pull request by its number and treats one without tickets as the row's own", () => {
+  it("keys a row's pull request by the repository in its URL and treats one without tickets as the row's own", () => {
     const e = rowEntry(rowPr(12, "open", { checks: "pending" }));
-    expect(e).toMatchObject({ id: "https://github.com/acme/shop/pull/12", key: "#12", state: "open", checks: "pending", own: true, tickets: [] });
+    expect(e).toMatchObject({ id: "https://github.com/acme/shop/pull/12", key: "acme/shop#12", state: "open", checks: "pending", own: true, tickets: [] });
+  });
+
+  it("keys a row's pull request by its number alone when the URL names no repository", () => {
+    expect(rowEntry(rowPr(12, "open", { url: "https://example.test/12" })).key).toBe("#12");
   });
 
   it("is the row's own only when its tickets name the row", () => {
@@ -217,9 +223,7 @@ describe("shortKeys", () => {
     expect(shown(["#1", "#22"])).toEqual(["#1", "#22"]);
   });
 
-  // DEFECT: a row's ref has no key, so `rowEntry` keys it `#n` and a parent row's card cannot
-  // tell a stray repository's pull request apart: the detail's card says `admin#88`, the row's `#88`.
-  it.fails("keys a row's pull request from another repository apart, as the detail's card does", () => {
+  it("keys a row's pull request from another repository apart, as the detail's card does", () => {
     const refs = [rowPr(31), rowPr(30), rowPr(88, "open", { url: "https://github.com/acme/admin/pull/88" })];
     const entries = refs.map((ref) => rowEntry(ref, "ACME-P"));
     expect([...shortKeys(entries).values()]).toEqual(["#31", "#30", "admin#88"]);

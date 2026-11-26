@@ -23,7 +23,7 @@ import { leadingTone, linkTone, shortKey, stateLabel } from "./link-state";
 import { countLabel, LinkHoverCard, SingleLinkCard } from "./LinkHoverCard";
 import { ItemGlyph, LinkGlyph } from "./parts";
 import { ChecksMark, PullRequestCard, PullRequestTally } from "./PullRequestParts";
-import { checksWords, descendantEntries, entryTone, linkEntry, otherTickets, subtreeEntries, tallyOf, tallyWords, type PullRequestEntry } from "./pull-requests";
+import { checksWords, descendantEntries, entryTone, linkEntry, otherTickets, subtreeEntries, tallyOf, tallyParts, tallyWords, type PullRequestEntry } from "./pull-requests";
 
 const MAX_CHIPS = 4;
 
@@ -190,7 +190,8 @@ function SubtreeRollup({ detail, entries }: { detail: IssueDetail; entries: Pull
   return (
     <LinkHoverCard
       data-subtree-rollup=""
-      aria-label={`In tasks inside: ${tallyWords(tally)}`}
+      // The name opens with the words on screen, so saying them reaches the control.
+      aria-label={`${heading}, pull requests: ${tallyParts(tally)}`}
       cardLabel={`Pull requests in tasks inside`}
       className={cn(CHIP, HIT, "max-w-full gap-2 text-text-secondary")}
       card={(close) => (

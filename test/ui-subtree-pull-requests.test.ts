@@ -90,7 +90,8 @@ async function openDetail(page: Page, ref: string) {
 const desk = () => browser.newContext({ viewport: { width: 1280, height: 900 } });
 const card = (page: Page) => page.locator('[data-link-card="pull-requests"]');
 const cardRows = (page: Page) => card(page).locator("[data-pr-row]").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-pr-row")));
-const ROLLUP_NAME = "In tasks inside: 4 pull requests: 1 with failing checks, 2 open, 1 draft, 1 merged";
+const ROLLUP_NAME = "4 in tasks inside, pull requests: 1 with failing checks, 2 open, 1 draft, 1 merged";
+const SECTION_NAME = "In tasks inside: 4 pull requests: 1 with failing checks, 2 open, 1 draft, 1 merged";
 /** The descendants' pull requests, the ones that need a person first. */
 const INSIDE = ["acme/admin#88", "team/repo#31", "team/repo#30", "team/repo#20"];
 
@@ -160,7 +161,7 @@ describe("a parent's pull requests in the detail", () => {
       await section.waitFor();
       expect(await section.isVisible()).toBe(true);
       expect(await section.locator("[data-subtree-link]").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-subtree-link")))).toEqual(INSIDE);
-      expect(await section.getAttribute("aria-label")).toBe(ROLLUP_NAME);
+      expect(await section.getAttribute("aria-label")).toBe(SECTION_NAME);
       expect(await page.getByRole("button", { name: /^All, 5$/ }).count()).toBe(1);
       expect(await page.getByRole("button", { name: /^Pull requests, 5$/ }).count()).toBe(1);
       await page.getByRole("button", { name: /^Issues, 0$/ }).click();
@@ -200,7 +201,8 @@ describe("a parent's pull requests in the detail", () => {
       const inside = page.locator('section[aria-label="Children"]');
       const badge = (ref: string) => inside.locator(`[data-identifier="${ref}"]`).first().locator('[data-testid="pr-badge"]');
       await expect.poll(() => badge(refs.a).getAttribute("data-pr-set")).toBe("own");
-      expect(await badge(refs.a).getAttribute("aria-label")).toBe("3 pull requests: 1 open, 1 draft, 1 merged");
+      // The pending mark it draws is said too.
+      expect(await badge(refs.a).getAttribute("aria-label")).toBe("3 pull requests: 1 open, 1 draft, 1 merged, checks pending");
       expect(await badge(refs.b).getAttribute("data-pr-set")).toBe("subtree");
       expect(await badge(refs.b).getAttribute("aria-label")).toBe("3 pull requests: 1 with failing checks, 2 open, 1 draft");
       expect(await badge(refs.b).locator("[data-pr-tally]").count()).toBe(1);
@@ -239,9 +241,10 @@ describe("a parent's row", () => {
       expect(await badge.innerText()).not.toContain("#");
       await badge.click();
       await card(page).waitFor();
-      // A row's refs carry numbers only, newest first within a state (rowPullRequests), so the
-      // card keys them by number and the failing one still leads.
-      expect(await cardRows(page)).toEqual(["#88", "#31", "#10", "#30", "#20"]);
+      // A row's refs are keyed from their URLs, newest first within a state (rowPullRequests),
+      // and the failing one still leads. The other repository's is told apart on screen.
+      expect(await cardRows(page)).toEqual(["acme/admin#88", "team/repo#31", "team/repo#10", "team/repo#30", "team/repo#20"]);
+      expect(await card(page).locator("[data-pr-row] span.tabular-nums").allInnerTexts()).toEqual(["admin#88", "#31", "#10", "#30", "#20"]);
       expect(await card(page).getByText(/^5 pull requests$/).count()).toBe(1);
       await page.keyboard.press("Escape");
       await expect.poll(() => card(page).count()).toBe(0);

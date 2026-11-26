@@ -40,6 +40,7 @@ export function subtreePr(n: number, shape: PrShape & { own?: boolean; tickets?:
     state,
     title: shape.title === undefined ? `Change ${n}` : shape.title,
     checks: checksOf(shape),
+    ref: { providerId: "github", host: "github.com", scopeId: "host", containerId: repo, id: String(n), kind: "pull_request" },
     fetchedAt: "2026-11-24T11:00:00Z",
     linkedAt: "2026-11-23T00:00:00Z",
     own: shape.own ?? false,

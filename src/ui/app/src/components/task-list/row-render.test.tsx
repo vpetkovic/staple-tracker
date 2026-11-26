@@ -279,9 +279,7 @@ describe("PR badge shapes", () => {
     expect(markup).toContain('aria-haspopup="dialog"');
   });
 
-  // DEFECT: the badge draws the pending mark (worstChecks) but its name is `tallyWords`, which
-  // only ever says failing checks, so a screen reader never hears "checks pending" here.
-  it.fails("says the pending checks it marks on several of its own", () => {
+  it("says the pending checks it marks on several of its own", () => {
     const markup = badge(renderAt(undefined, [pr(9, "open"), pr(8, "open", { checks: "pending" }), pr(7, "merged")]));
     expect(markup).toContain('data-checks="pending"');
     expect(/aria-label="([^"]*)"/.exec(markup)![1]).toMatch(/pending/);

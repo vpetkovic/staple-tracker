@@ -94,12 +94,22 @@ export function linkEntry(link: ExternalLink): PullRequestEntry {
   };
 }
 
+/**
+ * A row's ref carries no key, only the number and the URL. The repository is read from the
+ * URL (`https://host/owner/repo/pull/12`), so a row's list can tell a pull request of another
+ * repository apart the way the detail's does; a URL of another shape leaves the number alone.
+ */
+function rowKey(pr: PullRequestRef): string {
+  const repository = /^https?:\/\/[^/]+\/([^/]+\/[^/]+)\/pull\/[0-9]+/.exec(pr.url)?.[1];
+  return repository ? `${repository}#${pr.number}` : `#${pr.number}`;
+}
+
 /** A task row's pull request. `tickets` are identifiers only there, so the entry's ids are the identifiers. */
 export function rowEntry(pr: PullRequestRef, ownIdentifier?: string): PullRequestEntry {
   const tickets = (pr.tickets ?? []).map((identifier) => ({ id: identifier, identifier, title: "" }));
   return {
     id: pr.url,
-    key: `#${pr.number}`,
+    key: rowKey(pr),
     url: pr.url,
     title: pr.title ?? null,
     state: pr.state,
@@ -175,11 +185,17 @@ export const segmentWords = (segment: TallySegment, count: number): string => `$
 
 export const countWords = (count: number): string => `${count} pull request${count === 1 ? "" : "s"}`;
 
+/** "1 with failing checks, 5 open, 2 draft, 2 merged": the breakdown alone; empty for an empty tally. */
+export function tallyParts(tally: PullRequestTally): string {
+  return TALLY_ORDER.filter((segment) => tally[segment] > 0)
+    .map((segment) => segmentWords(segment, tally[segment]))
+    .join(", ");
+}
+
 /** "10 pull requests: 1 with failing checks, 5 open, 2 draft, 2 merged". */
 export function tallyWords(tally: PullRequestTally): string {
-  const parts = TALLY_ORDER.filter((segment) => tally[segment] > 0).map((segment) => segmentWords(segment, tally[segment]));
-  // One pull request in one state needs no breakdown after its count unless it is in trouble.
-  return parts.length ? `${countWords(tally.total)}: ${parts.join(", ")}` : countWords(tally.total);
+  const parts = tallyParts(tally);
+  return parts ? `${countWords(tally.total)}: ${parts}` : countWords(tally.total);
 }
 
 /** "checks failing: unit, typecheck and 2 more", "checks pending"; null when there is nothing to say. */
@@ -310,6 +326,8 @@ export function childPullRequests(entries: readonly PullRequestEntry[] | undefin
   const drawn = byAttention(entries ?? [])
     .map((entry) => {
       const inside = entry.tickets.filter((ticket) => (ticket.childId === undefined ? ticket.id : ticket.childId) === childId);
+      // An entry that sits in another child is not this row's, whatever list it came in.
+      if (!inside.length) return { entry, ref: null };
       const below = inside.some((ticket) => ticket.id !== childId);
       return { entry, ref: entryRef(entry, below ? inside.map((ticket) => ticket.identifier) : undefined) };
     })

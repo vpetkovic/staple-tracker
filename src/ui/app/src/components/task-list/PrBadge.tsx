@@ -100,6 +100,8 @@ export function PrBadge({
   }
 
   const tally = rowTally(entries, counts);
+  // The tally's words name failing checks; a pending mark drawn on several of its own is said too.
+  const pending = !subtree && worstChecks(entries) === "pending" ? ", checks pending" : "";
   const shown = prs.slice(1, MAX_GLYPHS);
   const extra = prs.length - 1 - shown.length;
   return (
@@ -108,7 +110,7 @@ export function PrBadge({
       data-testid="pr-badge"
       data-pr-state={pr.state}
       data-pr-set={subtree ? "subtree" : "own"}
-      aria-label={tallyWords(tally)}
+      aria-label={`${tallyWords(tally)}${pending}`}
       cardLabel={countWords(tally.total)}
       align="end"
       card={(close) => (

@@ -86,7 +86,7 @@ describe("a parent's pull requests in the detail", () => {
     expect(html.match(/data-subtree-rollup=""/g)).toHaveLength(1);
     expect(html).not.toContain("res-acme/shop-20");
     expect(html).not.toContain("res-acme/admin-88");
-    expect(html).toContain('aria-label="In tasks inside: 3 pull requests: 1 with failing checks, 2 open, 1 draft"');
+    expect(html).toContain('aria-label="3 in tasks inside, pull requests: 1 with failing checks, 2 open, 1 draft"');
     expect(html).toMatch(/data-subtree-rollup=""[^>]*>.*?<span class="truncate">3 in tasks inside<\/span>.*?data-pr-tally=""/);
     expect(html).not.toContain(">None<");
   });
@@ -112,12 +112,11 @@ describe("a parent's pull requests in the detail", () => {
     expect(html).not.toContain(">None<");
     // One line: the roll-up sits before the add button inside the chips' row.
     expect(html).toMatch(/data-subtree-rollup=""[\s\S]*aria-label="Link pull request"[\s\S]*<\/span><\/span>$/);
-    expect(html).toContain('aria-label="In tasks inside: 3 pull requests: 1 with failing checks, 2 open, 1 draft"');
+    expect(html).toContain('aria-label="3 in tasks inside, pull requests: 1 with failing checks, 2 open, 1 draft"');
   });
 
-  // DEFECT (WCAG 2.5.3, label in name): the roll-up shows "3 in tasks inside" but is named
-  // "In tasks inside: 3 pull requests: ...", so saying what is on screen does not reach it.
-  it.fails("names the roll-up with the words it shows", () => {
+  // Label in name: saying what is on screen reaches the control.
+  it("names the roll-up with the words it shows", () => {
     const html = summary(detail({ issue: parent, externalLinks: own, subtreePullRequests: set }));
     const label = /data-subtree-rollup=""[^>]*aria-label="([^"]*)"/.exec(html)![1]!;
     expect(label.toLowerCase()).toContain("3 in tasks inside");
