@@ -95,7 +95,8 @@ describe("per-workspace pages in All workspaces", () => {
       const markup = render(page, { mode: "hub", ws: "", workspaces: THREE });
       expect(markup).toContain("data-all-milestones");
       expect(markup).not.toContain("data-choose-workspace");
-      expect(markup).toContain("Milestones in every workspace");
+      // While every workspace's list is read: the outline's skeleton, under no heading of its own.
+      expect(markup).toContain("data-milestones-loading");
       // The old tell: a page that silently read the first workspace named it.
       expect(markup).not.toMatch(/in exercises-api/);
     });

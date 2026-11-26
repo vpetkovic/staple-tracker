@@ -18,7 +18,9 @@
  *   - reorder (buttons, menu, alt+arrow), add and remove, and the queue write, land in the store;
  *   - a fold, Collapse all and Expand all survive a reload; a phone starts folded;
  *   - a `focus=` link lands on its section, a finished one on its line, a missing one says so;
- *   - every control keeps its look on a phone, with a tap of at least 32px.
+ *   - every control keeps its look on a phone, with a tap of at least 32px;
+ *   - All workspaces: each workspace's milestones read-only, whatever the Done toggle says; a
+ *     header (click, Enter, Space) or a finished line switches workspace and lands on it.
  *
  * SKIPPED, SAYING WHY, when there is no built bundle (`npm run build:ui`; the gate order
  * builds first) or no Chromium for `playwright-core` on this machine, as ui-phone-back is.
@@ -158,6 +160,17 @@ beforeAll(async () => {
   } finally {
     empty.db.close();
   }
+  // A workspace whose milestones are all finished, and one without the milestone kind.
+  const past = initWorkspace({ global: true, slug: "gamma" }).store;
+  try {
+    past.addKind({ id: MILESTONE_KIND, label: "Milestone" }, null);
+    const old = past.milestones().create({ title: "Summer cut" }, null) as MilestoneCreateResult;
+    past.updateIssue(old.milestone.id, { status: "done" }, "w");
+    refs.summer = old.milestone.identifier;
+  } finally {
+    past.db.close();
+  }
+  initWorkspace({ global: true, slug: "bare" }).store.db.close();
   ui = startUiServer({ port: 0, hub: true });
   await once(ui.server, "listening");
   token = ui.token;
@@ -521,6 +534,91 @@ describe.skipIf(Boolean(reason))("the Milestones page, pressed in a real browser
     expect(detail.gate).toMatchObject({ state: "approved" });
     // The store re-derived it from its work: open, not closed.
     expect(["done", "cancelled"]).not.toContain(detail.issue.status);
+    await context.close();
+  });
+});
+
+describe.skipIf(Boolean(reason))("All workspaces' Milestones, pressed in a real browser", () => {
+  async function openAll(viewport = { width: 1440, height: 900 }, touch = false): Promise<{ page: Page; context: BrowserContext }> {
+    const context = await browser.newContext({ viewport, ...(touch ? { hasTouch: true, isMobile: true } : {}) });
+    const page = await context.newPage();
+    await page.goto(`${origin}/?view=milestones&token=${token}`, { waitUntil: "networkidle" });
+    await page.waitForSelector("[data-milestone-group]");
+    return { page, context };
+  }
+  const header = (page: Page, ref: string) => page.locator(`[data-milestone-header-link="${ref}"]`);
+  /** The page switched to `ws` and landed on the section `ref`, marked. */
+  async function landedOn(page: Page, ws: string, ref: string): Promise<void> {
+    await page.waitForSelector(`[data-milestone-section="${ref}"][data-milestone-landed]`, { timeout: 5000 });
+    expect(new URL(page.url()).searchParams.get("ws")).toBe(ws);
+  }
+
+  it("lists each workspace with milestones, finished ones included under Done hidden, and leaves the others out", async () => {
+    const { page, context } = await openAll();
+    expect(await page.locator("[data-milestone-group]").evaluateAll((groups) => groups.map((group) => group.getAttribute("data-milestone-group")))).toEqual([WS, "gamma"]);
+    // The header's Done toggle hides finished rows; it does not decide which milestones are listed.
+    expect(await page.locator('[data-filter-done="hidden"]').count()).toBeGreaterThan(0);
+    // The store's own count, read back: the presses above close milestones as they go.
+    const states = (await get<Array<{ milestone: { state: string } }>>(`/api/milestones?ws=${WS}&all=1`)).map((row) => row.milestone.state);
+    const finished = states.filter((state) => state === "done" || state === "cancelled").length;
+    expect(finished).toBeGreaterThan(0);
+    expect(await page.locator(`[data-milestone-group="${WS}"] [data-milestone-group-counts]`).innerText()).toBe(`${states.length - finished} open · ${finished} finished`);
+    expect(await page.locator('[data-milestone-group="gamma"] [data-milestones-none-open]').innerText()).toBe("No open milestones");
+    // Read-only: no control inside a header.
+    expect(await page.locator("[data-milestone-header-link] button, [data-milestone-header-link] a").count()).toBe(0);
+    expect(await header(page, refs.order!).getAttribute("aria-label")).toBe(`Open Reorder me in ${WS}`);
+    await context.close();
+  });
+
+  it("opens a header in its workspace on a click, and lands on its section", async () => {
+    const { page, context } = await openAll();
+    await header(page, refs.order!).click();
+    await landedOn(page, WS, refs.order!);
+    await context.close();
+  });
+
+  it("opens a header from the keyboard, on Enter and on Space", async () => {
+    for (const key of ["Enter", " "]) {
+      const { page, context } = await openAll();
+      await header(page, refs.plan!).focus();
+      await page.keyboard.press(key === " " ? "Space" : key);
+      await landedOn(page, WS, refs.plan!);
+      await context.close();
+    }
+  });
+
+  it("opens a group's Finished line for the visit, and a finished line opens it in its workspace", async () => {
+    const { page, context } = await openAll();
+    const shelf = page.locator('[data-milestone-group-shelf="gamma"]');
+    expect(await shelf.getAttribute("aria-expanded")).toBe("false");
+    expect(await page.locator(`[data-milestone-finished-link="${refs.summer}"]`).count()).toBe(0);
+    await shelf.click();
+    expect(await shelf.getAttribute("aria-expanded")).toBe("true");
+    expect(await shelf.innerText()).toMatch(/Finished\s*1\s*· hide/);
+    // Per visit: a reload folds it again.
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForSelector('[data-milestone-group-shelf="gamma"]');
+    expect(await page.locator('[data-milestone-group-shelf="gamma"]').getAttribute("aria-expanded")).toBe("false");
+    await page.locator('[data-milestone-group-shelf="gamma"]').click();
+    await page.locator(`[data-milestone-finished-link="${refs.summer}"]`).click();
+    // Lands on the workspace's own shelf, opened at that milestone's line.
+    await page.waitForSelector(`[data-milestone-finished-line="${refs.summer}"]`, { timeout: 5000 });
+    expect(new URL(page.url()).searchParams.get("ws")).toBe("gamma");
+    await context.close();
+  });
+
+  it("keeps its controls' look on a phone, with no 44px box, and its headers in the phone form", async () => {
+    // A finger: the base layer's touch floor applies unless a control lifts it.
+    const { page, context } = await openAll({ width: 390, height: 844 }, true);
+    await page.locator(`[data-milestone-group-shelf="${WS}"]`).click();
+    const drawn = (selector: string) => page.locator(selector).first().evaluate((element) => element.getBoundingClientRect().height);
+    expect(await drawn(`[data-milestone-group-shelf="${WS}"]`)).toBeCloseTo(36, 0);
+    expect(await drawn(`[data-milestone-finished-link="${refs.finished}"]`)).toBeCloseTo(40, 0);
+    // A header's name line is the outline's phone line: 44px, with the percent, and the due date in the facts.
+    const order = header(page, refs.order!);
+    expect(await order.evaluate((element) => getComputedStyle(element).minHeight)).toBe("0px");
+    expect(await order.locator("> div").first().evaluate((element) => element.getBoundingClientRect().height)).toBeCloseTo(44, 0);
+    expect(await order.locator("[data-milestone-facts-due]").count()).toBe(1);
     await context.close();
   });
 });
