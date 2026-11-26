@@ -12,6 +12,8 @@
  *     the whole plan for the error until something else changed and the next read happened.
  *   - In a shared workspace a row the next pick skips because it is another member's says so,
  *     with the store's sentence, instead of reading as ready.
+ *   - A conflict whose re-read fails does not leave the older order under a banner that says
+ *     the list is the server's.
  *
  * The re-read after a write is held back by delaying `/api/poll`, which is the first thing the
  * page's refresh asks. That is the real window between a write answering and the page
@@ -266,6 +268,28 @@ describe.skipIf(Boolean(reason))("the queue page through a write", () => {
       expect(await row.innerText()).toContain(`${second} is assigned to marko, another member.`);
       // The pick is the first row the store calls eligible, past marko's.
       expect(await page.locator("[data-queue-next-ref]").innerText()).toBe(children[0]);
+      expect(errors).toEqual([]);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("does not show the older order as the server's when a conflict's re-read fails", async () => {
+    setOrder([finished, epic, first, second]);
+    const { page, context, errors } = await openQueue();
+    try {
+      await holdRereads(page);
+      // Somebody else reorders: the page still holds the older revision.
+      setOrder([finished, second, epic, first]);
+      await page.route(/\/api\/queue\?/, (route) =>
+        route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "busy", message: "The server is busy." }) }),
+      );
+      const answered = page.waitForResponse((response) => response.url().includes("/api/queue/reorder"));
+      await moveButton(page, first, "down").click();
+      expect((await answered).status()).toBe(409);
+      await page.getByText("The server is busy.").waitFor({ timeout: 5_000 });
+      expect(await page.locator("[data-queue-conflict]").count()).toBe(0);
+      expect(plan().order).toEqual([finished, second, epic, first]);
       expect(errors).toEqual([]);
     } finally {
       await context.close();

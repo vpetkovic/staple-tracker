@@ -84,7 +84,8 @@ export interface QueueSection {
   workspace: string;
   /**
    * Why there is nothing to show. Only while there is no plan on screen: a re-read that fails
-   * after the plan loaded keeps the plan, and the next successful read replaces it.
+   * after the plan loaded keeps the plan, and the next successful read replaces it. The one
+   * exception is the re-read a conflict starts, whose failure leaves no server order to show.
    */
   error: Error | undefined;
   /** The plan as last read or written, or null before the first read. */
@@ -161,9 +162,18 @@ export function useHubQueue(onAuthError: (error: AuthError) => void): HubQueue {
   };
 }
 
-/** One section's slice of the hub read, as the `QueueRead` `useQueueSection` takes. */
+/**
+ * One section's slice of the hub read, as the `QueueRead` `useQueueSection` takes. A workspace
+ * the server could not read is in `failed`, not in `workspaces`, and its section carries that
+ * message as its error rather than loading forever.
+ */
 export function sectionRead(hub: HubQueue, slug: string): QueueRead {
-  return { data: hub.workspaces.find((section) => section.slug === slug), error: hub.error, reload: hub.reload };
+  const failed = hub.failed.find((entry) => entry.workspace === slug);
+  return {
+    data: hub.workspaces.find((section) => section.slug === slug),
+    error: hub.error ?? (failed ? new Error(failed.message) : undefined),
+    reload: hub.reload,
+  };
 }
 
 /** The writes and the derived plan for one workspace, over a read the caller owns. */
@@ -311,7 +321,11 @@ export function useQueueSection(workspace: string, read: QueueRead): QueueSectio
 
   return {
     workspace,
-    error: view ? undefined : read.error,
+    /*
+     * A conflict promises the list under its banner is the server's, so when the re-read it
+     * started fails, the older order must not stand in for it: the error shows instead.
+     */
+    error: view && !(failure?.kind === "conflict" && read.error) ? undefined : read.error,
     view,
     policy: view?.policy ?? null,
     rows,
