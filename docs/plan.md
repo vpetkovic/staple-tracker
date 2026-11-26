@@ -287,11 +287,14 @@ tracker. It no longer holds its horizon open.
 
 ## 8. Read the Timeline
 
-The **Timeline** lens draws each idea on a month axis, grouped by horizon:
+The **Timeline** lens draws each idea on a month axis, grouped by the horizon that carries it, as
+**Horizons** places it: a sub-idea scheduled on no horizon of its own sits under its parent in its
+parent's horizon. Then the ideas no horizon carries.
 
 - **planned**: the window you set. Drag the bar to move it, drag its ends to change the dates;
 - **actual**: a solid bar from the first start to the last finish of its work, then dashed to
-  the forecast end, hatched where it runs past the plan;
+  the forecast end, hatched where it runs past the plan. Work that landed with no start on
+  record, and an idea delivered outside the tracker, mark the day it landed;
 - **baseline**: an outline behind the bar when the plan moved after the work started.
 
 Vertical lines mark today and each dated horizon. An arrow runs from an idea to every idea that

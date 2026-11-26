@@ -255,14 +255,16 @@ export interface TimelineGroup {
   undated: IdeaData[];
 }
 
+/** A planned window, or an actual one: work that started, or landed on a day with no start (delivered outside the tracker). */
 function hasWindow(idea: IdeaData): boolean {
-  return idea.planned.start !== null || idea.planned.target !== null || idea.actual.start !== null;
+  return idea.planned.start !== null || idea.planned.target !== null || idea.actual.start !== null || idea.actual.end !== null;
 }
 
 /**
- * Rows grouped by horizon in order, then the ideas with no horizon. Inside a group, child
- * ideas follow their parent indented (a child on another horizon sits in that horizon's group
- * at depth 0). Folded parents hide their rows. Dropped ideas are left out.
+ * Rows grouped by the horizon that carries them (`carriedBy`, as the Horizons lens places them),
+ * in order, then the ideas no horizon carries. Inside a group, child ideas follow their parent
+ * indented (a child on another horizon sits in that horizon's group at depth 0). Folded parents
+ * hide their rows. Dropped ideas are left out.
  */
 export function timelineGroups(plan: PlanData, folded: ReadonlySet<string> = new Set()): TimelineGroup[] {
   const groups: Array<{ key: string; title: string; date: string | null; horizon: HorizonData | null; ideas: IdeaData[] }> = [
@@ -271,9 +273,9 @@ export function timelineGroups(plan: PlanData, folded: ReadonlySet<string> = new
       title: horizon.name,
       date: horizon.date,
       horizon,
-      ideas: plan.ideas.filter((idea) => idea.horizonId === horizon.id && idea.maturity !== "dropped"),
+      ideas: plan.ideas.filter((idea) => idea.carriedBy === horizon.id && idea.maturity !== "dropped"),
     })),
-    { key: "", title: "No horizon", date: null, horizon: null, ideas: plan.ideas.filter((idea) => idea.horizonId === null && idea.maturity !== "dropped") },
+    { key: "", title: "No horizon", date: null, horizon: null, ideas: plan.ideas.filter((idea) => idea.carriedBy === null && idea.maturity !== "dropped") },
   ];
   return groups
     .map((group) => {

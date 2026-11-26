@@ -304,6 +304,15 @@ describe("shipped is one mark", () => {
   });
 });
 
+  it("caps a record that landed with no recorded start, as one delivered outside the tracker, on the day it landed", () => {
+    const delivered = idea("delivered", { maturity: "shaped", stage: "shipped", state: "shipped", horizonId: "now", actual: { start: null, end: "2026-10-03", forecastEnd: null }, delivered: { on: "2026-10-03", note: null } });
+    const html = renderToStaticMarkup(<PlanTimeline plan={plan([delivered])} write={async () => true} onOpen={() => {}} selected={null} />);
+    expect(html).toContain('data-plan-timeline-row="delivered"');
+    expect(html).toContain('data-plan-actual="delivered"');
+    expect(html).toContain('data-plan-shipped-cap="delivered"');
+    expect(html).not.toContain('data-plan-undated-idea="delivered"');
+  });
+
 describe("dependencies on the timeline", () => {
   const a = idea("a", { planned: { start: "2026-10-01", target: "2026-10-10" } });
   const b = idea("b", { planned: { start: "2026-10-12", target: "2026-10-20" }, dependsOn: ["a"] });
