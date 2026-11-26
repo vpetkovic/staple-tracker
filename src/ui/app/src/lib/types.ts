@@ -3265,8 +3265,24 @@ export interface RunDriver {
 }
 
 /** One row of `GET /api/runs`, and what each run verb answers: `run status --json` plus the workspace. */
+/** An issue a run names, as it stands now (core/run-references.ts). Join on `issueId`. */
+export interface RunIssue {
+  issueId: string;
+  /** The identifier NOW: a ticket's own `identifier` is the one it had when the run took it. */
+  identifier: string;
+  title: string;
+  status: string;
+  /** The status's category; null for a status the vocabulary no longer has. */
+  category: StatusCategory | null;
+  kind: string;
+}
+
 export interface RunEntry {
   workspace: string;
+  /** The run's name: its epic or milestone's title, or for a queue run the work it took ("Queue: …"). */
+  title: string;
+  /** Every issue the run names (scope, tickets, facts, stop detail, goal), current; a deleted one is absent. */
+  issues: RunIssue[];
   run: Run;
   decision: RunDecision;
   /** Null once the run has ended. */

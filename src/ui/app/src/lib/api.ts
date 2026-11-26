@@ -1137,6 +1137,12 @@ export const getRuns = (params: { ws?: string; limit?: number } = {}) =>
   request<{ runs: RunEntry[]; now: string }>(`/api/runs${qs(params)}`);
 
 /**
+ * One run by id, ended runs past `/api/runs`'s limit included: what a link to a run opens.
+ * Without `ws` on a hub the server finds the workspace that holds it; an unknown id is a 404.
+ */
+export const getRun = (params: { id: string; ws?: string }) => request<RunEntry>(`/api/run${qs(params)}`);
+
+/**
  * The page's run verbs. It watches and stops runs and never starts or continues one: only
  * an agent does that. `actor` is the person using this page (`personActor()`), recorded as
  * who stopped the run; without one the server records "ui".
