@@ -220,6 +220,21 @@ describe.skipIf(Boolean(reason))("the Tasks tree: keys on a row's own controls",
     });
   }
 
+  it("Enter on a row's chevron folds it open and leaves the drawer closed", async () => {
+    const { page, context, errors } = await openAt("view=tasks");
+    try {
+      const chevron = row(page, refs.epic).getByRole("button", { name: `Expand ${refs.epic}` });
+      await chevron.focus();
+      await page.keyboard.press("Enter");
+      await expect.poll(() => row(page, refs.epic).getAttribute("aria-expanded")).toBe("true");
+      await settle(page);
+      expect(await detail(page).count()).toBe(0);
+      expect(errors).toEqual([]);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("Enter on the row itself still opens it", async () => {
     const { page, context, errors } = await openAt("view=tasks");
     try {
