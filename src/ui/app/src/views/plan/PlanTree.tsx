@@ -9,36 +9,19 @@
  */
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import type { HorizonData, PlanUnits } from "@/lib/plan-types";
+import type { HorizonData } from "@/lib/plan-types";
 import { useIsDesk } from "@/lib/use-media";
 import { cn } from "@/lib/utils";
 import { ideaPlanHref } from "@/detail/PlannedIdeaLinks";
 import { STATE_WORDS } from "@/detail/plan-record";
 import { ShippedMark } from "@/detail/ShippedMark";
-import { Chip, DeliveryChips } from "./PlanBoards";
-import { percentText, treeHeader, type TreeRow } from "./plan-tree";
+import { Chip, DeliveryChips, SegmentedBar } from "./plan-parts";
+import { treeHeader, type TreeRow } from "./plan-tree";
+
+export { SegmentedBar } from "./plan-parts";
 
 /** How a row opens its record: in place (the lens's drawer), or as a link to it in Plan (the drawer and Milestones). */
 export type TreeOpener = { onOpen: (id: string) => void } | { workspace: string };
-
-/**
- * Done, open and planned, each segment growing by the server's count, never a width of the page's;
- * then the server's percent as the CLI prints it (a whole 100 that is not complete says so).
- */
-export function SegmentedBar({ units, percent, complete }: { units: Pick<PlanUnits, "done" | "open" | "planned">; percent: number | null; complete: boolean }) {
-  const text = percentText(percent, complete);
-  const incomplete = text !== null && text.endsWith("incomplete");
-  return (
-    <div className="mt-1.5 flex items-center gap-2" aria-label={percent === null ? undefined : `${percent}% done${incomplete ? ", incomplete" : ""}`} data-plan-tree-bar={`${units.done}/${units.open}/${units.planned}`}>
-      <div className="flex h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-muted" title={`${units.done} done · ${units.open} open · ${units.planned} planned`}>
-        {units.done > 0 ? <span className="h-full bg-primary" style={{ flexGrow: units.done }} data-segment="done" /> : null}
-        {units.open > 0 ? <span className="h-full bg-[color:var(--status-task-in_progress)]" style={{ flexGrow: units.open }} data-segment="open" /> : null}
-        {units.planned > 0 ? <span className="h-full bg-border-strong" style={{ flexGrow: units.planned }} data-segment="planned" /> : null}
-      </div>
-      {text !== null ? <span className="shrink-0 text-caption tabular-nums text-text-tertiary">{text}</span> : null}
-    </div>
-  );
-}
 
 /** The horizon's own line, the same on every surface: leaf records and members, its states, the bar, the percent and "Needs you". */
 export function TreeHeader({ horizon, className }: { horizon: HorizonData; className?: string }) {
