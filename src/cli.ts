@@ -17,6 +17,7 @@ import { runInitCommand } from "./commands/init.js";
 import { runOpenCommand } from "./commands/open.js";
 import { runBareCommand } from "./commands/bare.js";
 import { runDoctorCommand } from "./commands/doctor.js";
+import { type NormalizedArgv, normalizeArgv } from "./cli-global-flags.js";
 import { runAddCommand } from "./commands/add.js";
 import { runDiscoverCommand } from "./commands/discover.js";
 import { runMilestoneCommand } from "./commands/milestone.js";
@@ -1407,10 +1408,18 @@ Estimates:    --estimate takes a <dur> and is what makes estimate-vs-actual hone
               "time   est 2h · ran 3h10m" and --json carries "timing" (with
               children rollups over DIRECT children) beside the issue.
 
-Global flags: --db <path>, --ws <slug|prefix>  (default: walk up for .staple/staple.db,
-                      then a legacy .tasks/tasks.db)
+Global flags (before or after the command, with the same meaning):
+              --db <path>, --ws <slug|prefix>  (default: walk up for .staple/staple.db,
+                      then a legacy .tasks/tasks.db); doctor diagnoses that workspace
               --json  machine-readable output (store objects, full ISO-8601 timestamps;
                       events emits NDJSON; errors are single-line JSON on stderr)
+              --agent <name>  who acts on any write; else $STAPLE_AGENT, else $USER.
+                      A verb's own --author or --actor wins when given; after
+                      run drive, --agent names the harness instead
+              e.g.  staple --json --ws <slug> show <ref>
+                    staple show <ref> --json --ws <slug>
+                    staple --agent <name> --db <path> new "<title>" --json
+                    staple doctor --ws <slug> --json
 Workspace vocabulary
   statuses ls                           configured statuses, in configured order
   statuses add <id> --category C [--label L] [--after <id>]
@@ -1469,8 +1478,13 @@ function asksForHelp(args: readonly string[]): boolean {
   return (end === -1 ? args : args.slice(0, end)).some((arg) => arg === "--help" || arg === "-h");
 }
 
+/** argv as the dispatcher read it, once `main` has run (`normalizeArgv`); the sync trigger below keys off it. */
+let invocation: NormalizedArgv | null = null;
+
 function main() {
-  const [command, ...rest] = process.argv.slice(2);
+  // The global flags mean the same on either side of the command (src/cli-global-flags.ts).
+  invocation = normalizeArgv(process.argv.slice(2));
+  const { command, args: rest } = invocation;
   if (command === "help" || command === "--help" || command === "-h") {
     console.log(HELP);
     return;
@@ -1496,8 +1510,8 @@ function main() {
   if (!command || command === "--yes") {
     // `--yes` is the bare command's one flag (D5): `staple --yes` — and
     // therefore `npx staple-cli --yes` — is still the bare lifecycle, just with
-    // the questions answered up front. Any other leading flag stays an unknown
-    // command, exactly as before.
+    // the questions answered up front. Any other leading flag is a global flag
+    // (normalizeArgv) or refused as not being one.
     runBareCommand(command ? [command, ...rest] : rest, { token: persistentUiToken() });
     return;
   }
@@ -1507,8 +1521,11 @@ function main() {
    * as any flag that names who acts, and as the $USER fallback when neither is given, before
    * any command runs.
    */
+  // `--agent`, on either side of the command, is $STAPLE_AGENT for this process: every verb's
+  // own fallback (`agentName` and each module's) reads it, and a child process inherits it.
+  if (invocation.agent !== undefined) process.env.STAPLE_AGENT = invocation.agent;
   assertNotReservedActor(process.env.STAPLE_AGENT);
-  let named = false;
+  let named = invocation.agent !== undefined;
   for (const [index, arg] of rest.entries()) {
     const flag = /^--(actor|agent|author|by)(?:=(.*))?$/.exec(arg);
     if (flag) {
@@ -3284,7 +3301,9 @@ try {
  * not a command; synchronizing on the strength of it would be a network request
  * caused by a typo.
  */
-if (!process.exitCode && CLI_COMMAND_TRIGGERS[process.argv[2] ?? ""] !== undefined) {
+// `main` assigned it; TypeScript does not follow the assignment through the call.
+const invoked = invocation as NormalizedArgv | null;
+if (!process.exitCode && invoked?.command !== undefined && CLI_COMMAND_TRIGGERS[invoked.command] !== undefined) {
   try {
     /**
      * Both guards, deliberately. `runCommandTrigger` absorbs its own failures, so
@@ -3293,7 +3312,7 @@ if (!process.exitCode && CLI_COMMAND_TRIGGERS[process.argv[2] ?? ""] !== undefin
      * had already succeeded and reported. Belt and braces is the right amount of
      * caution for a line whose entire job is to be optional.
      */
-    void runCommandTrigger(process.argv[2], process.argv.slice(3), {
+    void runCommandTrigger(invoked.command, invoked.args, {
       home: stapleHome(),
     }).catch(() => undefined);
   } catch {
