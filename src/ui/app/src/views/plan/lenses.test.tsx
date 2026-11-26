@@ -366,7 +366,7 @@ describe("dependencies on the timeline", () => {
   it("draws an arrow from the day a record landed when it has no planned window or recorded start", () => {
     const landed = idea("landed", { actual: { start: null, end: "2026-10-05", forecastEnd: null }, delivered: { on: "2026-10-05", note: null } });
     const ideas = new Map([landed, b].map((entry) => [entry.id, entry]));
-    const html = renderToStaticMarkup(<DependencyArrows edges={[{ from: "landed", to: "b" }]} ideas={ideas} rowTops={new Map([["landed", 0], ["b", 40]])} rowHeight={40} x={(day) => day} left={0} width={10} />);
+    const html = renderToStaticMarkup(<DependencyArrows edges={[{ from: "landed", to: "b" }]} ideas={ideas} rowTops={new Map([["landed", 0], ["b", 40]])} barY={14} x={(day) => day} left={0} width={10} />);
     expect(html).toContain('data-plan-arrows="1"');
   });
 
