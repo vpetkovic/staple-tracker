@@ -46,7 +46,8 @@ export function AttentionView(_props: { onAuthError: (error: AuthError) => void 
   const session = useSession();
 
   return (
-    <div className="@container/inbox h-full overflow-y-auto" data-attention-view="">
+    // The scroll padding keeps a row the keyboard focuses clear of the sticky section header.
+    <div className="@container/inbox h-full scroll-pt-9 overflow-y-auto" data-attention-view="">
       {refusal ? <GuardRefusal refusal={refusal} onDismiss={clearRefusal} className="m-3" /> : null}
       {resource.error ? (
         <div className="px-4">
