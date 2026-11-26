@@ -58,6 +58,11 @@ describe("list lines", () => {
     expect(listTime(failedEntry().run, NOW)).toBe("4m ago");
   });
 
+  it("places an ended run with one unit", () => {
+    const ended = { ...failedEntry().run, endedAt: new Date(NOW.getTime() - (12 * 60 + 50) * 60_000).toISOString() };
+    expect(listTime(ended, NOW)).toBe("12h ago");
+  });
+
   it("tallies done and failed, else what is in progress or that it took nothing", () => {
     expect(tally(workingEntry().run)).toEqual([
       { text: "2 done", tone: "ok" },

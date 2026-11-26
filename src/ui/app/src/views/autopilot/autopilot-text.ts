@@ -19,6 +19,7 @@ import {
   type RunTone,
 } from "@/lib/run-text";
 import type { Run, RunEntry, RunFacts, RunTicket } from "@/lib/types";
+import { formatAgo } from "@/lib/claim";
 
 /** The page's width, in px, from which it shows the run list and a run side by side. */
 export const AUTOPILOT_WIDE = 900;
@@ -83,7 +84,9 @@ export function endedAt(run: Pick<Run, "endedAt" | "updatedAt">): string {
 
 /** The list item's time: how long a live run has run, how long ago an ended one ended. */
 export function listTime(run: Pick<Run, "state" | "startedAt" | "endedAt" | "updatedAt">, now: Date): string {
-  return isLiveRun(run) ? durationText(run.startedAt, null, now) : `${durationText(endedAt(run), null, now)} ago`;
+  if (isLiveRun(run)) return durationText(run.startedAt, null, now);
+  // One unit is enough to place an ended run: "12h ago", not "12h 50m ago".
+  return `${formatAgo((now.getTime() - Date.parse(endedAt(run))) / 1000)} ago`;
 }
 
 export type TallyTone = "ok" | "risk" | "quiet";

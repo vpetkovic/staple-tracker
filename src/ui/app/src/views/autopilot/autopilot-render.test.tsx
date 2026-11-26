@@ -99,11 +99,17 @@ describe("which pane is drawn", () => {
     expect(html).toContain("data-run-back");
   });
 
-  it("a run that is not in the list says so and offers every run", () => {
+  it("a run that cannot be found says so and offers every run", () => {
     const html = render({ entries: [live], selectedRunId: "0000000000-gone" });
     expect(html).toContain("data-run-unknown");
-    expect(text(html)).toContain("This run is not in the list.");
+    expect(text(html)).toContain("This run could not be found.");
     expect(text(html)).toContain("Show all runs");
+  });
+
+  it("a linked run still being read is a loading pane, not a run that cannot be found", () => {
+    const html = render({ entries: [live], selectedRunId: "0000000000-old", selectedLoading: true });
+    expect(html).toContain('data-run-loading="run"');
+    expect(html).not.toContain("data-run-unknown");
   });
 });
 
