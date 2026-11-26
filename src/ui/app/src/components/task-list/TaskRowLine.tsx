@@ -321,7 +321,7 @@ export function TaskRowLine({
    * them out. A parent's subtree set keeps its badge on a phone held upright, folded to a glyph
    * and the total: the counted link badge that would stand in knows only the parent's own.
    */
-  const prBadge = Boolean(columns.pr && row.pullRequests?.length && (plan.prBadge || isSubtreeSet(row.pullRequests, issue.identifier)));
+  const prBadge = Boolean(columns.pr && row.pullRequests?.length && (plan.prBadge || isSubtreeSet(row.pullRequests, issue.identifier, row.pullRequestCounts)));
   /** Without the badge, the counted link badge carries the checks mark for the row's pull requests. */
   const prChecks = prBadge ? null : worstChecks((row.pullRequests ?? []).map((pr) => rowEntry(pr, issue.identifier)));
   /**
@@ -651,7 +651,7 @@ export function TaskRowLine({
             ) : null}
             {/* Last of the signals, so the who slot and the trailing slot after them stay clean columns. */}
             <ExternalLinkBadges summary={row.externalLinks} workspace={row.workspace} issueId={issue.id} issueRef={issue.identifier} withoutPullRequests={prBadge} pullRequestChecks={prChecks} />
-            {prBadge ? <PrBadge pullRequests={row.pullRequests} showNumber={plan.prNumber} counted={!plan.prBadge} workspace={row.workspace} issueId={issue.id} issueRef={issue.identifier} /> : null}
+            {prBadge ? <PrBadge pullRequests={row.pullRequests} counts={row.pullRequestCounts} showNumber={plan.prNumber} counted={!plan.prBadge} workspace={row.workspace} issueId={issue.id} issueRef={issue.identifier} /> : null}
           </span>
           {columns.claim || columns.assignee ? (
             <WhoCue
@@ -774,7 +774,7 @@ export function TaskRowLine({
           <Avatar name={issue.assignee} kind="human" size={20} className="staple-row-assignee" />
         ) : null}
         <ExternalLinkBadges summary={row.externalLinks} workspace={row.workspace} issueId={issue.id} issueRef={issue.identifier} withoutPullRequests={prBadge} pullRequestChecks={prChecks} />
-        {prBadge ? <PrBadge pullRequests={row.pullRequests} showNumber={plan.prNumber} counted={!plan.prBadge} workspace={row.workspace} issueId={issue.id} issueRef={issue.identifier} /> : null}
+        {prBadge ? <PrBadge pullRequests={row.pullRequests} counts={row.pullRequestCounts} showNumber={plan.prNumber} counted={!plan.prBadge} workspace={row.workspace} issueId={issue.id} issueRef={issue.identifier} /> : null}
         {columns.date && plan.date ? (
           <time className="staple-row-date" dateTime={issue.updatedAt} title={issue.updatedAt}>
             {formatRowDate(issue.updatedAt, now)}

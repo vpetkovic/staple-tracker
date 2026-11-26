@@ -864,6 +864,23 @@ export interface PullRequestRef {
   updatedAt?: string | null;
 }
 
+/**
+ * A parent row's whole subtree set, counted. The row carries only the first of its pull
+ * requests (the ones that need a person first); these say how many there are in all.
+ */
+export interface PullRequestCounts {
+  total: number;
+  /** Open or draft with failing checks; they count in `open` or `draft` too. */
+  failing: number;
+  open: number;
+  draft: number;
+  unknown: number;
+  merged: number;
+  closed: number;
+  /** How many are not recorded on the row's own ticket: above zero, the set reaches into the children. */
+  inside: number;
+}
+
 /** GET /api/issues */
 /**
  * What this row is waiting on, and what is waiting on it — O6 (STA-138).
@@ -955,6 +972,8 @@ export interface IssueRow {
    * freezing it into the entity would be a lie waiting to happen.
    */
   pullRequests?: PullRequestRef[];
+  /** On a parent's row: its subtree set counted, when `pullRequests` holds only the first of it. */
+  pullRequestCounts?: PullRequestCounts;
   externalLinks?: ExternalRowSummary;
   /**
    * The review gate ON this row, and the gate this row is QUEUED BEHIND

@@ -12,6 +12,14 @@ export function filterCounts(links: readonly ExternalLink[]): { all: number; iss
   return { all: links.length, issue, pull_request: links.length - issue };
 }
 
+/**
+ * What refreshing a saved copy and judging its connection read of a link. A pull request a
+ * parent lists from its descendants has this much too, so "Refresh all" covers the whole tab.
+ */
+export interface RefreshTarget {
+  resource: Pick<ExternalLink["resource"], "id" | "ref" | "fetchedAt">;
+}
+
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
 
 /** "6 pull requests", "1 issue", "2 issues, 3 pull requests". */
@@ -23,7 +31,7 @@ export function countWords(links: readonly ExternalLink[]): string {
 }
 
 /** A connection that could read this link: same provider and host, and beyond GitHub the same organisation or workspace. */
-function serves(connection: ConnectionView, link: ExternalLink): boolean {
+function serves(connection: ConnectionView, link: RefreshTarget): boolean {
   const ref = link.resource.ref;
   return (
     connection.providerId === ref.providerId &&
@@ -33,11 +41,11 @@ function serves(connection: ConnectionView, link: ExternalLink): boolean {
 }
 
 /** The ready connection that reads this link, named on every refresh so the server never has to choose between two accounts. */
-export function refreshConnection(link: ExternalLink, connections: readonly ConnectionView[]): string | null {
+export function refreshConnection(link: RefreshTarget, connections: readonly ConnectionView[]): string | null {
   return connections.find((c) => isReady(c) && serves(c, link))?.id ?? null;
 }
 
-export function isRefreshable(link: ExternalLink, connections: readonly ConnectionView[]): boolean {
+export function isRefreshable(link: RefreshTarget, connections: readonly ConnectionView[]): boolean {
   return refreshConnection(link, connections) !== null;
 }
 
@@ -52,7 +60,7 @@ export interface ConnectionNotice {
 }
 
 /** One notice per provider and host that has links here but no ready connection for them. */
-export function connectionNotices(links: readonly ExternalLink[], connections: readonly ConnectionView[]): ConnectionNotice[] {
+export function connectionNotices(links: readonly RefreshTarget[], connections: readonly ConnectionView[]): ConnectionNotice[] {
   const notices = new Map<string, ConnectionNotice>();
   for (const link of links) {
     const { providerId, host } = link.resource.ref;
@@ -74,7 +82,7 @@ export function connectionNotices(links: readonly ExternalLink[], connections: r
 }
 
 /** The link with the oldest saved copy among those a connection here can refresh; null when none was ever read. */
-export function oldestRefresh(links: readonly ExternalLink[], connections: readonly ConnectionView[]): ExternalLink | null {
+export function oldestRefresh<T extends RefreshTarget>(links: readonly T[], connections: readonly ConnectionView[]): T | null {
   const read = links
     .filter((l) => l.resource.fetchedAt && isRefreshable(l, connections))
     .sort((a, b) => Date.parse(a.resource.fetchedAt!) - Date.parse(b.resource.fetchedAt!));

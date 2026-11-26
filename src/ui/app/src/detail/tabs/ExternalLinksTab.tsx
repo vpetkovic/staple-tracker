@@ -28,7 +28,7 @@ import {
 import { groupLinks, type ExternalLink } from "@/integrations/model";
 import { useConnections } from "@/integrations/useConnections";
 import { SubtreeLinkSection } from "@/integrations/SubtreeLinkSection";
-import { descendantEntries, subtreeEntries, type PullRequestEntry } from "@/integrations/pull-requests";
+import { descendantEntries, refreshTargets, subtreeEntries, type PullRequestEntry } from "@/integrations/pull-requests";
 import type { TabProps } from "./registry";
 
 const message = (caught: unknown) => (caught instanceof Error ? caught.message : String(caught));
@@ -47,6 +47,7 @@ export function ExternalLinksTab({ detail, workspace, refresh, onAuthError, hold
   const [refreshingAll, setRefreshingAll] = useState(false);
   const [refreshAllError, setRefreshAllError] = useState<string | null>(null);
   const links = resource.data ?? detail.externalLinks ?? [];
+  const inside = descendantEntries(subtreeEntries(detail));
 
   const write: WriteLink = async (command) => {
     try {
@@ -57,7 +58,8 @@ export function ExternalLinksTab({ detail, workspace, refresh, onAuthError, hold
     }
   };
   async function refreshAll() {
-    const targets = links.filter((l) => isRefreshable(l, connections));
+    // Everything the tab lists: this ticket's links, and on a parent the pull requests of the tickets inside it.
+    const targets = [...links, ...refreshTargets(inside)].filter((l) => isRefreshable(l, connections));
     setRefreshingAll(true);
     setRefreshAllError(null);
     const failures: string[] = [];
@@ -77,7 +79,7 @@ export function ExternalLinksTab({ detail, workspace, refresh, onAuthError, hold
   return (
     <ExternalLinksView
       links={links}
-      subtree={{ entries: descendantEntries(subtreeEntries(detail)), workspace, shownId: detail.issue.id }}
+      subtree={{ entries: inside, workspace, shownId: detail.issue.id }}
       loading={resource.loading && !links.length}
       loadError={resource.error?.message ?? null}
       connections={loaded ? connections : null}
@@ -136,10 +138,12 @@ export function ExternalLinksView({
   const showInside = inside.length > 0 && section !== "issue";
   const shown = links.filter((l) => section === "all" || l.resource.ref.kind === section);
   const groups = new Map(groupLinks(links).flatMap((g) => g.links.map((l) => [l.id, g.links] as const)));
-  const oldest = oldestRefresh(links, known);
-  const refreshed = oldest ? savedAge(oldest.resource, now)?.sentence.replace(/^Saved copy from /, "") : null;
-  const canRefresh = links.some((l) => isRefreshable(l, known));
-  const notices = connections ? connectionNotices(links, connections) : [];
+  // Refreshing and the connection notice cover everything listed, the descendants' pull requests included.
+  const listed = [...links, ...refreshTargets(inside)];
+  const oldest = oldestRefresh(listed, known);
+  const refreshed = oldest ? savedAge(oldest.resource as Parameters<typeof savedAge>[0], now)?.sentence.replace(/^Saved copy from /, "") : null;
+  const canRefresh = listed.some((l) => isRefreshable(l, known));
+  const notices = connections ? connectionNotices(listed, connections) : [];
 
   if (!loading && !links.length && !inside.length && !loadError)
     return (

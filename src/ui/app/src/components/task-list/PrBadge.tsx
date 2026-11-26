@@ -29,12 +29,12 @@
  * different outlines in the same hues the detail's pull request chips use, so the row and
  * the detail say the same thing about the same pull request, and all four survive greyscale.
  */
-import type { PullRequestRef } from "@/lib/types";
+import type { PullRequestCounts, PullRequestRef } from "@/lib/types";
 import { ROW_COUNT_BADGE, useShowExternalLinks } from "@/integrations/ExternalLinkBadges";
 import { LinkHoverCard } from "@/integrations/LinkHoverCard";
 import { LinkGlyph } from "@/integrations/parts";
 import { ChecksMark, PullRequestCard, PullRequestTally } from "@/integrations/PullRequestParts";
-import { checksWords, countWords, entryTone, isSubtreeSet, rowEntry, tallyOf, tallyWords, worstChecks } from "@/integrations/pull-requests";
+import { checksWords, countWords, entryTone, isSubtreeSet, rowEntry, rowTally, tallyWords, worstChecks } from "@/integrations/pull-requests";
 
 const word = (state: PullRequestRef["state"]) => (state === "unknown" ? "state unknown" : state);
 
@@ -46,6 +46,7 @@ const HIT = "relative pointer-coarse:min-h-0 pointer-coarse:before:absolute poin
 
 export function PrBadge({
   pullRequests,
+  counts,
   showNumber = true,
   counted = false,
   workspace = "",
@@ -53,6 +54,8 @@ export function PrBadge({
   issueRef,
 }: {
   pullRequests?: PullRequestRef[];
+  /** A parent's whole subtree set counted, when `pullRequests` holds only the first of it. */
+  counts?: PullRequestCounts;
   /** `#123` beside the glyph, or a parent's breakdown by state — the first thing the row ladder drops (row-layout.ts). */
   showNumber?: boolean;
   /**
@@ -71,7 +74,7 @@ export function PrBadge({
 
   const pr = prs[0]!;
   const entries = prs.map((p) => rowEntry(p, issueRef));
-  const subtree = isSubtreeSet(prs, issueRef);
+  const subtree = isSubtreeSet(prs, issueRef, counts);
 
   if (prs.length === 1 && !subtree) {
     const checks = entries[0]!.checks === "passing" ? null : checksWords(entries[0]!);
@@ -96,7 +99,7 @@ export function PrBadge({
     );
   }
 
-  const tally = tallyOf(entries);
+  const tally = rowTally(entries, counts);
   const shown = prs.slice(1, MAX_GLYPHS);
   const extra = prs.length - 1 - shown.length;
   return (
@@ -106,12 +109,13 @@ export function PrBadge({
       data-pr-state={pr.state}
       data-pr-set={subtree ? "subtree" : "own"}
       aria-label={tallyWords(tally)}
-      cardLabel={countWords(prs.length)}
+      cardLabel={countWords(tally.total)}
       align="end"
       card={(close) => (
         <PullRequestCard
-          heading={countWords(prs.length)}
+          heading={countWords(tally.total)}
           entries={entries}
+          tally={tally}
           workspace={workspace}
           shownId={issueRef ?? issueId}
           onShowAll={() => {

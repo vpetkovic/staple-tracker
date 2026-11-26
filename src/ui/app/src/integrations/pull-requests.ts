@@ -6,9 +6,11 @@
  * decided once. Pure.
  */
 import type { SubtreePullRequest } from "../../../../core/subtree-pull-requests";
-import type { PullRequestRef } from "@/lib/types";
+import type { PullRequestCounts, PullRequestRef } from "@/lib/types";
 import { shortKey, type LinkTone } from "./link-state";
 import type { ExternalRowSummary } from "../../../../core/integrations/link-store";
+import type { ExternalItemRef } from "../../../../core/integrations/contracts";
+import type { RefreshTarget } from "./links-view";
 import type { ExternalLink, SourceItem } from "./model";
 
 export type PullRequestState = "open" | "draft" | "merged" | "closed" | "unknown";
@@ -38,6 +40,10 @@ export interface PullRequestEntry {
   own: boolean;
   /** Every ticket of the subtree it is recorded on; empty when the payload names none. */
   tickets: EntryTicket[];
+  /** Where it lives at the provider, when the payload says: what refreshing its saved copy needs. */
+  ref?: ExternalItemRef;
+  /** When its saved copy was read; null when never. */
+  fetchedAt?: string | null;
 }
 
 const STATES: readonly PullRequestState[] = ["open", "draft", "merged", "closed"];
@@ -61,6 +67,9 @@ export function subtreeEntry(pr: SubtreePullRequest): PullRequestEntry {
     failing: pr.checks?.state === "failing" ? pr.checks.failing : [],
     own: pr.own,
     tickets: pr.tickets,
+    // Absent from a server that predates it; the entry then lists but cannot be refreshed from here.
+    ref: (pr as { ref?: ExternalItemRef }).ref,
+    fetchedAt: pr.fetchedAt,
   };
 }
 
@@ -269,10 +278,19 @@ export function entryRef(entry: PullRequestEntry, tickets?: string[]): PullReque
 /**
  * Whether a row's pull requests reach beyond the row's own ticket: a parent's subtree set
  * with at least one that a descendant carries. A parent whose pull requests are all its own
- * reads as a leaf does.
+ * reads as a leaf does. The server's counts decide when it sends them, since the row then
+ * holds only the first of the set.
  */
-export function isSubtreeSet(prs: readonly PullRequestRef[] | undefined, ownIdentifier?: string): boolean {
+export function isSubtreeSet(prs: readonly PullRequestRef[] | undefined, ownIdentifier?: string, counts?: PullRequestCounts): boolean {
+  if (counts) return counts.inside > 0;
   return (prs ?? []).some((pr) => (pr.tickets ?? []).some((ticket) => ticket !== ownIdentifier));
+}
+
+/** A row's tally: the server's counts over the whole set when it sent them, else what the row lists. */
+export function rowTally(entries: readonly PullRequestEntry[], counts?: PullRequestCounts): PullRequestTally {
+  if (!counts) return tallyOf(entries);
+  const { total, failing, open, draft, merged, closed, unknown } = counts;
+  return { total, failing, open, draft, merged, closed, unknown };
 }
 
 /**
@@ -307,4 +325,9 @@ export function childPullRequests(entries: readonly PullRequestEntry[] | undefin
 export function worstChecks(entries: readonly Pick<PullRequestEntry, "checks">[]): ChecksState | null {
   if (entries.some((entry) => entry.checks === "failing")) return "failing";
   return entries.some((entry) => entry.checks === "pending") ? "pending" : null;
+}
+
+/** The entries whose saved copies can be read again from here: the ones the payload placed at a provider. */
+export function refreshTargets(entries: readonly PullRequestEntry[]): RefreshTarget[] {
+  return entries.filter((entry) => entry.ref).map((entry) => ({ resource: { id: entry.id, ref: entry.ref!, fetchedAt: entry.fetchedAt ?? null } }));
 }

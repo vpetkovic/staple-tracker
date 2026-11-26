@@ -162,6 +162,7 @@ export function PullRequestCard({
   entries,
   workspace,
   shownId,
+  tally: counted,
   onShowAll,
 }: {
   /** What the card lists, e.g. "8 in tasks inside". */
@@ -169,9 +170,12 @@ export function PullRequestCard({
   entries: readonly PullRequestEntry[];
   workspace: string;
   shownId: string;
+  /** The whole set counted, when `entries` holds only the first of it (a parent's row). */
+  tally?: Tally;
   onShowAll: () => void;
 }) {
-  const tally = tallyOf(entries);
+  const tally = counted ?? tallyOf(entries);
+  const more = tally.total - entries.length;
   return (
     <div className="flex flex-col" data-link-card="pull-requests">
       <p className="m-0 mb-1 flex min-w-0 items-center gap-2 text-label">
@@ -184,10 +188,11 @@ export function PullRequestCard({
       <div className="-mx-3 mt-1 border-t" />
       <button
         type="button"
+        data-pr-show-all=""
         className="focus-ring -mx-1.5 -mb-1 mt-1 flex h-7 items-center rounded-md px-1.5 text-left text-label text-muted-foreground hover:bg-[var(--surface-hover)] hover:text-foreground pointer-coarse:h-11"
         onClick={onShowAll}
       >
-        Show in External links
+        {more > 0 ? `Show all ${tally.total} in External links` : "Show in External links"}
       </button>
     </div>
   );
