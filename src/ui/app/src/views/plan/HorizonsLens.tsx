@@ -10,13 +10,12 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { horizonActionItems, offers, type PlanItem } from "@/detail/plain-actions";
-import { ShippedMark } from "@/detail/ShippedMark";
 import { RunSettingDialog, runSettingLabel } from "./RunSetting";
-import { PlanTree, TreeHeader } from "./PlanTree";
+import { PlanTree } from "./PlanTree";
 import { Board, ColumnFrame, MoveMenu, openOnKey, type BoardProps, type Write } from "./plan-board";
-import { Chip } from "./plan-parts";
+import { HorizonSummary, HorizonWhen } from "./plan-parts";
 import { planTree, type TreeRow } from "./plan-tree";
-import { dayLabel, horizonDone, horizonsColumns, isShipped, type BoardColumn } from "./plan-model";
+import { horizonDone, horizonsColumns, isShipped, type BoardColumn } from "./plan-model";
 
 export function HorizonsBoard(props: BoardProps) {
   const columns = horizonsColumns(props.plan);
@@ -40,7 +39,7 @@ function HorizonColumn({ plan, column, columns, write, desk, onOpen, selected }:
   return (
     <ColumnFrame plan={plan} column={column} write={write} desk={desk}>
       {column.horizon ? (
-        <HorizonHeader column={column} write={write} onOpen={onOpen} done={done} />
+        <HorizonHeader column={column} today={plan.today} write={write} onOpen={onOpen} done={done} />
       ) : (
         <header className="border-b px-3 py-2">
           <div className="flex items-baseline gap-2 text-body font-semibold">
@@ -109,7 +108,7 @@ function DeliveryCard({ row, column, columns, write, onOpen, selected, children 
 
 // ---------------------------------------------------------------- horizons
 
-function HorizonHeader({ column, write, onOpen, done }: { column: BoardColumn; write: Write; onOpen: (id: string) => void; done: boolean }) {
+function HorizonHeader({ column, today, write, onOpen, done }: { column: BoardColumn; today: string; write: Write; onOpen: (id: string) => void; done: boolean }) {
   const horizon = column.horizon!;
   const [running, setRunning] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -125,26 +124,62 @@ function HorizonHeader({ column, write, onOpen, done }: { column: BoardColumn; w
     if (name.trim() && name.trim() !== horizon.name) await write("horizon-update", { ref: horizon.id, name: name.trim() });
     setRenaming(false);
   };
-  // Every count is the server's: it sees hand-added members and records still being explored.
-  const risk = { late: horizon.lateCount, notStarted: horizon.notStartedCount };
   const items = horizonActionItems("", horizon);
   const queue = items.find((item) => item.id === "queue");
   const run = items.find((item) => item.id === "run");
   return (
     <header className="border-b px-3 py-2" data-plan-horizon={horizon.identifier} data-plan-horizon-done={done ? "" : undefined}>
-      <div className="flex items-center gap-2">
-        {renaming ? (
-          <form onSubmit={rename} className="min-w-0 flex-1">
-            <Input value={name} autoFocus onChange={(event) => setName(event.target.value)} onBlur={rename} aria-label="Horizon name" className="h-8" />
-          </form>
-        ) : (
-          <button type="button" className="min-w-0 flex-1 truncate text-left text-body font-semibold" onClick={() => (offers(horizon, "rename") ? setRenaming(true) : undefined)} title={offers(horizon, "rename") ? "Rename" : horizon.name}>
-            {horizon.name}
-          </button>
-        )}
+      <div className="flex items-start gap-2">
+        <HorizonSummary
+          horizon={horizon}
+          today={today}
+          className="flex-1"
+          heading={
+            <>
+              {renaming ? (
+                <form onSubmit={rename} className="min-w-0 flex-1">
+                  <Input value={name} autoFocus onChange={(event) => setName(event.target.value)} onBlur={rename} aria-label="Horizon name" className="h-8" />
+                </form>
+              ) : (
+                <button type="button" className="min-w-0 truncate text-left text-title font-semibold" onClick={() => (offers(horizon, "rename") ? setRenaming(true) : undefined)} title={offers(horizon, "rename") ? "Rename" : horizon.name}>
+                  {horizon.name}
+                </button>
+              )}
+              <span className="flex items-center gap-2 text-caption text-text-tertiary">
+                {dating ? (
+                  <input
+                    ref={dateRef}
+                    type="date"
+                    defaultValue={horizon.date ?? ""}
+                    aria-label={`${horizon.name} date`}
+                    className="h-8 rounded-md border bg-field px-2 text-label text-foreground"
+                    onChange={(event) => {
+                      if (event.target.value) {
+                        setDating(false);
+                        void write("horizon-update", { ref: horizon.id, date: event.target.value });
+                      }
+                    }}
+                    onBlur={() => setDating(false)}
+                  />
+                ) : horizon.date ? (
+                  <>
+                    <HorizonWhen date={horizon.date} today={today} />
+                    <button type="button" className="flex min-h-6 items-center gap-0.5 underline-offset-2 hover:underline" onClick={() => void write("horizon-update", { ref: horizon.id, date: null })} aria-label={`Clear ${horizon.name} date`}>
+                      <X className="size-3" aria-hidden /> clear
+                    </button>
+                  </>
+                ) : (
+                  <button type="button" className="flex min-h-6 items-center gap-1 underline-offset-2 hover:underline" onClick={() => setDating(true)} data-plan-horizon-date={horizon.identifier}>
+                    <CalendarPlus className="size-3" aria-hidden /> add a date
+                  </button>
+                )}
+              </span>
+            </>
+          }
+        />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="size-8 text-text-tertiary" aria-label={`${horizon.name} options`} data-plan-horizon-menu={horizon.identifier}>
+            <Button variant="ghost" size="icon" className="-mr-1.5 size-8 shrink-0 text-text-tertiary" aria-label={`${horizon.name} options`} data-plan-horizon-menu={horizon.identifier}>
               <MoreHorizontal aria-hidden />
             </Button>
           </DropdownMenuTrigger>
@@ -161,48 +196,6 @@ function HorizonHeader({ column, write, onOpen, done }: { column: BoardColumn; w
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-      <div className="mt-0.5 flex items-center gap-2 text-caption text-text-tertiary">
-        {dating ? (
-          <input
-            ref={dateRef}
-            type="date"
-            defaultValue={horizon.date ?? ""}
-            aria-label={`${horizon.name} date`}
-            className="h-8 rounded-md border bg-field px-2 text-label text-foreground"
-            onChange={(event) => {
-              if (event.target.value) {
-                setDating(false);
-                void write("horizon-update", { ref: horizon.id, date: event.target.value });
-              }
-            }}
-            onBlur={() => setDating(false)}
-          />
-        ) : horizon.date ? (
-          <>
-            <span className="text-text-secondary">{dayLabel(horizon.date)}</span>
-            <button type="button" className="flex min-h-6 items-center gap-0.5 underline-offset-2 hover:underline" onClick={() => void write("horizon-update", { ref: horizon.id, date: null })} aria-label={`Clear ${horizon.name} date`}>
-              <X className="size-3" aria-hidden /> clear
-            </button>
-          </>
-        ) : (
-          <button type="button" className="flex min-h-6 items-center gap-1 underline-offset-2 hover:underline" onClick={() => setDating(true)} data-plan-horizon-date={horizon.identifier}>
-            <CalendarPlus className="size-3" aria-hidden /> add a date
-          </button>
-        )}
-      </div>
-      <TreeHeader horizon={horizon} className="mt-1" />
-      {done || horizon.shippedCount > 0 || risk.late > 0 || risk.notStarted > 0 || horizon.awaitingApproval ? (
-        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-caption" data-plan-horizon-risk={horizon.identifier}>
-          {horizon.awaitingApproval ? (
-            <Chip tone="amber">
-              <span data-plan-horizon-awaiting={horizon.identifier}>Waiting for your approval</span>
-            </Chip>
-          ) : null}
-          {done ? <ShippedMark /> : horizon.shippedCount > 0 ? <ShippedMark count={horizon.shippedCount} /> : null}
-          {risk.late > 0 && !done ? <Chip tone="red">{risk.late} late</Chip> : null}
-          {risk.notStarted > 0 && !done ? <Chip tone="amber">{risk.notStarted} not started</Chip> : null}
-        </div>
-      ) : null}
       {queue || run ? (
         <div className="mt-2 flex flex-wrap gap-1.5">
           {queue ? (

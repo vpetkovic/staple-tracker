@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 import { planActionItems, type PlanItem } from "@/detail/plain-actions";
 import { ShippedMark } from "@/detail/ShippedMark";
 import { Board, ColumnFrame, MoveMenu, openOnKey, type BoardProps, type Write } from "./plan-board";
-import { Chip, HorizonChip } from "./plan-parts";
+import { Amber, Chip, Flag, HorizonChip, StateGlyph } from "./plan-parts";
 import { columnEntries, dayLabel, droppedIdeas, horizonOf, ideasColumns, isShipped, isStarted, riskOf, riskWords, type BoardColumn, type BoardEntry } from "./plan-model";
 
 export function IdeasBoard(props: BoardProps) {
@@ -146,16 +146,16 @@ export function ThinkingChips({ idea, horizonLabel }: { idea: IdeaData; horizonL
       </span>
     </Chip>,
   ];
-  if (idea.openQuestions > 0) chips.push(<Chip key="q" tone="amber">{idea.openQuestions} open question{idea.openQuestions === 1 ? "" : "s"}</Chip>);
+  if (idea.openQuestions > 0) chips.push(<Amber key="q">{idea.openQuestions} open question{idea.openQuestions === 1 ? "" : "s"}</Amber>);
   if (horizonLabel) chips.push(<HorizonChip key="h" label={horizonLabel} />);
   return <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-caption">{chips}</div>;
 }
 
 function StatusDot({ idea }: { idea: IdeaData }) {
   if (isShipped(idea)) return <ShippedMark on={idea.actual.end} outside={idea.delivered !== null} className="text-caption" />;
-  if (idea.late) return <Chip tone="red">late</Chip>;
-  if (idea.notStarted) return <Chip tone="amber">not started</Chip>;
-  if (isStarted(idea)) return <Chip tone="blue">{idea.stage}</Chip>;
+  if (idea.late) return <Flag tone="late" />;
+  if (idea.notStarted) return <Flag tone="notStarted" />;
+  if (isStarted(idea)) return <StateGlyph state={idea.state} percent={idea.percent} word />;
   return null;
 }
 

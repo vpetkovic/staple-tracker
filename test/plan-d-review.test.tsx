@@ -88,7 +88,7 @@ describe("D review integration", () => {
     const idea = store.plan().ideaView(id);
     expect(idea.planIncomplete).toEqual(["a goal"]);
     const html = renderToStaticMarkup(<DeliveryChips idea={{ ...idea, actions: [] }} />);
-    expect(plain(html)).toContain("shaped");
+    expect(plain(html)).toContain("Shaped");
     expect(html).toContain("data-plan-card-incomplete");
   });
 

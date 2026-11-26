@@ -8,7 +8,7 @@ import type { HorizonData, IdeaData, IdeaState, PlanUnits } from "@/lib/plan-typ
 import { cn } from "@/lib/utils";
 import { STATE_WORDS } from "@/detail/plan-record";
 import { ShippedCheck, ShippedMark } from "@/detail/ShippedMark";
-import { dayIndex, dayLabel, horizonDone, isShipped, isStarted } from "./plan-model";
+import { dayIndex, dayLabel, horizonDone, isShipped } from "./plan-model";
 import { percentText, treeHeader } from "./plan-tree";
 
 /**
@@ -211,18 +211,12 @@ export function DeliveryChips({ idea, children }: { idea: IdeaData; children?: R
       </div>
     );
   }
-  const chips: ReactNode[] = [<Chip key="s">{isStarted(idea) ? idea.stage : idea.maturity}</Chip>];
+  const chips: ReactNode[] = [<StateGlyph key="s" state={idea.state} percent={idea.percent} word />];
   // Shaped, but its plan no longer passes the gate: shown here, flagged, and held back from Scaffold.
-  if (planIncomplete(idea)) {
-    chips.push(
-      <Chip key="pi" tone="amber">
-        <span data-plan-card-incomplete>plan incomplete</span>
-      </Chip>,
-    );
-  }
-  if (idea.linkCount > 0) chips.push(<Chip key="l" tone="blue">{idea.linkCount} linked</Chip>);
-  if (idea.late) chips.push(<Chip key="late" tone="red">late</Chip>);
-  if (idea.notStarted) chips.push(<Chip key="ns" tone="amber">not started</Chip>);
+  if (planIncomplete(idea)) chips.push(<Amber key="pi" data-plan-card-incomplete="">plan incomplete</Amber>);
+  if (idea.linkCount > 0) chips.push(<span key="l" className="text-text-tertiary">{idea.linkCount} linked</span>);
+  if (idea.late) chips.push(<Flag key="late" tone="late" />);
+  if (idea.notStarted) chips.push(<Flag key="ns" tone="notStarted" />);
   return (
     <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-caption">
       {chips}

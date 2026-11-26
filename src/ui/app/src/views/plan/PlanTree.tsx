@@ -13,33 +13,22 @@ import type { HorizonData } from "@/lib/plan-types";
 import { useIsDesk } from "@/lib/use-media";
 import { cn } from "@/lib/utils";
 import { ideaPlanHref } from "@/detail/PlannedIdeaLinks";
-import { STATE_WORDS } from "@/detail/plan-record";
 import { ShippedMark } from "@/detail/ShippedMark";
-import { Chip, DeliveryChips, SegmentedBar } from "./plan-parts";
-import { treeHeader, type TreeRow } from "./plan-tree";
+import { Amber, DeliveryChips, HorizonSummary, SegmentedBar, StateGlyph } from "./plan-parts";
+import type { TreeRow } from "./plan-tree";
 
 export { SegmentedBar } from "./plan-parts";
 
 /** How a row opens its record: in place (the lens's drawer), or as a link to it in Plan (the drawer and Milestones). */
 export type TreeOpener = { onOpen: (id: string) => void } | { workspace: string };
 
-/** The horizon's own line, the same on every surface: leaf records and members, its states, the bar, the percent and "Needs you". */
+/**
+ * The horizon's own line, the same on every surface: its bar and percent, "Needs you", its leaf
+ * records, members, states and units. A surface that titles the horizon and prints its risk
+ * itself (the drawer, Milestones) draws it without them.
+ */
 export function TreeHeader({ horizon, className }: { horizon: HorizonData; className?: string }) {
-  const words = treeHeader(horizon);
-  return (
-    <div className={cn("text-caption", className)} data-plan-tree-header={horizon.identifier}>
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-text-tertiary">
-        <span data-plan-tree-records>{words.records}</span>
-        {words.states ? <span data-plan-tree-states>{words.states}</span> : null}
-        {words.needsYou ? (
-          <Chip tone="amber">
-            <span data-plan-tree-needs-you={horizon.needsYou}>{words.needsYou}</span>
-          </Chip>
-        ) : null}
-      </div>
-      {horizon.percent !== null ? <SegmentedBar units={horizon.units} percent={horizon.percent} complete={horizon.complete} /> : null}
-    </div>
-  );
+  return <HorizonSummary horizon={horizon} heading={null} risk={false} className={className} />;
 }
 
 /**
@@ -74,11 +63,9 @@ function TreeNode({ row, opener, drag, desk, selected, depth }: { row: TreeRow; 
         </span>
       ) : null}
       {idea.openQuestions > 0 ? (
-        <Chip tone="amber">
-          <span data-plan-tree-questions={idea.openQuestions}>
-            {idea.openQuestions} open question{idea.openQuestions === 1 ? "" : "s"}
-          </span>
-        </Chip>
+        <Amber data-plan-tree-questions={idea.openQuestions}>
+          {idea.openQuestions} open question{idea.openQuestions === 1 ? "" : "s"}
+        </Amber>
       ) : null}
       {row.step && !dimmed ? (
         <span className={cn(row.step.person ? "font-medium text-foreground" : "text-text-secondary")} data-plan-tree-step={idea.nextStep?.need} data-plan-tree-person={row.step.person ? "" : undefined}>
@@ -116,9 +103,9 @@ function TreeNode({ row, opener, drag, desk, selected, depth }: { row: TreeRow; 
           {shipped ? (
             <ShippedMark on={idea.actual.end} outside={idea.delivered !== null} />
           ) : (
-            <Chip tone={row.reserved && !dimmed ? "amber" : undefined}>
-              <span data-plan-tree-state={idea.state}>{STATE_WORDS[idea.state] ?? idea.state}</span>
-            </Chip>
+            <span data-plan-tree-state={idea.state}>
+              <StateGlyph state={idea.state} percent={idea.percent} word />
+            </span>
           )}
           {extras}
         </div>
