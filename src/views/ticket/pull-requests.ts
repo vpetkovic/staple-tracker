@@ -69,19 +69,24 @@ function rank(pr: PullRequestRow): number {
 }
 
 /**
- * The shortest key still unambiguous among `keys`, as the web app shortens them: `#405` when
- * all are in one repository, `shop#405` across repositories, whole when two owners share a
- * repository name. A key without `#` stays as it is.
+ * A key as the list shows it, by the web app's rule: the repository most of the pull requests
+ * are in goes unsaid (`#405`), and one from another repository keeps the shortest name that
+ * tells it apart (`api#4`, or whole when two owners share a repository name). One stray pull
+ * request then never puts a prefix on every line. A key without `#` stays as it is.
  */
 function shortKey(key: string, keys: readonly string[]): string {
   const container = (k: string) => (k.lastIndexOf("#") > 0 ? k.slice(0, k.lastIndexOf("#")) : k);
   const hash = key.lastIndexOf("#");
   if (hash <= 0) return key;
   const mine = key.slice(0, hash);
-  const containers = new Set(keys.map(container));
-  if (containers.size === 1) return key.slice(hash);
+  const counts = new Map<string, number>();
+  for (const k of keys) counts.set(container(k), (counts.get(container(k)) ?? 0) + 1);
+  let home = "";
+  let most = 0;
+  for (const [c, count] of counts) if (count > most) [home, most] = [c, count];
+  if (mine === home) return key.slice(hash);
   const name = (c: string) => c.slice(c.lastIndexOf("/") + 1);
-  const sharing = [...containers].filter((c) => name(c) === name(mine));
+  const sharing = [...counts.keys()].filter((c) => name(c) === name(mine));
   return sharing.length === 1 ? `${name(mine)}${key.slice(hash)}` : key;
 }
 

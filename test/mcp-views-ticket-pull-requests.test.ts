@@ -242,7 +242,7 @@ describe.skipIf(Boolean(reason))("the ticket card's pull requests", () => {
     }
   });
 
-  it("shortens the key to #12 in one repository, repo#12 across two, and keeps it whole when two owners share a name", async () => {
+  it("leaves the repository most are in unsaid, names another one, and keeps a key whole when two owners share a name", async () => {
     const one = await show(card({ subtreePullRequests: [pr(12), pr(13)] }));
     try {
       expect(await one.frame.locator(".ticket-pr-ref").allInnerTexts()).toEqual(["#12", "#13"]);
@@ -251,7 +251,7 @@ describe.skipIf(Boolean(reason))("the ticket card's pull requests", () => {
     }
     const two = await show(card({ subtreePullRequests: [pr(12), pr(4, { key: "acme/api#4", url: "https://github.com/acme/api/pull/4" })] }));
     try {
-      expect(await two.frame.locator(".ticket-pr-ref").allInnerTexts()).toEqual(["shop#12", "api#4"]);
+      expect(await two.frame.locator(".ticket-pr-ref").allInnerTexts()).toEqual(["#12", "api#4"]);
     } finally {
       await two.context.close();
     }
@@ -259,7 +259,7 @@ describe.skipIf(Boolean(reason))("the ticket card's pull requests", () => {
       card({ subtreePullRequests: [pr(12), pr(4, { key: "other/shop#4" }), pr(5, { key: "acme/api#5" })] }),
     );
     try {
-      expect(await shared.frame.locator(".ticket-pr-ref").allInnerTexts()).toEqual(["acme/shop#12", "other/shop#4", "api#5"]);
+      expect(await shared.frame.locator(".ticket-pr-ref").allInnerTexts()).toEqual(["#12", "other/shop#4", "api#5"]);
     } finally {
       await shared.context.close();
     }
