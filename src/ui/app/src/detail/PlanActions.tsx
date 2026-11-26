@@ -14,14 +14,14 @@ import { useSession } from "@/lib/session";
 import type { IssueDetail } from "@/lib/types";
 import { Chip } from "@/views/plan/PlanBoards";
 import { PlanTree } from "@/views/plan/PlanTree";
-import { HorizonSummary } from "@/views/plan/plan-parts";
+import { Amber, Flag, HorizonSummary, StateGlyph } from "@/views/plan/plan-parts";
 import { planTree } from "@/views/plan/plan-tree";
 import { dayLabel } from "@/views/plan/plan-model";
 import type { IssueActionsController } from "./IssueActions";
 import { cn } from "./parts/cn";
 import { RunSettingDialog, runSettingLabel } from "@/views/plan/RunSetting";
 import { horizonActionItems, planActionItems, planPrimary, type PlanItem } from "./plain-actions";
-import { DeliveredMark, ShippedCheck, ShippedMark } from "./ShippedMark";
+import { DeliveredMark, ShippedMark } from "./ShippedMark";
 import { STATE_WORDS, requestScaffold } from "./plan-record";
 import { openDetailTab } from "./tabs/registry";
 
@@ -43,43 +43,47 @@ function useChoose(workspace: string, controller: IssueActionsController, epicRe
   };
 }
 
-/** The idea's status line: what it is and where it stands, in words, never a ticket number. */
+/**
+ * The idea's status line, one line: its state glyph and words (the percent once started, the
+ * horizon it is aimed at or on, the planned window), then the flags. Never a ticket number.
+ */
 export function IdeaStatusLine({ record, className, children }: { record: IdeaDetailData; className?: string; children?: React.ReactNode }) {
   const { idea } = record;
   return (
     <div className={cn("flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2", className)} data-status-line="" data-idea-status={idea.state}>
-      <span className="inline-flex h-7 items-center gap-1.5 rounded-full border bg-surface-raised px-2.5 text-label font-medium" data-idea-state-chip={idea.state}>
-        {idea.state === "shipped" ? <ShippedCheck label="" className="size-3.5 [&_svg]:size-2.5" /> : null}
-        Idea · {STATE_WORDS[idea.state]}
-        {idea.planIncomplete.length > 0 ? " · plan incomplete" : ""}
-      </span>
-      <p className="m-0 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-body text-text-secondary" data-status-sentence="">
-        {idea.state === "shipped" ? idea.delivered ? <DeliveredMark on={idea.delivered.on} /> : <ShippedMark on={idea.actual.end} withYear /> : <span>{sentence(record)}</span>}
-        {idea.late ? <Chip tone="red">late</Chip> : null}
-        {idea.notStarted ? <Chip tone="amber">not started</Chip> : null}
+      {/* Inline, not flex: a long line wraps as words, with the glyph leading its first line. */}
+      <p className="m-0 min-w-0 flex-[1_1_16rem] text-body text-text-secondary [&_[data-plan-flag]]:ml-2 [&_[data-plan-flag]]:align-[1px]" data-status-sentence="">
+        {idea.state === "shipped" && idea.delivered ? (
+          <DeliveredMark on={idea.delivered.on} className="align-middle" />
+        ) : (
+          <>
+            <StateGlyph state={idea.state} percent={idea.percent} className="mr-2 size-4 align-[-3px] [&_[data-shipped-check]]:size-4" />
+            <span data-idea-state-words="">{statusWords(record)}</span>
+          </>
+        )}
+        {idea.planIncomplete.length > 0 ? (
+          <>
+            {" · "}
+            <Amber data-idea-plan-incomplete="">plan incomplete</Amber>
+          </>
+        ) : null}
+        {idea.late && idea.state !== "shipped" ? <Flag tone="late" /> : null}
+        {idea.notStarted ? <Flag tone="notStarted" /> : null}
       </p>
       {children}
     </div>
   );
 }
 
-function sentence(record: IdeaDetailData): string {
+/** `Exploring · aimed at ◇ Post-MVP · planned Aug 12 – Apr 24, 2027`: what the state and the payload say, in words. */
+function statusWords(record: IdeaDetailData): string {
   const { idea, horizon } = record;
-  const where = horizon ? `on ${horizon.name}${horizon.date ? ` (${dayLabel(horizon.date, false)})` : ""}` : "not scheduled";
-  switch (idea.state) {
-    case "raw":
-      return "Captured, not explored yet";
-    case "exploring":
-      return `Being explored, ${where}`;
-    case "shaped":
-      return `Ready to start, ${where}`;
-    case "started":
-      return `Underway, ${where}${idea.percent !== null ? ` · ${idea.percent}% done` : ""}`;
-    case "shipped":
-      return `Shipped${idea.actual.end ? ` ${dayLabel(idea.actual.end)}` : ""}`;
-    case "dropped":
-      return "Dropped";
-  }
+  const state = idea.state === "shipped" && idea.actual.end ? `Shipped ${dayLabel(idea.actual.end)}` : (STATE_WORDS[idea.state] ?? idea.state);
+  const words = [idea.state === "started" && idea.percent !== null ? `${state} · ${idea.percent}% done` : state];
+  if (horizon) words.push(`${idea.state === "exploring" || idea.state === "raw" ? "aimed at" : "on"} ◇ ${horizon.name}${horizon.date ? ` (${dayLabel(horizon.date, false)})` : ""}`);
+  else if (idea.state === "shaped" || idea.state === "started") words.push("not scheduled");
+  if (idea.state !== "shipped" && idea.planned.start && idea.planned.target) words.push(`planned ${dayLabel(idea.planned.start, false)} – ${dayLabel(idea.planned.target)}`);
+  return words.join(" · ");
 }
 
 /** The idea's one primary action (the step forward its state offers) as a button. */
