@@ -13,7 +13,9 @@ rules with assumptions from another repository.
 ## Resolve the workspace and runtime
 
 Use the configured Staple MCP tools or the installed `staple` CLI. For CLI reads
-and writes, request `--json`, after the command and its positional arguments.
+and writes, request `--json`. The global flags `--json`, `--ws`, `--db` and `--agent`
+mean the same before or after the command: `staple --json --ws <slug> show <ref>` is
+`staple show <ref> --json --ws <slug>`.
 If Staple is unavailable, report that and follow the project's setup instructions.
 Do not run a source checkout against live tracker data or read its database with SQL.
 
@@ -21,11 +23,14 @@ The workspace is normally discovered from the working directory, including linke
 Git worktrees. For another project or an ambiguous location, use MCP's `ws` with
 its registered slug or prefix, or CLI `--ws <slug>`. `staple hub ls --json` lists
 registered workspaces. Never guess a database path or initialize a second tracker
-to work around a missing workspace.
+to work around a missing workspace. When the runtime and a workspace disagree,
+`staple doctor --ws <slug> --json` diagnoses that workspace read-only, from any
+directory, and prints the repair for each failed check.
 
-Use one agent identity throughout the session. Pass MCP `actor` on writes, or set
-`STAPLE_AGENT` for CLI commands. Keep the identity used to claim work when commenting
-and checkpointing; those writes establish the holder's liveness.
+Use one agent identity throughout the session. Pass MCP `actor` on writes. For CLI
+commands, set `STAPLE_AGENT` or pass `--agent <name>`, which every write accepts
+(`staple --agent <name> new "<title>" --json`). Keep the identity used to claim work
+when commenting and checkpointing; those writes establish the holder's liveness.
 
 ## Choose the narrow operation
 
