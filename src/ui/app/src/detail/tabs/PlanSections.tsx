@@ -121,6 +121,15 @@ function Prose({ text, fold, testId }: { text: string; fold?: boolean; testId: s
   );
 }
 
+/**
+ * After Escape closes a section's editor, focus goes back where the person came from: the
+ * section's Edit, else (an empty section) its "+ Section" chip or its write box.
+ */
+function returnFocus(from: HTMLElement, testId: string) {
+  const tab = from.closest("[data-plan-tab]");
+  requestAnimationFrame(() => tab?.querySelector<HTMLElement>(`[data-plan-section-edit="${testId}"], [data-plan-section-empty="${testId}"]`)?.focus());
+}
+
 function SectionInput({ value, onChange, onBlur, onCancel, placeholder, rows, testId }: { value: string; onChange: (value: string) => void; onBlur: () => void; onCancel: () => void; placeholder: string; rows: number; testId: string }) {
   return (
     <Textarea
@@ -129,7 +138,12 @@ function SectionInput({ value, onChange, onBlur, onCancel, placeholder, rows, te
       rows={rows}
       onChange={(event) => onChange(event.target.value)}
       onBlur={onBlur}
-      onKeyDown={(event) => event.key === "Escape" && (event.preventDefault(), onCancel())}
+      onKeyDown={(event) => {
+        if (event.key !== "Escape") return;
+        event.preventDefault();
+        returnFocus(event.currentTarget, testId);
+        onCancel();
+      }}
       placeholder={placeholder}
       className="staple-plan-prose-input"
       data-plan-section-input={testId}

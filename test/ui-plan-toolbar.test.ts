@@ -190,3 +190,20 @@ it("never hides a filter that is on behind the folded search button", async () =
     await close();
   }
 }, 20_000);
+
+it("closes the + Horizon form on Escape and returns focus to its button", async () => {
+  const { page, close } = await onHorizons(1280);
+  try {
+    await page.evaluate(() => {
+      const view = document.querySelector<HTMLElement>("[data-plan-view]")!;
+      view.style.flex = "none";
+      view.style.width = "1100px";
+    });
+    await page.locator("[data-plan-add-horizon]").click();
+    await page.getByRole("textbox", { name: "New horizon name" }).press("Escape");
+    await page.locator("[data-plan-add-horizon-form]").waitFor({ state: "detached" });
+    await expect.poll(() => page.locator("[data-plan-add-horizon]").evaluate((button) => button === document.activeElement)).toBe(true);
+  } finally {
+    await close();
+  }
+}, 20_000);

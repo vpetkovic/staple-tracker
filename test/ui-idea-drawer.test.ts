@@ -193,3 +193,31 @@ it("opens the scaffold preview in the panel from the header's Scaffold, and keep
     await phone.close();
   }
 }, 20_000);
+
+it("returns focus to the section's Edit, or its chip, when Escape closes an editor", async () => {
+  const { page, close } = await openIdea(exploring);
+  try {
+    const active = () => page.evaluate(() => ({ ...(document.activeElement as HTMLElement | null)?.dataset }));
+    // A written section: back to its Edit.
+    await page.locator('[data-plan-section-edit="goal"]').click();
+    await page.locator('[data-plan-section-input="goal"]').press("Escape");
+    await expect.poll(active).toMatchObject({ planSectionEdit: "goal" });
+    // An empty one opened from its chip: back to that chip (no other test writes Dependencies).
+    await page.locator('[data-plan-unwritten] [data-plan-section-empty="dependencies"]').click();
+    await page.locator('[data-plan-section-input="dependencies"]').press("Escape");
+    await expect.poll(active).toMatchObject({ planSectionEmpty: "dependencies" });
+    expect(await page.locator('[data-plan-section="dependencies"]').count()).toBe(0);
+  } finally {
+    await close();
+  }
+}, 20_000);
+
+it("puts focus in the Delivered form's date when it opens", async () => {
+  const { page, close } = await openIdea(exploring);
+  try {
+    await page.locator("[data-plan-delivered-open]").click();
+    await expect.poll(() => page.locator("[data-plan-delivered-on]").evaluate((input) => input === document.activeElement)).toBe(true);
+  } finally {
+    await close();
+  }
+}, 20_000);

@@ -387,7 +387,7 @@ function RareActions({ record, write }: { record: IdeaDetailData; write: PlanWri
           <h3 className="m-0 text-body font-semibold text-foreground">Delivered outside the tracker</h3>
           <p className="m-0 mt-1 text-label text-text-secondary">Work that shipped before or outside the tracker: it reads shipped, with no ticket.</p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <input type="date" aria-label="Delivered on" className="h-9 rounded-md border bg-field px-2 pointer-coarse:text-[16px]" value={on} max={today} onChange={(event) => setOn(event.target.value)} data-plan-delivered-on />
+            <input type="date" autoFocus aria-label="Delivered on" className="h-9 rounded-md border bg-field px-2 pointer-coarse:text-[16px]" value={on} max={today} onChange={(event) => setOn(event.target.value)} data-plan-delivered-on />
             <Button size="sm" disabled={busy || on === ""} onClick={() => void mark()} data-plan-action="mark_delivered">
               Mark delivered
             </Button>

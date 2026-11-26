@@ -7,7 +7,7 @@
  * would refuse is never marked as a target.
  */
 import { Plus } from "lucide-react";
-import { useState, type DragEvent, type FormEvent } from "react";
+import { useEffect, useRef, useState, type DragEvent, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { IdeaData, PlanData } from "@/lib/plan-types";
@@ -238,6 +238,14 @@ export function AddHorizon({ write, row = false }: { write: Write; row?: boolean
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [date, setDate] = useState("");
+  // Escape closes the form and gives focus back to the button that opened it.
+  const trigger = useRef<HTMLButtonElement>(null);
+  const refocus = useRef(false);
+  useEffect(() => {
+    if (open || !refocus.current) return;
+    refocus.current = false;
+    trigger.current?.focus();
+  }, [open]);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!name.trim()) return;
@@ -249,19 +257,29 @@ export function AddHorizon({ write, row = false }: { write: Write; row?: boolean
   };
   if (!open) {
     return row ? (
-      <Button variant="outline" className="min-h-11 w-full justify-center" onClick={() => setOpen(true)} data-plan-add-horizon-row>
+      <Button ref={trigger} variant="outline" className="min-h-11 w-full justify-center" onClick={() => setOpen(true)} data-plan-add-horizon-row>
         <Plus aria-hidden />
         Add a horizon
       </Button>
     ) : (
-      <Button variant="outline" size="sm" className="h-8" title="Add a horizon" onClick={() => setOpen(true)} data-plan-add-horizon>
+      <Button ref={trigger} variant="outline" size="sm" className="h-8" title="Add a horizon" onClick={() => setOpen(true)} data-plan-add-horizon>
         <Plus aria-hidden />
         Horizon
       </Button>
     );
   }
   return (
-    <form onSubmit={submit} className="flex flex-wrap items-center gap-2 @max-[760px]/plan:w-full" data-plan-add-horizon-form>
+    <form
+      onSubmit={submit}
+      onKeyDown={(event) => {
+        if (event.key !== "Escape") return;
+        event.preventDefault();
+        refocus.current = true;
+        setOpen(false);
+      }}
+      className="flex flex-wrap items-center gap-2 @max-[760px]/plan:w-full"
+      data-plan-add-horizon-form
+    >
       <Input value={name} autoFocus onChange={(event) => setName(event.target.value)} placeholder="Name, e.g. Q2" aria-label="New horizon name" className="h-9 w-40" />
       <input type="date" value={date} onChange={(event) => setDate(event.target.value)} aria-label="New horizon date (optional)" className="h-9 rounded-md border bg-field px-2 text-label" />
       <Button type="submit" size="sm">Add</Button>
