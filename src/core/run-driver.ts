@@ -43,6 +43,20 @@
  * resumes the ticket: one session per ticket, never two. A second Ctrl-C (or SIGTERM)
  * skips the grace and KILLs the session at once.
  *
+ * ## A live session keeps its claim live
+ *
+ * The take checks the ticket out to the run's actor, which opens its worker attempt. While
+ * the session's process is alive the driver records a heartbeat on that attempt
+ * (`staple attempt heartbeat`, design/execution-telemetry.md "Heartbeat") on the poll tick
+ * it already has, at most once per tick and no more often than every
+ * {@link ATTEMPT_HEARTBEAT_MS}: a session that reads and thinks for an hour without writing
+ * still reads as live, and `checkout --steal-if-stale` refuses to take it. Once the process
+ * exits the heartbeats stop, so a ticket left held by a dead session goes quiet on its own.
+ * A heartbeat never fails the driver. A refusal because the actor no longer holds an open
+ * attempt (the session handed the ticket on, released it, or lost it to a steal) is the
+ * claim leaving the session's hands, and is skipped in silence; any other refusal is
+ * reported once per session (`attempt_heartbeat_failed`) and the session goes on.
+ *
  * ## No git
  *
  * The driver spawns exactly one kind of process, the provider's session, and runs no
@@ -60,6 +74,9 @@ import { checkpointedSince, worklogReminder } from "./run-worklog.js";
 import type { ContinueAnswer, RunStore, RunTicketOutcome } from "./run-store.js";
 import type { WorkspaceStore } from "./store.js";
 import { StapleError, nowIso } from "./types.js";
+
+/** The least time between two heartbeats on a session's attempt, whatever `--poll` is. */
+export const ATTEMPT_HEARTBEAT_MS = 10_000;
 
 /** A headless agent CLI, as data. */
 export interface DriveProvider {
@@ -184,6 +201,7 @@ export type DriveEvent =
   | { event: "main_line_moved"; ref: string; moves: string[] }
   | { event: "take"; ref: string; title: string; resumed: boolean; why: string; recorded: ContinueAnswer["recorded"] }
   | { event: "session_started"; ref: string; pid: number; command: string; brief: string; stdout: string; stderr: string }
+  | { event: "attempt_heartbeat_failed"; ref: string; message: string }
   | { event: "session_ended"; ref: string; ended: SessionResult["ended"]; exitCode: number | null; signal: string | null; seconds: number; outcome: RunTicketOutcome | null; reason: string | null }
   | { event: "wait"; reason: string; message: string; retryAfterSeconds: number; recorded: ContinueAnswer["recorded"] }
   | { event: "stop"; reason: string; message: string; detail: Record<string, unknown>; recorded: ContinueAnswer["recorded"] };
@@ -207,6 +225,8 @@ export interface DriveOptions {
   retryAfterSeconds: number | null;
   /** How often the run is read (and the heartbeat written) while a session works or the driver waits. */
   pollMs: number;
+  /** The least time between two heartbeats on the session's attempt ({@link ATTEMPT_HEARTBEAT_MS}). */
+  attemptHeartbeatMs?: number;
   /** Between TERM and KILL. */
   killGraceMs: number;
   /** The environment sessions inherit, before the driver's own variables. */
@@ -392,7 +412,14 @@ async function driveLocked(options: DriveOptions): Promise<DriveResult> {
 
       const sessionStartedAt = nowIso();
       const mainLineBefore = mainLineSnapshot(options.cwd);
-      const result = await runSession(options, command, env, { stdout: `${stem}.stdout.log`, stderr: `${stem}.stderr.log`, ref: answer.ref, brief: values.brief_file }, beat);
+      const result = await runSession(
+        options,
+        command,
+        env,
+        { stdout: `${stem}.stdout.log`, stderr: `${stem}.stderr.log`, ref: answer.ref, brief: values.brief_file },
+        beat,
+        attemptHeartbeat(options, answer.ref, answer.run.actor),
+      );
       const moves = mainLineMoves(mainLineBefore, mainLineSnapshot(options.cwd));
       if (moves.length > 0) {
         const why = `touched_main_line: the session on ${answer.ref} moved ${moves.join(", ")}`;
@@ -470,6 +497,32 @@ function outcomeOf(
   return {};
 }
 
+/**
+ * The heartbeat on the attempt of the ticket a session works, for the session's poll tick:
+ * sent when {@link DriveOptions.attemptHeartbeatMs} has passed since the last one. The
+ * worker lane is named, so an actor that also coordinates the ticket from the orchestrator
+ * lane is not refused for holding one of each.
+ */
+function attemptHeartbeat(options: DriveOptions, ref: string, actor: string): () => void {
+  const everyMs = options.attemptHeartbeatMs ?? ATTEMPT_HEARTBEAT_MS;
+  let last = -Infinity;
+  const reported = new Set<string>();
+  return () => {
+    if (Date.now() - last < everyMs) return;
+    last = Date.now();
+    try {
+      options.store.recordAttemptEvent(ref, "heartbeat", actor, { role: "worker" });
+    } catch (error) {
+      // Not the session's to keep live any more: it handed the ticket on, released it, or lost it.
+      if (error instanceof StapleError && error.code === "conflict") return;
+      const message = error instanceof Error ? error.message : String(error);
+      if (reported.has(message)) return;
+      reported.add(message);
+      options.report({ event: "attempt_heartbeat_failed", ref, message });
+    }
+  };
+}
+
 /** Sleep up to `ms`, reading the run each poll: an ended run cuts the wait short (the next continue says why). */
 async function waitWhileLive(options: DriveOptions, ms: number, beat: () => void): Promise<void> {
   const until = Date.now() + ms;
@@ -516,6 +569,7 @@ async function runSession(
   env: NodeJS.ProcessEnv,
   files: { stdout: string; stderr: string; ref: string; brief: string },
   beat: (change?: Partial<DriverRecord>) => void,
+  heartbeat: () => void,
 ): Promise<SessionResult> {
   const out = openSync(files.stdout, "a");
   const err = openSync(files.stderr, "a");
@@ -546,6 +600,8 @@ async function runSession(
     options.report({ event: "session_started", ref: files.ref, pid, command: command.display, brief: files.brief, stdout: files.stdout, stderr: files.stderr });
     beat({ ticket: files.ref, sessionPid: pid, sessionStartedAt: nowIso() });
     if (spawned !== "exited") {
+      // A resumed ticket may have been quiet for a while: its first beat is at once.
+      heartbeat();
       while (finished === null) {
         await Promise.race([exited, sleep(options.pollMs, options.signal, true)]).catch(() => undefined);
         if (finished !== null) break;
@@ -563,6 +619,7 @@ async function runSession(
           await endGroup(pid, options.killGraceMs, options.force);
           break;
         }
+        heartbeat();
       }
     }
   } catch (error) {

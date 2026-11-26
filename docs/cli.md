@@ -306,6 +306,7 @@ Guide: [Budget and estimates](budget-and-estimates.md).
 | `staple timing quality` | How much of the recorded time can be trusted. |
 | `staple attempts <ref>` | Every agent session on a ticket. `staple attempt <id>` shows one. |
 | `staple attempt pause <ref> --reason R` | Report a pause on the ticket you hold. `resume`, `milestone -m label` and `interrupt` too. |
+| `staple attempt heartbeat <ref>` | Say the session on the ticket you hold is still alive, so the claim does not read as silent while you work without writing. Machine-local: no event, nothing synced. |
 | `staple budget` | Each account's usage limits: what is left, when it resets, and your pace. |
 | `staple budget setup --claude-account A --yes` | Turn on capture of Claude Code and Codex usage in one step. Without `--yes` it shows the plan. `budget unsetup --yes` reverses it. |
 | `staple budget status` | Whether capture is working, and what is missing. |

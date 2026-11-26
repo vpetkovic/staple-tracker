@@ -541,7 +541,7 @@ export class AttemptLedger {
   // ------------------------------------------------------------- reporting
 
   /**
-   * `staple attempt pause|resume|milestone|interrupt`: an event on the issue's open
+   * `staple attempt pause|resume|milestone|heartbeat|interrupt`: an event on the issue's open
    * attempt. `conflict` when there is none in the state the event needs, `validation` for a
    * reason the event cannot carry.
    */
@@ -601,6 +601,22 @@ export class AttemptLedger {
         this.transition(attempt, { kind: "attempt_milestone", at, actor, detection, reason: null, detail });
         break;
       }
+      case "heartbeat": {
+        /**
+         * The session is still alive (`design/execution-telemetry.md`, "Heartbeat"): the newest
+         * instant, upserted on the attempt's one row and never moved back. Machine-local and
+         * silent: no transition, no event, no operation. It is not evidence of work, so the
+         * attempt's timing is untouched; it keeps the holder's claim from reading as silent.
+         * Running or paused both count: a paused attempt is still open and still held.
+         */
+        this.db
+          .prepare(
+            `INSERT INTO attempt_heartbeats (attempt_id, at) VALUES (?, ?)
+             ON CONFLICT (attempt_id) DO UPDATE SET at = excluded.at WHERE excluded.at > attempt_heartbeats.at`,
+          )
+          .run(attempt.id, at);
+        break;
+      }
       case "interrupt": {
         if (reason === undefined) throw new StapleError("validation", `An interruption needs --reason, one of ${REPORTED_INTERRUPT_REASONS.join(", ")}.`);
         if ((INFERRED_INTERRUPT_REASONS as readonly string[]).includes(reason) || ORPHAN_END_REASONS.has(reason)) {
@@ -617,7 +633,7 @@ export class AttemptLedger {
         break;
       }
       default:
-        throw new StapleError("validation", `Unknown attempt event "${event}": use pause, resume, milestone or interrupt.`);
+        throw new StapleError("validation", `Unknown attempt event "${event}": use pause, resume, milestone, heartbeat or interrupt.`);
     }
     this.touched = attempt.id;
     return readAttempt(this.db, attempt.id)!;

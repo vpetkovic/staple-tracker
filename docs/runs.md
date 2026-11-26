@@ -54,6 +54,10 @@ content. Write "none" when appropriate. Comments do not substitute for a worklog
 A missing, older or incomplete checkpoint fails the session as `no_worklog`.
 Interactive run hooks ask for the same checkpoint before advancing, using the
 current ticket tenure as the cutoff. Human stop and loop-limit escapes still apply.
+While a session's process is alive, the driver sends a heartbeat on its ticket's attempt
+on every poll (at most every 10 seconds), so a session that reads and thinks for an hour
+without writing is never mistaken for a dead one and `checkout --steal-if-stale` refuses it.
+When the process exits, the heartbeats stop and the claim goes quiet on its own.
 `--instructions <file>` adds your repository's rules. Sessions get the permissions your
 Claude Code or Codex setup allows, no more. `--dry-run` prints the next ticket, the
 command and the brief, and starts nothing.

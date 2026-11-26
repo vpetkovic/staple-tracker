@@ -54,7 +54,7 @@ The loop an agent follows, described in
 | `export_file` | Write one file's bytes to a path | `staple file get` | yes |
 | `remove_file` | Remove a file | `staple file rm` | yes |
 | `events_since` | What changed since a point in the event log | `staple events --since` | no |
-| `record_attempt_event` | Report a pause, resume, checkpoint or interruption on the ticket you hold | `staple attempt pause` (and `resume`, `milestone`, `interrupt`) | yes |
+| `record_attempt_event` | Report a pause, resume, checkpoint, heartbeat or interruption on the ticket you hold. A heartbeat keeps your claim from reading as silent and stays on this machine | `staple attempt pause` (and `resume`, `milestone`, `heartbeat`, `interrupt`) | yes |
 
 ## Planning
 

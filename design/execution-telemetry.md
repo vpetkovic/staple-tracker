@@ -15,7 +15,7 @@ write and read them.
   (`release_task`). Pass `--harness`, `--harness-session`, `--model` and
   `--account` to say which harness and account did the work.
 - An agent reports on the attempt it holds with `staple attempt
-  pause|resume|milestone|interrupt` (MCP `record_attempt_event`). A coordinator
+  pause|resume|milestone|heartbeat|interrupt` (MCP `record_attempt_event`). A coordinator
   opens an orchestrator attempt with `staple attempt open <ref> --role
   orchestrator`. `staple attempt reconstruct` rebuilds attempts from older events.
 - Read attempts with `staple show` (`attempts: {current, last, count}`),
@@ -556,6 +556,44 @@ count is always the literal `1`, because exactly one id is hashed. It is never a
 counter. Because
 the key is derived from the transition id, re-applying a pulled transition
 re-derives the same key and cannot duplicate the timeline.
+
+### Heartbeat
+
+`staple attempt heartbeat <ref>` (MCP `record_attempt_event`, `event:
+"heartbeat"`) says the session working an open attempt is still alive. It is
+accepted only from the attempt's own agent, on an attempt that is running or
+paused, and refused (`conflict`) for anyone else and for an ended attempt.
+
+It is **not a transition**. It is not evidence of work and moves nothing in the
+attempt's timing (`activeSeconds`, the attempt's `idleSeconds`, the orphan
+bound). It records the newest instant on the attempt's one row in
+`attempt_heartbeats` (workspace migration 025), upserted and never moved back,
+and writes no event, no transition and no operation: it is **machine-local**,
+like `runs`. One beat per minute for a day stays one row, the timeline stays
+quiet, and nothing travels.
+
+What reads it is the claim. A held issue's `lastActivityAt` is the newest of the
+holder's events, comments and document revisions on it and the heartbeat of the
+holder's open attempt on it (`HOLDER_LAST_ACTIVITY` in `store.ts`, the one
+definition `claimActivityFor` and `claimActivity` share), floored at the
+checkout. A session that works without writing stays live, and one whose
+process exited stops beating and goes quiet. Every reader of the claim agrees:
+`show`/`get_task`, attention's silent claims, the queue, the stale badge,
+`checkout --steal-if-stale` and `release --if-stale`. Because the heartbeat
+stays on the machine that wrote it, the rule holds where the attempt lives;
+another device judges the claim by the holder's synced writes, as claims
+themselves are local to a database unless a lease is held.
+
+Who sends it: an interactive session that works for a long time without writing
+runs the verb itself (the agent guide says so), and `staple run drive` sends it
+for the sessions it launches. The take checked the ticket out to the run's actor,
+which opened the worker attempt, so the driver beats that attempt (`role:
+worker`) on the poll tick it already has while the session's process is alive, no
+more often than every 10 s. The heartbeat never fails the driver: a `conflict`
+(the session handed the ticket on, released it, or lost it to a steal) is the
+claim leaving the session's hands and is skipped in silence, and any other
+refusal is reported once per session as `attempt_heartbeat_failed`. When the
+process exits the beats stop, so a ticket a dead session left held goes quiet.
 
 ### Concurrency context
 
@@ -1374,7 +1412,8 @@ coverage gaps apply this one rule.
 
 ## Where it lives and what synchronizes
 
-**Attempts and their transitions are repository state.** They live in the
+**Attempts and their transitions are repository state.** (An attempt's
+[heartbeat](#heartbeat) is not: it is machine-local and never replicates.) They live in the
 workspace database beside the issues they describe (the `attempts` and
 `attempt_transitions` tables) and, when the repository is connected, replicate
 as two entity kinds:

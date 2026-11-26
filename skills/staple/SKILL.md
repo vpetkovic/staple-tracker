@@ -30,7 +30,12 @@ directory, and prints the repair for each failed check.
 Use one agent identity throughout the session. Pass MCP `actor` on writes. For CLI
 commands, set `STAPLE_AGENT` or pass `--agent <name>`, which every write accepts
 (`staple --agent <name> new "<title>" --json`). Keep the identity used to claim work
-when commenting and checkpointing; those writes establish the holder's liveness.
+when commenting and checkpointing; those writes establish the holder's liveness. A long
+interactive session or stretch that writes nothing may run `record_attempt_event` with
+`event: "heartbeat"` (CLI `staple attempt heartbeat <ref>`) on your open attempt every few
+minutes to keep the claim from reading as silent; a session that `run drive` launches gets
+these heartbeats from its driver automatically. It stays on this machine, so another device still
+sees only your synced writes.
 
 ## Choose the narrow operation
 

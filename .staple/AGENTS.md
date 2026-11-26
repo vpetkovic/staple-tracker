@@ -155,7 +155,7 @@ Set `STAPLE_AGENT` (or pass `--agent`, which every write accepts before or after
 command, or MCP `actor`) and **use the same value you claimed with for the entire session.**
 
 This is not bookkeeping. Liveness is derived from your claim plus the newest
-event or comment *by the holder*. Write a comment under a different name and it
+event, comment, document revision or attempt heartbeat *by the holder*. Write a comment under a different name and it
 does not count as your activity: your own task reads as silent, and you look
 stealable to the next agent that walks past. Set it once, at the top:
 
@@ -279,6 +279,19 @@ Every `in_progress` task shows its claim: `ls` and `show` print
 `held 2h · silent 45m`, and `--json` / the MCP `claim` object carry `heldBy`,
 `lastActivityAt`, `heldSeconds`, `idleSeconds`. That is how you tell an agent
 that is working from one a usage limit killed hours ago.
+
+Silence counts the holder only: their events, comments and document revisions
+on the task, and the heartbeat of their **open** attempt. A long interactive
+session or stretch of work that writes nothing (a build, a test run, a long
+edit) stays live if you run `staple attempt heartbeat <ref>` (MCP
+`record_attempt_event` with `event: "heartbeat"`) every few minutes.
+`staple run drive` does it for you: while a session it launched is alive, the
+driver beats that session's attempt on its poll. When the process exits the
+beats stop and the claim goes quiet, which is the point. A heartbeat is machine-local: it
+writes no event or transition and does not sync, so another machine still judges
+your claim by your synced writes (comments, the worklog). Another actor's
+heartbeat or read never refreshes your claim, and an ended attempt's heartbeat
+never counts.
 
 Taking over is **explicit and opt-in**:
 
