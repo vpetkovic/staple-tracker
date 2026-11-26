@@ -23,7 +23,7 @@ let browser: Browser;
 let ui: UiHandle;
 let home: string;
 let launch: { id: string; identifier: string; name: string };
-let next: { id: string };
+let next: { id: string; identifier: string; name: string };
 let parent: string;
 let first: string;
 let second: string;
@@ -47,6 +47,12 @@ beforeAll(async () => {
   solo = plan.capture({ title: "Audit trail", maturity: "shaped", plan: READY_PLAN, horizon: launch.id }, "Mira", person).id;
   // A dated horizon, so its header offers "clear" beside the first one's "add a date".
   plan.updateHorizon(next.id, { date: "2099-03-05" }, "Mira", person);
+  // Enough on the second horizon for the lens to scroll under its header, with work linked so it has a percent.
+  for (const title of ["Gift wrap", "Store credit", "Loyalty points", "Price alerts", "Wish lists", "Bundles", "Back in stock", "Size guide", "Reviews", "Returns"]) {
+    plan.capture({ title, maturity: "shaped", plan: READY_PLAN, horizon: next.id }, "Mira", person);
+  }
+  const linked = plan.view().ideas.find((idea) => idea.title === "Gift wrap")!.id;
+  plan.adopt(linked, ws.store.createIssue({ title: "Wrap paper" }).identifier, "agent");
   ws.store.db.close();
   ui = startUiServer({ port: 0, hub: true });
   await once(ui.server, "listening");
@@ -58,8 +64,8 @@ afterAll(async () => {
   if (home) rmSync(home, { recursive: true, force: true });
 });
 
-async function onHorizons(width = 1280): Promise<{ page: Page; close: () => Promise<void> }> {
-  const context = await browser.newContext({ viewport: { width, height: 844 } });
+async function onHorizons(width = 1280, height = 844): Promise<{ page: Page; close: () => Promise<void> }> {
+  const context = await browser.newContext({ viewport: { width, height } });
   const page = await context.newPage();
   page.setDefaultTimeout(5000);
   await page.goto(route("&ws=larkspur&plan-lens=horizons"));
@@ -165,7 +171,8 @@ it("gives the header's fold, name, clear and add a date a tap area of at least 3
       };
       for (const [name, selector] of Object.entries(controls)) {
         // A tap 16px either side of the control's centre still lands on it.
-        const reach = await page.locator(selector).first().evaluate((control) => {
+        // Under 760px the date links sit below the header's first line; the copy drawn at this width.
+        const reach = await page.locator(selector).filter({ visible: true }).first().evaluate((control) => {
           const box = control.getBoundingClientRect();
           const x = box.left + box.width / 2;
           const y = box.top + box.height / 2;
@@ -204,4 +211,74 @@ it("shows a row's ⋯ without hover on a touch device at tablet width, and keeps
   };
   expect(await opacity(true)).toBe("1");
   expect(await opacity(false)).toBe("0");
+}, 30_000);
+
+/** Scroll the lens so the second horizon's header is stuck with its rows under it. */
+async function stickNext(page: Page) {
+  await page.locator(`[data-plan-column="h:${next.id}"]`).evaluate((section: HTMLElement) => {
+    const board = section.closest<HTMLElement>("[data-plan-board]")!;
+    board.scrollTop = section.offsetTop + 120;
+    if (Math.round(board.scrollTop) !== section.offsetTop + 120) throw new Error(`the lens scrolls only to ${board.scrollTop}`);
+  });
+  await page.waitForTimeout(100);
+}
+
+it("sticks only a one-line horizon header on a phone, with the name and the percent", async () => {
+  const { page, close } = await onHorizons(390);
+  try {
+    const hairline = () => page.locator(`[data-plan-column="h:${next.id}"]`).evaluate((section) => {
+      const line = [...section.querySelectorAll<HTMLElement>("*")].find((el) => getComputedStyle(el).position === "sticky" && getComputedStyle(el).display !== "contents")!;
+      return getComputedStyle(line).borderBottomColor;
+    });
+    // In place, the line and the bar below it read as one header; stuck, a hairline ends it.
+    expect(await hairline()).toBe("rgba(0, 0, 0, 0)");
+    await stickNext(page);
+    await expect.poll(hairline).not.toBe("rgba(0, 0, 0, 0)");
+    const stuck = await page.locator(`[data-plan-column="h:${next.id}"]`).evaluate((section) => {
+      const board = section.closest<HTMLElement>("[data-plan-board]")!.getBoundingClientRect();
+      // What sits at the top of the scroller is the stuck part of the header.
+      const top = document.elementFromPoint(board.left + 60, board.top + 4)!;
+      // The header box gives way on a phone (`display: contents`): the stuck part is a sticky element with a box.
+      const line = [...section.querySelectorAll<HTMLElement>("*")].find((el) => el.contains(top) && getComputedStyle(el).position === "sticky" && getComputedStyle(el).display !== "contents")!;
+      const box = line.getBoundingClientRect();
+      const bar = section.querySelector("[data-plan-tree-bar]")!.getBoundingClientRect();
+      return { offset: Math.round(box.top - board.top), height: Math.round(box.height), text: line.textContent ?? "", barGone: bar.bottom <= box.bottom };
+    });
+    expect(stuck.offset).toBe(0);
+    expect(stuck.height).toBeLessThanOrEqual(44);
+    expect(stuck.text).toContain(next.name);
+    expect(stuck.text).toMatch(/\d+%/);
+    // The bar, its flags and the counts went with the content.
+    expect(stuck.barGone).toBe(true);
+  } finally {
+    await close();
+  }
+}, 30_000);
+
+it("keeps the whole horizon header stuck on a desk", async () => {
+  const { page, close } = await onHorizons(1280, 480);
+  try {
+    await stickNext(page);
+    const stuck = await page.locator(`[data-plan-horizon="${next.identifier}"]`).evaluate((header) => {
+      const board = header.closest<HTMLElement>("[data-plan-board]")!.getBoundingClientRect();
+      const box = header.getBoundingClientRect();
+      const bar = header.querySelector("[data-plan-tree-bar]")!.getBoundingClientRect();
+      return { offset: Math.round(box.top - board.top), barInside: bar.top >= box.top && bar.bottom <= box.bottom, height: Math.round(box.height) };
+    });
+    expect(stuck).toMatchObject({ offset: 0, barInside: true });
+    expect(stuck.height).toBeGreaterThan(60);
+  } finally {
+    await close();
+  }
+}, 30_000);
+
+it("draws the empty Not scheduled section as one line on a phone", async () => {
+  const { page, close } = await onHorizons(390);
+  try {
+    const empty = page.locator('[data-plan-column="h:"]');
+    expect(await empty.evaluate((section) => Math.round(section.getBoundingClientRect().height))).toBeLessThanOrEqual(44);
+    expect(await empty.innerText()).toMatch(/^Not scheduled\s+nothing here$/);
+  } finally {
+    await close();
+  }
 }, 30_000);
