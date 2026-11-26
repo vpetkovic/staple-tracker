@@ -35,7 +35,9 @@ describe("Plan memory", () => {
     expect(loadPlanMemory("larkspur", store).folded).toEqual({ launch: true, later: false, none: true });
     for (const folded of ["[true]", '"launch"', "null", "7", "[]"]) {
       store.setItem("staple:plan:v1:larkspur", `{"lens":"horizons","folded":${folded}}`);
-      expect(loadPlanMemory("larkspur", store), folded).toMatchObject({ lens: "horizons", folded: {} });
+      const memory = loadPlanMemory("larkspur", store);
+      expect(memory.lens, folded).toBe("horizons");
+      expect(memory.folded, folded).toEqual({});
     }
   });
   it("drops on save the folds of sections the plan no longer has", () => {
