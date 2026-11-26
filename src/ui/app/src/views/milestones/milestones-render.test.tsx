@@ -352,7 +352,9 @@ describe("control sizes", () => {
     const html = pages[0]!;
     // The fold chevron: 20px, a 32px tap under 760px.
     expect(html).toMatch(/class="[^"]*size-5[^"]*@max-\[760px\]\/ms:before:-inset-1\.5[^"]*"[^>]*aria-label="Hide October cut"|aria-label="Hide October cut"[^>]*class="[^"]*size-5[^"]*@max-\[760px\]\/ms:before:-inset-1\.5/);
-    // The header's `⋯` and every work row's: 28px, a 36px tap.
+    // The header's `⋯` and every work row's: 28px, a 36px tap, and the touch floor lifted.
+    expect(html).toMatch(/class="[^"]*min-h-0[^"]*"[^>]*aria-label="October cut options"/);
+    expect(html).toMatch(/class="[^"]*min-h-0[^"]*"[^>]*aria-label="Actions for STA-146"/);
     expect(html).toMatch(/class="[^"]*size-7[^"]*before:-inset-1[^"]*"[^>]*aria-label="October cut options"/);
     expect(html).toMatch(/class="[^"]*size-7[^"]*before:-inset-1[^"]*"[^>]*aria-label="Actions for STA-146"/);
     // Text buttons: 28px.
