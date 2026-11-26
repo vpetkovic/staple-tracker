@@ -24,6 +24,28 @@ afterAll(() => {
   removeDir(scratch);
 });
 
+/**
+ * At most this many `staple` processes at once. Each one is a full Node and tsx start,
+ * and these tests make a few hundred. Started all together they take every core for a
+ * minute and starve the other test file sharing the runner: on a four-core CI runner
+ * `cli-json`'s single spawns went from 0.3 s to over 20 s behind them and timed out.
+ */
+const IN_FLIGHT = 4;
+
+/** `run` over every item, IN_FLIGHT at a time; the results keep the items' order. */
+async function runLimited<T, R>(items: T[], run: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = [];
+  let next = 0;
+  const lane = async (): Promise<void> => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await run(items[index]!);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(IN_FLIGHT, items.length) }, lane));
+  return results;
+}
+
 /** Every command `staple help` names at the start of an entry line. */
 function helpCommands(): string[] {
   const help = runCliAt(scratch, ["help"], { STAPLE_HOME: home, HOME: home }).stdout;
@@ -46,10 +68,9 @@ describe("every command answers --help and -h", () => {
   it("prints help, exit 0, and touches nothing, for every command and both spellings", async () => {
     const names = helpCommands();
     const env = { STAPLE_HOME: home, HOME: home, STAPLE_AGENT: "help-probe" };
-    const results = await Promise.all(
-      names.flatMap((name) =>
-        ["--help", "-h"].map(async (flag) => ({ name, flag, result: await runCliAtAsync(scratch, [name, flag], env, 60_000) })),
-      ),
+    const results = await runLimited(
+      names.flatMap((name) => ["--help", "-h"].map((flag) => ({ name, flag }))),
+      async ({ name, flag }) => ({ name, flag, result: await runCliAtAsync(scratch, [name, flag], env, 60_000) }),
     );
     const failures = results
       .filter(({ result }) => result.status !== 0 || !result.stdout.startsWith("staple ") || result.stderr.includes("error("))
@@ -76,10 +97,9 @@ describe("every command answers --help and -h", () => {
     for (const verb of ["install", "bind", "unbind", ...hooks]) argvs.add(`run hook ${verb}`);
     for (const sub of ["connect", "sync", "backup", "restore", "devices"]) argvs.add(`cloud ${sub}`);
     expect(argvs.size).toBeGreaterThan(50);
-    const results = await Promise.all(
-      [...argvs].flatMap((argv) =>
-        ["--help", "-h"].map(async (flag) => ({ argv, flag, result: await runCliAtAsync(scratch, [...argv.split(" "), flag], env, 60_000) })),
-      ),
+    const results = await runLimited(
+      [...argvs].flatMap((argv) => ["--help", "-h"].map((flag) => ({ argv, flag }))),
+      async ({ argv, flag }) => ({ argv, flag, result: await runCliAtAsync(scratch, [...argv.split(" "), flag], env, 60_000) }),
     );
     const failures = results
       .filter(({ result }) => result.status !== 0 || !result.stdout.startsWith("staple ") || result.stderr.includes("error("))
