@@ -53,6 +53,7 @@ import { Hub } from "./hub.js";
 import { holdingCrossBlockers } from "./hub-cross-blockers.js";
 import { isGoalRunGate } from "./milestones.js";
 import { databaseFile, readDriver } from "./run-attachment.js";
+import { runName } from "./run-references.js";
 import { LIVE_RUN_STATES } from "./run-store.js";
 import type { Run, RunStopReason } from "./run-store.js";
 import type { WorkspaceStore } from "./store.js";
@@ -352,8 +353,8 @@ export const ATTENTION_KINDS = [
           id: run.id,
           runId: run.id,
           ref: run.scope.kind === "queue" ? null : run.scope.identifier,
-          title: run.scope.kind === "queue" ? `Autopilot run by ${run.actor} over the queue` : `Autopilot run by ${run.actor}`,
-          detail: `stopped: ${REASON_WORDS[run.stop.reason] ?? run.stop.reason}`,
+          title: runName(context.store, run),
+          detail: `stopped: ${REASON_WORDS[run.stop.reason] ?? run.stop.reason} · run by ${run.actor}`,
           since: run.endedAt,
           action: { verb: "inspect", label: "Inspect", command: `staple run status ${run.id} ${ws(context)}` },
         });
@@ -386,8 +387,8 @@ export const ATTENTION_KINDS = [
               id: run.id,
               runId: run.id,
               ref: run.scope.kind === "queue" ? null : run.scope.identifier,
-              title: run.scope.kind === "queue" ? `Autopilot run by ${run.actor} over the queue` : `Autopilot run by ${run.actor}`,
-              detail: `its ${driver.agent} driver stopped responding; it takes nothing until a driver attaches or it is stopped`,
+              title: runName(context.store, run),
+              detail: `its ${driver.agent} driver stopped responding; it takes nothing until a driver attaches or it is stopped · run by ${run.actor}`,
               since: driver.heartbeatAt || run.updatedAt,
               action: { verb: "inspect" as const, label: "Inspect", command: `staple run status ${run.id} ${ws(context)}` },
             },

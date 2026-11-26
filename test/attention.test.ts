@@ -127,6 +127,9 @@ describe("workspaceAttention", () => {
     expect(byKind.person_blocked!.action.label).toBe("add the API key");
     expect(byKind.gate_pending!.action.label).toBe("Approve or request changes");
     expect(byKind.run_stopped!.runId).toBe(seeded.run);
+    // A run is called by its name (its scope's title here), and the actor moves to the detail.
+    expect(byKind.run_stopped!.title).toBe("Run scope");
+    expect(byKind.run_stopped!.detail).toBe("stopped: a session changed master or main · run by agent-c");
     expect(byKind.cloud_conflict!.conflictId).toBe("conflict-1");
     // Both values as values, so a surface can show them side by side instead of a truncated line.
     expect(byKind.cloud_conflict!.conflict).toEqual({ entity: "issue", field: "title", localValue: "b", remoteValue: "c" });
@@ -364,6 +367,7 @@ describe("a live run whose driver stopped", () => {
     expect(stalled()).toMatchObject([
       { runId: run.id, ref: epic, since: "2026-11-26T10:05:00.000Z", dismissible: false, action: { verb: "inspect", command: `staple run status ${run.id} --ws app` } },
     ]);
+    expect(stalled()[0]!.title).toBe("Checkout");
     // Stopping the run is the person's answer: the row goes.
     store.runs().stop(run.id, "vp");
     expect(stalled()).toEqual([]);

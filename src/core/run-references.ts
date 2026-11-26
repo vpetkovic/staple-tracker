@@ -24,7 +24,7 @@
  * any string that is an issue identifier. Adding a field that names an issue to a run's status
  * then needs nothing here.
  */
-import type { RunStatus } from "./run-store.js";
+import type { Run, RunStatus } from "./run-store.js";
 import type { WorkspaceStore } from "./store.js";
 import type { StatusCategory } from "./types.js";
 
@@ -71,9 +71,8 @@ interface IssueRow {
   parent_id: string | null;
 }
 
-/** The run's name (see the file header). */
-export function runTitle(status: RunStatus, byId: ReadonlyMap<string, Pick<IssueRow, "title" | "parent_id">>): string {
-  const { run } = status;
+/** The run's name (see the file header), from its scope and tickets and those issues' rows. */
+function runTitle(run: Pick<Run, "scope" | "tickets">, byId: ReadonlyMap<string, Pick<IssueRow, "title" | "parent_id">>): string {
   if (run.scope.kind !== "queue") return byId.get(run.scope.issueId)?.title ?? `${run.scope.identifier ?? "A deleted issue"}`;
   const names: string[] = [];
   for (const ticket of run.tickets) {
@@ -86,28 +85,41 @@ export function runTitle(status: RunStatus, byId: ReadonlyMap<string, Pick<Issue
   return names.length === 1 ? `Queue: ${names[0]}` : `Queue: ${names[0]} and ${names.length - 1} more`;
 }
 
+/** The rows of the issues whose `column` is one of `values`, by id. */
+function rowsWhere(store: WorkspaceStore, column: "id" | "identifier", values: readonly string[]): Map<string, IssueRow> {
+  const rows = new Map<string, IssueRow>();
+  if (values.length === 0) return rows;
+  const found = store.db
+    .prepare(`SELECT id, identifier, title, status, kind, parent_id FROM issues WHERE ${column} IN (${values.map(() => "?").join(", ")})`)
+    .all(...values) as unknown as IssueRow[];
+  for (const row of found) rows.set(row.id, row);
+  return rows;
+}
+
+/** `rows` with the parents of the queue tickets in it, which a queue run is named after. */
+function withParents(store: WorkspaceStore, rows: Map<string, IssueRow>, run: Pick<Run, "tickets">): Map<string, IssueRow> {
+  const parents = [...new Set(run.tickets.flatMap((ticket) => rows.get(ticket.issueId)?.parent_id ?? []))].filter((id) => !rows.has(id));
+  return new Map([...rows, ...rowsWhere(store, "id", parents)]);
+}
+
+/**
+ * The run's name alone, for a surface that lists runs without their issues (the attention
+ * list): the scope and the tickets' parents, two small reads.
+ */
+export function runName(store: WorkspaceStore, run: Pick<Run, "scope" | "tickets">): string {
+  if (run.scope.kind !== "queue") return runTitle(run, rowsWhere(store, "id", [run.scope.issueId]));
+  return runTitle(run, withParents(store, rowsWhere(store, "id", [...new Set(run.tickets.map((ticket) => ticket.issueId))]), run));
+}
+
 export function runReferences(store: WorkspaceStore, status: RunStatus): RunReferences {
   const ids = new Set<string>();
   const identifiers = new Set<string>();
   collect({ run: status.run, decision: status.decision, facts: status.facts, goal: status.goal }, ids, identifiers);
   if (status.run.scope.kind !== "queue") ids.add(status.run.scope.issueId);
 
-  const rows = new Map<string, IssueRow>();
-  const read = (column: "id" | "identifier", values: readonly string[]) => {
-    if (values.length === 0) return;
-    const found = store.db
-      .prepare(`SELECT id, identifier, title, status, kind, parent_id FROM issues WHERE ${column} IN (${values.map(() => "?").join(", ")})`)
-      .all(...values) as unknown as IssueRow[];
-    for (const row of found) rows.set(row.id, row);
-  };
-  read("id", [...ids]);
-  read("identifier", [...identifiers].filter((identifier) => ![...rows.values()].some((row) => row.identifier === identifier)));
-  // A queue run is named after its tickets' parents, which nothing else in the status names.
-  const named = new Set(rows.keys());
-  read(
-    "id",
-    [...new Set(status.run.tickets.flatMap((ticket) => rows.get(ticket.issueId)?.parent_id ?? []))].filter((id) => !named.has(id)),
-  );
+  const byId = rowsWhere(store, "id", [...ids]);
+  const known = new Set([...byId.values()].map((row) => row.identifier));
+  const rows = withParents(store, new Map([...byId, ...rowsWhere(store, "identifier", [...identifiers].filter((ref) => !known.has(ref)))]), status.run);
 
   const issues = [...rows.values()].map((row) => ({
     issueId: row.id,
@@ -117,5 +129,5 @@ export function runReferences(store: WorkspaceStore, status: RunStatus): RunRefe
     category: store.categoryOf(row.status),
     kind: row.kind,
   }));
-  return { title: runTitle(status, rows), issues };
+  return { title: runTitle(status.run, rows), issues };
 }
