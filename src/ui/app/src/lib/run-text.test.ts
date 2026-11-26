@@ -211,7 +211,11 @@ describe("state, driver and history words", () => {
       tone: "ok",
     });
     expect(endedStateText(run({ state: "stopped", stop: { reason: "stopped_by_human", detail: {}, by: "vp", note: null, at } }))).toEqual({ text: "Stopped by vp", tone: "unknown" });
-    expect(stoppedByText(run({ state: "stopped", stop: { reason: "stopped_by_human", detail: {}, by: "vp", note: null, at } }))).toBe("Stopped by vp.");
+    // A person's stop already names them in its reason ("Stopped by vp"): the sentence adds nothing,
+    // and never says a stop rule ended a stop a person made.
+    expect(stoppedByText(run({ state: "stopped", stop: { reason: "stopped_by_human", detail: {}, by: "vp", note: null, at } }))).toBe("");
+    expect(stoppedByText(run({ state: "stopped", stop: { reason: "stopped_by_human", detail: {}, by: null, note: null, at } }))).toBe("");
+    expect(stoppedByText(run({ state: "stopped", stop: { reason: "touched_main_line", detail: {}, by: DRIVER_ACTOR, note: null, at } }))).toBe(`Stopped by ${DRIVER_ACTOR}.`);
     expect(stoppedByText(run({ state: "stopped", stop: { reason: "budget", detail: {}, by: null, note: null, at } }))).toBe("A stop rule ended it.");
     expect(stoppedByText(run({ state: "completed", stop: { reason: "scope_empty", detail: {}, by: null, note: null, at } }))).toBe("It finished on its own.");
   });

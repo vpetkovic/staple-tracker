@@ -249,9 +249,12 @@ export function driverText(driver: RunDriver | null): string {
   return `Driver on ${driver.host}`;
 }
 
-/** Who ended a run, as a sentence: the person (or the driver), or the tracker's own rule. */
+/**
+ * Who ended a run, as a sentence to follow its reason: the driver, or the tracker's own rule.
+ * Empty for a person's stop, whose reason already names them ("Stopped by vp").
+ */
 export function stoppedByText(run: Pick<Run, "state" | "stop">): string {
-  if (run.stop === null) return "";
+  if (run.stop === null || run.stop.reason === "stopped_by_human") return "";
   if (run.stop.by) return `Stopped by ${run.stop.by}.`;
   return run.state === "completed" ? "It finished on its own." : "A stop rule ended it.";
 }
