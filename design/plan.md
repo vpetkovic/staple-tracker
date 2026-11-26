@@ -819,7 +819,10 @@ header has an empty slot beside the page name (`data-phone-header-slot` in
 
 **The toolbar** (`PlanBar`) holds the lens tabs with their counts (Ideas: the records the lens
 holds; Horizons: `horizons.length`; Timeline: none), the **Show only** pills, the lens's tools
-(**+ Horizon** on Horizons, drawn at the end of the outline under 900px), the filter and,
+(on Horizons, **Collapse all** / **Expand all** and **+ Horizon**; under 900px of the Plan
+container **+ Horizon** is drawn at the end of the outline and the fold control moves to the
+right end of the outline's first line as a small text button, 28px high with a 32px tap), the
+filter and,
 outside Ideas, **+ Idea**, an icon under 900px: a popover with the capture field that leaves the lens where it is and
 answers *Captured to Raw* with a link to Ideas. The focus and the filter are
 `views/plan/plan-focus.ts`. Each pill reads one payload flag: needs you is
@@ -827,7 +830,9 @@ answers *Captured to Raw* with a link to Ideas. The focus and the filter are
 `notStarted`. A pill counts the live records with its flag and is left out at none unless it is
 on. `focusPlan` narrows `ideas` to the records that match the focus and hold the filter text in
 their title, adds every ancestor of each, and every lens draws that plan. While either is on
-nothing folds away (groups, a parent's shipped leaves, a done horizon), and a lens with nothing
+nothing folds away (groups, a parent's shipped leaves, a done horizon): the remembered folds are
+neither applied nor changed, and the fold control is held with its reason as a tooltip (*Clear
+the focus and filter to fold sections*). A lens with nothing
 left says *Nothing here matches.* with **Clear filter**. The focus is view state and is not
 remembered.
 
@@ -853,7 +858,8 @@ Marked shaped, a record moves to Horizons.
 
 **Horizons is delivery** (`views/plan/HorizonsLens.tsx`): one scroller of stacked sections.
 First **Not scheduled**, the shaped, started and shipped records no horizon carries; with
-none it is one line on the sunken surface, still the drop target that unschedules. Then a
+none it is one line on the sunken surface, still the drop target that unschedules; with rows it
+is a section whose header has a horizon's fold chevron, at the same x, size and tap. Then a
 section per horizon in plan order: a sticky header and the horizon's outline (below). Under
 760px only the header's first line sticks (the fold, the name, the date, the server's percent
 and the menu, at most 44px); its bar, flags and counts scroll away with the rows. A section
@@ -864,6 +870,17 @@ back as *Queued* once it is in the queue), the run setting (`runSettingLabel`) a
 under 760px only the ⋯, which holds them as the horizon's offered actions. *add a date* and
 *clear* show only where `offers(horizon, "date")`. The rename writes once, on submit or on a blur
 that changed the name, and stays open when refused.
+
+**Folds are remembered.** A section's fold is the person's choice, kept per workspace in this
+browser with the rest of Plan's memory (`PlanMemory.folded` in `views/plan/plan-memory.ts`): a
+`Record<string, boolean>` keyed by horizon id, and `"none"` for Not scheduled. A malformed entry
+reads as no choice, and a save keeps only the sections the plan still has (`keepFolds`). With no
+choice a done horizon starts folded and every other section unfolded, as before. **Collapse
+all** / **Expand all** (`FoldAll`) collapses while any section that folds is unfolded, else
+expands, writing the choice for every horizon and for Not scheduled when it has rows; it is
+disabled when nothing folds. The Milestones page folds the same way and remembers its folds
+alike, so a long plan reads section by section in both places
+([web-ui.md](web-ui.md#milestones)).
 
 `HorizonSummary` (`plan-parts.tsx`) is the horizon's header on every surface, in three lines:
 the name and the date with its distance from `plan.today` (`Mar 5, 2027 · in 99 days`); a
@@ -876,8 +893,8 @@ leaf ideas apart from parents and its members (`records`, `memberCount`:
 rows do not (a member added by hand, a record still being explored past its planned start). A
 horizon is done only when the server says so (`horizonDone`: its milestone is done, `shipped`;
 never its progress, since every counted unit can land while a reopened member, a gated epic or an
-idea whose work sits on another horizon keeps it open); then its section starts folded behind
-*All n members landed*. The Timeline's group rows read the same fields, and the Milestones
+idea whose work sits on another horizon keeps it open); then, with no remembered choice, its
+section starts folded behind *All n members landed*. The Timeline's group rows read the same fields, and the Milestones
 view's own bar reads the same percentage from the milestone's `progress`, with its planned units
 as a segment of it.
 
@@ -890,7 +907,8 @@ section far down is reachable without scrolling. A drop writes `dropBody` for it
 
 **A horizon's plan is an outline** (rows from `views/plan/plan-tree.ts`, visible lines and keys
 from `plan-outline.ts`, drawn by `views/plan/PlanTree.tsx`), one component on three surfaces: the
-Horizons lens section, the horizon's drawer and the Milestones view's horizon detail, all fed by
+Horizons lens section, the horizon's drawer and the Plan line of its section on the Milestones
+page, all fed by
 the server's payload alone. It is a treegrid with the columns Idea, Progress, Next and Planned.
 Records group parent to children in plan order, and a parent folds its sub-ideas.
 
@@ -1050,15 +1068,15 @@ milestone again (`placeForAxis`), and a **Horizon** filter keeps the work of the
 
 Plan reuses the detail drawer's `DetailTabStrip`, Radix keys and accessibility; under 620px of
 the Plan container it uses its finger-sized segments, wider its underline strip. The last lens,
-open record and each lens's scroll position are per-viewer preferences under
-`staple:plan:v1:<workspace>`. A lens has one scroller each position is kept for
+open record, each lens's scroll position and the Horizons lens's folds are per-viewer
+preferences under `staple:plan:v1:<workspace>`. A lens has one scroller each position is kept for
 (`[data-plan-board]`, `[data-plan-timeline-frame]`, and `[data-plan-scroll-key]` on each Ideas
 pane); the phone column an earlier build kept is no longer read, since no lens has a column
 switcher. Filters use the existing workspace/view preference envelope and URL state. The
 shareable `plan-lens` and `issue` parameters take precedence on arrival; Back/Forward follows the
 URL, and an explicit drawer close clears the remembered record. Storage reads and writes fail
 safe. The filter text and the Show only focus narrow every lens; the focus starts again with
-each workspace and is not remembered. A horizon's drawer and the Milestones detail link to each planned
+each workspace and is not remembered. A horizon's drawer and the Milestones page's Plan line link to each planned
 record with `view=plan&issue=<stable id>`, and a promoted epic carries an "Open original idea in
 Plan" link.
 
@@ -1180,7 +1198,8 @@ What converges, under both folds, on a tail device and a freshly hydrated one:
 | `views/plan/lenses.test.tsx`, `views/plan/plan-model.test.ts` | the lenses' membership; an Ideas card's written sections, horizon, late and not started and nothing about work; a horizon section's header, Queue and run setting; the fold of a done horizon only; the shipped mark; the Timeline stacked under 760px, its default range, end labels, dimming by the selected record's links, the notch, the target diamond and the undated line; end-caps and arrows (none between a record and its ancestor); Markdown reading mode; board columns, nesting, timeline groups, range and dragging |
 | `views/plan/plan-view.test.tsx`, `views/plan/plan-focus.test.ts` | the toolbar's lens counts, the labelled Show only group with the payload's counts, a pill with none left out unless pressed, and + Idea on Horizons and the Timeline only; each pill's count from its payload flag; a focus or the filter text narrowing every lens to the matches and every ancestor of each, never a shipped late record or a dropped one; *Nothing here matches.* with Clear filter |
 | `views/plan/ideas-lens.test.tsx` | a raw row's capture age, newest first, and Explore only where offered, running that action's write; an exploring card's shaping line without the server's wrapper, Ready to mark shaped with Mark shaped running the shape action's write, the brief line and the sections meter from the server's counts; both panes at every width with no column switcher; the empty panes' words |
-| `views/plan/horizons-outline.test.tsx` | Not scheduled as one quiet line that still unschedules, or a section with its count, by that one name on the drop rail and in the move menu; a parent's shipped leaves gathered into one line ahead of the rest, opened on request, never fewer than two; a compact outline's groups folded with their count; a focus or filter folding nothing; the drop rail and sections marked only for a move the state offers and that moves the record; add a date and clear only where offered; the row keys |
+| `test/plan-memory.test.ts`, `test/ui-plan-folds.test.ts` | a section's fold kept as a yes or no whatever else the stored folds hold, and dropped on save for a section the plan no longer has; in Chromium, a fold remembered across a reload and a lens change, Collapse all folding every section, the control held while a filter is on with no fold applied and the folds kept for after, Not scheduled's chevron at a horizon's x, size and tap, and the control at the right end of the outline's first line where the toolbar has no room |
+| `views/plan/horizons-outline.test.tsx` | Not scheduled as one quiet line that still unschedules, or a section with its count, by that one name on the drop rail and in the move menu; a parent's shipped leaves gathered into one line ahead of the rest, opened on request, never fewer than two; a compact outline's groups folded with their count; a focus or filter folding nothing and drawing no fold control; with no choice a done horizon folded and the rest open, a remembered fold and unfold applied, Not scheduled's chevron when it has rows, and Collapse all and Expand all; the drop rail and sections marked only for a move the state offers and that moves the record; add a date and clear only where offered; the row keys |
 | `views/plan/plan-parts.test.tsx`, `views/plan/timeline-model.test.ts`, `styles/contrast.test.ts` | the state glyph hidden from assistive technology, its word on request, the started wedge from the server's percent, never empty or whole; flags in words; the horizon summary's date and distance, percent, flags, counts and units, a done horizon shipped without late or not started; the Timeline's pixels per day for each range, today a third in, every end label, links on demand and Show all links, the notch never on a shipped row, the elbow, drags for a mouse or a pen only where dates are offered, the week nudge, folding, the axis labels; the flags' text AA on their tint in both themes |
 | `views/plan/plan-tree.test.ts` | the tree with hand-written expectations: a parent with its sub-ideas, one carried elsewhere dimmed with where, one scheduled nowhere, one carried through its parent, dropped ones left out; reserved rows; the group's rollup and a leaf's own units; the same tree from the whole plan and from a horizon's detail; the records no horizon carries (Not scheduled); every step's words and whether it waits on the person; the header's words; `100% incomplete` |
 | `views/plan/plan-tree-render.test.tsx`, `views/milestones/milestones-flag-off.test.tsx` | the lens section, the horizon drawer and the Milestones view draw the same rows, header, bars, steps and "Needs you" for one payload; a reserved row is never a card or dragged and stays a card in Ideas; a horizon at 100% that is not complete never folds; on a wide outline sub-ideas show without a click and only delivery rows drag; on a compact one a disclosure folds them and nothing drags; a plain milestone's Milestones view, and any with planning off, byte for byte the markup recorded before the tree |

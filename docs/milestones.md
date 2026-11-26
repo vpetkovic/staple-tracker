@@ -83,6 +83,11 @@ If that ticket is reopened, the criterion reads `unknown` until it is done again
 the criterion is reworded, mark it again. Use `--unmet` with a note to record what is
 missing.
 
+Two devices can disagree while they are apart. A criterion marked on one device and
+removed on another, or marked on both at once, leaves a mark that counts for nothing:
+the removed one's, or the earlier of the two. The goal lists it under the criteria as
+cleared (`goal.cleared`), and the next edit of the criteria drops it.
+
 ## 6. See where it stands
 
 ```bash
@@ -116,8 +121,12 @@ next     APP-10 (queue position 1)
   you set.
 
 `staple milestone ls` lists every open milestone on one line each. In the web UI, the
-**Milestones** view shows the same, and a milestone's detail shows the goal with its
-evidence.
+**Milestones** page shows each open milestone as a section with the same progress,
+pace and next ticket, then its goal and its work in order, where you reorder, add and
+remove members. Finished ones wait on its **Finished** line
+([Web UI tour](web-ui.md#6-milestones-dated-plans)). A milestone's details show the
+goal with its evidence, and **Show in Milestones** opens its section there. A link
+names the milestone: `?view=milestones&focus=APP-11`.
 
 ## 7. Sign it off
 

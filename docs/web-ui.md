@@ -118,11 +118,41 @@ it waits on, and use the **Epics** picker to narrow the canvas.
 
 ![The Milestones view: a milestone card with its due date and progress, and beside it the milestone's summary and its members in order](../site/static/img/screens/milestones-light.webp)
 
-Each [milestone](milestones.md) in plan order, with its due date, progress and
-what is in the way (*1 is blocked and 3 wait for approval.*). Select one to see
-what is in it and what comes next; reorder or remove members from their rows.
-**Open** shows its goal: each criterion with its verdict, and whether the
-milestone is on pace for its date.
+Each open [milestone](milestones.md) is a section, in plan order. Its header gives
+the due date, a progress bar, what needs you (*Waiting for your approval*, *2
+blocked*, *behind*) and a line of facts ending in what comes next. Click the name
+to open the milestone's details. Its status, its due date and its place in the
+queue are in the header's **⋯** menu.
+
+Under the header:
+
+- **Goal** says how many criteria are met and whether the milestone is on pace.
+  Click it to see each criterion with its verdict and evidence. It opens by
+  itself when the milestone waits for your approval or all its work is finished.
+- **Plan**, on a horizon only, unfolds the horizon's ideas. **Open in Plan** goes
+  to the Horizons lens.
+- **Work, in order** lists the members with their position. Move one with
+  **Move up** and **Move down** at the end of its row, its **⋯** menu, or Alt-↑
+  and Alt-↓; remove it from the same menu. **Add work** takes a reference and an
+  optional note. If someone else reordered the milestone first, the page says so
+  and **Reload** shows their order.
+
+Finished and cancelled milestones wait on the **Finished** line at the end;
+click it to list them, and a milestone's chevron to read its goal and work. They
+are a record and cannot be edited. The **Done** toggle only decides whether
+finished tasks show inside a milestone's work.
+
+Each section folds with its chevron, and **Collapse all** or **Expand all** above
+the outline folds every open one. This browser remembers what you folded, and
+whether Finished is open, for each workspace. On a phone, sections start folded
+so the first screen is the overview, and the fold control sits beside the page
+name.
+
+A link to `?view=milestones&focus=APP-11` scrolls to that milestone, opens it
+for this visit and marks it for a moment. The milestone marker on a task row and
+**Show in Milestones** on a milestone's details land the same way. With **All
+workspaces** chosen, the page lists every workspace's milestones read-only;
+click one to switch to its workspace and land on it.
 
 **Plan** sits beside it once a person turns on the experimental planning setting
 (**Settings → Experimental**). It holds ideas that are not work yet, in three lenses.
@@ -142,7 +172,9 @@ it. See [Planning](plan.md).
 
 A task opens in a drawer on the right. The top holds its status, a sentence about
 where it stands, and one primary action: *Start work*, *Mark done*, *Reopen*, or
-*Take it over* when the holder has gone quiet for 30 minutes. The tabs:
+*Take it over* when the holder has gone quiet for 30 minutes. An open milestone's
+is *Show in Milestones*, which lands on its section of the Milestones page, where
+its work is edited. The tabs:
 
 | Tab | What it is for |
 | --- | --- |

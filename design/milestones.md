@@ -512,7 +512,9 @@ verdict alone compares the remaining estimate with the seconds left to the end
 of the target day at the moment of the read, so it can flip from `on_track` to
 `behind` during that day with nothing else changed. `show` prints it as the
 `pace` line. The web UI shows the whole check on the milestone's detail
-([runs.md](runs.md#in-the-web-ui)).
+([runs.md](runs.md#in-the-web-ui)) and under the Goal line of its section on the
+Milestones page ([web-ui.md](web-ui.md#milestones)), both with `goal.cleared` as quiet
+lines under the criteria, drawn by one component.
 
 ### Gating a milestone
 
@@ -835,11 +837,12 @@ carries a claim goes through all three at once.
 serving the same fixture, into the real view components rendered with
 `react-dom/server`. No jsdom, no screenshot harness, no new dependency: a
 "browser test" here is the real HTTP routes plus the real markup. It pins the
-list and the detail drawn entirely from the wire; the three layouts at real
-widths; the accessible row order equalling the server's member order; a name on
-every reorder control with only the true edges disabled; each state legible as a
-glyph AND a word with the glyph hidden from a screen reader; the conflict banner
-after a genuinely stale `baseRevision`, showing the store's sentence verbatim
-while the server keeps the other writer's order; and the risk lines and rollups
-counting the fixture's one genuinely blocked leaf and two genuinely gated ones
-off `GET /api/queue`'s `eligibility`, where the status categories read zero.
+outline's sections and their work drawn entirely from the wire; the accessible
+row order equalling the server's member order; a name on every reorder control
+with only the true edges disabled; each state legible as a word with the glyph
+hidden from a screen reader; the conflict notice after a genuinely stale
+`baseRevision`, showing the store's sentence verbatim while the server keeps the
+other writer's order; and the facts and flags counting the fixture's one
+genuinely blocked leaf and two genuinely gated ones off `GET /api/queue`'s
+`eligibility`, where the status categories read zero.
+`test/ui-milestones-page.test.ts` presses the same page in Chromium.
