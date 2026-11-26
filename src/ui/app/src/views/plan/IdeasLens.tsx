@@ -82,6 +82,22 @@ export function IdeasBoard({ plan, write, onOpen, selected, filtering = false, c
 }
 
 /**
+ * A filter that leaves the Ideas lens nothing: Raw's heading and capture field stay, so an idea
+ * can still be captured, with what the page says about the filter (`children`) below them.
+ */
+export function IdeasNothing({ plan, write, capture, children }: { plan: PlanData; write: Write; capture: (title: string) => Promise<boolean>; children: ReactNode }) {
+  const raw = ideasColumns(plan)[0]!;
+  return (
+    <div className="h-full min-h-0 overflow-y-auto">
+      <IdeasPane column={raw} dragging={null} write={write}>
+        <RawCapture onCapture={capture} />
+        {children}
+      </IdeasPane>
+    </div>
+  );
+}
+
+/**
  * A pane: its sticky heading, then what the lens puts in it (for Raw the capture field, the list
  * and the Dropped shelf). The pane is the column's drop target and, on a wide container, its own scroller.
  */

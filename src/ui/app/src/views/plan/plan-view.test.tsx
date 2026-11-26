@@ -130,6 +130,15 @@ describe("the focus narrows every lens", () => {
     expect(lensHtml("ideas", "late")).toContain("Nothing here matches.");
     expect(lensHtml("horizons", "late")).not.toContain("Nothing here matches.");
   });
+
+  it("keeps Raw's heading and capture field on Ideas when nothing matches, the way out below them", () => {
+    const html = lensHtml("ideas", "late");
+    expect(html).toContain('aria-label="Raw"');
+    expect(html).toContain("data-plan-capture");
+    expect(html.indexOf("data-plan-capture")).toBeLessThan(html.indexOf("Nothing here matches."));
+    expect(html.indexOf("Nothing here matches.")).toBeLessThan(html.indexOf("data-plan-clear-filter"));
+    expect(lensHtml("horizons", "all", "no such idea")).not.toContain("data-plan-capture");
+  });
 });
 
 const barHtml = (lens: Lens, focus: PlanFocus = "all", ideas = PLAN.ideas) =>

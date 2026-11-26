@@ -34,7 +34,7 @@ import { cn } from "@/lib/utils";
 import { ErrorState } from "@/views/ViewChrome";
 import { workspaceScope } from "@/views/workspace-scope";
 import { AddHorizon, HorizonsBoard } from "./HorizonsLens";
-import { IdeasBoard } from "./IdeasLens";
+import { IdeasBoard, IdeasNothing } from "./IdeasLens";
 import { PlanTimeline } from "./PlanTimeline";
 import type { BoardProps, Write } from "./plan-board";
 import { focusCounts, focusing, focusPlan, type PlanFocus } from "./plan-focus";
@@ -221,13 +221,21 @@ export function PlanLens({ lens, plan, focus, text, onClear, ...board }: Omit<Bo
   const shown = focusPlan(plan, focus, text);
   const filtering = focusing(focus, text);
   if (filtering && !shown.ideas.some((idea) => LENS_HOLDS[lens](idea, shown))) {
-    return (
+    const nothing = (
       <div className="flex flex-col items-center gap-3 px-gutter py-12 text-center" data-plan-nothing>
         <p className="m-0 text-body text-text-secondary">Nothing here matches.</p>
         <Button variant="outline" size="sm" onClick={onClear} data-plan-clear-filter>
           Clear filter
         </Button>
       </div>
+    );
+    // On Ideas the capture field is the lens's only one: a filter never takes it away.
+    return lens === "ideas" && board.capture ? (
+      <IdeasNothing plan={shown} write={board.write} capture={board.capture}>
+        {nothing}
+      </IdeasNothing>
+    ) : (
+      nothing
     );
   }
   const props = { ...board, plan: shown, filtering };
