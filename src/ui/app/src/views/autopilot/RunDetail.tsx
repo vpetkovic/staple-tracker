@@ -64,10 +64,13 @@ function Header({ entry, showWorkspace, open }: { entry: RunEntry; showWorkspace
             <TicketChip issue={issueOf(entry, run.scope.issueId)} fallbackRef={ref ?? "a deleted issue"} onOpen={open} variant="inline" />
           )}
         </span>
-        <span aria-hidden className="text-border-strong">
-          ·
+        {/* The separator rides with what follows it, so a wrapped line never ends on a dot. */}
+        <span className="inline-flex min-w-0 items-center gap-2.5">
+          <span aria-hidden className="text-border-strong">
+            ·
+          </span>
+          <span className="min-w-0 wrap-anywhere">run by {run.actor}</span>
         </span>
-        <span>run by {run.actor}</span>
         {showWorkspace ? <WorkspacePill workspace={entry.workspace} /> : null}
       </div>
     </header>
@@ -372,7 +375,7 @@ export function RunDetail({
   );
 }
 
-/** "‹ Autopilot": back to the run list, on the one-pane page only. */
+/** "‹ All runs": back to the run list, on the one-pane page only (the page's own title already says Autopilot). */
 export function BackLink({ onBack }: { onBack: () => void }) {
   return (
     <button
@@ -382,7 +385,7 @@ export function BackLink({ onBack }: { onBack: () => void }) {
       className="focus-ring -mb-2 -ml-1.5 inline-flex h-8 items-center gap-1 self-start rounded-md px-1.5 text-body text-text-secondary hover:bg-surface-hover hover:text-foreground pointer-coarse:h-11 @min-[900px]/auto:hidden"
     >
       <ChevronLeft aria-hidden className="size-4" />
-      Autopilot
+      All runs
     </button>
   );
 }
