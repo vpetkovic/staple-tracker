@@ -27,5 +27,5 @@ export function checkpointedSince(store: WorkspaceStore, issueId: string, since:
 }
 
 export function worklogReminder(ref: string): string {
-  return `Write a current worklog with Done, Next, and Files touched sections, each with content (say "none" when appropriate): staple doc ${ref} worklog --put <file> --json. Update it at every milestone and before handoff; comments alone are not a checkpoint.`;
+  return `Write a current worklog with Done, Next, and Files touched sections, each with content (say "none" when appropriate): staple checkpoint ${ref} --done "..." --next "..." --files "..." --json (or staple doc ${ref} worklog --put <file>). Update it at every milestone and before handoff; comments alone are not a checkpoint.`;
 }

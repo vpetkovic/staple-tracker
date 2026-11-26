@@ -44,6 +44,7 @@ The loop an agent follows, described in
 | `checkout_task` | Claim a ticket and start it | `staple start` | yes |
 | `release_task` | Give a claim back | `staple release` | yes |
 | `set_branch` | Record the branch a ticket is worked on and its base commit (`null` clears). Answers the branch and every linked pull request with its state and checks. The pull requests on that branch are found and linked by `integration_write` `discover` and the web UI's poll | `staple branch` | yes |
+| `checkpoint` | Write a session's handoff in one call: replace the worklog with `done`, `next` and `filesTouched` as `## Done`, `## Next` and `## Files touched`, and set the branch when `branch` is given. An omitted section is written empty; a second call replaces the first | `staple checkpoint` | yes |
 | `add_comment` | Add a comment | `staple comment` | yes |
 | `list_comments` | A ticket's comments, oldest first | `staple show` | no |
 | `put_document` | Store a plan, worklog or other document on a ticket. `instructions: true` makes it an instruction document for everything beneath the ticket | `staple doc --put` | yes |

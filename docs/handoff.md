@@ -22,7 +22,10 @@ protocol (see [How an agent works a ticket](working-a-ticket.md)) leave two thin
 
 - a **branch pointer** comment at claim time:
   `staple comment APP-12 "Branch pointer: branch feat/reset-lockout, base 7d1e2f3."`
-- a **worklog** replaced after every step, with *Done*, *Next* and *Files touched*.
+- a **worklog** replaced after every step, with *Done*, *Next* and *Files touched*:
+  `staple checkpoint APP-12 --done "..." --next "..." --files "..."` (MCP `checkpoint`)
+  writes all three in one call, and `--branch feat/reset-lockout` records the branch
+  in the same write.
 
 Both must be written before the interruption, because an interruption gives no warning.
 A summary planned for the end of the session never gets written.

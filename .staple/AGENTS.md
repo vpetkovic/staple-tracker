@@ -169,10 +169,15 @@ Keep a document keyed `worklog` on every task you hold, and **revise it at every
 milestone**, not at the end.
 
 ```bash
-staple doc STA-42 worklog --put worklog.md --json
+staple checkpoint STA-42 --done "..." --next "..." --files "..." [--branch <name>] --json
 staple doc STA-42 worklog --json              # read the latest
 staple doc STA-42 worklog --revisions --json  # checkpoint history
 ```
+
+`staple checkpoint` (MCP `checkpoint`) replaces the worklog with the three
+sections below in one call, and with `--branch` records the branch in the same
+write. A section you leave out is stored empty, which the run's check refuses.
+`staple doc STA-42 worklog --put worklog.md --json` writes the same document from a file.
 
 Three sections, always:
 
