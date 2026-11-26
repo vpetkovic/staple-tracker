@@ -28,6 +28,7 @@ import {
   splitLabels,
   withoutValues,
   splitRefs,
+  withKnownProject,
   type CreateFormState,
 } from "./createIssueForm";
 import type { Issue, IssueRow } from "../lib/types";
@@ -437,5 +438,22 @@ describe("project on the create form", () => {
     expect(after).toEqual({ ...before, parent: "", project: "" });
     expect(buildCreatePayload(after)).not.toHaveProperty("project");
     expect(buildCreatePayload(after).blockedBy).toEqual(["STA-2"]);
+  });
+
+  it("is cleared when the chosen project is no longer on offer, so the payload matches the control", () => {
+    const chosen = form({ title: "t", project: "p-docs", labels: ["ui"] });
+    const after = withKnownProject(chosen, ["p-site"]);
+    expect(after).toEqual({ ...chosen, project: "" });
+    expect(buildCreatePayload(after)).not.toHaveProperty("project");
+    // The last project deleted leaves an empty list, and that is a real answer too.
+    expect(withKnownProject(chosen, []).project).toBe("");
+  });
+
+  it("keeps a project that is still on offer, and leaves the form alone before the list arrives", () => {
+    const chosen = form({ title: "t", project: "p-docs" });
+    expect(withKnownProject(chosen, ["p-docs", "p-site"])).toBe(chosen);
+    expect(withKnownProject(chosen, undefined)).toBe(chosen);
+    const none = form({ title: "t" });
+    expect(withKnownProject(none, [])).toBe(none);
   });
 });

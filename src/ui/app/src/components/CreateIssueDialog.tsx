@@ -67,6 +67,7 @@ import {
   labelOptions,
   parentOptions,
   relationOptions,
+  withKnownProject,
   withoutValues,
   splitLabels,
   splitRefs,
@@ -244,6 +245,19 @@ export function CreateIssueDialog({
    */
   const projects = projectsForWorkspace(session.projects.data ?? [], ws);
   const projectValue = projects.some((row) => row.project.id === form.project) ? form.project : NO_PROJECT;
+  /**
+   * A project deleted while the dialog is open leaves the FORM too, not only the select's
+   * label: otherwise the control says "No project" while the payload still carries the id,
+   * and the store refuses the task. Nothing is cleared before the list has arrived.
+   */
+  const offeredProjects = session.projects.data === undefined ? undefined : projects.map((row) => row.project.id);
+  const offeredProjectKey = offeredProjects?.join(",");
+  useEffect(() => {
+    if (!open) return;
+    setForm((current) => withKnownProject(current, offeredProjects));
+    // `offeredProjectKey` rather than `offeredProjects`: the list is a fresh array every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, offeredProjectKey]);
   // Neither relation may offer what the other already holds: the same ref on both
   // sides is a two-node cycle, and the store can only refuse it once the task exists.
   // See withoutValues() — the deeper cycles are still the store's to catch.
