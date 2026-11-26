@@ -234,7 +234,7 @@ export function SectionView({
           <h2 className="m-0 min-w-0 text-title font-semibold">
             <button
               type="button"
-              className="focus-ring block max-w-full truncate rounded-sm text-left underline-offset-2 hover:underline @max-[760px]/ms:-my-[5px] @max-[760px]/ms:py-[5px]"
+              className="focus-ring block min-h-0 max-w-full truncate rounded-sm text-left underline-offset-2 hover:underline @max-[760px]/ms:-my-[5px] @max-[760px]/ms:py-[5px]"
               title="Open details"
               onClick={() => work.onOpen("", milestone.identifier)}
               data-milestone-open={milestone.identifier}
@@ -249,7 +249,7 @@ export function SectionView({
               {queued ? (
                 <QueuedMark position={milestone.planPosition} />
               ) : (
-                <Button variant="outline" size="sm" className="h-7" disabled={queue.busy || !queue.onQueue} onClick={queue.onQueue} data-milestone-queue={milestone.identifier}>
+                <Button variant="outline" size="sm" className="h-7 min-h-0" disabled={queue.busy || !queue.onQueue} onClick={queue.onQueue} data-milestone-queue={milestone.identifier}>
                   <ListPlus aria-hidden />
                   Queue
                 </Button>
@@ -486,7 +486,7 @@ export function FinishedLine({ row, workspace, onAuthError, open, onToggle }: { 
         <MilestoneGlyph state={milestone.state} percent={progress.percent} />
         <button
           type="button"
-          className="focus-ring min-w-0 truncate rounded-sm text-left text-body font-medium text-text-secondary underline-offset-2 hover:underline"
+          className="focus-ring min-h-0 min-w-0 truncate rounded-sm text-left text-body font-medium text-text-secondary underline-offset-2 hover:underline"
           onClick={() => session.open(workspace, milestone.identifier)}
           data-milestone-open={milestone.identifier}
         >

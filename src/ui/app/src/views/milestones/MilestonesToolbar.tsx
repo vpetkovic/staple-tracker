@@ -32,7 +32,7 @@ export function MilestonesToolbar({ open, finished, foldAll, slot }: { open: num
       <Button
         variant="ghost"
         size="icon"
-        className="size-8 text-text-secondary"
+        className="size-8 min-h-0 text-text-secondary"
         aria-label={FOLD_WORDS[foldAll.action]}
         title={FOLD_WORDS[foldAll.action]}
         disabled={foldAll.disabled}
@@ -50,11 +50,12 @@ export function MilestonesToolbar({ open, finished, foldAll, slot }: { open: num
         {open} open · {finished} finished
       </span>
       <span aria-hidden className="ms-auto" />
-      <Button variant="outline" size="sm" className="h-8" disabled={foldAll.disabled} onClick={foldAll.onClick} data-milestones-fold-all={foldAll.action}>
+      <Button variant="outline" size="sm" className="h-8 min-h-0" disabled={foldAll.disabled} onClick={foldAll.onClick} data-milestones-fold-all={foldAll.action}>
         <Icon aria-hidden />
         {FOLD_WORDS[foldAll.action]}
       </Button>
-      <Button size="sm" className="h-8" onClick={createMilestone} data-milestones-create="">
+      {/* Under 760px of the page it is the full-width row at the end of the outline instead. */}
+      <Button size="sm" className="h-8 min-h-0 @max-[760px]/ms:hidden" onClick={createMilestone} data-milestones-create="">
         <Plus aria-hidden />
         Milestone
       </Button>
@@ -66,7 +67,7 @@ export function MilestonesToolbar({ open, finished, foldAll, slot }: { open: num
 export function AddMilestoneRow({ className }: { className?: string }) {
   return (
     <div className={cn("hidden px-3 pt-4 @max-[760px]/ms:block", className)}>
-      <Button variant="outline" size="sm" className="h-8 w-full justify-center" onClick={createMilestone} data-add-milestone-row="">
+      <Button variant="outline" size="sm" className="h-8 min-h-0 w-full justify-center" onClick={createMilestone} data-add-milestone-row="">
         <Plus aria-hidden />
         Add a milestone
       </Button>

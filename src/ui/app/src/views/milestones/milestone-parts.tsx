@@ -31,12 +31,16 @@ import { isFinishedMilestone, milestoneRisk } from "./milestones-model";
 
 type SummaryRow = Pick<MilestoneListRow, "milestone" | "progress" | "next">;
 
+/*
+ * Each carries `min-h-0`: the base layer's touch floor (theme-tokens.css) would otherwise draw
+ * every button 44px tall under a coarse pointer.
+ */
 /** A 20px icon control: a 32px tap under 760px. */
 export const TAP_20 = "relative @max-[760px]/ms:before:absolute @max-[760px]/ms:before:-inset-1.5 @max-[760px]/ms:before:content-['']";
 /** A 28px icon control: a 36px tap at every width (a work row's `⋯`, the section's `⋯`). */
-export const TAP_28 = "relative before:absolute before:-inset-1 before:content-['']";
+export const TAP_28 = "relative min-h-0 before:absolute before:-inset-1 before:content-['']";
 /** A 28px text button: a 32px tap under 760px. */
-export const TAP_TEXT = "relative h-7 @max-[760px]/ms:before:absolute @max-[760px]/ms:before:-inset-y-0.5 @max-[760px]/ms:before:inset-x-0 @max-[760px]/ms:before:content-['']";
+export const TAP_TEXT = "relative h-7 min-h-0 @max-[760px]/ms:before:absolute @max-[760px]/ms:before:-inset-y-0.5 @max-[760px]/ms:before:inset-x-0 @max-[760px]/ms:before:content-['']";
 
 /** The milestone's state as a 14px picture: a ring filled to the server's percent, red once overdue, the check when done, a dotted struck ring when cancelled. */
 export function MilestoneGlyph({ state, percent, className }: { state: MilestoneState; percent: number | null; className?: string }) {
@@ -222,7 +226,7 @@ export function AddWork({
         placeholder={exampleRef ? `Task or epic, like ${exampleRef}` : "Task or epic"}
         disabled={busy}
         onChange={(event) => setRef(event.target.value)}
-        className="h-8 w-48 text-label @max-[760px]/ms:flex-1"
+        className="h-8 min-h-0 w-48 text-label @max-[760px]/ms:flex-1"
       />
       <Input
         value={note}
@@ -230,7 +234,7 @@ export function AddWork({
         placeholder="Why it is here (optional)"
         disabled={busy}
         onChange={(event) => setNote(event.target.value)}
-        className="h-8 min-w-0 flex-1 basis-40 text-label @max-[760px]/ms:basis-full"
+        className="h-8 min-h-0 min-w-0 flex-1 basis-40 text-label @max-[760px]/ms:basis-full"
       />
       <Button type="submit" size="sm" className={TAP_TEXT} disabled={busy || ref.trim() === ""}>
         Add

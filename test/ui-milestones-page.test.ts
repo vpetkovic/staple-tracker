@@ -3,18 +3,22 @@
 /**
  * THE MILESTONES PAGE, WIRED — in a real browser, against the real server and the built app.
  *
- * The string renders in `src/ui/app/src/views/milestones/*.test.tsx` pin what the page DRAWS;
- * none of them can press anything, so a row whose click opened nothing, an Enter that did
- * nothing, a Done toggle the member list ignored, a date field that never wrote, or a write
- * aimed at the wrong route all passed them. This suite presses the real controls and reads the
- * store back:
+ * The string renders in `src/ui/app/src/views/milestones/*.test.tsx` pin what the outline
+ * DRAWS; none of them can press anything, so a row whose click opened nothing, an Enter that
+ * did nothing, a Done toggle the work list ignored, a date field that never wrote, a fold that
+ * was never remembered, or a write aimed at the wrong route all passed them. This suite presses
+ * the real controls and reads the store back:
  *
  *   - a member row opens its task on a click and on Enter or Space;
- *   - the header's Done toggle hides finished rows and finished milestones, and shows them;
+ *   - the header's Done toggle hides finished rows; finished milestones stay on the shelf;
  *   - a milestone whose members are all finished says so, with Show done, not "nothing in it";
  *   - the calendar sets the milestone's own target through the store, signed by the person,
- *     and clearing it falls back to the estimate;
- *   - approving from the page lands the gate as approved, signed by the person.
+ *     and clearing it falls back to the estimate; the `⋯` menu's Change due date opens it too;
+ *   - approving from the page lands the gate as approved, signed by the person;
+ *   - reorder (buttons, menu, alt+arrow), add and remove, and the queue write, land in the store;
+ *   - a fold, Collapse all and Expand all survive a reload; a phone starts folded;
+ *   - a `focus=` link lands on its section, a finished one on its line, a missing one says so;
+ *   - every control keeps its look on a phone, with a tap of at least 32px.
  *
  * SKIPPED, SAYING WHY, when there is no built bundle (`npm run build:ui`; the gate order
  * builds first) or no Chromium for `playwright-core` on this machine, as ui-phone-back is.
@@ -122,7 +126,17 @@ beforeAll(async () => {
     store.updateIssue(doneEpic.id, { status: "done" }, "w");
     const carried = store.milestones().create({ title: "Carried" }, null) as MilestoneCreateResult;
     store.milestones().addMember(carried.milestone.id, doneEpic.id, {}, null);
+    // Two open tasks to reorder, add to and remove from.
+    const order = store.milestones().create({ title: "Reorder me" }, null) as MilestoneCreateResult;
+    const first = store.createIssue({ title: "First thing" });
+    const second = store.createIssue({ title: "Second thing" });
+    const spare = store.createIssue({ title: "Spare thing" });
+    for (const issue of [first, second]) store.milestones().addMember(order.milestone.id, issue.id, {}, null);
     Object.assign(refs, {
+      order: order.milestone.identifier,
+      first: first.identifier,
+      second: second.identifier,
+      spare: spare.identifier,
       going: going.milestone.identifier,
       carried: carried.milestone.identifier,
       late: late.identifier,
@@ -157,13 +171,13 @@ afterAll(async () => {
   if (home) rmSync(home, { recursive: true, force: true });
 });
 
-async function open(focus: string, ws = WS, viewport = { width: 1440, height: 900 }): Promise<{ page: Page; context: BrowserContext }> {
-  const context = await browser.newContext({ viewport });
+async function open(focus: string, ws = WS, viewport = { width: 1440, height: 900 }, touch = false): Promise<{ page: Page; context: BrowserContext }> {
+  const context = await browser.newContext({ viewport, ...(touch ? { hasTouch: true, isMobile: true } : {}) });
   // Who this browser is: the name every detail write is signed with.
   await context.addInitScript((name) => localStorage.setItem("staple:me", name), PERSON);
   const page = await context.newPage();
   await page.goto(`${origin}/?ws=${ws}&view=milestones${focus ? `&focus=${focus}` : ""}&token=${token}`, { waitUntil: "networkidle" });
-  if (focus) await page.waitForSelector(`[data-milestone-detail="${focus}"]`);
+  if (focus) await page.waitForSelector(`[data-milestone-section="${focus}"]`);
   await page.waitForTimeout(300);
   return { page, context };
 }
@@ -185,6 +199,18 @@ function lastEventActor(type: string): string | null {
   }
 }
 
+/** A milestone's section. */
+const section = (page: Page, ref: string) => page.locator(`[data-milestone-section="${ref}"]`);
+
+/** Unfold a member epic, which starts as one line. */
+async function unfoldEpic(page: Page, ref: string, epic: string): Promise<void> {
+  await section(page, ref).locator(`[aria-label="Expand ${epic}"]`).click();
+  await page.waitForTimeout(200);
+}
+
+/** Members of a section, in the order drawn. */
+const membersOf = (page: Page, ref: string) => section(page, ref).locator("[data-member-row]").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-member-row")));
+
 /** The task the detail drawer has open, or null. */
 const openedTask = async (page: Page): Promise<string | null> => {
   await page.waitForTimeout(500);
@@ -194,6 +220,7 @@ const openedTask = async (page: Page): Promise<string | null> => {
 describe.skipIf(Boolean(reason))("the Milestones page, pressed in a real browser", () => {
   it("opens a member's task on a click anywhere on its row", async () => {
     const { page, context } = await open(refs.plan!);
+    await unfoldEpic(page, refs.plan!, refs.epic!);
     await page.locator(`[data-member-row="${refs.open}"] .staple-row-title`).click();
     expect(await openedTask(page)).toBe(refs.open);
     await context.close();
@@ -201,7 +228,7 @@ describe.skipIf(Boolean(reason))("the Milestones page, pressed in a real browser
 
   it("draws a visible focus ring on the row the keyboard is on", async () => {
     const { page, context } = await open(refs.plan!);
-    const row = page.locator(`[data-member-row="${refs.open}"]`);
+    const row = page.locator(`[data-member-row="${refs.epic}"]`);
     await page.keyboard.press("Tab"); // keyboard modality, so :focus-visible applies
     await row.focus();
     const ring = await row.evaluate((element) => {
@@ -218,45 +245,57 @@ describe.skipIf(Boolean(reason))("the Milestones page, pressed in a real browser
   it("opens it on Enter and on Space while the row has the focus", async () => {
     for (const key of ["Enter", " "]) {
       const { page, context } = await open(refs.plan!);
-      await page.locator(`[data-member-row="${refs.open}"]`).focus();
+      await page.locator(`[data-member-row="${refs.epic}"]`).focus();
       await page.keyboard.press(key === " " ? "Space" : key);
-      expect(await openedTask(page), key).toBe(refs.open);
+      expect(await openedTask(page), key).toBe(refs.epic);
       await context.close();
     }
   });
 
-  it("hides finished rows and finished milestones while Done is hidden, and shows them on the toggle", async () => {
+  it("starts each member as one line, and the chevron and the right arrow unfold an epic", async () => {
     const { page, context } = await open(refs.plan!);
-    const members = () => page.locator("[data-member-row]").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-member-row")));
-    expect(await members()).toEqual([refs.epic, refs.open]);
-    expect(await page.locator(`[data-milestone-row="${refs.finished}"]`).count()).toBe(0);
-    expect(await page.locator("[data-hidden-done]").getAttribute("data-hidden-done")).toBe("2");
-    await page.locator("[data-show-done]").click();
+    expect(await membersOf(page, refs.plan!)).toEqual([refs.epic]);
+    await page.locator(`[data-member-row="${refs.epic}"]`).focus();
+    await page.keyboard.press("ArrowRight");
+    await page.waitForTimeout(200);
+    expect(await membersOf(page, refs.plan!)).toEqual([refs.epic, refs.open]);
+    await context.close();
+  });
+
+  it("hides finished rows while Done is hidden and shows them on the toggle; finished milestones stay on the shelf", async () => {
+    const { page, context } = await open(refs.plan!);
+    await unfoldEpic(page, refs.plan!, refs.epic!);
+    expect(await membersOf(page, refs.plan!)).toEqual([refs.epic, refs.open]);
+    expect(await section(page, refs.plan!).locator("[data-hidden-done]").getAttribute("data-hidden-done")).toBe("2");
+    const shelf = () => page.locator("[data-milestones-shelf]").innerText();
+    expect(await shelf()).toMatch(/Finished\s+1\b/);
+    await section(page, refs.plan!).locator("[data-show-done]").click();
     await page.waitForTimeout(600);
-    expect(await members()).toEqual(expect.arrayContaining([refs.epic, refs.open, refs.cancelled, refs.done]));
-    expect(await page.locator(`[data-milestone-row="${refs.finished}"]`).count()).toBe(1);
+    expect(await membersOf(page, refs.plan!)).toEqual(expect.arrayContaining([refs.epic, refs.open, refs.cancelled, refs.done]));
+    // The shelf does not follow the toggle.
+    expect(await shelf()).toMatch(/Finished\s+1\b/);
     await context.close();
   });
 
   it("says a milestone whose members are all finished is finished, and offers them, instead of 'nothing in it'", async () => {
     const { page, context } = await open(refs.gated!);
-    const notice = page.locator("[data-hidden-all]");
+    const notice = section(page, refs.gated!).locator("[data-hidden-all]");
     expect(await notice.innerText()).toContain("2 finished items hidden");
-    expect(await page.getByText("Nothing is in this milestone yet").count()).toBe(0);
+    expect(await section(page, refs.gated!).getByText("Nothing is in this milestone yet").count()).toBe(0);
     await notice.locator("[data-show-done]").click();
     await page.waitForTimeout(600);
-    expect(await page.locator("[data-member-row]").count()).toBe(2);
+    expect(await section(page, refs.gated!).locator("[data-member-row]").count()).toBe(2);
     await context.close();
   });
 
   it("sets the milestone's own target from the calendar, signed by the person, and clears it back", async () => {
     const { page, context } = await open(refs.plan!);
-    const target = page.locator("[data-milestone-detail] [data-milestone-target]").first();
+    const target = section(page, refs.plan!).locator("[data-milestone-target]").first();
     // No finished work to calibrate against yet, so the forecast cannot weigh the open task:
     // no projection, and the page says so rather than guessing.
     const before = await target.getAttribute("data-due-source");
     expect(before).toBe("none");
-    await page.locator("[data-milestone-detail] [data-milestone-due-button]").first().click();
+    await section(page, refs.plan!).locator("[data-milestone-due-button]").click();
     await page.locator('[data-milestone-due-picker] input[type="date"]').fill("2030-01-15");
     await page.locator("[data-milestone-due-save]").click();
     await page.waitForTimeout(800);
@@ -265,7 +304,11 @@ describe.skipIf(Boolean(reason))("the Milestones page, pressed in a real browser
     expect(await target.getAttribute("data-due-source")).toBe("target");
     expect(lastEventActor("milestone_updated")).toBe(PERSON);
 
-    await page.locator("[data-milestone-detail] [data-milestone-due-button]").first().click();
+    // The `⋯` menu's Change due date opens the same field.
+    await section(page, refs.plan!).locator("[data-milestone-menu]").click();
+    await page.locator('[role=menu] [data-menu-item="due"]').click();
+    await page.waitForTimeout(400);
+    expect(await page.locator("[data-milestone-due-picker]").isVisible()).toBe(true);
     await page.locator("[data-milestone-due-clear]").click();
     await page.waitForTimeout(800);
     const cleared = await get<{ milestone: { targetDate: string | null } }>(`/api/milestone?ws=${WS}&ref=${refs.plan}`);
@@ -276,29 +319,149 @@ describe.skipIf(Boolean(reason))("the Milestones page, pressed in a real browser
 
   it("approves the milestone's gate from the page, signed by the person, and the status follows", async () => {
     const { page, context } = await open(refs.gated!);
-    expect(await page.locator("[data-milestone-detail] [data-status-menu]").getAttribute("data-status-category")).toBe("gated");
+    const gated = section(page, refs.gated!);
+    // The status is in the `⋯` menu, the detail's own item.
+    await gated.locator("[data-milestone-menu]").click();
+    expect(await page.locator("[role=menu] [data-status-menu]").getAttribute("data-status-category")).toBe("gated");
+    await page.keyboard.press("Escape");
     page.on("dialog", (dialog) => void dialog.accept(PERSON));
     // Everything under it is finished, so the button says approving closes it.
-    expect(await page.locator("[data-milestone-gate]").innerText()).toContain("All work here is finished.");
-    await page.getByRole("button", { name: "Approve and close milestone" }).click();
+    expect(await gated.locator("[data-milestone-gate]").innerText()).toContain("All work here is finished.");
+    await gated.getByRole("button", { name: "Approve and close milestone" }).click();
     await page.waitForTimeout(1200);
     const detail = await get<{ issue: { status: string }; gate: { state: string; resolvedBy: string | null } | null }>(`/api/issue?ws=${WS}&ref=${refs.gated}`);
     expect(detail.gate).toMatchObject({ state: "approved", resolvedBy: PERSON });
     // Everything had landed, so approving closed it, as the button said.
     expect(detail.issue.status).toBe("done");
     expect(lastEventActor("gate_approved")).toBe(PERSON);
-    expect(await page.locator("[data-milestone-detail] [data-status-menu]").getAttribute("aria-label")).not.toContain("Awaiting");
+    // Closed, it moves to the Finished shelf.
+    expect(await page.locator(`[data-milestone-finished-line="${refs.gated}"]`).count()).toBe(1);
     await context.close();
   });
 
-  it("shows a finished milestone a link points at, even while Done is hidden", async () => {
+  it("lands a link to a finished milestone on its line on the opened shelf, even while Done is hidden", async () => {
     const { page, context } = await open(refs.finished!);
-    expect(await page.locator(`[data-milestone-row="${refs.finished}"]`).count()).toBe(1);
-    expect(await page.locator("[data-milestone-detail]").getAttribute("data-milestone-detail")).toBe(refs.finished);
+    expect(await page.locator("[data-milestones-shelf]").getAttribute("aria-expanded")).toBe("true");
+    const line = page.locator(`[data-milestone-finished-line="${refs.finished}"]`);
+    expect(await line.count()).toBe(1);
+    // Its goal and work, read-only, open under it.
+    expect(await line.locator("[data-milestone-goal-line]").count()).toBe(1);
+    expect(await line.locator("[data-milestone-add-open]").count()).toBe(0);
     await context.close();
   });
 
-  it("offers New task with the Milestone kind chosen when a workspace has no milestones yet", async () => {
+  it("lands a link to an open milestone at the top of the page, unfolded for the visit and marked for a moment", async () => {
+    const { page, context } = await open(refs.carried!, WS, { width: 390, height: 844 });
+    const landed = section(page, refs.carried!);
+    // A phone starts folded, but the link unfolds the one it names.
+    expect(await landed.getAttribute("data-milestone-folded")).toBeNull();
+    // At the top of the scroller, or as near as the page's length lets it come.
+    const where = await page.evaluate((ref) => {
+      const outline = document.querySelector<HTMLElement>("[data-milestones-outline]")!;
+      const top = document.querySelector(`[data-milestone-section="${ref}"]`)!.getBoundingClientRect().top - outline.getBoundingClientRect().top;
+      return { top, scrolled: outline.scrollTop, bottom: outline.scrollTop >= outline.scrollHeight - outline.clientHeight - 1 };
+    }, refs.carried!);
+    expect(where.scrolled).toBeGreaterThan(0);
+    expect(Math.abs(where.top) < 2 || where.bottom, JSON.stringify(where)).toBe(true);
+    expect(await landed.getAttribute("data-milestone-landed")).toBe("");
+    await page.waitForTimeout(1800);
+    expect(await landed.getAttribute("data-milestone-landed")).toBeNull();
+    // For the visit only: a reload without the link starts it folded again.
+    await page.goto(`${origin}/?ws=${WS}&view=milestones&token=${token}`, { waitUntil: "networkidle" });
+    await page.waitForTimeout(300);
+    expect(await section(page, refs.carried!).getAttribute("data-milestone-folded")).toBe("");
+    await context.close();
+  });
+
+  it("says a link to a milestone the list does not carry is not in it, and offers to open it", async () => {
+    const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const page = await context.newPage();
+    await page.goto(`${origin}/?ws=${WS}&view=milestones&focus=${refs.open}&token=${token}`, { waitUntil: "networkidle" });
+    await page.waitForTimeout(300);
+    const missing = page.locator(`[data-milestone-missing="${refs.open}"]`);
+    expect(await missing.innerText()).toContain(`${refs.open} is not in this list.`);
+    await missing.getByRole("button", { name: "Open it" }).click();
+    expect(await openedTask(page)).toBe(refs.open);
+    await context.close();
+  });
+
+  it("remembers a fold, Collapse all and Expand all across a reload, and starts a phone folded", async () => {
+    const { page, context } = await open("");
+    const folded = () => page.locator("[data-milestone-section][data-milestone-folded]").count();
+    const open_ = () => page.locator("[data-milestones-content] > [data-milestone-section]").count();
+    expect(await folded()).toBe(0);
+    await section(page, refs.plan!).locator("[data-milestone-fold]").click();
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForTimeout(300);
+    expect(await section(page, refs.plan!).getAttribute("data-milestone-folded")).toBe("");
+    expect(await folded()).toBe(1);
+    await page.locator('[data-milestones-fold-all="collapse"]').click();
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForTimeout(300);
+    expect(await folded()).toBe(await open_());
+    await page.locator('[data-milestones-fold-all="expand"]').click();
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForTimeout(300);
+    expect(await folded()).toBe(0);
+    await context.close();
+
+    const phone = await open("", WS, { width: 390, height: 844 });
+    expect(await phone.page.locator("[data-milestones-content] > [data-milestone-section]:not([data-milestone-folded])").count()).toBe(0);
+    // The fold control sits beside the page name, as an icon labelled for a screen reader.
+    expect(await phone.page.locator("[data-phone-header-slot] [data-milestones-fold-all]").getAttribute("aria-label")).toBe("Expand all");
+    await phone.context.close();
+  });
+
+  it("reorders with the buttons, the menu and alt+arrow, adds and removes, and every write lands in the store", async () => {
+    const { page, context } = await open(refs.order!);
+    const order = async () => (await get<{ members: Array<{ identifier: string }> }>(`/api/milestone?ws=${WS}&ref=${refs.order}`)).members.map((m) => m.identifier);
+    const it_ = section(page, refs.order!);
+    expect(await order()).toEqual([refs.first, refs.second]);
+    // alt+arrow on the row.
+    await it_.locator(`[data-member-row="${refs.first}"]`).focus();
+    await page.keyboard.press("Alt+ArrowDown");
+    await page.waitForTimeout(800);
+    expect(await order()).toEqual([refs.second, refs.first]);
+    // The hover button.
+    await it_.locator(`[data-member-row="${refs.first}"]`).hover();
+    await it_.getByRole("button", { name: `Move ${refs.first} up` }).click();
+    await page.waitForTimeout(800);
+    expect(await order()).toEqual([refs.first, refs.second]);
+    // The row's menu.
+    await it_.locator(`[data-member-actions="${refs.first}"]`).click();
+    await page.locator('[role=menu] [data-menu-item="down"]').click();
+    await page.waitForTimeout(800);
+    expect(await order()).toEqual([refs.second, refs.first]);
+    // Add work, then remove it.
+    await it_.locator("[data-milestone-add-open]").click();
+    await it_.locator('[aria-label="Identifier to add"]').fill(refs.spare!);
+    await it_.locator("[data-milestone-add] button[type=submit]").click();
+    await page.waitForTimeout(800);
+    expect(await order()).toEqual([refs.second, refs.first, refs.spare]);
+    expect(lastEventActor("milestone_member_added")).toBe(PERSON);
+    await it_.locator(`[data-member-actions="${refs.spare}"]`).click();
+    await page.locator('[role=menu] [data-menu-item="remove"]').click();
+    await page.waitForTimeout(800);
+    expect(await order()).toEqual([refs.second, refs.first]);
+    await context.close();
+  });
+
+  it("queues the milestone from its header and takes it off from its menu", async () => {
+    const { page, context } = await open(refs.order!);
+    const queued = async () => (await get<{ entries: Array<{ identifier: string }> }>(`/api/queue?ws=${WS}`)).entries.map((e) => e.identifier);
+    expect(await queued()).not.toContain(refs.order);
+    await section(page, refs.order!).locator("[data-milestone-queue]").click();
+    await page.waitForTimeout(900);
+    expect(await queued()).toContain(refs.order);
+    expect(await section(page, refs.order!).locator("[data-milestone-queued]").count()).toBe(1);
+    await section(page, refs.order!).locator("[data-milestone-menu]").click();
+    await page.locator('[role=menu] [data-menu-item="dequeue"]').click();
+    await page.waitForTimeout(900);
+    expect(await queued()).not.toContain(refs.order);
+    await context.close();
+  });
+
+  it("offers a new milestone with the Milestone kind chosen when a workspace has none yet", async () => {
     const { page, context } = await open("", "beta");
     await page.locator("[data-create-milestone]").click();
     await page.waitForSelector("[data-create-kind]");
@@ -306,26 +469,39 @@ describe.skipIf(Boolean(reason))("the Milestones page, pressed in a real browser
     await context.close();
   });
 
-  it("gives every control on the phone page a target of at least 44px", async () => {
-    const { page, context } = await open(refs.carried!, WS, { width: 390, height: 844 });
-    const size = (selector: string) =>
+  it("keeps every control's look on a phone, with a tap of at least 32px and no 44px box", async () => {
+    // A finger: the base layer's touch floor applies unless a control lifts it.
+    const { page, context } = await open(refs.carried!, WS, { width: 390, height: 844 }, true);
+    /** The drawn box's height and the tap's: the larger of the box and its invisible `::before`. */
+    const measure = (selector: string) =>
       page.locator(selector).first().evaluate((element) => {
         const box = element.getBoundingClientRect();
-        return [box.width, box.height];
+        const before = getComputedStyle(element, "::before");
+        const tap = before.content !== "none" && before.position === "absolute" ? Math.max(box.height, parseFloat(before.height)) : box.height;
+        return { drawn: box.height, tap: Math.max(tap, box.height) };
       });
-    for (const selector of [
-      `[data-milestone-detail] header [aria-label="Open ${refs.carried}"]`,
-      '[aria-label="Expand to full screen"]',
-      "[data-milestone-due-button]",
-      "[data-milestone-add] button[type=submit]",
-      '[aria-label="Identifier to add"]',
+    const carried = `[data-milestone-section="${refs.carried}"]`;
+    for (const [selector, drawn] of [
+      [`${carried} [data-milestone-fold]`, 20],
+      [`${carried} [data-milestone-menu]`, 28],
       // The lifted row's own control: the hidden member's `⋯` it carries.
-      `[data-milestone-member="${refs.late}"] [role=gridcell]:last-child button`,
-    ]) {
-      const [, height] = await size(selector);
-      expect(height, selector).toBeGreaterThanOrEqual(44);
+      [`[data-milestone-member="${refs.late}"] [data-member-actions]`, 28],
+      [`${carried} [data-milestone-add-open]`, 28],
+      [`${carried} [data-show-done]`, 28],
+      ["[data-add-milestone-row]", 32],
+      ["[data-phone-header-slot] [data-milestones-fold-all]", 32],
+    ] as const) {
+      const { drawn: height, tap } = await measure(selector);
+      expect(height, selector).toBeCloseTo(drawn, 0);
+      expect(tap, selector).toBeGreaterThanOrEqual(32);
     }
-    // The lifted child's parent chip keeps its drawn size and grows a 44px target.
+    await page.locator(`${carried} [data-milestone-add-open]`).click();
+    for (const selector of [`${carried} [data-milestone-add] button[type=submit]`, `${carried} [aria-label="Identifier to add"]`]) {
+      const { drawn, tap } = await measure(selector);
+      expect(drawn, selector).toBeLessThanOrEqual(32);
+      expect(tap, selector).toBeGreaterThanOrEqual(28);
+    }
+    // The lifted child's parent chip is the Tasks list's own: it keeps its drawn size and grows a 44px target.
     const chip = page.locator(`[data-member-row="${refs.late}"] .staple-row-breadcrumb`);
     const target = await chip.evaluate((element) => parseFloat(getComputedStyle(element, "::before").height));
     expect(target).toBeGreaterThanOrEqual(44);
@@ -334,11 +510,12 @@ describe.skipIf(Boolean(reason))("the Milestones page, pressed in a real browser
 
   it("says approving a gated milestone with open work continues it, and it does not close", async () => {
     const { page, context } = await open(refs.going!);
-    const block = page.locator("[data-milestone-gate]");
+    const going = section(page, refs.going!);
+    const block = going.locator("[data-milestone-gate]");
     expect(await block.innerText()).toContain("2 tasks are still open. Approving lifts the hold; the milestone closes on its own when they are done.");
-    expect(await page.getByRole("button", { name: "Approve and close milestone" }).count()).toBe(0);
+    expect(await going.getByRole("button", { name: "Approve and close milestone" }).count()).toBe(0);
     page.on("dialog", (dialog) => void dialog.accept(PERSON));
-    await page.getByRole("button", { name: "Approve and continue" }).click();
+    await going.getByRole("button", { name: "Approve and continue" }).click();
     await page.waitForTimeout(1200);
     const detail = await get<{ issue: { status: string }; gate: { state: string } | null }>(`/api/issue?ws=${WS}&ref=${refs.going}`);
     expect(detail.gate).toMatchObject({ state: "approved" });

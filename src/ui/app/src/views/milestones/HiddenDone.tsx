@@ -6,8 +6,8 @@
  */
 import { Button } from "@/components/ui/button";
 
-/** 28px at every width; on a phone a 32px tap through an invisible inset, never a thumb-sized box. */
-const TEXT_BUTTON = "relative h-7 max-md:before:absolute max-md:before:-inset-y-0.5 max-md:before:inset-x-0 max-md:before:content-['']";
+/** 28px at every width (`min-h-0` lifts the touch floor); on a phone a 32px tap through an invisible inset, never a thumb-sized box. */
+const TEXT_BUTTON = "relative h-7 min-h-0 max-md:before:absolute max-md:before:-inset-y-0.5 max-md:before:inset-x-0 max-md:before:content-['']";
 
 export function hiddenDoneText(count: number): string {
   return count === 1 ? "1 finished item hidden" : `${count} finished items hidden`;

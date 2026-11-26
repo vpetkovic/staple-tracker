@@ -35,6 +35,8 @@ import { AddMilestoneRow, createMilestone, MilestonesToolbar } from "./Milestone
 
 /** How long a landed section stays marked. */
 const LANDED_MS = 1600;
+/** How long a landing keeps its section at the top while the sections above it finish reading. */
+const HOLD_MS = 3000;
 
 /** The open milestones in plan order, and the finished ones, the most recently closed first. */
 export function outlineGroups<T extends Pick<MilestoneListRow, "milestone">>(sorted: readonly T[]): { open: T[]; finished: T[] } {
@@ -127,6 +129,7 @@ export function MilestonesOutline({
 
   // Landing: on a focus, once the list and the width are in.
   const sections = useRef(new Map<string, HTMLElement>());
+  const scroller = useRef<HTMLDivElement>(null);
   const register = (identifier: string) => (element: HTMLElement | null) => {
     if (element) sections.current.set(identifier, element);
     else sections.current.delete(identifier);
@@ -144,10 +147,24 @@ export function MilestonesOutline({
       setVisitShelf(true);
       setFinishedOpen((current) => new Set(current).add(identifier));
     }
-    const frameId = requestAnimationFrame(() => sections.current.get(identifier)?.scrollIntoView({ block: "start" }));
+    const toTop = () => sections.current.get(identifier)?.scrollIntoView({ block: "start" });
+    const frameId = requestAnimationFrame(toTop);
+    // Sections above it grow as their reads land (a gate, a goal): keep it at the top for a
+    // moment, until the person scrolls or presses anything themselves.
+    const box = scroller.current;
+    const content = box?.firstElementChild;
+    const hold = content && typeof ResizeObserver !== "undefined" ? new ResizeObserver(toTop) : null;
+    if (hold && content) hold.observe(content);
+    const release = () => hold?.disconnect();
+    const events = ["wheel", "touchstart", "keydown", "pointerdown"] as const;
+    for (const event of events) box?.addEventListener(event, release, { passive: true });
+    const held = window.setTimeout(release, HOLD_MS);
     const timer = window.setTimeout(() => setLanded((current) => (current === identifier ? null : current)), LANDED_MS);
     return () => {
       cancelAnimationFrame(frameId);
+      release();
+      for (const event of events) box?.removeEventListener(event, release);
+      window.clearTimeout(held);
       window.clearTimeout(timer);
     };
     // Once per landing: the rows' identity changes on every read.
@@ -163,7 +180,7 @@ export function MilestonesOutline({
             A milestone gathers tasks that should be finished by a date. Create one, or ask an agent to.
           </PlainEmptyState>
           <div className="mt-3 flex justify-center">
-            <Button variant="outline" size="sm" className="h-8" onClick={createMilestone} data-create-milestone="">
+            <Button variant="outline" size="sm" className="h-8 min-h-0" onClick={createMilestone} data-create-milestone="">
               <Plus aria-hidden />
               Milestone
             </Button>
@@ -172,9 +189,9 @@ export function MilestonesOutline({
       ) : (
         <>
           <MilestonesToolbar open={open.length} finished={finished.length} foldAll={foldAll} slot={slot} />
-          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-6" data-milestones-outline="">
+          <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-6" data-milestones-outline="">
             {measured ? (
-              <>
+              <div data-milestones-content="">
                 {landing?.kind === "missing" ? (
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-2 text-label text-text-secondary @max-[760px]/ms:px-3" data-milestone-missing={landing.identifier}>
                     <span>{landing.identifier} is not in this list.</span>
@@ -233,7 +250,7 @@ export function MilestonesOutline({
                   </section>
                 ) : null}
                 <AddMilestoneRow />
-              </>
+              </div>
             ) : null}
           </div>
         </>

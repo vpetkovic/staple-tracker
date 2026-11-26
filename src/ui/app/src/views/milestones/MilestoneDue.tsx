@@ -172,7 +172,7 @@ export function MilestoneDueControl({
                 aria-label="Due date"
                 disabled={busy}
                 onChange={(event) => setDraft(event.target.value)}
-                className="h-9 text-body"
+                className="h-9 min-h-0 text-body"
               />
             </label>
             <p className="m-0 text-label text-text-secondary">
@@ -189,11 +189,11 @@ export function MilestoneDueControl({
             ) : null}
             <div className="flex items-center justify-end gap-2">
               {milestone.targetDate ? (
-                <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => void save(null)} data-milestone-due-clear="">
+                <Button type="button" variant="ghost" size="sm" className="min-h-0" disabled={busy} onClick={() => void save(null)} data-milestone-due-clear="">
                   {projection ? "Use the estimate" : "Clear date"}
                 </Button>
               ) : null}
-              <Button type="submit" size="sm" disabled={busy || !draft || draft === milestone.targetDate} data-milestone-due-save="">
+              <Button type="submit" size="sm" className="min-h-0" disabled={busy || !draft || draft === milestone.targetDate} data-milestone-due-save="">
                 Save
               </Button>
             </div>
