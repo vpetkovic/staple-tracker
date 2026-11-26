@@ -17,6 +17,7 @@
  * background of the web UI's poll, where an error has nowhere to go.
  */
 import type { WorkspaceStore } from "../store.js";
+import type { SubtreePullRequest } from "../subtree-pull-requests.js";
 import { type TicketBranch, ticketBranches } from "../ticket-branch.js";
 import { StapleError } from "../types.js";
 import type { ConnectionHealthSnapshot, ConnectionState, ExternalItem } from "./contracts.js";
@@ -230,20 +231,31 @@ export interface RowPullRequest {
   state: RowState;
   title: string | null;
   updatedAt: string | null;
+  /** On a parent's row, the tickets of its subtree the pull request is linked on; absent on a leaf's. */
+  tickets?: string[];
 }
 
 /**
  * A row's `pullRequests`: every linked pull request, the ones still moving first (open, draft,
  * unknown, then merged and closed), newest first within a state. A GitHub pull request is all
- * a link can be, so every one is drawn: one with no state read yet draws as unknown.
+ * a link can be, so every one is drawn: one with no state read yet draws as unknown. Given a
+ * parent's subtree set, each names the tickets it is linked on.
  */
-export function rowPullRequests(linked: readonly LinkedPullRequest[] | undefined): { pullRequests?: RowPullRequest[] } {
+export function rowPullRequests(linked: readonly (LinkedPullRequest | SubtreePullRequest)[] | undefined): { pullRequests?: RowPullRequest[] } {
   const drawable = (linked ?? []).filter((pr) => pr.providerId === "github" && pr.number !== null);
   if (!drawable.length) return {};
   const stateOf = (pr: LinkedPullRequest): RowState => (ROW_STATES.includes(pr.state as RowState) && pr.state !== "unknown" ? (pr.state as RowState) : "unknown");
   return {
     pullRequests: [...drawable]
       .sort((a, b) => ROW_STATES.indexOf(stateOf(a)) - ROW_STATES.indexOf(stateOf(b)) || b.number! - a.number!)
-      .map((pr) => ({ provider: "github", number: pr.number!, url: pr.url, state: stateOf(pr), title: pr.title, updatedAt: pr.fetchedAt })),
+      .map((pr) => ({
+        provider: "github",
+        number: pr.number!,
+        url: pr.url,
+        state: stateOf(pr),
+        title: pr.title,
+        updatedAt: pr.fetchedAt,
+        ...("tickets" in pr ? { tickets: pr.tickets.map((ticket) => ticket.identifier) } : {}),
+      })),
   };
 }

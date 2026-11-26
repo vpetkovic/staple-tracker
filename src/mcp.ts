@@ -33,6 +33,7 @@ import { readWorkspaceManifest } from "./core/repo-identity.js";
 import { SurfaceAutoSync } from "./core/cloud/auto-triggers.js";
 import { VIEWS, RESOURCE_MIME_TYPE, linkToolView, readViewHtml, viewToolMeta, viewUri } from "./mcp-views.js";
 import { ticketCard, ticketCardText, type TicketCard } from "./mcp-ticket-card.js";
+import { subtreePullRequestsField } from "./core/subtree-pull-requests.js";
 import { setTicketBranch } from "./core/ticket-branch.js";
 import { writeCheckpoint } from "./core/checkpoint.js";
 import { DECISION_VIEW_IDS, approvalComment, configuredHumanName, personFor, sendBackComment } from "./mcp-view-actions.js";
@@ -1197,6 +1198,34 @@ type _CrossBlockerShapeMatchesInterface = Expect<
   Equals<z.infer<z.ZodObject<typeof crossBlockerShape>>, CrossBlockerState>
 >;
 
+const linkedPullRequestShape = z.object({
+  resourceId: z.string(),
+  providerId: z.string(),
+  key: z.string().describe("owner/repo#12"),
+  url: z.string(),
+  number: z.number().nullable(),
+  state: z.string().nullable().describe("draft, open, merged or closed; null when no state was read on this machine or shared"),
+  title: z.string().nullable(),
+  checks: z
+    .object({ state: z.enum(["passing", "failing", "pending"]), failing: z.array(z.string()), completedAt: z.string().nullable() })
+    .nullable()
+    .describe("The checks on the head commit at the last read; null for a merged or closed PR or a head with no checks"),
+  fetchedAt: z.string().nullable(),
+  linkedAt: z.string(),
+});
+/**
+ * A pull request of a parent's subtree (core/subtree-pull-requests.ts): one per pull request,
+ * however many tickets of the subtree it is linked on.
+ */
+const subtreePullRequestShape = linkedPullRequestShape.extend({
+  own: z.boolean().describe("Linked on the parent itself; false when only its descendants carry it"),
+  tickets: z
+    .array(z.object({ id: z.string(), identifier: z.string(), title: z.string() }))
+    .describe("Every ticket of the subtree it is linked on: the parent first when own, then in tree order"),
+});
+const subtreePullRequestsDescription =
+  "A parent's pull requests and every descendant's, done and cancelled ones included: its own first, then its descendants' in tree order, each once with the tickets it is linked on";
+
 /** The ticket card. show_ticket answers with it; checkout_task and the from-view gate tools carry it too, so the view never reads it back. */
 const ticketCardShape = {
   workspace: z.string().describe("The workspace slug: the web UI's ws parameter"),
@@ -1244,6 +1273,7 @@ const ticketCardShape = {
     .nullable()
     .describe("The web UI deep link, <base>?ws=<slug>&issue=<REF>. The base is STAPLE_UI_URL, else the configured UI port on 127.0.0.1; null when STAPLE_UI_URL=off"),
   actions: z.object({ approve: z.boolean(), requestChanges: z.boolean() }),
+  subtreePullRequests: z.array(subtreePullRequestShape).nullable().describe(`${subtreePullRequestsDescription}; null on a ticket with no children`),
 };
 type _TicketCardShapeMatchesInterface = Expect<Equals<Flat<z.infer<z.ZodObject<typeof ticketCardShape>>>, Published<TicketCard>>>;
 
@@ -1544,6 +1574,10 @@ server.registerTool(
         .describe(
           "The certified plan of a parent: total labor, estimate coverage and critical path, as compare_plans reports them. Null for an issue with no children, whose plan is its own estimate on timing.",
         ),
+      subtreePullRequests: z
+        .array(subtreePullRequestShape)
+        .optional()
+        .describe(`${subtreePullRequestsDescription}. Absent on an issue with no children`),
     },
     annotations: { title: "Get task context", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
@@ -1578,6 +1612,7 @@ server.registerTool(
         attempts: store.attemptSummary(context.issue.id),
         orchestration: store.orchestrationSummary(context.issue.id),
         planSummary: store.planSummary(context.issue.id),
+        ...subtreePullRequestsField(store, context.issue.id),
       };
     }),
 );
@@ -1907,21 +1942,6 @@ server.registerTool(
  * The branch a ticket is worked on (core/ticket-branch.ts). Like set_estimate, an absolute
  * set: the identical repeat answers changed: false and writes nothing.
  */
-const linkedPullRequestShape = z.object({
-  resourceId: z.string(),
-  providerId: z.string(),
-  key: z.string().describe("owner/repo#12"),
-  url: z.string(),
-  number: z.number().nullable(),
-  state: z.string().nullable().describe("draft, open, merged or closed; null when no state was read on this machine or shared"),
-  title: z.string().nullable(),
-  checks: z
-    .object({ state: z.enum(["passing", "failing", "pending"]), failing: z.array(z.string()), completedAt: z.string().nullable() })
-    .nullable()
-    .describe("The checks on the head commit at the last read; null for a merged or closed PR or a head with no checks"),
-  fetchedAt: z.string().nullable(),
-  linkedAt: z.string(),
-});
 server.registerTool(
   "set_branch",
   {

@@ -295,15 +295,17 @@ export class ExternalLinkStore {
 
   /**
    * Every linked pull request per issue, from the saved copy this machine reads (its own, or a
-   * newer shared one). One query for the whole workspace, newest link last.
+   * newer shared one). One query for the whole workspace, newest link last; `issueIds` keeps
+   * it to those tickets (a parent's subtree, `subtree-pull-requests.ts`), still one query.
    */
-  pullRequests(): Map<string, LinkedPullRequest[]> {
+  pullRequests(issueIds?: readonly string[]): Map<string, LinkedPullRequest[]> {
     const rows = this.db.prepare(`SELECT l.issue_id,l.created_at AS linked_at,r.id,r.provider_id,r.display_key,r.url,
         CASE WHEN p.fetched_at IS NOT NULL AND (r.fetched_at IS NULL OR p.fetched_at>=r.fetched_at) THEN p.title ELSE r.title END AS title,
         CASE WHEN p.fetched_at IS NOT NULL AND (r.fetched_at IS NULL OR p.fetched_at>=r.fetched_at) THEN p.status_json ELSE r.status_json END AS status_json,
         CASE WHEN p.fetched_at IS NOT NULL AND (r.fetched_at IS NULL OR p.fetched_at>=r.fetched_at) THEN p.fetched_at ELSE r.fetched_at END AS fetched_at
       FROM external_links l JOIN external_resources r ON r.id=l.resource_id LEFT JOIN external_private_cache p ON p.resource_id=r.id
-      WHERE r.kind='pull_request' ORDER BY l.issue_id,l.position,l.created_at,l.rowid`).all() as Array<{issue_id:string;linked_at:string;id:string;provider_id:string;display_key:string;url:string;title:string|null;status_json:string|null;fetched_at:string|null}>;
+      WHERE r.kind='pull_request' AND (? IS NULL OR l.issue_id IN (SELECT value FROM json_each(?)))
+      ORDER BY l.issue_id,l.position,l.created_at,l.rowid`).all(...Array(2).fill(issueIds === undefined ? null : JSON.stringify(issueIds))) as Array<{issue_id:string;linked_at:string;id:string;provider_id:string;display_key:string;url:string;title:string|null;status_json:string|null;fetched_at:string|null}>;
     const result = new Map<string, LinkedPullRequest[]>();
     for (const row of rows) {
       const number = Number(/#([1-9][0-9]*)$/.exec(row.display_key)?.[1]);
