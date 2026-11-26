@@ -3,7 +3,7 @@
  * The code lives beside it: `IdeasLens.tsx`, `HorizonsLens.tsx`, the shared board shell in
  * `plan-board.tsx` and the presentational parts in `plan-parts.tsx`.
  */
-export { IdeasBoard, shelfRestore, ThinkingChips } from "./IdeasLens";
+export { IdeasBoard, shelfRestore } from "./IdeasLens";
 export { AddHorizon, HorizonMenuItem, HorizonsBoard } from "./HorizonsLens";
 export { cardMenuItems, type Write } from "./plan-board";
 export { Chip, DeliveryChips, HorizonChip, planIncomplete, Progress } from "./plan-parts";

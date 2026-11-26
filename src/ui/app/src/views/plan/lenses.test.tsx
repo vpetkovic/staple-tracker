@@ -9,7 +9,7 @@ import type { HorizonData, IdeaData, PlanData } from "@/lib/plan-types";
 import { Markdown } from "@/lib/markdown";
 import { ShippedMark } from "@/detail/ShippedMark";
 import { planActionItems, planPrimary } from "@/detail/plain-actions";
-import { cardMenuItems, DeliveryChips, HorizonsBoard, IdeasBoard, shelfRestore, ThinkingChips } from "./PlanBoards";
+import { cardMenuItems, DeliveryChips, HorizonsBoard, IdeasBoard, shelfRestore } from "./PlanBoards";
 import { DependencyArrows, PlanTimeline } from "./PlanTimeline";
 import { RunSettingForm, runSettingLabel } from "./RunSetting";
 import { dependencyEdges, horizonDone, horizonsColumns, ideasColumns, inHorizonsLens, inIdeasLens } from "./plan-model";
@@ -143,12 +143,13 @@ describe("the Ideas lens is thinking only", () => {
   });
 
   it("shows how much of the plan is written and the horizon, and nothing about delivery", () => {
-    const html = renderToStaticMarkup(<ThinkingChips idea={{ ...exploring, completeness: { starred: 3, starredTotal: 3, filled: 7, total: 10 }, linkCount: 2, late: true, notStarted: true }} horizonLabel="Now · Dec 31" />);
+    const thinking = { ...exploring, completeness: { starred: 3, starredTotal: 3, filled: 7, total: 10 }, linkCount: 2, late: true, notStarted: true };
+    const html = renderToStaticMarkup(<IdeasBoard plan={plan([thinking])} write={async () => true} onOpen={() => {}} selected={null} />);
     expect(html).toContain('data-plan-card-completeness="3/3"');
-    expect(text(html)).toContain("★ 3/3 · 7/10 written");
+    expect(text(html)).toContain("7/10 written");
     expect(html).toContain("data-horizon-chip");
-    expect(text(html)).toContain("◇ Now · Dec 31");
-    expect(text(html)).not.toMatch(/linked|late|not started|shipped/);
+    expect(text(html)).toContain("◇ H now · Dec 31");
+    expect(text(html)).not.toMatch(/linked|late|not started|shipped|% done/);
   });
 
   it("renders no delivery card on the board", () => {
