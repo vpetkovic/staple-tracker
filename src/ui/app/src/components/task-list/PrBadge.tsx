@@ -44,7 +44,9 @@ export function PrBadge({
   const pr = prs[0]!;
   const shown = prs.slice(1, MAX_GLYPHS);
   const extra = prs.length - 1 - shown.length;
-  const names = prs.map((p) => `#${p.number} ${word(p.state)}`).join(", ");
+  // On a parent's row each names the tickets of its subtree it is linked on.
+  const on = (p: PullRequestRef) => (p.tickets?.length ? ` on ${p.tickets.join(", ")}` : "");
+  const names = prs.map((p) => `#${p.number} ${word(p.state)}${on(p)}`).join(", ");
 
   return (
     <a
@@ -57,8 +59,8 @@ export function PrBadge({
       // Without this the click opens the PR AND the detail drawer — the one interaction
       // bug this element would otherwise ship with.
       onClick={(event) => event.stopPropagation()}
-      aria-label={prs.length === 1 ? `Pull request #${pr.number}, ${word(pr.state)}` : `${prs.length} pull requests: ${names}`}
-      title={prs.map((p) => (p.title ? `#${p.number} ${p.title} (${word(p.state)})` : `#${p.number} (${word(p.state)})`)).join("\n")}
+      aria-label={prs.length === 1 ? `Pull request #${pr.number}, ${word(pr.state)}${on(pr)}` : `${prs.length} pull requests: ${names}`}
+      title={prs.map((p) => `${p.title ? `#${p.number} ${p.title} (${word(p.state)})` : `#${p.number} (${word(p.state)})`}${on(p)}`).join("\n")}
     >
       <LinkGlyph kind="pull_request" tone={toneOf(pr.state)} className="size-3" />
       {showNumber ? <span className="staple-pr-number">#{pr.number}</span> : null}

@@ -2,8 +2,9 @@
  * A task's linked issues or pull requests in its properties: one chip per link with the
  * shortest key that is still unambiguous, and a `+` to link another. Linked issues stop at four
  * and then "+N more"; pull requests are all listed, since the ticket's replaced and stacked
- * pull requests are what this row is for. On the phone (`compact`) it is one counted pill per
- * kind beside the other chips.
+ * pull requests are what this row is for. A parent's pull requests row also lists its
+ * descendants' after its own, each naming its tickets (SubtreePullRequests.tsx). On the phone
+ * (`compact`) it is one counted pill per kind beside the other chips, for this ticket's own links.
  */
 import { useRef } from "react";
 import { Plus } from "lucide-react";
@@ -15,6 +16,7 @@ import { requestExternalSection } from "./external-section";
 import { leadingTone, linkTone, shortKey, stateLabel } from "./link-state";
 import { countLabel, LinkHoverCard, SingleLinkCard } from "./LinkHoverCard";
 import { ItemGlyph, LinkGlyph } from "./parts";
+import { descendantPullRequests, otherTickets, SubtreePullRequestChip, SubtreeTickets, subtreeItem } from "./SubtreePullRequests";
 
 const MAX_CHIPS = 4;
 
@@ -75,14 +77,19 @@ export function ExternalPropertySummary({
 
   const shown = kind === "pull_request" ? links : links.slice(0, MAX_CHIPS);
   const more = links.length - shown.length;
+  // A parent's: the pull requests only its descendants carry, and which of its own they share.
+  const descendants = kind === "pull_request" ? descendantPullRequests(detail) : [];
+  const subtree = new Map((kind === "pull_request" ? detail.subtreePullRequests ?? [] : []).map((pr) => [pr.resourceId, pr]));
+  const keyPeers = descendants.length ? [...peers, ...descendants.map(subtreeItem)] : peers;
   return (
     <span className="flex min-w-0 max-w-full flex-wrap items-center gap-1.5 py-1 pointer-coarse:gap-y-5 pointer-coarse:py-2" data-link-chips={kind}>
       <span className="sr-only">{countLabel(links.length, kind)}</span>
-      {links.length === 0 ? <span className="text-body text-text-tertiary">None</span> : null}
+      {links.length === 0 && descendants.length === 0 ? <span className="text-body text-text-tertiary">None</span> : null}
       {shown.map((link) => {
         const item = link.resource;
         const state = stateLabel(item);
-        return (
+        const also = subtree.has(item.id) ? otherTickets(subtree.get(item.id)!, detail.issue.id) : [];
+        const chip = (
           <LinkHoverCard
             key={link.id}
             data-link-chip={item.id}
@@ -107,10 +114,20 @@ export function ExternalPropertySummary({
             )}
           >
             <ItemGlyph item={item} className="size-3.5" />
-            <span data-link-key="">{shortKey(item, peers)}</span>
+            <span data-link-key="">{shortKey(item, keyPeers)}</span>
           </LinkHoverCard>
         );
+        if (also.length === 0) return chip;
+        return (
+          <span key={link.id} className="inline-flex min-w-0 items-center gap-1.5">
+            {chip}
+            <SubtreeTickets workspace={detail.workspace} tickets={also} also />
+          </span>
+        );
       })}
+      {descendants.map((pr) => (
+        <SubtreePullRequestChip key={pr.resourceId} pr={pr} workspace={detail.workspace} peers={keyPeers} />
+      ))}
       {more > 0 ? (
         <button
           type="button"

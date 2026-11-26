@@ -1,4 +1,5 @@
 import type { ExternalLink, ExternalRowSummary } from "../../../../core/integrations/link-store.js";
+import type { SubtreePullRequest } from "../../../../core/subtree-pull-requests.js";
 import type { TicketBranch } from "../../../../core/ticket-branch.js";
 import type { HorizonData, IdeaData, IdeaDetailData, PlanStepData } from "./plan-types.js";
 /**
@@ -855,6 +856,8 @@ export interface PullRequestRef {
   state: "draft" | "open" | "merged" | "closed" | "unknown";
   /** Optional; tooltip only. */
   title?: string | null;
+  /** On a parent's row, the tickets of its subtree this pull request is linked on (tooltip only); absent on a leaf's. */
+  tickets?: string[];
   /** ISO-8601. Optional; tooltip only. */
   updatedAt?: string | null;
 }
@@ -1110,6 +1113,12 @@ export interface IssueDetail {
   externalLinks?: ExternalLink[];
   /** The branch the work lives on (`staple branch`), else the newest branch-pointer comment; null when neither. */
   branch?: TicketBranch | null;
+  /**
+   * A parent's pull requests and every descendant's (core/subtree-pull-requests.ts): its own
+   * first, then its descendants' in tree order, each once with the tickets it is linked on.
+   * Absent on a ticket with no children; empty on a parent whose subtree has none.
+   */
+  subtreePullRequests?: SubtreePullRequest[];
   workspace: string;
   issue: Issue;
   ancestors: Issue[];
