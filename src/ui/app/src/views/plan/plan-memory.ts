@@ -5,8 +5,10 @@ export interface PlanMemory {
   record: string | null;
   scroll: Record<string, { left: number; top: number }>;
   column: Record<string, string>;
+  /** The Horizons lens's sections as the person folded them, by horizon id and `"none"` for Not scheduled. */
+  folded: Record<string, boolean>;
 }
-const defaults = (): PlanMemory => ({ lens: "ideas", record: null, scroll: {}, column: {} });
+const defaults = (): PlanMemory => ({ lens: "ideas", record: null, scroll: {}, column: {}, folded: {} });
 const key = (workspace: string) => `staple:plan:v1:${workspace}`;
 export const isLens = (value: unknown): value is Lens => value === "ideas" || value === "horizons" || value === "timeline";
 
@@ -26,8 +28,16 @@ export function loadPlanMemory(workspace: string, storage = browserStorage()): P
       if (position && Number.isFinite(position.left) && Number.isFinite(position.top)) result.scroll[lens] = { left: Math.max(0, position.left), top: Math.max(0, position.top) };
       if (typeof value.column?.[lens] === "string") result.column[lens] = value.column[lens];
     }
+    if (value.folded && typeof value.folded === "object" && !Array.isArray(value.folded)) {
+      for (const [section, folded] of Object.entries(value.folded)) if (section && typeof folded === "boolean") result.folded[section] = folded;
+    }
     return result;
   } catch { return defaults(); }
+}
+/** The folds to save: the remembered ones with the new choices over them, only for sections the plan still has. */
+export function keepFolds(folded: Record<string, boolean>, changes: Record<string, boolean>, sections: readonly string[]): Record<string, boolean> {
+  const next = { ...folded, ...changes };
+  return Object.fromEntries(sections.filter((section) => typeof next[section] === "boolean").map((section) => [section, next[section]!]));
 }
 export function savePlanMemory(workspace: string, memory: PlanMemory, storage = browserStorage()): void {
   try { storage?.setItem(key(workspace), JSON.stringify(memory)); } catch { /* Best effort per-viewer preference. */ }

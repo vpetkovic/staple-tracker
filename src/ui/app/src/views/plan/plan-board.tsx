@@ -26,6 +26,9 @@ export interface BoardProps {
   selected: string | null;
   /** A focus or filter text is on: fold nothing away, so every match shows. */
   filtering?: boolean;
+  /** The Horizons lens's folds as the person chose them (plan memory), and how one is chosen. */
+  folded?: Record<string, boolean>;
+  onFold?: (changes: Record<string, boolean>) => void;
   /** Captures a raw idea; the Ideas lens draws its field at the top of Raw. */
   capture?: (title: string) => Promise<boolean>;
 }

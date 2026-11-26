@@ -6,14 +6,14 @@
  * section, or onto the drop rail pinned at the top while a drag is on. A section the idea's state
  * would refuse is never marked as a target.
  */
-import { Plus } from "lucide-react";
+import { ChevronsDownUp, ChevronsUpDown, Plus } from "lucide-react";
 import { useEffect, useRef, useState, type DragEvent, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { IdeaData, PlanData } from "@/lib/plan-types";
 import { cn } from "@/lib/utils";
 import { moveOffered } from "@/detail/plain-actions";
-import { HorizonHeader, type DropMark } from "./HorizonHeader";
+import { FoldButton, HorizonHeader, type DropMark } from "./HorizonHeader";
 import { PlanTree } from "./PlanTree";
 import { MoveMenu, type BoardProps, type Write } from "./plan-board";
 import { dropBody, dropChanges, horizonDone, horizonsColumns, type BoardColumn } from "./plan-model";
@@ -32,6 +32,9 @@ interface LensContext {
   /** The idea being dragged, from its `dragstart` to its `dragend` or drop. */
   dragging: IdeaData | null;
   onDrag: (idea: IdeaData | null) => void;
+  /** The folds the person chose, by horizon id and `NONE`; how one is chosen. */
+  folded: Record<string, boolean>;
+  onFold: (changes: Record<string, boolean>) => void;
 }
 
 /** What the lens calls the place a record with no horizon sits: the section, the drop rail and the move menu. */
@@ -42,10 +45,54 @@ export function lensColumns(plan: PlanData): BoardColumn[] {
   return horizonsColumns(plan).map((column) => (column.horizon ? column : { ...column, title: NOT_SCHEDULED }));
 }
 
-export function HorizonsBoard({ plan, write, onOpen, selected, filtering = false }: BoardProps) {
+/** Not scheduled's key in the remembered folds; a horizon's is its id. */
+export const NONE = "none";
+
+/** Folded as the person left it, else when its horizon is done. */
+const isFolded = (folded: Record<string, boolean>, key: string, done: boolean) => folded[key] ?? done;
+
+/**
+ * What Collapse all / Expand all does: collapse while any section that folds is unfolded, else
+ * expand, writing the choice for every horizon and Not scheduled. Null when nothing folds.
+ */
+export function foldAll(plan: PlanData, folded: Record<string, boolean>): { collapse: boolean; changes: Record<string, boolean> } | null {
+  const open = plan.horizons.map((horizon) => !isFolded(folded, horizon.id, horizonDone(horizon)));
+  // Not scheduled folds only when it has rows; its one quiet line does not.
+  if (planTree({ horizonId: null, ideas: plan.ideas, horizons: plan.horizons }).length > 0) open.push(!isFolded(folded, NONE, false));
+  if (open.length === 0) return null;
+  const collapse = open.includes(true);
+  return { collapse, changes: Object.fromEntries([NONE, ...plan.horizons.map((horizon) => horizon.id)].map((key) => [key, collapse])) };
+}
+
+/** Collapse all / Expand all: in the toolbar beside + Horizon, or (`row`) beside the outline's Add a horizon. */
+export function FoldAll({ plan, folded, onFold, filtering, row = false }: { plan: PlanData; folded: Record<string, boolean>; onFold: (changes: Record<string, boolean>) => void; filtering: boolean; row?: boolean }) {
+  const choice = foldAll(plan, folded);
+  const collapse = choice?.collapse ?? false;
+  const Icon = collapse ? ChevronsDownUp : ChevronsUpDown;
+  const why = filtering ? "Clear the focus and filter to fold sections" : undefined;
+  // A disabled button takes no pointer, so its wrapper carries the reason's tooltip.
+  return (
+    <span title={why} className={cn("inline-flex", row && "min-w-0 flex-1")}>
+      <Button
+        variant="outline"
+        size={row ? "default" : "sm"}
+        className={row ? "min-h-11 w-full justify-center" : "h-8"}
+        disabled={filtering || choice === null}
+        title={why}
+        onClick={() => choice && onFold(choice.changes)}
+        data-plan-fold-all
+      >
+        <Icon aria-hidden />
+        {collapse ? "Collapse all" : "Expand all"}
+      </Button>
+    </span>
+  );
+}
+
+export function HorizonsBoard({ plan, write, onOpen, selected, filtering = false, folded = {}, onFold = () => {} }: BoardProps) {
   const columns = lensColumns(plan);
   const [dragging, setDragging] = useState<IdeaData | null>(null);
-  const lens: LensContext = { plan, columns, write, onOpen, selected, filtering, dragging, onDrag: setDragging };
+  const lens: LensContext = { plan, columns, write, onOpen, selected, filtering, dragging, onDrag: setDragging, folded, onFold };
   return (
     <div className="relative flex h-full min-h-0 flex-col">
       {dragging ? <DropRail lens={lens} /> : null}
@@ -54,9 +101,12 @@ export function HorizonsBoard({ plan, write, onOpen, selected, filtering = false
         {columns.slice(1).map((column) => (
           <HorizonSection key={column.key} lens={lens} column={column} />
         ))}
-        {/* Under 900px of the Plan container the toolbar has no room for it beside the pills. */}
-        <div className="hidden px-3 pt-4 @max-[900px]/plan:block">
-          <AddHorizon write={write} row />
+        {/* Under 900px of the Plan container the toolbar has no room for them beside the pills; the add form takes the row's width. */}
+        <div className="hidden flex-wrap gap-2 px-3 pt-4 @max-[900px]/plan:flex" data-plan-lens-tools>
+          <FoldAll plan={plan} folded={folded} onFold={onFold} filtering={filtering} row />
+          <div className="min-w-0 flex-1 has-[[data-plan-add-horizon-form]]:basis-full">
+            <AddHorizon write={write} row />
+          </div>
         </div>
       </div>
     </div>
@@ -143,38 +193,41 @@ export function ReadySection({ lens, column }: { lens: LensContext; column: Boar
     );
   }
   const waiting = column.ideas.length;
+  const folded = !lens.filtering && isFolded(lens.folded, NONE, false);
   return (
     <section aria-label={title} data-plan-column={column.key} data-plan-drop={state} {...handlers} className="border-b">
       <header
         className={cn(
-          "sticky top-0 z-10 flex flex-wrap items-baseline gap-x-2.5 border-b bg-card py-3 pr-4 pl-[42px] @max-[760px]/plan:px-3",
+          // The horizon header's padding and gaps, so the chevron and the title sit at a horizon's x.
+          "sticky top-0 z-10 flex flex-wrap items-baseline gap-x-2.5 border-b bg-card px-4 py-3 @max-[760px]/plan:gap-x-2 @max-[760px]/plan:px-3",
           mark !== null && "shadow-[inset_0_0_0_2px_var(--color-ring)]",
           mark === "over" && "bg-surface-hover",
         )}
         data-plan-ready
       >
+        <FoldButton name={title} folded={folded} onFold={lens.filtering ? null : () => lens.onFold({ [NONE]: !folded })} data-plan-ready-fold="" />
         <h2 className="m-0 text-title font-semibold">{title}</h2>
         <span className="text-label text-text-secondary">
           {waiting} idea{waiting === 1 ? "" : "s"} with no horizon
         </span>
       </header>
-      <SectionTree lens={lens} column={column} rows={rows} label={title} />
+      {folded ? null : <SectionTree lens={lens} column={column} rows={rows} label={title} />}
     </section>
   );
 }
 
-/** A horizon's section: its sticky header and its tree. A horizon the server reads as done starts folded. */
+/** A horizon's section: its sticky header and its tree. With no choice remembered, a horizon the server reads as done starts folded. */
 function HorizonSection({ lens, column }: { lens: LensContext; column: BoardColumn }) {
   const horizon = column.horizon!;
   const rows = planTree({ horizonId: horizon.id, ideas: lens.plan.ideas, horizons: lens.plan.horizons });
   const done = horizonDone(horizon);
-  const [chosen, setChosen] = useState<boolean | null>(null);
-  // Folded as the person left it, else when done; never while a filter is on, so every match shows.
-  const folded = !lens.filtering && (chosen ?? done);
+  // Never folded while a filter is on, so every match shows; nothing is applied or chosen then.
+  const folded = !lens.filtering && isFolded(lens.folded, horizon.id, done);
+  const fold = () => lens.onFold({ [horizon.id]: !folded });
   const { mark, handlers, state } = useDropTarget(lens, column);
   return (
     <section aria-label={horizon.name} data-plan-column={column.key} data-plan-drop={state} {...handlers} className="border-b">
-      <HorizonHeader horizon={horizon} today={lens.plan.today} write={lens.write} onOpen={lens.onOpen} done={done} folded={folded} onFold={lens.filtering ? null : () => setChosen(!folded)} drop={mark} />
+      <HorizonHeader horizon={horizon} today={lens.plan.today} write={lens.write} onOpen={lens.onOpen} done={done} folded={folded} onFold={lens.filtering ? null : fold} drop={mark} />
       {done && lens.filtering ? (
         // While filtering the section shows every match and cannot fold: the line only says it landed.
         <p className="m-0 flex min-h-9 items-center border-b py-1.5 pr-4 pl-[42px] text-label text-text-secondary @max-[760px]/plan:px-3">{landed(horizon.memberCount)}</p>
@@ -184,7 +237,7 @@ function HorizonSection({ lens, column }: { lens: LensContext; column: BoardColu
           className="focus-ring-inset flex min-h-9 w-full items-center border-b py-1.5 pr-4 pl-[42px] text-left text-label text-text-secondary hover:bg-surface-hover @max-[760px]/plan:px-3"
           aria-expanded={!folded}
           data-plan-done-toggle={horizon.identifier}
-          onClick={() => setChosen(!folded)}
+          onClick={fold}
         >
           {landed(horizon.memberCount)} · {folded ? "show" : "hide"}
         </button>

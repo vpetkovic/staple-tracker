@@ -34,14 +34,14 @@ import { useResource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
 import { ErrorState } from "@/views/ViewChrome";
 import { workspaceScope } from "@/views/workspace-scope";
-import { AddHorizon, HorizonsBoard } from "./HorizonsLens";
+import { AddHorizon, FoldAll, HorizonsBoard, NONE } from "./HorizonsLens";
 import { IdeasBoard, IdeasNothing } from "./IdeasLens";
 import { PlanTimeline } from "./PlanTimeline";
 import type { BoardProps, Write } from "./plan-board";
 import { focusCounts, focusing, focusPlan, type PlanFocus } from "./plan-focus";
 import { inHorizonsLens, inIdeasLens, LENSES, type Lens } from "./plan-model";
 import { CaptureForm, PLAN_WIDTH, useElementWidth } from "./plan-parts";
-import { loadPlanMemory, readPlanLens, savePlanMemory, withPlanLens } from "./plan-memory";
+import { keepFolds, loadPlanMemory, readPlanLens, savePlanMemory, withPlanLens } from "./plan-memory";
 
 export function PlanView({ onAuthError }: { onAuthError: (error: AuthError) => void }) {
   const session = useSession();
@@ -69,6 +69,7 @@ function WorkspacePlan({ workspace, onAuthError }: { workspace: string; onAuthEr
   // View state only: it starts again with each workspace (this component is keyed by it) and is not remembered.
   const [focus, setFocus] = useState<PlanFocus>("all");
   const memory = useRef(loadPlanMemory(workspace));
+  const [folded, setFolded] = useState(() => memory.current.folded);
   const [lens, setLens] = useState<Lens>(() => {
     const params = new URLSearchParams(window.location.search);
     const sameWorkspace = !params.get("ws") || params.get("ws") === workspace;
@@ -163,6 +164,12 @@ function WorkspacePlan({ workspace, onAuthError }: { workspace: string; onAuthEr
   const selected = session.selection && session.selection.workspace === workspace ? (plan.ideas.find((idea) => idea.id === session.selection!.ref || idea.identifier === session.selection!.ref)?.id ?? null) : null;
   const text = session.filters.text;
   const setText = (next: string) => session.setFilters({ ...session.filters, text: next });
+  // A fold is remembered with the rest; a horizon that is gone takes its fold with it.
+  const fold = (changes: Record<string, boolean>) => {
+    memory.current.folded = keepFolds(memory.current.folded, changes, [NONE, ...plan.horizons.map((horizon) => horizon.id)]);
+    savePlanMemory(workspace, memory.current);
+    setFolded(memory.current.folded);
+  };
   // Capture never moves the page: the idea lands in Raw, and the toolbar offers a way there.
   const capture = (title: string) => write("capture", { title });
   return (
@@ -177,7 +184,14 @@ function WorkspacePlan({ workspace, onAuthError }: { workspace: string; onAuthEr
         onText={setText}
         onCapture={capture}
         onViewIdeas={() => chooseLens("ideas")}
-        tools={lens === "horizons" ? <AddHorizon write={write} /> : null}
+        tools={
+          lens === "horizons" ? (
+            <>
+              <FoldAll plan={plan} folded={folded} onFold={fold} filtering={focusing(focus, text)} />
+              <AddHorizon write={write} />
+            </>
+          ) : null
+        }
       />
       {refusal ? (
         <div className="px-gutter pt-2" data-plan-refusal>
@@ -195,6 +209,8 @@ function WorkspacePlan({ workspace, onAuthError }: { workspace: string; onAuthEr
           onOpen={open}
           selected={selected}
           capture={capture}
+          folded={folded}
+          onFold={fold}
         />
       </TabsContent>
       </Tabs>
