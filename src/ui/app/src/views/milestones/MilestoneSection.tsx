@@ -24,7 +24,7 @@ import { dequeueTask, enqueueTask, type AuthError } from "@/lib/api";
 import { useBackToClose } from "@/lib/back-to-close";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
 import { useSession } from "@/lib/session";
-import type { EffectiveQueueRow, MilestoneListRow } from "@/lib/types";
+import type { EffectiveQueueRow, MilestoneListRow, MilestoneView } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { ErrorState } from "@/views/ViewChrome";
 import { dueText, progressSentence, projectedDue, shownState } from "./milestone-plain";
@@ -101,6 +101,42 @@ function useSectionQueue(workspace: string, milestoneId: string, queueRevision: 
     onDequeue: ready ? () => void write((baseRevision) => dequeueTask({ ws, ref: milestoneId, baseRevision }))() : undefined,
     onDismiss: () => setRefusal(null),
   };
+}
+
+/** The header's first line, the name line, in the editable section and in All workspaces' read-only header. */
+export const NAME_LINE = "flex min-w-0 items-center gap-x-2.5 @max-[760px]/ms:h-11 @max-[760px]/ms:gap-x-2";
+/** The milestone's name on its header's first line. */
+export const NAME_TEXT = "text-title font-semibold";
+
+/** Under 760px of the page the percent sits on the name line; from 760px it is beside the bar. */
+export function NarrowPercent({ percent }: { percent: number | null }) {
+  if (percent === null) return null;
+  return <span className="hidden text-label font-semibold tabular-nums text-foreground @max-[760px]/ms:inline">{percent}%</span>;
+}
+
+/**
+ * The header's second and third lines: the bar with its percent and the flags, then (under 760px
+ * of the page) the due date in words and the queue chip as text, then the facts sentence.
+ */
+export function HeaderFacts({ row, effective, now, goal, narrow, due }: { row: Pick<MilestoneListRow, "milestone" | "progress" | "next">; effective: readonly EffectiveQueueRow[]; now: Date; goal?: MilestoneView["goal"]; narrow: boolean; due: ReactNode }) {
+  const { milestone } = row;
+  return (
+    <>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        <MilestoneBar row={row} effective={effective} size="lg" className="min-w-[120px] flex-[0_1_340px] @max-[760px]/ms:flex-[1_1_100%] @max-[760px]/ms:[&>span]:hidden" />
+        <MilestoneFlags row={row} effective={effective} now={now} goal={goal} />
+      </div>
+      {narrow ? (
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 text-label text-text-secondary" data-milestone-facts-due="">
+          {due}
+          {milestone.planPosition !== null ? <span className="text-text-tertiary">· Queued #{milestone.planPosition}</span> : null}
+        </div>
+      ) : null}
+      <p className="m-0 mt-1 text-label text-text-tertiary text-pretty" data-milestone-facts="">
+        {milestoneFacts(row, effective, now)}
+      </p>
+    </>
+  );
 }
 
 /** An open milestone's section, with its reads and its queue write. */
@@ -222,8 +258,8 @@ export function SectionView({
         <span ref={sentinel} aria-hidden className="block h-0" />
         <div
           className={cn(
-            "flex min-w-0 items-center gap-x-2.5",
-            "@max-[760px]/ms:sticky @max-[760px]/ms:top-0 @max-[760px]/ms:z-10 @max-[760px]/ms:h-11 @max-[760px]/ms:gap-x-2 @max-[760px]/ms:border-b @max-[760px]/ms:border-transparent @max-[760px]/ms:bg-card @max-[760px]/ms:px-3",
+            NAME_LINE,
+            "@max-[760px]/ms:sticky @max-[760px]/ms:top-0 @max-[760px]/ms:z-10 @max-[760px]/ms:border-b @max-[760px]/ms:border-transparent @max-[760px]/ms:bg-card @max-[760px]/ms:px-3",
             stuck && "@max-[760px]/ms:border-border",
           )}
           data-milestone-line={milestone.identifier}
@@ -231,7 +267,7 @@ export function SectionView({
         >
           <FoldButton folded={folded} label={milestone.title} onClick={onFold} className="-ml-1" data-milestone-fold={milestone.identifier} />
           <MilestoneGlyph state={state} percent={progress.percent} />
-          <h2 className="m-0 min-w-0 text-title font-semibold">
+          <h2 className={cn("m-0 min-w-0", NAME_TEXT)}>
             <button
               type="button"
               className="focus-ring block min-h-0 max-w-full truncate rounded-sm text-left underline-offset-2 hover:underline @max-[760px]/ms:-my-[5px] @max-[760px]/ms:py-[5px]"
@@ -244,7 +280,7 @@ export function SectionView({
           </h2>
           {narrow ? null : <span className="shrink-0 text-label text-text-secondary">{due}</span>}
           <div className="ms-auto flex shrink-0 items-center gap-1.5">
-            {progress.percent !== null ? <span className="hidden text-label font-semibold tabular-nums text-foreground @max-[760px]/ms:inline">{progress.percent}%</span> : null}
+            <NarrowPercent percent={progress.percent} />
             <span className="contents @max-[760px]/ms:hidden">
               {queued ? (
                 <QueuedMark position={milestone.planPosition} />
@@ -272,19 +308,7 @@ export function SectionView({
           </div>
         </div>
         <div className="mt-1.5 @max-[760px]/ms:mt-0 @max-[760px]/ms:border-b @max-[760px]/ms:bg-card @max-[760px]/ms:px-3 @max-[760px]/ms:pb-2.5">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-            <MilestoneBar row={summary} effective={effective} size="lg" className="min-w-[120px] flex-[0_1_340px] @max-[760px]/ms:flex-[1_1_100%] @max-[760px]/ms:[&>span]:hidden" />
-            <MilestoneFlags row={summary} effective={effective} now={now} goal={work.view?.goal} />
-          </div>
-          {narrow ? (
-            <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 text-label text-text-secondary" data-milestone-facts-due="">
-              {due}
-              {queued ? <span className="text-text-tertiary">· Queued #{milestone.planPosition}</span> : null}
-            </div>
-          ) : null}
-          <p className="m-0 mt-1 text-label text-text-tertiary text-pretty" data-milestone-facts="">
-            {milestoneFacts(summary, effective, now)}
-          </p>
+          <HeaderFacts row={summary} effective={effective} now={now} goal={work.view?.goal} narrow={narrow} due={due} />
         </div>
       </header>
       {queue.refusal ? <GuardRefusal refusal={queue.refusal} onDismiss={queue.onDismiss} className="mx-4 my-2 @max-[760px]/ms:mx-3" /> : null}
