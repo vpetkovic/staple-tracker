@@ -42,7 +42,7 @@ sees only your synced writes.
 | Request | MCP | CLI |
 |---|---|---|
 | Show the queue or what is next to a person | `show_queue` | `inbox --json` |
-| Show what is waiting on a person (gates, reviews, their blockers, stopped runs, silent claims, conflicts) | `attention` | `attention --json` (`--hub` for every workspace) |
+| Show what is waiting on a person (gates, reviews, their blockers, stopped or stalled runs, silent claims, conflicts) | `attention` | `attention --json` (`--hub` for every workspace) |
 | Show a ticket to a person | `show_ticket` | `show <ref> --json` |
 | Show progress | `show_progress` | `show <ref> --json` |
 | Check version and workspace | `show_about` | `--version`, then `hub ls --json` |

@@ -77,9 +77,10 @@ task, epic or milestone…* adds work, and a row's `⋯` menu removes it.
 The work only a person can move, one card per thing: gates waiting on approval
 (resubmitted ones apart), blockers a person owns, tickets in review, tickets made
 ready again because their blockers in other workspaces closed, stopped autopilot
-runs, claims silent past `queue.silentClaimMinutes`, and sync conflicts. Each card
+runs, live runs whose driver stopped (they take nothing until a driver attaches or
+you stop them), claims silent past `queue.silentClaimMinutes`, and sync conflicts. Each card
 names its workspace, how long it has waited and one action: a gate, a review or a
-blocker opens the ticket, a stopped run opens its history, and a conflict asks which
+blocker opens the ticket, a stopped or stalled run opens its history, and a conflict asks which
 value to keep. A silent claim only opens the ticket; taking work over stays
 explicit. Under *All workspaces* every workspace's cards are listed. `staple
 attention` prints the same rows.

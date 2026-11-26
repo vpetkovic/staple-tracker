@@ -5,13 +5,15 @@
  *
  * Every test runs in a scratch STAPLE_HOME with scratch workspaces registered.
  */
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ATTENTION_KINDS, attentionList, attentionText, dismissAttention, personRule, workspaceAttention } from "../src/core/attention.js";
 import { MILESTONE_KIND } from "../src/core/milestones.js";
 import { Hub } from "../src/core/hub.js";
+import { databaseFile, writeDriver } from "../src/core/run-attachment.js";
 import { initWorkspace, type OpenedWorkspace } from "../src/core/workspace.js";
 import type { WorkspaceStore } from "../src/core/store.js";
 
@@ -332,6 +334,39 @@ describe("a linked pull request with failing checks", () => {
     expect(workspaceAttention(store).map((row) => row.kind)).toContain("pr_checks_failing");
     store.updateIssue(task.identifier, { status: "done" }, "eng-1");
     expect(workspaceAttention(store).map((row) => row.kind)).not.toContain("pr_checks_failing");
+  });
+});
+
+describe("a live run whose driver stopped", () => {
+  it("is listed while the run is live and its driver's process on this machine is gone, and only then", () => {
+    const { store } = workspace("app");
+    const epic = store.createIssue({ title: "Checkout", kind: "epic" }).identifier;
+    store.createIssue({ title: "Card form", parent: epic });
+    const run = store.runs().start({ actor: "bot", scope: epic });
+    store.runs().continue({ actor: "bot" });
+    const stalled = () => workspaceAttention(store).filter((row) => row.kind === "run_stalled");
+    // No driver at all: a run kept going by a stop hook or by hand is not stalled.
+    expect(stalled()).toEqual([]);
+    const record = {
+      pid: process.pid,
+      host: hostname(),
+      agent: "claude",
+      startedAt: "2026-11-26T10:00:00.000Z",
+      heartbeatAt: "2026-11-26T10:05:00.000Z",
+      ticket: null,
+      sessionPid: null,
+      logDir: "",
+    };
+    writeDriver(databaseFile(store.db)!, run.id, record);
+    expect(stalled()).toEqual([]);
+    // The driver's process ended without detaching: it crashed or was killed.
+    writeDriver(databaseFile(store.db)!, run.id, { ...record, pid: spawnSync(process.execPath, ["-e", ""]).pid! });
+    expect(stalled()).toMatchObject([
+      { runId: run.id, ref: epic, since: "2026-11-26T10:05:00.000Z", dismissible: false, action: { verb: "inspect", command: `staple run status ${run.id} --ws app` } },
+    ]);
+    // Stopping the run is the person's answer: the row goes.
+    store.runs().stop(run.id, "vp");
+    expect(stalled()).toEqual([]);
   });
 });
 

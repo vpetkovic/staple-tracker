@@ -52,6 +52,7 @@ import { insertEvent } from "./event-log.js";
 import { Hub } from "./hub.js";
 import { holdingCrossBlockers } from "./hub-cross-blockers.js";
 import { isGoalRunGate } from "./milestones.js";
+import { databaseFile, readDriver } from "./run-attachment.js";
 import { LIVE_RUN_STATES } from "./run-store.js";
 import type { Run, RunStopReason } from "./run-store.js";
 import type { WorkspaceStore } from "./store.js";
@@ -358,6 +359,40 @@ export const ATTENTION_KINDS = [
         });
       }
       return rows;
+    },
+  },
+  {
+    /**
+     * A live run whose `staple run drive` process on this machine ended without detaching
+     * (crashed, killed, the machine slept through it): the run is still live and takes nothing,
+     * and nothing else says so. A run with no driver at all is not one (a stop hook or a person
+     * keeps it going), nor is a driver on another machine, whose process this one cannot see.
+     * It holds until a driver attaches again or a person stops the run.
+     */
+    kind: "run_stalled",
+    label: "Autopilot runs whose driver stopped",
+    dismissible: false,
+    collect: (context) => {
+      const dbFile = databaseFile(context.store.db);
+      return context.store
+        .runs()
+        .list({ all: true })
+        .filter((run) => LIVE_RUN_STATES.includes(run.state))
+        .flatMap((run) => {
+          const driver = readDriver(dbFile, run.id);
+          if (driver?.alive !== false) return [];
+          return [
+            {
+              id: run.id,
+              runId: run.id,
+              ref: run.scope.kind === "queue" ? null : run.scope.identifier,
+              title: run.scope.kind === "queue" ? `Autopilot run by ${run.actor} over the queue` : `Autopilot run by ${run.actor}`,
+              detail: `its ${driver.agent} driver stopped responding; it takes nothing until a driver attaches or it is stopped`,
+              since: driver.heartbeatAt || run.updatedAt,
+              action: { verb: "inspect" as const, label: "Inspect", command: `staple run status ${run.id} ${ws(context)}` },
+            },
+          ];
+        });
     },
   },
   {
