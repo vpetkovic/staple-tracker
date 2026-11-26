@@ -46,8 +46,8 @@ export function HorizonsBoard({ plan, write, onOpen, selected, filtering = false
         {columns.slice(1).map((column) => (
           <HorizonSection key={column.key} lens={lens} column={column} />
         ))}
-        {/* On a phone-width page the toolbar has no room for it beside the pills. */}
-        <div className="hidden px-3 pt-4 @max-[620px]/plan:block">
+        {/* Under 900px of the Plan container the toolbar has no room for it beside the pills. */}
+        <div className="hidden px-3 pt-4 @max-[900px]/plan:block">
           <AddHorizon write={write} row />
         </div>
       </div>

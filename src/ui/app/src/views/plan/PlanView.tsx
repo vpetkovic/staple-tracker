@@ -291,12 +291,13 @@ export function PlanBar({ lens, plan, focus, onFocus, text, onText, onCapture, o
   // A pill with nothing to show is left out, unless it is the one on: it stays so it can be turned off.
   const pills = PILLS.filter((pill) => counts[pill.id] > 0 || focus === pill.id);
   return (
-    <div ref={ref} className="flex flex-wrap items-center gap-x-2 gap-y-1.5 border-b px-gutter py-2" data-plan-bar>
-      <div className="min-w-0 @max-[620px]/plan:basis-full">
+    // One row from 620px of the Plan container: the pills give way and scroll before anything wraps.
+    <div ref={ref} className="flex flex-wrap items-center gap-x-2 gap-y-1.5 border-b px-gutter py-2 @min-[620px]/plan:flex-nowrap" data-plan-bar>
+      <div className="min-w-0 shrink-0 @max-[620px]/plan:basis-full">
         <DetailTabStrip sheet={sheet} label="Plan lens" items={lenses} active={lens} marker="data-plan-lens" />
       </div>
       {pills.length > 0 ? (
-        <div role="group" aria-label="Show only" className="flex min-w-0 items-center gap-1.5 [scrollbar-width:none] @max-[620px]/plan:flex-1 @max-[620px]/plan:overflow-x-auto @min-[620px]/plan:ml-1 @min-[620px]/plan:border-l @min-[620px]/plan:pl-3">
+        <div role="group" aria-label="Show only" className="flex min-w-0 items-center gap-1.5 overflow-x-auto [scrollbar-width:none] @max-[620px]/plan:flex-1 @min-[620px]/plan:ml-1 @min-[620px]/plan:border-l @min-[620px]/plan:pl-3">
           {pills.map((pill) => {
             const on = focus === pill.id;
             return (
@@ -320,8 +321,8 @@ export function PlanBar({ lens, plan, focus, onFocus, text, onText, onCapture, o
         </div>
       ) : null}
       <span aria-hidden className="ms-auto" />
-      {/* Under 620px a lens's tools move into the lens (Horizons draws + Horizon at its end). */}
-      {tools ? <span className="contents @max-[620px]/plan:hidden">{tools}</span> : null}
+      {/* Under 900px a lens's tools move into the lens (Horizons draws + Horizon at its end). */}
+      {tools ? <span className="contents @max-[900px]/plan:hidden">{tools}</span> : null}
       <PlanSearch text={text} onText={onText} />
       {lens === "ideas" ? null : <CapturePopover onCapture={onCapture} onViewIdeas={onViewIdeas} />}
     </div>
@@ -379,9 +380,10 @@ function CapturePopover({ onCapture, onViewIdeas }: { onCapture: (title: string)
       }}
     >
       <PopoverTrigger asChild>
-        <Button size="sm" className="h-8" aria-label="Capture an idea" data-plan-capture-open>
+        {/* Icon-only between the phone width and 900px, where the bar has no room for the word. */}
+        <Button size="sm" className="h-8 @min-[620px]/plan:@max-[900px]/plan:w-8 @min-[620px]/plan:@max-[900px]/plan:px-0" aria-label="Capture an idea" data-plan-capture-open>
           <Plus aria-hidden />
-          Idea
+          <span className="@min-[620px]/plan:@max-[900px]/plan:hidden">Idea</span>
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-80 max-w-[calc(100vw-2rem)] p-3">
@@ -426,8 +428,8 @@ function PlanSkeleton({ lens }: { lens: Lens }) {
       <span role="status" className="sr-only">
         Loading the plan
       </span>
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 border-b px-gutter py-2">
-        <Skeleton className="h-8 w-[232px] @max-[620px]/plan:h-9 @max-[620px]/plan:w-full" />
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 border-b px-gutter py-2 @min-[620px]/plan:flex-nowrap">
+        <Skeleton className="h-8 w-[232px] shrink-0 @max-[620px]/plan:h-9 @max-[620px]/plan:w-full" />
         <div className="flex min-w-0 items-center gap-1.5 overflow-hidden @max-[620px]/plan:flex-1 @min-[620px]/plan:ml-1 @min-[620px]/plan:border-l @min-[620px]/plan:pl-3">
           {[92, 64, 100].map((width) => (
             <Skeleton key={width} className="h-[26px] shrink-0 rounded-full @max-[620px]/plan:h-8" style={{ width }} />
@@ -435,7 +437,7 @@ function PlanSkeleton({ lens }: { lens: Lens }) {
         </div>
         <span className="ms-auto @max-[620px]/plan:hidden" />
         <Skeleton className="h-8 w-[200px] shrink-0 @max-[1100px]/plan:w-8" />
-        {lens === "ideas" ? null : <Skeleton className="h-8 w-[68px] shrink-0 @max-[620px]/plan:w-8" />}
+        {lens === "ideas" ? null : <Skeleton className="h-8 w-[68px] shrink-0 @min-[620px]/plan:@max-[900px]/plan:w-8" />}
       </div>
       {lens === "horizons" ? <HorizonsSkeleton /> : lens === "timeline" ? <TimelineSkeleton /> : <IdeasSkeleton />}
     </div>
