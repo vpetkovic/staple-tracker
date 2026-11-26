@@ -70,6 +70,34 @@ const focused = (page: Page) =>
     return element.getAttribute("aria-label") ?? element.textContent?.trim() ?? element.tagName;
   });
 
+describe("the phone drawer", () => {
+  it("keeps Tab inside the drawer and makes the page behind it inert while it is open", async () => {
+    await withPage(PHONE, async (page) => {
+      await page.getByRole("button", { name: "Menu" }).click();
+      await page.locator("[data-nav-overlay]").waitFor();
+      expect(await page.locator("[data-content-frame]").evaluate((frame) => (frame as HTMLElement).inert)).toBe(true);
+      const escaped: string[] = [];
+      for (let i = 0; i < 30; i++) {
+        await page.keyboard.press("Tab");
+        // Past the drawer's last control Tab may leave the document for the browser's own
+        // controls (BODY here), as it does from a native modal dialog. What must never take
+        // focus is a control of the page behind the scrim.
+        const behind = await page.evaluate(() => {
+          const element = document.activeElement;
+          return element !== null && element !== document.body && !element.closest("[data-nav-overlay]");
+        });
+        if (behind) escaped.push(await focused(page));
+      }
+      expect(escaped).toEqual([]);
+
+      await page.keyboard.press("Escape");
+      await page.locator("[data-nav-overlay]").waitFor({ state: "detached" });
+      expect(await page.locator("[data-content-frame]").evaluate((frame) => (frame as HTMLElement).inert)).toBe(false);
+      expect(await focused(page)).toBe("Menu");
+    });
+  });
+});
+
 describe("the theme", () => {
   const stored = (page: Page) => page.evaluate(() => localStorage.getItem("staple:theme"));
   const dark = (page: Page) => page.evaluate(() => document.documentElement.classList.contains("dark"));
