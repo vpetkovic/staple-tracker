@@ -32,6 +32,7 @@ import { SurfaceAutoSync } from "./core/cloud/auto-triggers.js";
 import { VIEWS, RESOURCE_MIME_TYPE, linkToolView, readViewHtml, viewToolMeta, viewUri } from "./mcp-views.js";
 import { ticketCard, ticketCardText, type TicketCard } from "./mcp-ticket-card.js";
 import { setTicketBranch } from "./core/ticket-branch.js";
+import { writeCheckpoint } from "./core/checkpoint.js";
 import { DECISION_VIEW_IDS, approvalComment, configuredHumanName, personFor, sendBackComment } from "./mcp-view-actions.js";
 import { queueLanes, queueText, type QueueLanes } from "./mcp-queue.js";
 import { ATTENTION_KINDS, attentionList, attentionText, hubAttentionSources } from "./core/attention.js";
@@ -1958,6 +1959,44 @@ server.registerTool(
       const issue = store.getIssue(ref);
       return { ref: issue.identifier, branch: result.branch, changed: result.changed, pullRequests: store.externalLinks().pullRequests().get(issue.id) ?? [] };
     }),
+);
+
+server.registerTool(
+  "checkpoint",
+  {
+    description:
+      "Write a session's handoff in one call: replaces the ticket's worklog document with one new revision whose whole body is '## Done', '## Next' and '## Files touched', in that order, and with branch also records the ticket's branch as set_branch does. Use it after each step and before you stop, instead of composing the worklog for put_document. A second call replaces the first (the earlier one stays in the revision history). A section left out is written as its heading with nothing under it and the call still succeeds, but a run's handoff check wants content under all three: say 'none' when a section has nothing to report. Branch left out keeps the ticket's branch; a blank branch is refused. Branch and worklog are written together or not at all. Never changes status or the claim.",
+    inputSchema: {
+      ref: refSchema,
+      done: z.string().optional().describe("What this session finished"),
+      next: z.string().optional().describe("Where the next session picks up"),
+      filesTouched: z.string().optional().describe("The files this session changed"),
+      branch: z.string().optional().describe("The branch as git names it (feat/sta-42); omit to keep the ticket's branch"),
+      actor: actorSchema,
+      ws: wsSchema,
+    },
+    outputSchema: {
+      ref: z.string(),
+      key: z.literal("worklog"),
+      revision: z.number().int().describe("The worklog revision this checkpoint wrote"),
+      body: z.string().describe("The worklog body as stored"),
+      branch: z
+        .object({
+          name: z.string(),
+          base: z.string().nullable(),
+          source: z.enum(["field", "comment"]),
+          setBy: z.string().nullable(),
+          setAt: z.string().nullable(),
+        })
+        .nullable()
+        .describe("The ticket's branch after the call, whether or not this call set it"),
+      branchChanged: z.boolean().describe("True when this call changed the branch field"),
+    },
+    // Revisions are append-only, so nothing is destroyed, but each call mints a new one.
+    annotations: { title: "Checkpoint", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  },
+  ({ ref, done, next, filesTouched, branch, actor, ws }) =>
+    run(() => writeCheckpoint(storeFor(ws), ref, { done, next, filesTouched, ...(branch !== undefined ? { branch } : {}) }, requireActor(actor))),
 );
 
 server.registerTool(
