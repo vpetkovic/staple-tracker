@@ -18,9 +18,9 @@
  * the bytes stays. A second run creates nothing.
  */
 import { writeFileSync } from "node:fs";
-import { readInputFile } from "../core/input-file.js";
 import { basename } from "node:path";
 import { parseArgs } from "node:util";
+import { readInputFile } from "../core/input-file.js";
 import { acknowledgeRenumbers } from "../core/identifier-moves.js";
 import { StapleError } from "../core/types.js";
 import { resolveWorkspace } from "../core/workspace.js";

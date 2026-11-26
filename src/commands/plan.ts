@@ -9,9 +9,9 @@
  * person made from the CLI.
  */
 import { readFileSync } from "node:fs";
-import { readInputFile } from "../core/input-file.js";
 import { basename } from "node:path";
 import { parseArgs } from "node:util";
+import { readInputFile } from "../core/input-file.js";
 import { configuredHumanName } from "../mcp-view-actions.js";
 import type { HorizonView, IdeaDetail, IdeaView, PlanView, PlanWriteOptions, ScaffoldPreview } from "../core/plan-store.js";
 import { splitDepends, type BreakdownRowInput, type PlanPatch } from "../core/plan-sections.js";

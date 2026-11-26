@@ -16,8 +16,8 @@
  * answer for `continue` (design/runs.md). Errors are thrown as `StapleError` and
  * formatted by the top-level catch in cli.ts like every other command's.
  */
-import { readInputFile } from "../core/input-file.js";
 import { parseArgs } from "node:util";
+import { readInputFile } from "../core/input-file.js";
 import { type InstructionChange, type RunInstruction, renderInstructions, runInstructionKey } from "../core/instructions.js";
 import { type ContinueAnswer, type Run, type RunGoalReport, type RunStatus, RUN_TICKET_OUTCOMES, type RunTicketOutcome, scopeLabel } from "../core/run-store.js";
 import { resolveWorkspace } from "../core/workspace.js";
