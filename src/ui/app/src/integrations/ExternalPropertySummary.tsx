@@ -95,7 +95,8 @@ export function ExternalPropertySummary({
       const tally = tallyOf(entries);
       return (
         <button type="button" className={PILL} data-link-pill={kind} aria-label={`${tallyWords(tally)}; show External links`} onClick={() => showAll(kind)}>
-          <LinkGlyph kind={kind} tone={leadingTone(entries.map(entryTone))} className="size-3.5" />
+          {/* Own links keep their provider's reading of the state; a parent's descendants add theirs. */}
+          <LinkGlyph kind={kind} tone={leadingTone([...peers.map(linkTone), ...descendants.map(entryTone)])} className="size-3.5" />
           {`${entries.length} pull request${entries.length === 1 ? "" : "s"}`}
           {tally.failing > 0 ? <ChecksMark checks="failing" className="size-3.5" /> : null}
         </button>

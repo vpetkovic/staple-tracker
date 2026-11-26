@@ -7,7 +7,7 @@
  */
 import type { SubtreePullRequest } from "../../../../core/subtree-pull-requests";
 import type { PullRequestCounts, PullRequestRef } from "@/lib/types";
-import { shortKey, type LinkTone } from "./link-state";
+import { linkTone, shortKey, type LinkTone } from "./link-state";
 import type { ExternalRowSummary } from "../../../../core/integrations/link-store";
 import type { ExternalItemRef } from "../../../../core/integrations/contracts";
 import type { RefreshTarget } from "./links-view";
@@ -73,10 +73,13 @@ export function subtreeEntry(pr: SubtreePullRequest): PullRequestEntry {
   };
 }
 
+/** The state a link's tone stands for, so a provider that names its states differently (Azure DevOps) still counts. */
+const TONE_STATE: Record<LinkTone, PullRequestState> = { open: "open", active: "open", draft: "draft", merged: "merged", done: "merged", closed: "closed", neutral: "unknown" };
+
 /** A ticket's own linked pull request. */
 export function linkEntry(link: ExternalLink): PullRequestEntry {
   const resource = link.resource;
-  const state = resource.ref.providerId === "github" ? stateOf(resource.status?.id) : "unknown";
+  const state = TONE_STATE[linkTone(resource)];
   const checks = resource.pullRequest?.checks ?? null;
   return {
     id: resource.id,
@@ -225,7 +228,11 @@ export function shortKeys(entries: readonly PullRequestEntry[]): Map<string, str
   for (const [container, count] of counts) if (count > most) [home, most] = [container, count];
   const items = entries.map(entryItem);
   return new Map(
-    entries.map((entry, index) => [entry.id, containerOf(entry.key) === home ? entry.key.slice(entry.key.lastIndexOf("#")) : shortKey(items[index]!, items)]),
+    entries.map((entry, index) => {
+      const hash = entry.key.lastIndexOf("#");
+      // A key that names no number (another provider's) is shown whole.
+      return [entry.id, hash > 0 && containerOf(entry.key) === home ? entry.key.slice(hash) : shortKey(items[index]!, items)];
+    }),
   );
 }
 
