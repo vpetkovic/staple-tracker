@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
+import { openSqlite } from "./sqlite.js";
 import { stapleHome } from "../config/home.js";
 import { RESOLVED_CATEGORIES, RESOLVED_STATUSES, StapleError } from "./types.js";
 import { assertInTestSandbox } from "./test-sandbox.js";
@@ -41,7 +42,7 @@ function openReadOnly(path: string): DatabaseSync | null {
   if (path === "" || !existsSync(path)) return null;
   try {
     assertInTestSandbox(path, "workspace database");
-    return new DatabaseSync(path, { readOnly: true });
+    return openSqlite(path, { readOnly: true });
   } catch {
     return null;
   }

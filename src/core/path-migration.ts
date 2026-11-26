@@ -56,7 +56,8 @@ import {
 } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, join, parse as parsePath, resolve } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
+import { openSqlite } from "./sqlite.js";
 import { writeFileAtomic } from "../config/atomic.js";
 import { openDb } from "./db.js";
 import { migrateWorkspace, workspaceSchemaState } from "./schema.js";
@@ -563,7 +564,7 @@ function columnSets(db: DatabaseSync): Record<string, string[]> {
 
 function assertIntegrity(dbPath: string, label: string): void {
   assertInTestSandbox(dbPath);
-  const db = new DatabaseSync(dbPath);
+  const db = openSqlite(dbPath);
   try {
     const rows = db.prepare("PRAGMA integrity_check").all() as Array<{ integrity_check: string }>;
     const verdict = rows.map((r) => r.integrity_check).join("; ");

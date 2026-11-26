@@ -9,7 +9,8 @@
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
+import { openSqlite } from "../sqlite.js";
 import { StapleError } from "../types.js";
 import { Hub, absentRowRefusal, isAbsentRow } from "../hub.js";
 import { localPrefix, repositoryPrefixOf } from "./repository-prefix.js";
@@ -67,7 +68,7 @@ export function assertHubCanTakePrefix(home: string, db: DatabaseSync, prefix: s
   if (!existsSync(path)) return;
   const ours = slugOf(db);
   const dbPath = db.location();
-  const hub = new DatabaseSync(path, { readOnly: true });
+  const hub = openSqlite(path, { readOnly: true });
   let holder: HubRow | undefined;
   try {
     const rows = hub.prepare("SELECT slug, path, repository_id FROM workspaces WHERE prefix = ?").all(prefix) as unknown as HubRow[];

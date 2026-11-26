@@ -1,3 +1,4 @@
+import "./quiet-sqlite-warning.js";
 import { configuredHumanName } from "./mcp-view-actions.js";
 /**
  * staple CLI — the human/CI surface. Mirrors the MCP tools.

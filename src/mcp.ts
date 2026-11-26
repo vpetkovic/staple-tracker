@@ -1,3 +1,4 @@
+import "./quiet-sqlite-warning.js";
 import { hubWorkspaces } from "./core/integrations/mapping.js";
 import { IntegrationOperations, integrationCommandSchema, INTEGRATION_READ_ACTIONS, INTEGRATION_WRITE_ACTIONS, INTEGRATION_CONFIG_ACTIONS } from "./core/integrations/operations.js";
 /**
