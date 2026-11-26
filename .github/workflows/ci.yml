@@ -10,9 +10,58 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request makes the older run's result worthless, so it is
+# cancelled. Pushes to master are never cancelled: each run is its own group (run_id),
+# because a shared group keeps only one pending run and would drop the middle one of
+# three quick pushes even without cancel-in-progress.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# The jobs below run in parallel and none waits on another, except the last one,
+# which only collects their results. A run takes as long as its slowest job.
 jobs:
-  gates:
-    name: Gates + clean-machine drill
+  # The unit suite is most of the run: in one job it took 19-23 minutes on two
+  # workers. Four shards run it in parallel, each on its own runner with the same
+  # two-worker cap (vitest.config.ts explains the cap). The split is by running
+  # time, not file count (test/setup/shard-sequencer.ts), and every file runs in
+  # exactly one shard. fail-fast is off so one red shard does not cancel the others
+  # and hide their results.
+  unit:
+    name: Unit tests (shard ${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node 22 (engines require >= 22.5)
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The browser suites (test/ui-*.test.ts) drive the built app in Chromium through
+      # playwright-core, which brings no browser of its own. Without this they would skip; with
+      # CI set they fail instead, so the gate never passes having pressed nothing.
+      - name: Install Chromium for playwright-core
+        run: npx playwright-core install --with-deps chromium
+
+      # No build step: the suite's globalSetup builds the UI bundle, the MCP views and
+      # the package payload it tests (test/setup/package-payload.ts).
+      - name: Unit tests
+        run: env -u STAPLE_DB -u STAPLE_AGENT -u STAPLE_RUN -u STAPLE_RUN_TICKET HOME=$(mktemp -d) npm test -- --shard=${{ matrix.shard }}/4
+
+  # worker/ is a separate package on its own vitest. Its sources import from the
+  # root src/, so the root dependencies are installed too.
+  worker:
+    name: Worker tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -30,11 +79,27 @@ jobs:
       - name: Install Worker dependencies
         run: npm ci --prefix worker
 
-      # The browser suites (test/ui-*.test.ts) drive the built app in Chromium through
-      # playwright-core, which brings no browser of its own. Without this they would skip; with
-      # CI set they fail instead, so the gate never passes having pressed nothing.
-      - name: Install Chromium for playwright-core
-        run: npx playwright-core install --with-deps chromium
+      - name: Worker tests
+        run: env -u STAPLE_DB -u STAPLE_AGENT -u STAPLE_RUN -u STAPLE_RUN_TICKET HOME=$(mktemp -d) npm run test:worker
+
+  build:
+    name: Build, typecheck, MCP smoke + npx drill
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node 22 (engines require >= 22.5)
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Worker dependencies
+        run: npm ci --prefix worker
 
       - name: Build package
         run: npm run build:package
@@ -45,12 +110,6 @@ jobs:
       - name: Typecheck Worker
         run: npm run typecheck:worker
 
-      - name: Unit tests
-        run: env -u STAPLE_DB -u STAPLE_AGENT -u STAPLE_RUN -u STAPLE_RUN_TICKET HOME=$(mktemp -d) npm test
-
-      - name: Worker tests
-        run: env -u STAPLE_DB -u STAPLE_AGENT -u STAPLE_RUN -u STAPLE_RUN_TICKET HOME=$(mktemp -d) npm run test:worker
-
       - name: MCP smoke test
         run: npm run smoke:mcp
 
@@ -59,3 +118,20 @@ jobs:
       # failure; writes nothing into the checkout.
       - name: Clean-machine npx drill
         run: npm run drill:npx
+
+  # The check name everything used to run under, kept so it still means "all of CI
+  # passed". It runs even when a job above failed or was cancelled (always()), and
+  # fails unless every one of them succeeded; a skipped job would otherwise read as
+  # a pass.
+  gates:
+    name: Gates + clean-machine drill
+    runs-on: ubuntu-latest
+    needs: [unit, worker, build]
+    if: always()
+    steps:
+      - name: Every job passed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$RESULTS" | jq -e 'all(.[]; .result == "success")' > /dev/null

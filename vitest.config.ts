@@ -21,6 +21,7 @@
  */
 import { fileURLToPath } from "node:url";
 import { configDefaults, defineConfig } from "vitest/config";
+import { BalancedShardSequencer } from "./test/setup/shard-sequencer.js";
 
 export default defineConfig({
   resolve: {
@@ -103,7 +104,18 @@ export default defineConfig({
      *
      * Local runs are untouched — a developer machine has the headroom, and halving
      * the pool there would cost minutes for no benefit.
+     *
+     * CI splits the suite into parallel shards (below), each on its own runner, so the
+     * cap holds per shard and the time comes back from the shards instead.
      */
     ...(process.env.CI ? { maxWorkers: 2, minWorkers: 1 } : {}),
+
+    /**
+     * CI runs the suite as four `--shard=i/4` jobs. Vitest's own split gives each shard
+     * the same number of files, not the same running time, and a few files here take
+     * minutes. This sequencer balances the shards by time and changes nothing else; see
+     * `test/setup/shard-sequencer.ts`.
+     */
+    sequence: { sequencer: BalancedShardSequencer },
   },
 });
