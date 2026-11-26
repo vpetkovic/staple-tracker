@@ -29,8 +29,11 @@ afterAll(() => {
  * and these tests make a few hundred. Started all together they take every core for a
  * minute and starve the other test file sharing the runner: on a four-core CI runner
  * `cli-json`'s single spawns went from 0.3 s to over 20 s behind them and timed out.
+ * Four at once still did it: a CI shard runs two vitest workers on four cores, and with
+ * four of these in flight `plan-review-cli-scenarios` and `cloud-fold-parity`, running
+ * beside this file, timed out. Two leaves the neighbour its share of the runner.
  */
-const IN_FLIGHT = 4;
+const IN_FLIGHT = 2;
 
 /** `run` over every item, IN_FLIGHT at a time; the results keep the items' order. */
 async function runLimited<T, R>(items: T[], run: (item: T) => Promise<R>): Promise<R[]> {
