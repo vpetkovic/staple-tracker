@@ -32,7 +32,7 @@ import { openCreateIssue } from "@/lib/shell-events";
 import { Fragment, useCallback, useEffect, useMemo, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { GuardRefusal } from "@/components/GuardRefusal";
 import { resolveTaskListConfig, StatusIcon, TaskRowLine } from "@/components/task-list";
-import { clampIndex, useRovingFocus } from "@/components/task-list/roving";
+import { clampIndex, onRowItself, useRovingFocus } from "@/components/task-list/roving";
 import { useRowPlan } from "@/components/task-list/useRowPlan";
 import { passesDone, withShowDone } from "@/lib/filters";
 import { statusCategory, statusLabel } from "@/lib/settings";
@@ -520,7 +520,7 @@ function MemberRow({
           return;
         }
         // Keys on a control inside the row are the control's own.
-        if (event.target !== event.currentTarget) return;
+        if (!onRowItself(event)) return;
         onKeyDown?.(event);
       }}
       className="flex cursor-pointer items-center gap-1 rounded-md outline-hidden hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring"

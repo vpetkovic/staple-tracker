@@ -60,6 +60,19 @@ export function useRovingFocus(keys: readonly string[]): RovingFocus {
   return { activeKey, go, set: setFocusKey, register };
 }
 
+/**
+ * Whether a key reached a row's handler from the row itself, not from a control inside it.
+ *
+ * A row that opens on Enter (or selects on Space) holds focusable controls of its own: the
+ * `⋯`, a pull request link, a member's buttons. Their keydown bubbles to the row, and so does
+ * a keydown inside a menu or card they open, because React propagates through a portal along
+ * the component tree. Enter or Space on any of them belongs to that control, so a row acts
+ * on those two keys only when this is true. Arrow keys and the rest still bubble as before.
+ */
+export function onRowItself(event: { target: EventTarget | null; currentTarget: EventTarget | null }): boolean {
+  return event.target === event.currentTarget;
+}
+
 /** Clamp an index into a list — the move every arrow key makes. */
 export function clampIndex(index: number, length: number): number {
   return Math.max(0, Math.min(length - 1, index));
