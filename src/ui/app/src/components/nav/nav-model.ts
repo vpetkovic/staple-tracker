@@ -18,7 +18,7 @@
  */
 import type { LucideIcon } from "lucide-react";
 import { BatteryMedium, Bot, Gauge, GitFork, Inbox, Layers, Lightbulb, ListOrdered, Milestone } from "lucide-react";
-import { MACHINE_VIEWS, VIEWS, VIEW_LABELS, isMachineView, type ViewName } from "@/lib/session";
+import { TOP_VIEWS, VIEWS, VIEW_LABELS, isMachineView, isTopView, type ViewName } from "@/lib/session";
 
 export interface NavItem {
   /** Stable id; the DOM key and the test hook. */
@@ -42,7 +42,7 @@ export interface NavItem {
 
 export interface NavGroup {
   id: string;
-  /** The section label, rendered as an eyebrow above the rows. */
+  /** The section label, rendered as an eyebrow above the rows; "" for the top rows, which have none. */
   label: string;
   items: readonly NavItem[];
 }
@@ -76,27 +76,37 @@ function item(view: ViewName): NavItem {
 
 /**
  * The rail's sections of VIEWS, top to bottom. (The workspaces the views are scoped to are
- * listed above them from the session, not from here: they are data, not a registry.)
+ * listed between the top rows and Views, from the session, not from here: they are data,
+ * not a registry.)
  *
- * The Views group lists every view in `VIEWS` order — the tuple is the registry and the rail
- * must not keep a second copy of it — except the machine's views, which sit in "This
- * computer" at the foot of the rail (`MACHINE_VIEWS`): the provider budget is this
- * computer's and reads the same whichever workspace is chosen, so filing it among the
- * workspace's views would say otherwise.
+ *   top      Inbox and Autopilot (`TOP_VIEWS`), unlabelled, above everything: what waits on
+ *            a person and what agents are doing are read across every workspace, so they
+ *            sit above the workspace list rather than among one workspace's views.
+ *   views    every other view in `VIEWS` order. The tuple is the registry and the rail must
+ *            not keep a second copy of it.
+ *   machine  the machine's views, in "This computer" at the foot of the rail: the provider
+ *            budget is this computer's and reads the same whichever workspace is chosen, so
+ *            filing it among the workspace's views would say otherwise.
  */
 export const NAV_GROUPS: readonly NavGroup[] = [
+  { id: "top", label: "", items: TOP_VIEWS.map(item) },
   {
     id: "views",
     label: "Views",
-    items: VIEWS.filter((view) => !isMachineView(view)).map(item),
+    items: VIEWS.filter((view) => !isTopView(view) && !isMachineView(view)).map(item),
   },
   {
     id: "machine",
     // The same words Settings uses for its computer-wide half.
     label: "This computer",
-    items: MACHINE_VIEWS.map(item),
+    items: VIEWS.filter(isMachineView).map(item),
   },
 ];
+
+/** A group of `NAV_GROUPS` by its id. */
+export function navGroup(id: "top" | "views" | "machine"): NavGroup {
+  return NAV_GROUPS.find((group) => group.id === id)!;
+}
 
 /** How many workspaces the rail lists before the rest go behind "More workspaces". */
 export const RAIL_WORKSPACE_LIMIT = 6;

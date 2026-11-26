@@ -23,19 +23,25 @@ describe("the rail's groups", () => {
     expect(new Set(views).size).toBe(views.length);
   });
 
-  it("opens with the Views group, in the order Tasks, Queue, Inbox, Autopilot, Graph, Milestones, Plan, Estimates (the calibration view)", () => {
-    const first = NAV_GROUPS[0]!;
-    expect(first.label).toBe("Views");
-    expect(first.items.map((entry) => entry.label)).toEqual(["Tasks", "Queue", "Inbox", "Autopilot", "Graph", "Milestones", "Plan", "Estimates"]);
-    expect(first.items.map((entry) => entry.view)).toEqual(["tree", "queue", "attention", "autopilot", "graph", "milestones", "plan", "calibration"]);
+  it("opens with Inbox and Autopilot, unlabelled, then the Views group in VIEWS order without them", () => {
+    expect(NAV_GROUPS.map((group) => group.id)).toEqual(["top", "views", "machine"]);
+    const [top, views] = NAV_GROUPS;
+    expect(top!.label).toBe("");
+    expect(top!.items.map((entry) => entry.view)).toEqual(["attention", "autopilot"]);
+    expect(top!.items.map((entry) => entry.label)).toEqual(["Inbox", "Autopilot"]);
+    expect(views!.label).toBe("Views");
+    expect(views!.items.map((entry) => entry.label)).toEqual(["Tasks", "Queue", "Graph", "Milestones", "Plan", "Estimates"]);
+    expect(views!.items.map((entry) => entry.view)).toEqual(["tree", "queue", "graph", "milestones", "plan", "calibration"]);
   });
 
   it("lists the machine's Usage in its own This computer group — Settings' name for it — after the workspace's views", () => {
-    expect(NAV_GROUPS.map((group) => group.label)).toEqual(["Views", "This computer"]);
-    const machine = NAV_GROUPS[1]!;
+    expect(NAV_GROUPS.map((group) => group.label)).toEqual(["", "Views", "This computer"]);
+    const machine = NAV_GROUPS[2]!;
     expect(machine.items.map((entry) => entry.label)).toEqual(["Usage"]);
     expect(machine.items.map((entry) => entry.view)).toEqual(["budget"]);
     expect(navItemForView("budget")).toMatchObject({ id: "view:budget", label: "Usage" });
+    expect(navItemForView("attention")).toMatchObject({ id: "view:attention", label: "Inbox" });
+    expect(navItemForView("autopilot")).toMatchObject({ id: "view:autopilot", label: "Autopilot" });
   });
 
   it("calls every view by ONE name: the tab bar says exactly what the rail says", () => {

@@ -167,6 +167,13 @@ const overlayIds = (p: Page) =>
   p.evaluate(() => ((history.state as Record<string, unknown> | null)?.stapleOverlay as unknown[] | undefined)?.length ?? 0);
 const count = (p: Page, selector: string) => p.locator(selector).count();
 const tap = (p: Page, selector: string) => p.locator(selector).first().tap();
+/** A view through the tab bar: its own tab, or for a view outside the bar, More and then its row in the sheet. */
+async function tapView(p: Page, view: string): Promise<void> {
+  if (["attention", "autopilot", "tree", "queue"].includes(view)) return tap(p, `[data-view-tab="${view}"]`);
+  await tap(p, '[data-view-tab="more"]');
+  await p.locator(`[data-more-view="${view}"]`).waitFor();
+  await tap(p, `[data-more-view="${view}"]`);
+}
 
 describe.skipIf(Boolean(reason))("phone Back closes the overlay on top, and the page stays", () => {
   it("the menu drawer", async () => {
@@ -246,7 +253,7 @@ describe.skipIf(Boolean(reason))("phone Back closes the overlay on top, and the 
 
   it("closing from the UI takes the entry back out: no dead Back step is left", async () => {
     const { page: p, context } = await page("/?view=tasks");
-    await tap(p, '[data-view-tab="graph"]');
+    await tapView(p, "graph");
     await settle(p, 600);
     await tap(p, 'button[aria-label="Menu"]');
     await settle(p);
@@ -314,7 +321,7 @@ describe.skipIf(Boolean(reason))("phone Back closes the overlay on top, and the 
 
   it.skipIf(!detailSheetWired)("[task-list overlay] Tasks → Graph → Tasks → open a task: Back closes the sheet and the page stays Tasks", async () => {
     const { page: p, context } = await page("/?view=tasks");
-    await tap(p, '[data-view-tab="graph"]');
+    await tapView(p, "graph");
     await settle(p, 600);
     await tap(p, '[data-view-tab="tree"]');
     await settle(p, 600);
@@ -367,7 +374,7 @@ describe.skipIf(Boolean(reason))("phone Back closes the overlay on top, and the 
 
   it.skipIf(!rowMenuWired || !detailSheetWired)("[task-list overlay] the row menu's Open hands over to the sheet: one Back closes the sheet, the next leaves the page", async () => {
     const { page: p, context } = await page("/?ws=alpha&view=tasks");
-    await tap(p, '[data-view-tab="graph"]');
+    await tapView(p, "graph");
     await settle(p, 600);
     await tap(p, '[data-view-tab="tree"]');
     await settle(p, 600);
@@ -391,7 +398,7 @@ describe.skipIf(Boolean(reason))("phone Back closes the overlay on top, and the 
 
   it.skipIf(!milestoneMenuWired || !detailSheetWired)("[task-list overlay] a milestone member's menu hands over to the sheet: one Back closes the sheet, the next leaves the page", async () => {
     const { page: p, context } = await page("/?ws=alpha&view=tasks");
-    await tap(p, '[data-view-tab="milestones"]');
+    await tapView(p, "milestones");
     await settle(p, 600);
     if ((await count(p, '[data-member-actions="ALP-4"]')) === 0) {
       await p.getByRole("button", { name: /October cut/ }).first().tap();
@@ -417,7 +424,7 @@ describe.skipIf(Boolean(reason))("phone Back closes the overlay on top, and the 
 
   it("Graph's View menu: a choice made in it rewrites the address without orphaning the menu's entry", async () => {
     const { page: p, context } = await page("/?ws=beta&view=tasks");
-    await tap(p, '[data-view-tab="graph"]');
+    await tapView(p, "graph");
     await settle(p, 800);
     await tap(p, "[data-graph-view]");
     await settle(p);
@@ -436,7 +443,7 @@ describe.skipIf(Boolean(reason))("phone Back closes the overlay on top, and the 
     await back(p);
     expect(viewOf(p)).toBe("tasks");
     // …and phone Back closes the menu itself.
-    await tap(p, '[data-view-tab="graph"]');
+    await tapView(p, "graph");
     await settle(p, 800);
     await tap(p, "[data-graph-view]");
     await settle(p);
@@ -510,7 +517,7 @@ describe.skipIf(Boolean(reason))("phone Back closes the overlay on top, and the 
 
   it("Settings: Back over unsaved edits asks, as the X does; Keep stays, Discard closes and leaves no dead step", async () => {
     const { page: p, context } = await page("/?ws=alpha&view=tasks");
-    await tap(p, '[data-view-tab="graph"]');
+    await tapView(p, "graph");
     await settle(p, 600);
     await tap(p, 'button[aria-label="Menu"]');
     await settle(p);

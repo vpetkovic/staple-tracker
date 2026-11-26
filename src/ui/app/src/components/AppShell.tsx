@@ -61,7 +61,6 @@ import { CloudStrip } from "@/components/CloudStrip";
 import { JoinRequestWatcher } from "@/components/join/JoinRequestToast";
 import { SharedBadge } from "@/components/SharedBadge";
 import { refreshSharedWorkspaces } from "@/lib/shared-workspaces";
-import { RunStrip } from "@/components/autopilot/RunBanner";
 import { RunStopNotices } from "@/components/autopilot/RunStopNotices";
 import { getCloudStatus, getCloudWorkspaces } from "@/lib/api";
 import type { CloudSurfaceReport, HubCloudReport } from "@/lib/types";
@@ -410,15 +409,10 @@ export function AppShell({ children }: { children: ReactNode }) {
         */}
         <main className="relative min-h-0 flex-1 overflow-hidden">{children}</main>
 
-        {/*
-          The phone's run banner: the rail is a closed drawer here, so a live autopilot run is
-          one line and a Stop above the tab bar, on every view (components/autopilot).
-        */}
         {/* A run that ended: a notice naming why and what needs a person, on every view. */}
         <RunStopNotices placement={wide ? "corner" : "strip"} />
         {/* a join request toast, polled only with automatic sync on (JoinRequestToast). */}
         {all ? null : <JoinRequestWatcher report={cloud} slug={currentWorkspace(session)?.slug ?? ""} />}
-        {wide ? null : <RunStrip />}
         {wide ? null : <ViewTabBar />}
       </div>
     </div>

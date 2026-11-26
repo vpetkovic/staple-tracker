@@ -13,7 +13,8 @@ import { FilterChipStrip } from "@/components/filters/FilterChips";
 import { ProjectForm } from "@/components/projects/ProjectDialog";
 import { buildFilterContext } from "@/lib/filter-dimensions";
 import { emptyFilters, withDimension } from "@/lib/filters";
-import { SessionContext, VIEWS, VIEW_LABELS, type StapleSession } from "@/lib/session";
+import { AttentionContext } from "@/lib/attention";
+import { SessionContext, TAB_VIEWS, VIEW_LABELS, type StapleSession } from "@/lib/session";
 import { DEFAULT_SORT } from "@/lib/sort-modes";
 
 const noop = () => {};
@@ -59,6 +60,9 @@ function session(over: Partial<StapleSession> = {}): StapleSession {
   };
 }
 
+/** The root's Inbox read (App.tsx provides it): nothing waiting. */
+const NO_ATTENTION = { data: { rows: [], workspaces: [], failed: [], now: "2026-11-26T12:00:00.000Z" }, error: undefined, loading: false, reload: () => {} };
+
 const globals = globalThis as { window?: unknown };
 const previousWindow = globals.window;
 afterEach(() => {
@@ -73,7 +77,11 @@ function at(width: number, node: ReactElement, over: Partial<StapleSession> = {}
       return { matches: min ? width >= Number(min[1]) : max ? width <= Number(max[1]) : false };
     },
   };
-  return renderToStaticMarkup(<SessionContext.Provider value={session(over)}>{node}</SessionContext.Provider>);
+  return renderToStaticMarkup(
+    <SessionContext.Provider value={session(over)}>
+      <AttentionContext value={NO_ATTENTION}>{node}</AttentionContext>
+    </SessionContext.Provider>,
+  );
 }
 const shell = (width: number, over: Partial<StapleSession> = {}) =>
   at(
@@ -97,12 +105,16 @@ describe("on a phone", () => {
     expect(markup).not.toContain('aria-label="Primary"');
   });
 
-  it("puts every view one tap away in the tab bar, the current one marked", () => {
-    const markup = shell(360, { view: "graph" });
-    for (const view of VIEWS) {
-      expect(markup).toMatch(new RegExp(`<button type="button" data-view-tab="${view}"[^>]*aria-label="${VIEW_LABELS[view]}"`));
+  it("puts the four top views one tap away and every other view behind More, the current one marked", () => {
+    const tasks = shell(360, { view: "tree" });
+    for (const view of TAB_VIEWS) {
+      expect(tasks).toMatch(new RegExp(`<button type="button" data-view-tab="${view}"[^>]*aria-label="${VIEW_LABELS[view]}"`));
     }
-    expect(markup.match(/data-view-tab="[a-z]+" aria-current="page"/g)).toEqual(['data-view-tab="graph" aria-current="page"']);
+    expect([...tasks.matchAll(/data-view-tab="([a-z]+)"/g)].map((match) => match[1])).toEqual([...TAB_VIEWS, "more"]);
+    expect(tasks.match(/data-view-tab="[a-z]+" aria-current="page"/g)).toEqual(['data-view-tab="tree" aria-current="page"']);
+    // A view outside the bar: More is the page, and it is the way there.
+    const graph = shell(360, { view: "graph" });
+    expect(graph.match(/data-view-tab="[a-z]+" aria-current="page"/g)).toEqual(['data-view-tab="more" aria-current="page"']);
   });
 
   it("reaches the switcher in one tap from the top bar, with the full selection on it", () => {

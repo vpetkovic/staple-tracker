@@ -1,8 +1,12 @@
 /**
  * The navigation rail — the left column of the shell.
  *
- * ── THREE PLAIN GROUPS, TOP TO BOTTOM ─────────────────────────────────────────────────
+ * ── TOP TO BOTTOM ─────────────────────────────────────────────────────────────────────
  *
+ *   INBOX, AUTOPILOT  two rows with no heading, above everything: what waits on a person
+ *                (with how many, and a dot when some are new) and what agents are doing (how
+ *                many runs are live, then one sub-row per live run that leads to it). Both read
+ *                every workspace, so they sit above the workspace list.
  *   WORKSPACES   every workspace, listed — All workspaces first — so what the page is
  *                scoped to, and the way to change it, are on screen without opening a menu.
  *                One click switches. Past `RAIL_WORKSPACE_LIMIT` the rest sit behind "More
@@ -40,7 +44,6 @@ import {
   ChevronDown,
   Cog,
   FolderKanban,
-  History,
   LayoutGrid,
   Moon,
   PanelLeftClose,
@@ -59,10 +62,22 @@ import { isResolvedStatus } from "@/lib/settings";
 import { openProjectDialog, openSettings } from "@/lib/shell-events";
 import { usePendingJoinRequests } from "@/lib/pending-requests";
 import { isAllWorkspaces, scopeName, useSession, type ViewName } from "@/lib/session";
+import { useInboxBadge, type InboxBadge } from "@/lib/attention";
 import { useRuns } from "@/lib/runs";
-import { RunCard } from "@/components/autopilot/RunBanner";
+import { bannerLine, liveStateText } from "@/lib/run-text";
+import { runHref } from "@/lib/session-url";
+import type { RunEntry } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { NAV_GROUPS, chooseRailWorkspace, projectCaption, railWorkspaces, type NavGroup, type NavItem } from "./nav-model";
+import { chooseRailWorkspace, navGroup, projectCaption, railWorkspaces, type NavGroup, type NavItem } from "./nav-model";
+import {
+  autopilotLiveText,
+  currentTopRow,
+  inboxRowMark,
+  openRunOnPlainClick,
+  runSubRowAside,
+  runSubRowLabel,
+  runSubRows,
+} from "./top-nav-model";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 import { integrationRead } from "@/lib/api";
 import { CONNECTIONS_CHANGED, type ConnectionView } from "@/integrations/connection-status";
@@ -385,38 +400,164 @@ function WorkspaceRows() {
 }
 
 /**
- * AUTOPILOT — the live runs as banners (components/autopilot/RunBanner.tsx), then the way to
- * every run's history. Under the views, because a run works the workspace the rail is on
- * (All workspaces shows every workspace's, each card naming its own); absent altogether until
- * the workspace has had a run, so a tracker nobody runs agents on keeps its rail unchanged.
+ * A live run's sub-row under Autopilot: 28px, its dot on the row labels' line, `text-label`.
+ * 44px in the phone's drawer and under a finger, like every rail row.
  */
-function AutopilotSection({ onNavigate }: { onNavigate?: () => void }) {
-  const session = useSession();
-  const { entries, live } = useRuns();
-  if (entries.length === 0) return null;
-  const all = isAllWorkspaces(session);
+const RUN_SUBROW_CLASS = cn(
+  "flex h-7 w-full min-w-0 items-center gap-2 rounded-lg pr-2 pl-[2.125rem] text-left text-label font-normal focus-ring-inset",
+  "max-md:h-11 max-md:pl-[2.25rem] max-md:text-[13px] pointer-coarse:h-11",
+  "text-sidebar-foreground/85 transition-colors duration-(--motion-duration-fast) hover:bg-surface-hover hover:text-foreground",
+  "aria-[current]:bg-surface-selected aria-[current]:text-foreground",
+);
+
+/** A run's state as a dot: its tone's colour, breathing only while it works, never under reduced motion. */
+function RunDot({ tone }: { tone: ReturnType<typeof liveStateText>["tone"] }) {
   return (
-    <RailSection id="autopilot" label="Autopilot">
-      {live.map((entry) => (
-        <li key={`${entry.workspace}/${entry.run.id}`} className="pb-1.5">
-          <RunCard entry={entry} showWorkspace={all} onNavigate={onNavigate} />
-        </li>
-      ))}
+    <span
+      aria-hidden
+      data-run-dot={tone}
+      className={cn(
+        "size-2 shrink-0 rounded-full",
+        tone === "ok" && "motion-safe:animate-[staple-breathe_var(--motion-working-pulse)_var(--motion-ease-standard)_infinite]",
+      )}
+      style={{ backgroundColor: `var(--plain-${tone}-fg)` }}
+    />
+  );
+}
+
+/**
+ * INBOX AND AUTOPILOT — the rail's first rows, a plain list with no heading and no fold.
+ * Presentational: everything it shows arrives as props, so a test renders it to markup.
+ *
+ * The Inbox row says how much waits on a person in every workspace, with a dot when some of it
+ * is new to this browser. The Autopilot row says how many runs are live, and under it each live
+ * run is a sub-row that leads to that run (a real link: a plain click navigates in the page). A
+ * fifth live run and later fold into one "n more" that opens the run list.
+ */
+export function RailTopRows({
+  view,
+  run,
+  badge,
+  live,
+  showWorkspace,
+  hrefFor,
+  onSelect,
+  onOpenRun,
+}: {
+  view: ViewName;
+  run: string | null;
+  badge: InboxBadge;
+  live: readonly RunEntry[];
+  showWorkspace: boolean;
+  hrefFor: (runId: string) => string;
+  onSelect: (view: ViewName) => void;
+  onOpenRun: (runId: string | null) => void;
+}) {
+  const [inbox, autopilot] = navGroup("top").items as [NavItem, NavItem];
+  const { shown, more } = runSubRows(live);
+  const current = currentTopRow(view, run, shown.map((entry) => entry.run.id));
+  const mark = inboxRowMark(badge);
+  const liveText = autopilotLiveText(live.length);
+  const InboxIcon = inbox.icon;
+  const AutopilotIcon = autopilot.icon;
+  return (
+    <ul role="list" data-nav-group="top" aria-label="Inbox and Autopilot" className="flex flex-col gap-px">
       <li>
         <button
           type="button"
-          data-nav-run-history
-          onClick={() => {
-            onNavigate?.();
-            session.openRun(null);
-          }}
+          data-nav-item={inbox.id}
+          aria-current={current === inbox.id ? "page" : undefined}
+          onClick={() => onSelect(inbox.view)}
           className={RAIL_ROW_CLASS}
         >
-          <History aria-hidden />
-          <span className="truncate">Run history</span>
+          <InboxIcon aria-hidden />
+          <span className="truncate">{inbox.label}</span>
+          {mark.count ? (
+            <span className="ml-auto flex shrink-0 items-center gap-1.5 text-label font-normal text-text-tertiary tabular-nums">
+              {mark.fresh ? (
+                <span aria-hidden data-nav-inbox-new className="size-1.5 rounded-full bg-[var(--status-task-in_progress)]" />
+              ) : null}
+              <span aria-hidden data-nav-inbox-count>
+                {mark.count}
+              </span>
+            </span>
+          ) : null}
+          {mark.spoken ? <span className="sr-only">{mark.spoken}</span> : null}
         </button>
       </li>
-    </RailSection>
+      <li>
+        <button
+          type="button"
+          data-nav-item={autopilot.id}
+          aria-current={current === autopilot.id ? "page" : undefined}
+          onClick={() => onSelect(autopilot.view)}
+          className={RAIL_ROW_CLASS}
+        >
+          <AutopilotIcon aria-hidden />
+          <span className="truncate">{autopilot.label}</span>
+          {liveText ? (
+            <span data-nav-autopilot-live className="ml-auto shrink-0 text-label font-normal text-text-tertiary tabular-nums">
+              {liveText}
+            </span>
+          ) : null}
+        </button>
+        {shown.length > 0 ? (
+          <ul role="list" aria-label="Live runs" className="mt-px flex flex-col gap-px">
+            {shown.map((entry) => {
+              const id = entry.run.id;
+              const state = liveStateText(entry);
+              return (
+                <li key={`${entry.workspace}/${id}`}>
+                  <a
+                    href={hrefFor(id)}
+                    data-nav-run={id}
+                    aria-current={current === `run:${id}` ? "page" : undefined}
+                    aria-label={runSubRowLabel(entry, showWorkspace)}
+                    title={bannerLine(entry)}
+                    onClick={(event) => openRunOnPlainClick(event, () => onOpenRun(id))}
+                    className={RUN_SUBROW_CLASS}
+                  >
+                    <RunDot tone={state.tone} />
+                    <span className="min-w-0 flex-1 truncate">{entry.title}</span>
+                    <span className="max-w-[45%] shrink-0 truncate text-caption text-text-tertiary">{runSubRowAside(entry)}</span>
+                  </a>
+                </li>
+              );
+            })}
+            {more > 0 ? (
+              <li>
+                <button type="button" data-nav-run-more onClick={() => onOpenRun(null)} className={RUN_SUBROW_CLASS}>
+                  <span aria-hidden className="size-2 shrink-0" />
+                  <span className="truncate">{more} more</span>
+                </button>
+              </li>
+            ) : null}
+          </ul>
+        ) : null}
+      </li>
+    </ul>
+  );
+}
+
+/** The top rows from the page's reads: the Inbox badge, the live runs, and where the page is. */
+function TopRows({ onSelect, onNavigate }: { onSelect: (view: ViewName) => void; onNavigate?: () => void }) {
+  const session = useSession();
+  const badge = useInboxBadge();
+  const { live } = useRuns();
+  return (
+    <RailTopRows
+      view={session.view}
+      run={session.run}
+      badge={badge}
+      live={live}
+      showWorkspace={isAllWorkspaces(session)}
+      hrefFor={(runId) => runHref(window.location.href, runId)}
+      onSelect={onSelect}
+      onOpenRun={(runId) => {
+        session.openRun(runId);
+        onNavigate?.();
+      }}
+    />
   );
 }
 
@@ -476,7 +617,8 @@ export function NavRail({
     session.setView(view);
     onNavigate?.();
   };
-  const [views, machine] = NAV_GROUPS;
+  const views = navGroup("views");
+  const machine = navGroup("machine");
 
   return (
     <nav
@@ -525,21 +667,21 @@ export function NavRail({
         </Button>
       </div>
 
-      {/* ── where you are: the workspace, then what you can look at in it ── */}
+      {/* ── what waits and what runs, then the workspace, then what you can look at in it ── */}
       <div className="staple-momentum flex min-h-0 flex-1 flex-col overflow-y-auto px-3 pt-2 pb-3 max-md:px-2.5">
+        <TopRows onSelect={select} onNavigate={onNavigate} />
         {phone ? null : <WorkspaceRows />}
         <NavGroupSection
-          group={views!}
+          group={views}
           // A phone has no workspace list above, so its views group is named for the scope.
-          label={phone ? scopeName(session) : views!.label}
+          label={phone ? scopeName(session) : views.label}
           view={session.view}
           onSelect={select}
           onNavigate={onNavigate}
         />
-        <AutopilotSection onNavigate={onNavigate} />
         <NavGroupSection
-          group={machine!}
-          label={machine!.label}
+          group={machine}
+          label={machine.label}
           view={session.view}
           onSelect={select}
           onNavigate={onNavigate}

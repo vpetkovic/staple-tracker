@@ -69,10 +69,17 @@ it("keeps the Plan URL and remembered lens aligned without a workspace parameter
 
 async function goView(page: Page, view: string, width: number) {
   if (view === "tasks") view = "tree";
-  const target = page.locator(width < 768 ? `[data-view-tab="${view}"]` : `[data-nav-item="view:${view}"]`);
+  // A phone reaches a view outside its four tabs through More and the sheet's row.
+  const viaMore = width < 768 && !["attention", "autopilot", "tree", "queue"].includes(view);
+  const target = page.locator(width >= 768 ? `[data-nav-item="view:${view}"]` : viaMore ? '[data-view-tab="more"]' : `[data-view-tab="${view}"]`);
   // Invoke shell navigation with an open modal too: on phones its sheet covers the rail.
   if (await page.locator('[aria-label="Issue detail"]').count()) await target.evaluate((el: HTMLElement) => el.click());
   else await target.click();
+  if (viaMore) {
+    const row = page.locator(`[data-more-view="${view}"]`);
+    await row.waitFor();
+    await row.click();
+  }
 }
 for (const width of [1280, 390]) {
   it(`restores Plan lens, drawer, filters and both scroll axes at ${width}px; URL wins and workspaces stay separate`, async () => {
