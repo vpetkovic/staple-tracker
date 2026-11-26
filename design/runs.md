@@ -792,16 +792,20 @@ the ticket, and a stated failure on a held ticket its `release`.
 
 The page watches and stops runs; it never starts or continues one.
 
-- **Banner.** Each live run is a card in the rail's **Autopilot** section:
-  `Autopilot · <scope> · <n> done this run · <m> left · working|next <ref> · <what would stop it>` (n: tickets this run handed on; m: unresolved work in scope, whoever works it; a milestone's own progress is its detail's), the run's
-  state (working, paused, or what it waits on), whether a driver is attached, **Stop** and
-  **Details**. On a phone (below 768px) the first live run is also one line above the tab
-  bar with a 44px Stop. The section is absent until the workspace has had a run.
+- **Autopilot page.** `?view=autopilot` lists every run (*Running now*, *Earlier*) and shows
+  one in full; `?view=autopilot&run=<run id>` is one run, and every place that names a run
+  links there. A run is called by its name (`title` on `/api/runs`: its epic or milestone's
+  title, or for a queue run the work it took). One run shows what it is working on now and
+  whether a driver is attached, `<n>` done this run and `<m>` left (n: tickets this run
+  handed on; m: unresolved work in scope, whoever works it; a milestone's own progress is its
+  detail's), each limit it has, every take with how it went, what it takes next, and for an
+  ended run how it ended, in plain words (`src/ui/app/src/lib/run-text.ts` words every stop
+  and wait reason). **Pause**, **Resume** and **Stop** are on the run.
+- **Rail and tab bar.** The rail's **Autopilot** row is always there, with one line per live
+  run (its state, its name, the ticket it is on). On a phone (below 768px) the **Autopilot**
+  tab carries a dot while a run is live.
 - **Badge.** A task a live run holds as its open ticket wears an **Autopilot** badge in the
   list and a line in its detail naming the run.
-- **Run history.** The section's **Run history** row (and every Details) opens every run:
-  who ran it, over what, started, how long, each ticket with how it went, and how it ended,
-  in plain words (`src/ui/app/src/lib/run-text.ts` words every stop and wait reason).
 - **Run stopped.** When a run ends, every open page shows a notice within one refresh: why, in
   the history's words, and a link to the reference that needs a person (`goal_met` and a
   `goal_children` budget: the milestone to review; `gate_pending`: the gated issue;
@@ -811,8 +815,8 @@ The page watches and stops runs; it never starts or continues one.
   dismissed, opened or stopped itself (localStorage `staple:run-stops:v1`), counted from the
   browser's first read of the server's clock (`now`), so a reload shows the same notices and
   an old stop is not news; keys of runs no longer served are pruned. One compact card shows
-  the newest ("N more" expands to three): in the desk's corner, in the flow above the run
-  strip on a phone, and, while a task is open, as the detail's last row (inside the modal, so
+  the newest ("N more" expands to three): in the desk's corner, in the flow above the tab
+  bar on a phone, and, while a task is open, as the detail's last row (inside the modal, so
   it covers nothing and is in the focus order). The app has no service worker, so there is
   no system notification (`src/ui/app/src/lib/run-stops.ts`).
 - **Goal view.** A milestone's detail shows its goal in place of "Done when": each criterion

@@ -19,11 +19,13 @@ browser=auto|always|never`. `staple ui` is an alias.
 
 ## Views
 
-Six views, one per entry of `VIEWS` in `src/ui/app/src/lib/session.ts`, plus the
+One view per entry of `VIEWS` in `src/ui/app/src/lib/session.ts`, plus the
 surfaces that open on top of any of them.
 
 | View | What it shows | How to reach it |
 | --- | --- | --- |
+| [Inbox](#inbox) | What waits on a person: gates, reviews, blockers a person owns, stopped runs, silent claims, sync conflicts | The rail's first row and the first phone tab; "Go to Inbox"; `?view=inbox` (`?view=attention` lands there) |
+| [Autopilot](#autopilot-runs) | Every autopilot run and one run in full; a notice when one stops | The rail's second row and its live-run lines; the second phone tab; a task's run line; a stop notice; `?view=autopilot`, `?view=autopilot&run=<run id>` |
 | [Tasks](#tasks) | Every issue as one tree, parents over children, with grouping, sorting, filters, search and the pickup cues | Rail and tab bar *Tasks*; "Go to Tasks"; a project row under it; `?view=tasks` |
 | [Queue](#queue) | The pickup order as one tree: the plan, what each queued epic or milestone expands to, what comes next, and the editor for it | *Queue*; "Go to Queue"; `?view=queue` |
 | [Graph](#graph) | Issues as a node graph: epics as containers, dependencies as edges | *Graph*; "Go to Graph"; `?view=graph` |
@@ -31,7 +33,6 @@ surfaces that open on top of any of them.
 | [Estimates](#estimates) | How long work took against its estimate, per group of similar work | *Estimates*; "Go to Estimates"; `?view=estimate-accuracy` |
 | [Usage](#usage) | This computer's provider limits and the pace against each one | *Usage* under *This computer*; "Go to Usage"; `?view=budget` |
 | [Task detail](#task-detail) | One issue: details, connections, documents, activity, the agent payload and time | Click or Enter on any row, node or reference |
-| [Autopilot runs](#autopilot-runs) | Live runs, their history, and a notice when one stops | The rail's *Autopilot* section; a task's run line |
 | [Settings](#settings) | Statuses, kinds, workflow settings, cloud, usage capture | The rail's *Settings*; the palette; `?settings` |
 | [Choose a workspace](#choose-a-workspace) | Shown in place of Queue or Estimates on *All workspaces* | Opening either view with no workspace chosen |
 
@@ -63,9 +64,12 @@ is charcoal, not near-black. Every shell size is a token in
   registered workspace with a one-letter tile, capped at six (the current one is
   always kept) with the rest behind *More workspaces*. A single-workspace page
   lists none;
+- the top rows, above the workspaces and with no heading (`TOP_VIEWS`):
+  *Inbox*, with every workspace's count and a dot when something is new to this
+  browser, and *Autopilot*, always present, with "n live" and one line per live
+  run (its state dot, its name, and the ticket it is on or its state; at most
+  four, then "n more"). A line is a link to that run;
 - **Views**: *Tasks*, *Queue*, *Graph*, *Milestones*, *Estimates*;
-- **Autopilot**, once the workspace has had a run: one card per live run and a
-  *Run history* row (see [Autopilot runs](#autopilot-runs));
 - **This computer**: *Usage*, at the bottom of the rail;
 - the foot, above a hairline: *Settings* and a dark-mode switch
   (`role="switch"`, remembered under `staple:theme`).
@@ -124,8 +128,11 @@ search clears it; a second Escape leaves the field.
 85% of the width, closed by a row, the scrim, Escape or Back), the workspace
 switcher as a pill (a bottom sheet), the sync state as one icon, search and New
 task. Under it, the view's name large, its controls as 44px icon buttons, and
-the active filters as one sideways-scrolling row. A bottom **tab bar** holds all
-six views (`components/nav/ViewTabBar.tsx`). On a touch screen, controls grow to
+the active filters as one sideways-scrolling row. A bottom **tab bar** holds five
+tabs (`components/nav/ViewTabBar.tsx`): *Inbox* with its count, *Autopilot* with
+a dot while a run is live (green working, amber paused or waiting), *Tasks*,
+*Queue* (`TAB_VIEWS`), and *More*, a bottom sheet with every other view. More is
+drawn as current when the page is on one of them. On a touch screen, controls grow to
 44px at any width.
 
 **The address follows the page.** The workspace, the view, the search text,
@@ -1214,35 +1221,80 @@ motion and is off under reduced motion.
 
 The forecast re-reads on the page's refresh fingerprint.
 
+## Inbox
+
+What only a person can move (`views/attention/`; the view's id stays
+`attention`). The rows are `GET /api/attention`'s, the same rows `staple
+attention` prints, read once at the root for every workspace (`lib/attention.ts`)
+and narrowed to the page's workspace. Nothing here decides membership or order,
+and nothing switches on a row's kind: a kind added to `core/attention.ts` renders
+with no change to the page.
+
+- **Sections** are the server's kinds in the server's order, under sticky headers
+  that fold: a glyph by the first row's verb, the label, the count, and the oldest
+  wait.
+- **A row** is one 38px line from 860px of the page's own width: a dot when the
+  row is new to this browser, the ticket's reference, the title, why it waits,
+  the workspace (on *All workspaces*), how long, and the action's word by verb
+  (*Review*, *Open*, *View run*, *Resolve*). Narrower, it stacks: title, reason,
+  then reference, workspace and wait. A blocker a person owns prints its to-do
+  after the reason; it is never a button label.
+- **The row is the action.** A click or Enter opens the ticket or the run. A sync
+  conflict opens in place with both devices' values and *Keep this device's* /
+  *Take the other's*. Rows the server marks dismissible carry a dismiss.
+- **Keyboard.** The rows are one tab stop: Up, Down, `k`, `j`, Home, End move;
+  Enter or Space acts; `e` dismisses; Right and Left open and close a conflict.
+  The focused row's buttons follow it in the tab order.
+- **The drawer walks the list.** With a ticket open from the Inbox, previous and
+  next follow the rows, and when the open ticket's row leaves, the next row
+  opens.
+- **States.** A skeleton shaped like the list while it loads; an empty state
+  that says what lands here (and how many wait in other workspaces); a banner
+  per workspace that could not be read; a refusal in words. A page narrowed to
+  one workspace ends with how many more wait elsewhere.
+
 ## Autopilot runs
 
 The page watches and stops [autopilot runs](runs.md); it never starts or
 continues one. Everything reads one `GET /api/runs` per change fingerprint
-(`lib/runs.ts`). [runs.md](runs.md#in-the-web-ui) has the full description.
+(`lib/runs.ts`); a run the list does not hold is read on its own
+(`GET /api/run`). [runs.md](runs.md#in-the-web-ui) has the full description.
 
-- **The rail's Autopilot section**, once the workspace has had a run: one card
-  per live run (its scope, progress, the next ticket, what would stop it, its
-  state, whether a driver is attached, **Stop** and **Details**), then *Run
-  history*. On a phone the first live run is one line above the tab bar with a
-  44px Stop.
+- **The page** (`views/autopilot/`, `?view=autopilot`): from 900px of its own
+  width, the run list (*Running now*, *Earlier*) beside one run; narrower, the
+  list, or one run with *All runs* back. `?view=autopilot&run=<run id>` is one
+  run, and moving between the list and a run is a history step. A wide page
+  with no run in its address shows the newest live run, else the newest, without
+  writing it to the address.
+- **A list item**: a state dot, the run's name, how long it has run or how long
+  ago it ended; its scope and who ran it; its state as a pill (a working run
+  names its ticket) and its tally of done and failed takes.
+- **One run**: its name, state, scope and who ran it, with **Pause** / **Resume**
+  and **Stop** while it is live; what it is working on now, for how long, and
+  whether a driver is attached (a run with none says in words that it takes
+  nothing); for an ended run, why it ended, who ended it and the one thing to
+  do about it; tiles for what it has done, what is left, and each limit it has
+  (tickets, time, usage); a goal run's criteria; every take in order with its
+  outcome, how long it was held, a retry mark and a failure's reason; and for a
+  live run what it takes next. Every ticket is a chip (status, reference,
+  title, `components/ticket/TicketChip.tsx`) that opens the ticket. Stop asks
+  first and takes an optional note: `POST /api/run/stop`; pause and resume are
+  `POST /api/run/pause` and `/api/run/resume`.
+- **The rail and the tab bar.** One line per live run under *Autopilot* in the
+  rail; a dot on the phone's *Autopilot* tab while a run is live.
 - **The badge.** A task a live run holds, the run's scope row and a folded
   parent hiding held work wear an *Autopilot* badge; the task's detail says
-  which run is working on it.
-- **Run history** (*Autopilot runs*): *Running now* and *Earlier*, each run with
-  who ran it, over what, when, how long, its driver, its tickets and how each
-  went, and how it ended in plain words (`lib/run-text.ts`). Live runs have
-  **Stop** and **Pause** / **Resume**. Stop asks first and takes an optional
-  note: `POST /api/run/stop`; pause and resume are `POST /api/run/pause` and
-  `/api/run/resume`.
+  which run is working on it and links to the run.
 - **Stop notices.** When a run ends, every open page shows a notice within one
-  refresh: why, and a link to what needs a person (*Review*, *Unblock*,
-  *Open*). It sits in the corner on a desk, above the run strip on a phone, and
-  inside the detail while a task is open. What this browser has already seen is
-  kept in `staple:run-stops:v1`.
+  refresh: the run by name, why, the tickets it names as chips, a link to what
+  needs a person (*Review*, *Unblock*, *Open*) and *View run*. It sits in the
+  corner on a desk, above the tab bar on a phone, and inside the detail while a
+  task is open. What this browser has already seen is kept in
+  `staple:run-stops:v1`.
 
-`components/autopilot/autopilot-e2e.test.tsx` drives the banner, the phone
-strip, the badge, the history, a stop notice and a stop from the page against a
-real server and real runs.
+`components/autopilot/autopilot-e2e.test.tsx` drives the rail's run lines, the
+badge, a stop notice and a stop from the page against a real server and real
+runs; `views/autopilot/*.test.*` cover the page.
 
 ## Choose a workspace
 
