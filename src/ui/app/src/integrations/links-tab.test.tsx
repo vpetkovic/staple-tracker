@@ -5,6 +5,10 @@ import { ExternalLinksView, type ExternalLinksViewProps } from "@/detail/tabs/Ex
 import type { ConnectionView } from "./connection-status";
 import { LinkRow } from "./LinkList";
 import type { ExternalLink } from "./model";
+import { TABS } from "@/detail/tabs/registry";
+import { detail } from "@/detail/detail-fixture";
+import { descendantEntries, subtreeEntry } from "./pull-requests";
+import { prLink, prTicket, subtreePr } from "./pull-request-fixture";
 
 const NOW = Date.parse("2026-11-24T12:00:00Z");
 const TEAM_UUID = "0f9c3a52-6d1e-4c1b-9b7e-2a4c8e1d3f55";
@@ -253,6 +257,85 @@ describe("External links tab", () => {
   });
 });
 
+describe("a parent's External links tab", () => {
+  const P = prTicket("ACME-P", null);
+  const A = prTicket("ACME-A", "id-ACME-A");
+  const B = prTicket("ACME-B", "id-ACME-B");
+  const B1 = prTicket("ACME-B1", "id-ACME-B");
+  const set = [
+    subtreePr(218, { repo: "vpetkovic/staple-tracker", own: true, tickets: [P, A] }),
+    subtreePr(1, { state: "merged", tickets: [A] }),
+    subtreePr(2, { tickets: [B, B1] }),
+    subtreePr(3, { state: "draft", tickets: [B1] }),
+    subtreePr(88, { repo: "acme/admin", checks: "failing", failing: ["unit"], tickets: [A, B, B1, prTicket("ACME-C", "id-ACME-C")] }),
+  ];
+  const inside = descendantEntries(set.map(subtreeEntry));
+  const subtree = { entries: inside, workspace: "w", shownId: "id-ACME-P" };
+  const rows = (html: string) => [...html.matchAll(/data-subtree-link="([^"]*)"/g)].map((m) => m[1]);
+
+  it("lists the descendants' pull requests after its own links, the ones that need a person first", () => {
+    const html = view({ links: [link(218), link(5, { kind: "issue" })], subtree });
+    expect(html.match(/data-subtree-links=""/g)).toHaveLength(1);
+    expect(html.indexOf("resource-218")).toBeLessThan(html.indexOf("data-subtree-links"));
+    expect(rows(html)).toEqual(["acme/admin#88", "acme/shop#2", "acme/shop#3", "acme/shop#1"]);
+    expect(html).toMatch(/<section[^>]*aria-label="In tasks inside: 4 pull requests: 1 with failing checks, 2 open, 1 draft, 1 merged"/);
+    expect(html).toMatch(/<h3[^>]*>.*?In tasks inside.*?data-pr-tally="".*?4 pull requests<\/span><\/h3>/);
+    // The parent's own pull request is drawn among its links, never again in the section.
+    expect(rows(html)).not.toContain("vpetkovic/staple-tracker#218");
+  });
+
+  it("gives each row its checks, its state and its tickets as buttons, never the parent", () => {
+    const html = view({ links: [], subtree });
+    const row = (key: string) => new RegExp(`data-subtree-link="${key.replace(/[/#]/g, "\\$&")}".*?</li>`).exec(html)![0];
+    expect(row("acme/admin#88")).toContain('aria-label="Open acme/admin#88, Change 88, open, checks failing: unit"');
+    expect(row("acme/admin#88")).toContain('data-checks="failing"');
+    // Three tickets are named, the fourth counted.
+    expect([...row("acme/admin#88").matchAll(/data-pr-ticket="([^"]*)"/g)].map((m) => m[1])).toEqual(["ACME-A", "ACME-B", "ACME-B1"]);
+    expect(row("acme/admin#88")).toMatch(/title="ACME-C"[^>]*>\+1</);
+    expect(row("acme/shop#2")).toContain('data-pr-ticket="ACME-B"');
+    expect(html).not.toContain('data-pr-ticket="ACME-P"');
+    expect(row("acme/shop#1")).toMatch(/data-link-state="merged"/);
+    // The repository most are in goes unsaid; the stray keeps its repository.
+    expect(row("acme/shop#2")).toMatch(/tabular-nums[^"]*">#2</);
+    expect(row("acme/admin#88")).toMatch(/tabular-nums[^"]*">admin#88</);
+  });
+
+  it("counts the descendants' pull requests under All and Pull requests, and not under Issues", () => {
+    const html = view({ links: [link(218), link(5, { kind: "issue" })], subtree });
+    expect(html).toMatch(/aria-label="All, 6"/);
+    expect(html).toMatch(/aria-label="Issues, 1"/);
+    expect(html).toMatch(/aria-label="Pull requests, 5"/);
+  });
+
+  it("keeps the section under Pull requests and hides it under Issues", () => {
+    const prs = view({ links: [link(218), link(5, { kind: "issue" })], subtree, section: "pull_request" });
+    expect(prs).toContain("data-subtree-links");
+    expect(prs).not.toContain("resource-5");
+    const issues = view({ links: [link(218), link(5, { kind: "issue" })], subtree, section: "issue" });
+    expect(issues).not.toContain("data-subtree-links");
+    expect(issues).toContain("resource-5");
+    const noIssues = view({ links: [link(218)], subtree, section: "issue" });
+    expect(noIssues).toContain("No linked issues");
+    expect(view({ links: [], subtree, section: "issue" })).toContain("No linked issues");
+  });
+
+  it("shows the empty state only with neither own links nor descendants'", () => {
+    const onlyInside = view({ links: [], subtree });
+    expect(onlyInside).not.toContain("Nothing linked yet");
+    expect(onlyInside).toContain("data-subtree-links");
+    expect(onlyInside).not.toContain("No linked");
+    expect(view({ links: [], subtree: { ...subtree, entries: [] } })).toContain("Nothing linked yet");
+  });
+
+  it("counts own links plus descendant-only pull requests on the tab in the strip", () => {
+    const count = TABS.find((tab) => tab.id === "external-links")!.count!;
+    expect(count(detail({ externalLinks: [link(218), link(5, { kind: "issue" })], subtreePullRequests: set }))).toBe(6);
+    expect(count(detail({ externalLinks: [], subtreePullRequests: set }))).toBe(4);
+    expect(count(detail({ externalLinks: [link(218)] }))).toBe(1);
+    expect(count(detail({ externalLinks: [] }))).toBeNull();
+  });
+});
+
 describe("an open link row", () => {
   it("shows the description, the sharing switch, the saved copy age, Unlink and the way out", () => {
     const html = row(link(1, { kind: "issue", body: "## Summary\n\n- Line one\n- Line two" }), { open: true });
@@ -272,6 +355,34 @@ describe("an open link row", () => {
   it("says when there is no description and when the link was never read", () => {
     expect(row(link(1), { open: true })).toContain("No description");
     expect(row(link(1, { fetchedAt: null }), { open: true })).toContain("Not read yet. Refresh to load it.");
+  });
+
+  it("marks a pull request's failing or pending checks on its row and names them when opened", () => {
+    const failing = prLink(7, { checks: "failing", failing: ["unit", "lint"] });
+    const closed = row(failing);
+    expect(closed).toContain('data-checks="failing"');
+    expect(closed).toContain('<span class="sr-only">checks failing: unit, lint</span>');
+    expect(closed).not.toContain("data-link-checks");
+    const opened = row(failing, { open: true });
+    expect(opened).toMatch(/>Checks<[\s\S]*data-link-checks="failing"[^>]*>.*?Failing: unit, lint<\/span>/);
+
+    const pending = row(prLink(8, { checks: "pending" }), { open: true });
+    expect(pending).toContain('data-checks="pending"');
+    expect(pending).toMatch(/data-link-checks="pending"[^>]*>.*?Pending<\/span>/);
+  });
+
+  it("keeps a row quiet for passing checks, and says them only when opened", () => {
+    const passing = prLink(9, { checks: "passing" });
+    const closed = row(passing);
+    expect(closed).not.toContain("data-checks");
+    expect(closed).not.toContain("sr-only\">checks");
+    expect(row(passing, { open: true })).toMatch(/data-link-checks="passing"[^>]*>.*?Passing<\/span>/);
+    // Merged: the checks no longer say anything.
+    const merged = row(prLink(10, { state: "merged", checks: "failing" }), { open: true });
+    expect(merged).not.toContain("data-checks");
+    expect(merged).not.toContain("data-link-checks");
+    // An issue has no checks fact at all.
+    expect(row(link(1, { kind: "issue" }), { open: true })).not.toContain("data-link-checks");
   });
 
   it("offers Stacked on for a pull request and names a parent that is not linked here", () => {
