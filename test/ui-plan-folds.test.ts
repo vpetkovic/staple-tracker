@@ -3,7 +3,8 @@
  * The Horizons lens's folds in a real browser: a fold the person chose survives a reload and a
  * lens change, Collapse all and Expand all fold every section and are remembered, a focus or
  * filter holds the control and applies none of it, Not scheduled's chevron is a horizon's, and
- * under 900px of the Plan container the control is the outline's last row beside Add a horizon.
+ * under 900px of the Plan container the control is a small text button at the right end of the
+ * outline's first line.
  */
 import { once } from "node:events";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
@@ -37,7 +38,9 @@ beforeAll(async () => {
   const plan = ws.store.plan();
   const person = { person: { via: "plan_view" } } as const;
   plan.enable("Mira", { person: { via: "settings" } });
-  [now, next] = plan.view().horizons as [typeof now, typeof next];
+  const [first, second] = plan.view().horizons;
+  now = first!;
+  next = second!;
   onNow = plan.capture({ title: "Checkout", maturity: "shaped", plan: READY_PLAN, horizon: now.id }, "Mira", person).id;
   onNext = plan.capture({ title: "Gift wrap", maturity: "shaped", plan: READY_PLAN, horizon: next.id }, "Mira", person).id;
   // One shaped idea with no horizon, so Not scheduled is a section with a row.
@@ -147,18 +150,21 @@ it("gives Not scheduled a horizon's chevron: the same x, size and tap area", asy
   }
 }, 30_000);
 
-it("puts the control beside Add a horizon in the outline's last row where the toolbar has no room", async () => {
+it("puts the control at the right end of the outline's first line where the toolbar has no room", async () => {
   for (const width of [375, 768]) {
     const { page, close } = await onHorizons(width);
     try {
       expect(await toolbarControl(page).isVisible(), `toolbar at ${width}px`).toBe(false);
-      const row = await page.locator("[data-plan-lens-tools]").evaluate((tools) => {
-        const fold = tools.querySelector("[data-plan-fold-all]")!.getBoundingClientRect();
-        const add = tools.querySelector("[data-plan-add-horizon-row]")!.getBoundingClientRect();
-        return { top: fold.top === add.top, height: [fold.height, add.height], sideBySide: fold.right < add.left };
+      const control = page.locator("[data-plan-board] [data-plan-fold-all]");
+      expect(await control.count()).toBe(1);
+      const placed = await control.evaluate((button) => {
+        const box = button.getBoundingClientRect();
+        const line = button.closest("header, section")!.getBoundingClientRect();
+        const board = button.closest("[data-plan-board]")!.getBoundingClientRect();
+        const firstHorizon = document.querySelector("[data-plan-horizon-line]")!.getBoundingClientRect();
+        return { height: box.height, inFirstLine: box.top >= line.top && box.bottom <= line.bottom, aboveHorizons: box.bottom <= firstHorizon.top, atRight: board.right - box.right < 16 };
       });
-      expect(row, `at ${width}px`).toEqual({ top: true, height: [44, 44], sideBySide: true });
-      const control = page.locator("[data-plan-lens-tools] [data-plan-fold-all]");
+      expect(placed, `at ${width}px`).toEqual({ height: 28, inFirstLine: true, aboveHorizons: true, atRight: true });
       await control.click();
       await expect.poll(() => rows(page)).toEqual([]);
       expect(await control.innerText()).toBe("Expand all");

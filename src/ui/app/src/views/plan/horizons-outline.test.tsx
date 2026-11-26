@@ -297,9 +297,16 @@ describe("folds the person chose", () => {
     expect(control({ data: plan([], []) })).toMatch(/<button[^>]*disabled=""/);
   });
 
-  it("sits beside Add a horizon in the outline's last row, for the widths where the toolbar has no room", () => {
+  it("sits at the right end of the outline's first line, for the widths where the toolbar has no room", () => {
     const html = board({ plan: full, folded: {} });
-    expect(html).toMatch(/data-plan-lens-tools[^]*data-plan-fold-all[^]*data-plan-add-horizon-row/);
+    // In Not scheduled's line, before any horizon: the top of the outline, not its last row.
+    const at = html.indexOf("data-plan-fold-all");
+    expect(at).toBeGreaterThan(-1);
+    expect(at).toBeLessThan(html.indexOf("data-plan-horizon="));
+    expect(html.match(/data-plan-fold-all/g)).toHaveLength(1);
+    // A small text button, shown only under 900px of the Plan container; never a 44px box.
+    expect(html).toMatch(/@max-\[900px\]\/plan:inline-flex[^>]*>\s*<button[^>]*\bh-7\b[^>]*data-plan-fold-all/);
+    expect(html).not.toMatch(/<button[^>]*min-h-11[^>]*data-plan-fold-all/);
   });
 });
 

@@ -64,19 +64,23 @@ export function foldAll(plan: PlanData, folded: Record<string, boolean>): { coll
   return { collapse, changes: Object.fromEntries([NONE, ...plan.horizons.map((horizon) => horizon.id)].map((key) => [key, collapse])) };
 }
 
-/** Collapse all / Expand all: in the toolbar beside + Horizon, or (`row`) beside the outline's Add a horizon. */
-export function FoldAll({ plan, folded, onFold, filtering, row = false }: { plan: PlanData; folded: Record<string, boolean>; onFold: (changes: Record<string, boolean>) => void; filtering: boolean; row?: boolean }) {
+/**
+ * Collapse all / Expand all. In the toolbar beside + Horizon it is that button's twin; `quiet` is
+ * its form at the right end of the outline's first line, for the widths where the toolbar has no
+ * room: the same words as a small text button, 28px high with a 32px tap.
+ */
+export function FoldAll({ plan, folded, onFold, filtering, quiet = false }: { plan: PlanData; folded: Record<string, boolean>; onFold: (changes: Record<string, boolean>) => void; filtering: boolean; quiet?: boolean }) {
   const choice = foldAll(plan, folded);
   const collapse = choice?.collapse ?? false;
   const Icon = collapse ? ChevronsDownUp : ChevronsUpDown;
   const why = filtering ? "Clear the focus and filter to fold sections" : undefined;
   // A disabled button takes no pointer, so its wrapper carries the reason's tooltip.
   return (
-    <span title={why} className={cn("inline-flex", row && "min-w-0 flex-1")}>
+    <span title={why} className={cn("inline-flex shrink-0", quiet && "ms-auto hidden self-center @max-[900px]/plan:inline-flex")}>
       <Button
-        variant="outline"
-        size={row ? "default" : "sm"}
-        className={row ? "min-h-11 w-full justify-center" : "h-8"}
+        variant={quiet ? "ghost" : "outline"}
+        size="sm"
+        className={quiet ? "relative -my-1.5 -mr-2 h-7 min-h-0 gap-1 px-2 text-label text-text-secondary before:absolute before:-inset-y-0.5 before:inset-x-0 before:content-['']" : "h-8"}
         disabled={filtering || choice === null}
         title={why}
         onClick={() => choice && onFold(choice.changes)}
@@ -101,12 +105,9 @@ export function HorizonsBoard({ plan, write, onOpen, selected, filtering = false
         {columns.slice(1).map((column) => (
           <HorizonSection key={column.key} lens={lens} column={column} />
         ))}
-        {/* Under 900px of the Plan container the toolbar has no room for them beside the pills; the add form takes the row's width. */}
-        <div className="hidden flex-wrap gap-2 px-3 pt-4 @max-[900px]/plan:flex" data-plan-lens-tools>
-          <FoldAll plan={plan} folded={folded} onFold={onFold} filtering={filtering} row />
-          <div className="min-w-0 flex-1 has-[[data-plan-add-horizon-form]]:basis-full">
-            <AddHorizon write={write} row />
-          </div>
+        {/* Under 900px of the Plan container the toolbar has no room for it beside the pills. */}
+        <div className="hidden px-3 pt-4 @max-[900px]/plan:block">
+          <AddHorizon write={write} row />
         </div>
       </div>
     </div>
@@ -189,6 +190,7 @@ export function ReadySection({ lens, column }: { lens: LensContext; column: Boar
         {/* One line on a phone: the sentence that explains it from 760px, two words under that. */}
         <span className="text-label text-text-tertiary @max-[760px]/plan:hidden">Nothing here. A shaped idea lands here until you give it a horizon.</span>
         <span className="hidden text-label text-text-tertiary @max-[760px]/plan:inline">nothing here</span>
+        <FoldAll plan={lens.plan} folded={lens.folded} onFold={lens.onFold} filtering={lens.filtering} quiet />
       </section>
     );
   }
@@ -210,6 +212,7 @@ export function ReadySection({ lens, column }: { lens: LensContext; column: Boar
         <span className="text-label text-text-secondary">
           {waiting} idea{waiting === 1 ? "" : "s"} with no horizon
         </span>
+        <FoldAll plan={lens.plan} folded={lens.folded} onFold={lens.onFold} filtering={lens.filtering} quiet />
       </header>
       {folded ? null : <SectionTree lens={lens} column={column} rows={rows} label={title} />}
     </section>
