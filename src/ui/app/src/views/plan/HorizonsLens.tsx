@@ -130,13 +130,15 @@ export function ReadySection({ lens, column }: { lens: LensContext; column: Boar
         data-plan-drop={state}
         {...handlers}
         className={cn(
-          "flex flex-wrap items-baseline gap-x-3 gap-y-0.5 border-b bg-surface-sunken py-2.5 pr-4 pl-[42px] @max-[760px]/plan:px-3",
+          "flex flex-wrap items-baseline gap-x-3 gap-y-0.5 border-b bg-surface-sunken py-2.5 pr-4 pl-[42px] @max-[760px]/plan:flex-nowrap @max-[760px]/plan:px-3",
           mark !== null && "shadow-[inset_0_0_0_2px_var(--color-ring)]",
           mark === "over" && "bg-surface-hover",
         )}
       >
         <span className="text-body font-semibold text-text-secondary">{title}</span>
-        <span className="text-label text-text-tertiary">Nothing here. A shaped idea lands here until you give it a horizon.</span>
+        {/* One line on a phone: the sentence that explains it from 760px, two words under that. */}
+        <span className="text-label text-text-tertiary @max-[760px]/plan:hidden">Nothing here. A shaped idea lands here until you give it a horizon.</span>
+        <span className="hidden text-label text-text-tertiary @max-[760px]/plan:inline">nothing here</span>
       </section>
     );
   }
