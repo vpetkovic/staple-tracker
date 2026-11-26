@@ -4,7 +4,8 @@
  * server sent (`/api/queue`); nothing here decides order or eligibility, it only words the
  * store's answer. `queue-words.test.ts` pins them.
  */
-import type { EffectiveQueueRow, IssueKind, IssueRow, QueueEntry, QueueView } from "@/lib/types";
+import type { SelectOption } from "@/components/ui/searchable-select";
+import type { EffectiveQueueRow, IssueKind, IssueRow, IssueStatus, QueueEntry, QueueView } from "@/lib/types";
 import { blockersOf } from "./queue-model";
 import { BUCKET_OF, type QueueBucket } from "./queue-summary";
 
@@ -291,6 +292,16 @@ export function bandWords(count: number, hasPlan: boolean): { title: string; cou
     count: plural(count, "open task"),
     rest: `agents take ${count === 1 ? "it" : "these"} in list order${hasPlan ? " once the plan runs out" : ""}`,
   };
+}
+
+// ---------- Add to queue ----------
+
+/**
+ * What Add to queue offers: the section's candidates without finished work, which the store
+ * never queues. An option with no status is kept: nothing says it is finished.
+ */
+export function addableOptions(options: readonly SelectOption[], isResolved: (status: IssueStatus) => boolean): SelectOption[] {
+  return options.filter((option) => !option.status || !isResolved(option.status));
 }
 
 // ---------- the move announcement ----------

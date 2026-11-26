@@ -73,6 +73,13 @@ describe("which rows a section draws", () => {
 });
 
 describe("showing a task", () => {
+  it("keys rows with printable text, so a selector built with CSS.escape finds the row", () => {
+    // CSS.escape turns a NUL into U+FFFD, so a key carrying one never matched its own row.
+    const key = rowKey("exercises-api", "nested", "EXE-275");
+    expect(key).toMatch(/^[\x20-\x7e]+$/);
+    expect(new Set([rowKey("a", "entry", "X-1"), rowKey("a", "nested", "X-1"), rowKey("b", "entry", "X-1")]).size).toBe(3);
+  });
+
   it("opens and pages the container that holds it", () => {
     const reveal = revealOf(input(), "STA-16")!;
     expect(reveal).toEqual({ place: "nested", entry: "STA-1", identifier: "STA-16", whole: true });

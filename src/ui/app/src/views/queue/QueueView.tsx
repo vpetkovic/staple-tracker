@@ -32,7 +32,8 @@ import type { AuthError } from "@/lib/api";
 import { useRuns } from "@/lib/runs";
 import { useSession } from "@/lib/session";
 import { openSettings } from "@/lib/shell-events";
-import type { Issue, WorkspaceRef } from "@/lib/types";
+import { statusCategory } from "@/lib/settings";
+import { RESOLVED_CATEGORIES, type Issue, type IssueStatus, type WorkspaceRef } from "@/lib/types";
 import { useIsDesk } from "@/lib/use-media";
 import { ErrorState } from "@/views/ViewChrome";
 import { workspaceScope } from "@/views/workspace-scope";
@@ -43,7 +44,7 @@ import { nestedRowKey } from "./queue-keys";
 import { NO_FOLDS, revealKey, revealOf, rowKey, sectionLayout, withReveal, type RowPlace, type SectionFolds } from "./queue-lines";
 import { queueSummary } from "./queue-summary";
 import { issueFromEffective } from "./queue-tree";
-import { hasOpenWork, moveAnnouncement, nothingPickable, whyNext } from "./queue-words";
+import { addableOptions, hasOpenWork, moveAnnouncement, nothingPickable, whyNext } from "./queue-words";
 import {
   AddToQueue,
   AllStrip,
@@ -158,7 +159,7 @@ function WorkspaceQueue({ workspace, onAuthError }: { workspace: string; onAuthE
   const add = (
     <AddToQueue
       workspace={workspace}
-      options={queue.candidates}
+      options={addableOptions(queue.candidates, isResolvedStatus)}
       onPick={(ref) => queue.add(ref)}
       disabled={queue.busy || queue.view === null}
       primary
@@ -442,8 +443,9 @@ function SectionController({
     );
   };
 
+  const addable = useMemo(() => addableOptions(queue.candidates, isResolvedStatus), [queue.candidates]);
   const policy = queue.policy ?? "advisory";
-  const policyTag = <PolicyTag policy={policy} workspace={workspace} onOpenSettings={() => openSettings({ section: "queue", workspace })} />;
+  const policyTag = view === null ? null : <PolicyTag policy={policy} workspace={workspace} onOpenSettings={() => openSettings({ section: "queue", workspace })} />;
   const summary = useMemo(() => queueSummary(view?.effective ?? []), [view]);
   const finished = view ? view.entries.filter((entry) => entry.resolved).length : 0;
   const standing = view ? <Standing summary={summary} finished={finished} busy={queue.busy} onPrune={queue.prune} /> : null;
@@ -466,7 +468,7 @@ function SectionController({
         onToggle={() => onFold?.(workspace)}
         policy={policyTag}
         standing={standing}
-        add={<AddToQueue workspace={workspace} options={queue.candidates} onPick={(ref) => queue.add(ref)} disabled={queue.busy || view === null} compact />}
+        add={<AddToQueue workspace={workspace} options={addable} onPick={(ref) => queue.add(ref)} disabled={queue.busy || view === null} compact />}
       />
     );
 
@@ -527,7 +529,7 @@ function SectionController({
           empty={
             mode === "page" ? (
               <EmptyPlan
-                add={<AddToQueue workspace={workspace} options={queue.candidates} onPick={(ref) => queue.add(ref)} disabled={queue.busy} primary />}
+                add={<AddToQueue workspace={workspace} options={addable} onPick={(ref) => queue.add(ref)} disabled={queue.busy} primary />}
               />
             ) : undefined
           }
@@ -538,6 +540,10 @@ function SectionController({
 }
 
 const NOTHING: ReadonlySet<string> = new Set();
+
+function isResolvedStatus(status: IssueStatus): boolean {
+  return RESOLVED_CATEGORIES.includes(statusCategory(status));
+}
 
 /**
  * What the row menu may offer for a row (`queueRowMenuState`): the page's own issue when it

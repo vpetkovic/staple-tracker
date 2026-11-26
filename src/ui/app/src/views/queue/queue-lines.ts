@@ -11,7 +11,7 @@ import { BAND_PAGE, coveredBy, EXPANSION_PAGE, expansionLines, paged } from "./q
 export type RowPlace = "entry" | "nested" | "band";
 
 export function rowKey(workspace: string, place: RowPlace, identifier: string): string {
-  return `${workspace}\u0000${place}\u0000${identifier}`;
+  return `${workspace}|${place}|${identifier}`;
 }
 
 /** What the reader folded, opened and paged in one section. View state; never written anywhere. */
@@ -114,7 +114,7 @@ export function sectionLayout(input: SectionInput, folds: SectionFolds, workspac
       const shown = paged(plan.expansion, EXPANSION_PAGE, whole);
       for (const line of expansionLines(shown, identifier, input.known)) {
         if (line.kind === "caption") {
-          children.push({ kind: "caption", key: `${key}\u0000${line.identifier}\u0000${children.length}`, identifier: line.identifier, title: line.title, issueKind: line.issueKind });
+          children.push({ kind: "caption", key: `${key}|${line.identifier}|${children.length}`, identifier: line.identifier, title: line.title, issueKind: line.issueKind });
         } else {
           const taskKey = rowKey(workspace, "nested", line.row.identifier);
           keys.push(taskKey);

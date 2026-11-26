@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { IssueRow } from "@/lib/types";
 import { effective, entry } from "./fixtures";
 import {
+  addableOptions,
   coveredBy,
   expansionLines,
   initials,
@@ -173,4 +174,13 @@ describe("what a container expands to", () => {
 
 it("announces a move as a place in the plan", () => {
   expect(moveAnnouncement("STA-465", 0, 3)).toBe("STA-465 is now 1 of 3");
+});
+
+it("offers no finished work to add to the plan", () => {
+  const options = [
+    { value: "FDS-3", label: "FDS-3", status: "done" as const },
+    { value: "FDS-16", label: "FDS-16", status: "backlog" as const },
+    { value: "FDS-40", label: "FDS-40" },
+  ];
+  expect(addableOptions(options, (status) => status === "done").map((option) => option.value)).toEqual(["FDS-16", "FDS-40"]);
 });
