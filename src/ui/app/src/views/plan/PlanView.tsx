@@ -413,65 +413,175 @@ function CapturePopover({ onCapture, onViewIdeas }: { onCapture: (title: string)
   );
 }
 
-/** While the plan loads: the toolbar, then a shape like the lens it will show. */
+/**
+ * While the plan loads: the toolbar, then the shape of the lens it will show, at the layout the
+ * Plan container's width gives that lens. Horizons: a section header and its rows. Timeline: the
+ * axis, a group and its bars, with the name column only from 760px. Ideas: Raw's list beside
+ * Exploring's cards, stacked under 760px.
+ */
 function PlanSkeleton({ lens }: { lens: Lens }) {
   return (
-    <div className="@container/plan flex h-full min-h-0 flex-col" aria-busy="true" data-plan-loading={lens}>
+    <div className="@container/plan flex h-full min-h-0 flex-col overflow-hidden" aria-busy="true" data-plan-loading={lens}>
       <span role="status" className="sr-only">
         Loading the plan
       </span>
-      <div className="flex flex-wrap items-center gap-2 border-b px-gutter py-2">
-        <Skeleton className="h-8 w-60 @max-[620px]/plan:w-full" />
-        <Skeleton className="h-[26px] w-44 rounded-full" />
-        <span className="ms-auto" />
-        <Skeleton className="h-8 w-20" />
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 border-b px-gutter py-2">
+        <Skeleton className="h-8 w-[232px] @max-[620px]/plan:h-9 @max-[620px]/plan:w-full" />
+        <div className="flex min-w-0 items-center gap-1.5 overflow-hidden @max-[620px]/plan:flex-1 @min-[620px]/plan:ml-1 @min-[620px]/plan:border-l @min-[620px]/plan:pl-3">
+          {[92, 64, 100].map((width) => (
+            <Skeleton key={width} className="h-[26px] shrink-0 rounded-full @max-[620px]/plan:h-8" style={{ width }} />
+          ))}
+        </div>
+        <span className="ms-auto @max-[620px]/plan:hidden" />
+        <Skeleton className="h-8 w-[200px] shrink-0 @max-[1100px]/plan:w-8" />
+        {lens === "ideas" ? null : <Skeleton className="h-8 w-[68px] shrink-0 @max-[620px]/plan:w-8" />}
       </div>
-      {lens === "horizons" ? (
-        <div className="flex flex-col">
-          <div className="flex flex-col gap-2 border-b px-gutter py-3">
-            <Skeleton className="h-5 w-56" />
-            <Skeleton className="h-2 w-[340px] max-w-full" />
-            <Skeleton className="h-3 w-96 max-w-full" />
-          </div>
-          {SKELETON_ROWS.map((row) => (
-            <div key={row} className="flex h-9 items-center gap-3 border-b px-gutter">
-              <Skeleton className="size-3.5 rounded-full" />
-              <Skeleton className="h-3.5 max-w-[420px] flex-1" style={{ maxWidth: 200 + ((row * 67) % 220) }} />
-              <Skeleton className="ms-auto h-1.5 w-28 @max-[760px]/plan:hidden" />
-            </div>
-          ))}
-        </div>
-      ) : lens === "timeline" ? (
-        <div className="flex flex-col">
-          <div className="flex h-[34px] items-center gap-10 border-b px-gutter">
-            {SKELETON_ROWS.slice(0, 6).map((month) => (
-              <Skeleton key={month} className="h-3 w-10" />
-            ))}
-          </div>
-          {SKELETON_ROWS.map((row) => (
-            <div key={row} className="flex h-[34px] items-center gap-3 border-b px-gutter">
-              <Skeleton className="h-3.5 w-40 shrink-0 @max-[760px]/plan:hidden" />
-              <Skeleton className="h-3" style={{ marginLeft: `${(row * 9) % 40}%`, width: `${18 + ((row * 13) % 30)}%` }} />
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div className="grid min-h-0 flex-1 content-start gap-4 p-gutter @min-[760px]/plan:grid-cols-[minmax(280px,360px)_minmax(0,1fr)]">
-          <div className="flex flex-col gap-2">
-            <Skeleton className="h-9 w-full" />
-            {SKELETON_ROWS.slice(0, 5).map((row) => (
-              <Skeleton key={row} className="h-11 w-full" />
-            ))}
-          </div>
-          <div className="grid content-start gap-3 [grid-template-columns:repeat(auto-fill,minmax(300px,1fr))]">
-            {SKELETON_ROWS.slice(0, 4).map((row) => (
-              <Skeleton key={row} className="h-32" />
-            ))}
-          </div>
-        </div>
-      )}
+      {lens === "horizons" ? <HorizonsSkeleton /> : lens === "timeline" ? <TimelineSkeleton /> : <IdeasSkeleton />}
     </div>
   );
 }
 
 const SKELETON_ROWS = [1, 2, 3, 4, 5, 6, 7, 8];
+/** A title's length on a skeleton row: varied, the same on every render. */
+const skeletonWidth = (row: number, min: number, spread: number) => min + ((row * 67) % spread);
+
+function HorizonsSkeleton() {
+  return (
+    <div className="flex min-h-0 flex-col">
+      <div className="flex items-start gap-3 border-b px-gutter py-3">
+        <Skeleton className="mt-1 size-4 shrink-0" />
+        <div className="flex min-w-0 flex-1 flex-col gap-2">
+          <div className="flex items-center gap-2.5">
+            <Skeleton className="h-5 w-28" />
+            <Skeleton className="h-3.5 w-36" />
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <Skeleton className="h-2 w-[340px] max-w-full @max-[760px]/plan:w-full" />
+            <Skeleton className="h-3.5 w-9" />
+            <Skeleton className="h-4 w-16" />
+            <Skeleton className="h-4 w-20" />
+          </div>
+          <Skeleton className="h-3 w-[420px] max-w-full" />
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <Skeleton className="h-7 w-16 @max-[760px]/plan:hidden" />
+          <Skeleton className="h-7 w-48 @max-[760px]/plan:hidden" />
+          <Skeleton className="size-8" />
+        </div>
+      </div>
+      <div className="h-7 border-b bg-surface-sunken @max-[760px]/plan:hidden" />
+      {SKELETON_ROWS.map((row) => (
+        <div
+          key={row}
+          className="grid min-h-9 grid-cols-[minmax(0,1fr)_150px_250px_140px_28px] items-center gap-x-3 border-b px-gutter @max-[1040px]/plan:grid-cols-[minmax(0,1fr)_130px_200px_28px] @max-[760px]/plan:min-h-[52px] @max-[760px]/plan:grid-cols-[minmax(0,1fr)_28px]"
+        >
+          <div className="flex min-w-0 flex-col gap-1.5" style={{ paddingInlineStart: row % 3 === 0 ? 18 : 0 }}>
+            <div className="flex items-center gap-2">
+              <Skeleton className="size-3.5 shrink-0 rounded-full" />
+              <Skeleton className="h-3.5" style={{ width: skeletonWidth(row, 140, 220), maxWidth: "100%" }} />
+            </div>
+            <Skeleton className="ms-[22px] hidden h-2.5 w-40 @max-[760px]/plan:block" />
+          </div>
+          <div className="flex items-center gap-2 @max-[760px]/plan:hidden">
+            <Skeleton className="h-1.5 flex-1" />
+            <Skeleton className="h-3 w-7" />
+          </div>
+          <Skeleton className="h-3 @max-[760px]/plan:hidden" style={{ width: `${50 + ((row * 23) % 40)}%` }} />
+          <Skeleton className="ms-auto h-3 w-24 @max-[1040px]/plan:hidden" />
+          <span />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TimelineSkeleton() {
+  const bar = (row: number) => ({ marginInlineStart: `${(row * 11) % 45}%`, width: `${16 + ((row * 13) % 30)}%` });
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="flex h-[34px] shrink-0 items-center border-b">
+          <div className="flex h-full w-[300px] shrink-0 items-center border-e px-gutter @max-[1040px]/plan:w-[220px] @max-[760px]/plan:hidden">
+            <Skeleton className="h-6 w-44" />
+          </div>
+          <div className="flex flex-1 items-center justify-around px-3">
+            {SKELETON_ROWS.slice(0, 6).map((month) => (
+              <Skeleton key={month} className="h-3 w-8" />
+            ))}
+          </div>
+        </div>
+        <div className="flex h-[34px] shrink-0 items-center gap-3 border-b bg-surface-sunken px-gutter">
+          <Skeleton className="h-3.5 w-24" />
+          <Skeleton className="h-3 w-20" />
+          <Skeleton className="h-1.5 w-[90px]" />
+        </div>
+        {SKELETON_ROWS.map((row) => (
+          <div key={row} className="flex h-[34px] shrink-0 items-center border-b @max-[760px]/plan:h-[50px] @max-[760px]/plan:flex-col @max-[760px]/plan:items-stretch @max-[760px]/plan:justify-center @max-[760px]/plan:gap-2.5 @max-[760px]/plan:px-gutter">
+            <div className="flex h-full w-[300px] shrink-0 items-center gap-2 border-e px-gutter @max-[1040px]/plan:w-[220px] @max-[760px]/plan:h-auto @max-[760px]/plan:w-auto @max-[760px]/plan:border-e-0 @max-[760px]/plan:px-0">
+              <Skeleton className="size-3.5 shrink-0 rounded-full" style={{ marginInlineStart: row % 3 === 0 ? 16 : 0 }} />
+              <Skeleton className="h-3.5" style={{ width: skeletonWidth(row, 90, 110) }} />
+            </div>
+            <div className="flex-1 px-3 @max-[760px]/plan:flex-none @max-[760px]/plan:px-0">
+              <Skeleton className="h-3" style={bar(row)} />
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="flex h-11 shrink-0 items-center gap-2 border-t px-gutter">
+        <Skeleton className="h-3 w-64 @max-[760px]/plan:w-40" />
+        <span className="ms-auto" />
+        <Skeleton className="h-7 w-14" />
+        <Skeleton className="h-7 w-28 @max-[760px]/plan:w-14" />
+      </div>
+    </div>
+  );
+}
+
+function IdeasSkeleton() {
+  const heading = (width: number) => (
+    <div className="flex items-baseline gap-2 px-4 pt-3 pb-2 @max-[760px]/plan:px-3">
+      <Skeleton className="h-5" style={{ width }} />
+      <Skeleton className="h-3 w-4" />
+    </div>
+  );
+  return (
+    <div className="min-h-0 flex-1 overflow-hidden @min-[760px]/plan:grid @min-[760px]/plan:grid-cols-[minmax(280px,360px)_minmax(0,1fr)]">
+      <div className="min-w-0">
+        {heading(40)}
+        <div className="px-4 pb-2 @max-[760px]/plan:px-3">
+          <div className="flex h-9 items-center gap-2 rounded-lg border border-dashed border-border-strong px-2.5 @max-[760px]/plan:h-[42px]">
+            <Skeleton className="h-3 w-32" />
+          </div>
+        </div>
+        {SKELETON_ROWS.slice(0, 4).map((row) => (
+          <div key={row} className="flex items-start gap-2.5 border-t border-border/60 px-4 py-2.5 @max-[760px]/plan:px-3">
+            <Skeleton className="mt-0.5 size-3.5 shrink-0 rounded-full" />
+            <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+              <Skeleton className="h-3.5" style={{ width: `${60 + ((row * 17) % 35)}%` }} />
+              <Skeleton className="h-2.5 w-20" />
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="min-w-0 @min-[760px]/plan:border-l @max-[760px]/plan:border-t">
+        {heading(84)}
+        <div className="grid gap-3 px-4 pt-1 [grid-template-columns:repeat(auto-fill,minmax(300px,1fr))] @max-[760px]/plan:grid-cols-1 @max-[760px]/plan:px-3">
+          {SKELETON_ROWS.slice(0, 6).map((row) => (
+            <div key={row} className="flex flex-col gap-2.5 rounded-[10px] border px-3.5 py-3">
+              <div className="flex items-center gap-2">
+                <Skeleton className="size-3.5 shrink-0 rounded-full" />
+                <Skeleton className="h-4" style={{ width: `${45 + ((row * 19) % 40)}%` }} />
+              </div>
+              <Skeleton className="h-3 w-full" />
+              <Skeleton className="h-3 w-3/5" />
+              <div className="mt-1 flex items-center gap-2.5">
+                <Skeleton className="h-2.5 w-28" />
+                <Skeleton className="h-3 w-16" />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
