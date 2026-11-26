@@ -206,11 +206,12 @@ function dragProps(idea: IdeaData, onDrag: (idea: IdeaData | null) => void) {
 
 /**
  * The `⋯` beside a row's or card's own buttons, without the corner offsets it has at a card's top
- * and without making the line taller. From 760px it shows on hover and focus, as Explore does.
+ * and without making the line taller. From 760px it shows on hover and focus, as Explore does;
+ * always on a device with no hover.
  */
 function RowMenu(props: { idea: IdeaData; column: BoardColumn; columns: BoardColumn[]; write: Write }) {
   return (
-    <span className="flex shrink-0 group-hover:opacity-100 group-focus-within:opacity-100 has-[[data-state=open]]:opacity-100 @min-[760px]/plan:opacity-0 [&>button]:mx-0 [&>button]:-my-1">
+    <span className="flex shrink-0 group-hover:opacity-100 group-focus-within:opacity-100 has-[[data-state=open]]:opacity-100 @min-[760px]/plan:opacity-0 @min-[760px]/plan:[@media(hover:none)]:opacity-100 [&>button]:mx-0 [&>button]:-my-1">
       <MoveMenu {...props} />
     </span>
   );
@@ -261,7 +262,7 @@ function RawRow({ plan, idea, column, columns, write, onOpen, selected, onDrag }
         <Button
           variant="outline"
           size="sm"
-          className="h-7 gap-1 px-2 text-label opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 @max-[760px]/plan:h-8 @max-[760px]/plan:opacity-100"
+          className="h-7 gap-1 px-2 text-label opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 @max-[760px]/plan:h-8 @max-[760px]/plan:opacity-100 [@media(hover:none)]:opacity-100"
           aria-label={`Explore ${idea.title}`}
           disabled={!explore.call}
           title={explore.disabledReason}

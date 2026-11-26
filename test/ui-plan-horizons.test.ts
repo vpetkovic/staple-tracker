@@ -185,3 +185,23 @@ it("gives the header's fold, name, clear and add a date a tap area of at least 3
     }
   }
 }, 30_000);
+
+it("shows a row's ⋯ without hover on a touch device at tablet width, and keeps it for hover on a desk", async () => {
+  const opacity = async (touch: boolean) => {
+    const context = await browser.newContext({ viewport: { width: 1180, height: 820 }, hasTouch: touch });
+    const page = await context.newPage();
+    page.setDefaultTimeout(5000);
+    try {
+      await page.goto(route("&ws=larkspur&plan-lens=horizons"));
+      const menu = page.locator(`[data-plan-card-menu="${solo}"]`);
+      await menu.waitFor({ state: "attached" });
+      // The outline is wide here: the ⋯ would wait for hover.
+      expect(await page.locator("[data-plan-tree]").first().evaluate((tree) => tree.getBoundingClientRect().width)).toBeGreaterThanOrEqual(760);
+      return await menu.evaluate((button) => getComputedStyle(button.parentElement!).opacity);
+    } finally {
+      await context.close();
+    }
+  };
+  expect(await opacity(true)).toBe("1");
+  expect(await opacity(false)).toBe("0");
+}, 30_000);

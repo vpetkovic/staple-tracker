@@ -108,3 +108,24 @@ it("explores a raw idea with one click, and marks a ready one shaped, which hand
     await close();
   }
 }, 20_000);
+
+it("shows a raw row's Explore and ⋯ without hover on a touch device at tablet width, and keeps them for hover on a desk", async () => {
+  const opacities = async (touch: boolean) => {
+    const context = await browser.newContext({ viewport: { width: 1180, height: 820 }, hasTouch: touch });
+    const page = await context.newPage();
+    page.setDefaultTimeout(5000);
+    try {
+      await page.goto(route());
+      // Any raw row: an earlier test explores the first one.
+      const row = page.locator('[data-plan-column="m:raw"] [data-plan-card]').filter({ has: page.locator('[data-plan-action="explore"]') }).first();
+      await row.waitFor();
+      const explore = await row.locator('[data-plan-action="explore"]').evaluate((button) => getComputedStyle(button).opacity);
+      const menu = await row.locator("[data-plan-card-menu]").evaluate((button) => getComputedStyle(button.parentElement!).opacity);
+      return [explore, menu];
+    } finally {
+      await context.close();
+    }
+  };
+  expect(await opacities(true)).toEqual(["1", "1"]);
+  expect(await opacities(false)).toEqual(["0", "0"]);
+}, 30_000);
