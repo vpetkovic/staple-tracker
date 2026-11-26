@@ -21,6 +21,7 @@ export function fakeSession(over: Partial<StapleSession> = {}): StapleSession {
     focusMilestone: noop,
     run: null,
     openRun: noop,
+    openHorizon: noop,
     projects: { data: [], error: undefined, loading: false, reload: noop },
     focusProject: noop,
     ws: "staple",

@@ -354,9 +354,10 @@ export function TreeGrid({
   /**
    * R4c (STA-188). What the milestone marker does: switch to the Milestones view with that
    * milestone focused. Optional, because a container without a view to route to still wants
-   * the marker — the tooltip names the milestone either way. Called with the row's workspace.
+   * the marker — the tooltip names the milestone either way. Called with the row's workspace
+   * and whether the marker names a horizon.
    */
-  onOpenMilestone?: (identifier: string, workspace: string) => void;
+  onOpenMilestone?: (identifier: string, workspace: string, horizon: boolean) => void;
   /**
    * THE `⋯` MENU, BUILT PER ROW — the slot `TaskRowLine.actionsMenu` opened.
    *

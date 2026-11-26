@@ -249,9 +249,10 @@ export interface TaskRowLineProps {
    * R4c (STA-188). Open the Milestones view with this milestone focused. Absent on every
    * surface that has no view to route to — the marker still renders and still names the
    * milestone in its tooltip; only the navigation is missing, which is honest. The row's
-   * workspace rides along, because on All workspaces the milestone is that workspace's.
+   * workspace rides along, because on All workspaces the milestone is that workspace's, and
+   * whether the marker names a horizon, which opens where the plan shows it.
    */
-  onOpenMilestone?: (identifier: string, workspace: string) => void;
+  onOpenMilestone?: (identifier: string, workspace: string, horizon: boolean) => void;
   onToggleExpand?: () => void;
   /**
    * THE `⋯` AS A MENU — the slot V5 promised and left empty.
@@ -310,7 +311,7 @@ export function TaskRowLine({
    */
   const cues = row.cues ?? null;
   const milestoneCue = rowMilestoneCue(row);
-  const openMilestone = onOpenMilestone ? (identifier: string) => onOpenMilestone(identifier, row.workspace) : undefined;
+  const openMilestone = onOpenMilestone ? (identifier: string) => onOpenMilestone(identifier, row.workspace, milestoneCue?.horizon === true) : undefined;
   const { columns, labelMax } = config;
   /**
    * What this width keeps — row-layout.ts. Every element below that the ladder can drop is

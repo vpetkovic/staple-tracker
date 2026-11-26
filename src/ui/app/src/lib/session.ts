@@ -235,6 +235,17 @@ export interface StapleSession {
   openRun: (runId: string | null) => void;
 
   /**
+   * A HORIZON, opened where the plan shows it: Plan's Horizons lens, landing on that horizon
+   * (`?view=plan&plan-lens=horizons&focus=<identifier>`). It switches to the horizon's
+   * workspace when the page is on another (hub only), writes the Horizons lens into that
+   * workspace's plan memory so the page opens on it, and puts the horizon in `milestoneFocus`,
+   * which on Plan names the horizon the lens lands on. A history step, like `focusMilestone`.
+   * Planning is read for the horizon's own workspace: with it off there, a horizon is a
+   * milestone and this opens it on Milestones instead. A row's horizon chip calls it.
+   */
+  openHorizon: (workspace: string, ref: string) => void;
+
+  /**
    * THE TRACKED PROJECTS, fetched once for the whole page — the rail lists them under
    * Tasks, the Project filter offers them, the create dialog and the detail panel pick
    * from them. Scoped like `issues`: one workspace, or every workspace in hub mode with
