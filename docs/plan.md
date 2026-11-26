@@ -161,7 +161,8 @@ milestone yourself stays where you put it.
 
 Add, rename, date and remove horizons from the column header and **+ Horizon**. Each horizon
 has its own name, in any case, so `idea ls --horizon <name>` and `list_ideas` know which one you
-mean; they list what the horizon carries, sub-ideas following a parent on it included. Removing one
+mean; they list what the horizon carries, sub-ideas following a parent on it included, and the dropped
+ideas scheduled on it. Removing one
 returns its ideas to Unscheduled. A horizon that still holds open work, or sits in the queue,
 cannot be removed until you move that work or take it off the queue. The refusal names what to
 move.

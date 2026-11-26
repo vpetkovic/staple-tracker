@@ -12,7 +12,7 @@ import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { parseArgs } from "node:util";
 import { configuredHumanName } from "../mcp-view-actions.js";
-import { ideasOnHorizon, type HorizonView, type IdeaDetail, type IdeaView, type PlanView, type PlanWriteOptions, type ScaffoldPreview } from "../core/plan-store.js";
+import { horizonWords, ideasOnHorizon, type HorizonView, type IdeaDetail, type IdeaView, type PlanView, type PlanWriteOptions, type ScaffoldPreview } from "../core/plan-store.js";
 import { splitDepends, type BreakdownRowInput, type PlanPatch } from "../core/plan-sections.js";
 import { resolveWorkspace } from "../core/workspace.js";
 import { StapleError } from "../core/types.js";
@@ -56,7 +56,7 @@ function planFor(values: { db?: string; ws?: string }, enabling = false) {
 }
 
 function ideaLine(idea: IdeaView, plan: PlanView): string {
-  const horizon = plan.horizons.find((h) => h.id === idea.horizonId)?.name ?? "unscheduled";
+  const horizon = horizonWords(idea, plan);
   const flags = [idea.late ? "late" : null, idea.notStarted ? "not started" : null].filter(Boolean).join(", ");
   const depth = (() => {
     let level = 0;

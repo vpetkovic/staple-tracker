@@ -730,6 +730,11 @@ export class PlanStore {
   }
 
 
+  /** Whether the plan still lists this horizon: a removed one (a cancelled milestone) holds nothing, as the plan reads it. */
+  private listedHorizon(id: string | null): boolean {
+    return id !== null && this.db.prepare(`SELECT 1 AS hit FROM issues WHERE id = ? AND ${LISTED_HORIZON}`).get(id) !== undefined;
+  }
+
   private horizonRow(ref: string, forWrite = true): PlanRow {
     const row = this.row(ref, forWrite);
     if (row.kind !== MILESTONE_KIND || row.plan_rank === null) {
@@ -1727,7 +1732,7 @@ export class PlanStore {
       // Shaped only when the plan, as this write leaves it, passes the gate: marked shaped, or restored into shaped.
       if (action === "shape" || (action === "restore" && maturity === "shaped")) assertShaped(displayRef(row), this.gateOf(row.id, sections));
       // Restored into raw, it is raw: what it holds follows the table, as a capture into raw does (never scheduled, no dates).
-      if (action === "restore" && maturity === "raw") assertRestorableToRaw(row);
+      if (action === "restore" && maturity === "raw") assertRestorableToRaw(row, this.listedHorizon(row.plan_horizon_id));
       // The rest of one write is held to the state its maturity change leads to: shaping a raw idea
       // and scheduling it is one decision. A started or shipped record keeps its state.
       if (before !== "started" && before !== "shipped") state = maturity;
@@ -2491,7 +2496,6 @@ export function mergeSections(base: PlanSections, patch: PlanPatch): PlanSection
   return out;
 }
 
-/** The shaped gate as a refusal: what the plan still needs, named. */
 /**
  * The horizon a reference names: its id, its identifier or its name, in any case. A name that
  * names none, or that several horizons carry (two devices can each create one), is refused
@@ -2510,15 +2514,27 @@ export function horizonNamed(view: Pick<PlanView, "horizons">, ref: string): Hor
   throw new StapleError("not_found", `No horizon is named "${ref}". The horizons are: ${known || "none"}.`);
 }
 
-/** The records a horizon carries (`carriedBy`): scheduled on it, or following a parent scheduled on it. As its column and counts read them. */
+/**
+ * The records on a horizon: those it carries (`carriedBy`), scheduled on it or following a parent
+ * scheduled on it, as its column and counts read them; and the dropped ones scheduled on it, which
+ * keep their horizon though nothing carries them.
+ */
 export function ideasOnHorizon(view: PlanView, ref: string): IdeaView[] {
   const horizon = horizonNamed(view, ref);
-  return view.ideas.filter((idea) => idea.carriedBy === horizon.id);
+  return view.ideas.filter((idea) => idea.carriedBy === horizon.id || (idea.state === "dropped" && idea.horizonId === horizon.id));
 }
 
-/** The first line with text in it, trimmed; null for none. */
+/** Where a record sits, in words: its horizon, `<horizon> (via parent)` when it follows one, else `unscheduled`. */
+export function horizonWords(idea: Pick<IdeaView, "horizonId" | "carriedBy">, view: Pick<PlanView, "horizons">): string {
+  const on = view.horizons.find((horizon) => horizon.id === idea.horizonId);
+  if (on) return on.name;
+  const via = view.horizons.find((horizon) => horizon.id === idea.carriedBy);
+  return via ? `${via.name} (via parent)` : "unscheduled";
+}
+
+/** The first line with text in it, trimmed and without the Markdown marker that opens it (a heading, quote or list item); null for none. */
 function firstLine(text: string | null): string | null {
-  return text?.split("\n").map((line) => line.trim()).find((line) => line !== "") ?? null;
+  return text?.split("\n").map((line) => line.trim().replace(/^(#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)/, "").trim()).find((line) => line !== "") ?? null;
 }
 
 /**
@@ -2526,8 +2542,8 @@ function firstLine(text: string | null): string | null {
  * and no plan dates), and a record restored into raw could not shed them: so it is restored to
  * exploring or shaped instead, which hold both.
  */
-function assertRestorableToRaw(row: Pick<PlanRow, "identifier" | "title" | "plan_horizon_id" | "plan_start" | "plan_target">): void {
-  const held = [row.plan_horizon_id !== null ? "a horizon" : null, row.plan_start !== null || row.plan_target !== null ? "planned dates" : null].filter((part): part is string => part !== null);
+function assertRestorableToRaw(row: Pick<PlanRow, "identifier" | "title" | "plan_start" | "plan_target">, onHorizon: boolean): void {
+  const held = [onHorizon ? "a horizon" : null, row.plan_start !== null || row.plan_target !== null ? "planned dates" : null].filter((part): part is string => part !== null);
   if (held.length === 0) return;
   const subject = displayRef(row);
   throw new StapleError(
@@ -2537,6 +2553,7 @@ function assertRestorableToRaw(row: Pick<PlanRow, "identifier" | "title" | "plan
   );
 }
 
+/** The shaped gate as a refusal: what the plan still needs, named. */
 function assertShaped(subject: string, missing: readonly string[]): void {
   if (missing.length === 0) return;
   throw new StapleError("validation", `${subject.charAt(0).toUpperCase()}${subject.slice(1)} cannot be marked shaped yet: ${gateSentence(missing)}.`, { missing });

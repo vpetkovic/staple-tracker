@@ -125,6 +125,12 @@ describe("a parent's own state is its own; its sub-ideas' work is a rollup", () 
     const loose = idea("Loose then dropped", "raw");
     plan.update(loose, { maturity: "dropped" }, "vp", PERSON);
     expect(plan.update(loose, { maturity: "raw" }, "vp", PERSON).state).toBe("raw");
+    // A horizon the plan no longer lists (removed on another device before this one synced) holds nothing back.
+    const orphan = idea("Dropped on a horizon removed elsewhere");
+    plan.update(orphan, { horizon: horizon("Next") }, "vp", PERSON);
+    plan.update(orphan, { maturity: "dropped" }, "vp", PERSON);
+    store.db.prepare("UPDATE issues SET plan_rank = NULL WHERE id = ?").run(horizon("Next"));
+    expect(plan.update(orphan, { maturity: "raw" }, "vp", PERSON).state).toBe("raw");
     // Into shaped only through the shaped gate, as marking it shaped is.
     const empty = plan.capture({ title: "Never planned" }, "vp", PERSON).id;
     plan.update(empty, { maturity: "dropped" }, "vp", PERSON);
