@@ -131,7 +131,7 @@ export function cardMenuItems(idea: IdeaData, column: BoardColumn, columns: Boar
  * drop, restore, reset the baseline). All of it from the idea's offered actions; a move a state
  * does not offer is not listed, and an idea whose state offers nothing has no menu.
  */
-export function MoveMenu({ idea, column, columns, write }: { idea: IdeaData; column: BoardColumn; columns: BoardColumn[]; write: Write }) {
+export function MoveMenu({ idea, column, columns, write, tabIndex }: { idea: IdeaData; column: BoardColumn; columns: BoardColumn[]; write: Write; tabIndex?: number }) {
   const { moves, others } = cardMenuItems(idea, column, columns);
   const move = (target: DropTarget) => void write("update", { ref: idea.id, ...dropBody(target) });
   if (moves.length === 0 && others.length === 0) return null;
@@ -143,6 +143,7 @@ export function MoveMenu({ idea, column, columns, write }: { idea: IdeaData; col
           size="icon"
           className="-mr-1.5 -mt-1 size-8 shrink-0 text-text-tertiary"
           aria-label={`Move ${idea.title}`}
+          tabIndex={tabIndex}
           data-plan-card-menu={idea.id}
           onClick={(event) => event.stopPropagation()}
         >
