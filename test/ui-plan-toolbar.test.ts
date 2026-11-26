@@ -167,3 +167,26 @@ it("keeps the toolbar to one row on every lens from 620px of the Plan container 
     await context.close();
   }
 }, 60_000);
+
+it("never hides a filter that is on behind the folded search button", async () => {
+  const { page, close } = await onHorizons(1280);
+  try {
+    const width = (w: number) =>
+      page.evaluate((px) => {
+        const view = document.querySelector<HTMLElement>("[data-plan-view]")!;
+        view.style.flex = "none";
+        view.style.width = `${px}px`;
+      }, w);
+    // Typed where the field is drawn open, then the Plan container narrows past 1100px, where
+    // search folds to a button: a filter that is on stays open.
+    await width(1200);
+    const field = page.getByRole("textbox", { name: "Filter the plan" });
+    await field.fill("checkout");
+    await width(900);
+    await expect.poll(() => field.isVisible()).toBe(true);
+    expect(await field.inputValue()).toBe("checkout");
+    expect(await page.locator("[data-plan-search-toggle]").getAttribute("aria-label")).toBe("Close the filter");
+  } finally {
+    await close();
+  }
+}, 20_000);

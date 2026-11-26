@@ -240,6 +240,18 @@ describe("Where it stands, started and shipped", () => {
     expect(done).not.toContain("data-plan-missing");
   });
 
+  it("says it can be marked shaped only when shaping is offered and nothing holds it back", () => {
+    const note = "It started while still exploring";
+    // Nothing missing, but the action is held back: no note.
+    const held = started({ actions: [...EDITS, act("shape", { disabledReason: "Answer the open questions first." })] });
+    expect(text(standing(tab(record(held, { missingForShaped: [] }))))).not.toContain(note);
+    // Nothing missing, and shaping is not offered at all: no note.
+    const unoffered = started({ actions: [...EDITS, act("adopt")] });
+    expect(text(standing(tab(record(unoffered, { missingForShaped: [] }))))).not.toContain(note);
+    // Offered and free: the note.
+    expect(text(standing(tab(record(started(), { missingForShaped: [] }))))).toContain(note);
+  });
+
   it("puts the delivered mark, its note and the person's clear in the panel", () => {
     const shipped = idea({
       state: "shipped",
