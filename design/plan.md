@@ -817,6 +817,15 @@ header has an empty slot beside the page name (`data-phone-header-slot` in
 `DetailTabStrip` into it, so the toolbar is one row of at most 44px with the pills, the filter and
 **+ Idea**. In the desk shell the tabs stay in the toolbar at every width.
 
+**Landing on a horizon.** A row's horizon chip calls `session.openHorizon`, whose address is
+`?view=plan&plan-lens=horizons&focus=<horizon identifier>`; on Plan `session.milestoneFocus` names
+that horizon and `HorizonsBoard` takes it as `landing` (matched against the horizon's identifier or
+id). The lens scrolls that section to the top after the page has restored its remembered scroll
+position, unfolds it for the visit without writing `PlanMemory.folded`, and marks it with a ring
+that fades after 1.6s (no ring with reduced motion): the Milestones outline's landing, so a link to
+a milestone and a link to a horizon behave alike. A fold the person makes ends the visit's unfold.
+Pinned in `test/ui-plan-folds.test.ts`.
+
 **The toolbar** (`PlanBar`) holds the lens tabs with their counts (Ideas: the records the lens
 holds; Horizons: `horizons.length`; Timeline: none), the **Show only** pills, the lens's tools
 (on Horizons, **Collapse all** / **Expand all** and **+ Horizon**; under 900px of the Plan

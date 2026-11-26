@@ -199,6 +199,9 @@ This browser remembers your folds for each workspace. Until you fold one, a ship
 starts folded and the rest start open. While **Show only** or the filter is on, nothing folds and
 the button is held; your folds come back when you clear them.
 
+A task's horizon chip in **Tasks** opens this lens on that horizon: the page scrolls to its
+section, opens it for that visit and outlines it for a moment. Your remembered folds do not change.
+
 ### How a horizon reads
 
 A horizon reads the same in three places: its section in the **Horizons** lens, its drawer, and
