@@ -74,6 +74,9 @@ const HELP = `staple attempt — report on the attempt you hold
   attempt resume <ref> [--reason R]      paused -> running
   attempt milestone <ref> -m <label>     a one-line checkpoint on a running attempt; point it at the
                 [--comment-id ID] [--doc key@rev]   comment or worklog revision it summarizes
+  attempt heartbeat <ref>                the session is still alive: keeps your claim from reading as
+                                         silent without writing anything. Machine-local: no event, no
+                                         transition, nothing synced; another device sees your writes only
   attempt interrupt <ref> --reason R     end the attempt as interrupted; R: provider_limit, harness_exit,
                                          operator_stop, unknown. The claim stays: resume with checkout.
   attempt open <ref> --role orchestrator open an orchestrator attempt on the issue you coordinate (usually
@@ -81,7 +84,7 @@ const HELP = `staple attempt — report on the attempt you hold
                                          the parent or epic). No claim, no status change; never agent work.
   attempt end <ref> --role orchestrator  end it (yielded, coordination_ended). Opening another one, or the
                                          issue resolving, also ends it at read time.
-  --role worker|orchestrator             on pause/resume/milestone/interrupt: which lane, required when you
+  --role worker|orchestrator             on pause/resume/milestone/heartbeat/interrupt: which lane, required when you
   --attempt ID                           hold an attempt in each; or name the attempt by id
   attempt reconstruct                    rebuild attempts for work done before they were recorded,
                                          from the event log (idempotent)
@@ -126,7 +129,7 @@ export function runAttemptCommand(rest: string[]): void {
   });
   const [sub, ref] = positionals;
   if (values.help === true || sub === undefined || sub === "help") return console.log(HELP);
-  const verbs = ["pause", "resume", "milestone", "interrupt", "reconstruct", "open", "end"];
+  const verbs = ["pause", "resume", "milestone", "heartbeat", "interrupt", "reconstruct", "open", "end"];
   // Any other single word is an attempt id: the read surface.
   if (!verbs.includes(sub) && ref === undefined) return showAttempt(values, sub);
   const store = resolveWorkspace({ db: values.db, ws: values.ws }).store;
@@ -140,8 +143,8 @@ export function runAttemptCommand(rest: string[]): void {
         (report.alreadyPresent > 0 ? ` (${report.alreadyPresent} already present)` : ""),
     );
   }
-  if (!["pause", "resume", "milestone", "interrupt", "open", "end"].includes(sub)) {
-    throw new StapleError("validation", `Unknown attempt command "${sub}". Use pause, resume, milestone, interrupt, open, end or reconstruct, or name one attempt by its id.`);
+  if (!["pause", "resume", "milestone", "heartbeat", "interrupt", "open", "end"].includes(sub)) {
+    throw new StapleError("validation", `Unknown attempt command "${sub}". Use pause, resume, milestone, heartbeat, interrupt, open, end or reconstruct, or name one attempt by its id.`);
   }
   if (ref === undefined) throw new StapleError("validation", `staple attempt ${sub} needs the issue: staple attempt ${sub} <ref>.`);
   const actor = values.agent ?? process.env.STAPLE_AGENT ?? process.env.USER ?? "user";
@@ -163,5 +166,5 @@ export function runAttemptCommand(rest: string[]): void {
   });
   if (values.json) return console.log(JSON.stringify(attempt));
   const identifier = attempt.identifier ?? ref;
-  console.log(`${identifier} attempt ${attempt.ordinal}: ${attempt.state}${attempt.outcome ? ` (${attempt.outcome}, ${attempt.endReason})` : ""}`);
+  console.log(`${identifier} attempt ${attempt.ordinal}: ${attempt.state}${attempt.outcome ? ` (${attempt.outcome}, ${attempt.endReason})` : ""}${sub === "heartbeat" ? " · heartbeat recorded" : ""}`);
 }
