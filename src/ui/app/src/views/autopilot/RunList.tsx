@@ -53,7 +53,7 @@ function RunItem({
           {showWorkspace ? <WorkspacePill workspace={entry.workspace} /> : null}
         </span>
         <span className="col-[2/-1] mt-[3px] flex min-w-0 items-center gap-2">
-          <RunStatePill text={pill.text} tone={pill.tone} />
+          <RunStatePill text={pill.text} tone={pill.tone} className="shrink" />
           <span className="ml-auto inline-flex shrink-0 gap-2 text-label whitespace-nowrap tabular-nums">
             {tally(run).map((part) => (
               <span key={part.text} className={TALLY_CLASS[part.tone]}>

@@ -21,10 +21,10 @@ export function RunDot({ tone, pulse = false, className }: { tone: RunTone; puls
   );
 }
 
-/** The workspace's slug, as the task list prints it. */
+/** The workspace's slug, as the task list prints it; here it has room for a whole slug before it truncates. */
 export function WorkspacePill({ workspace }: { workspace: string }) {
   return (
-    <span className="staple-row-workspace" title={workspace}>
+    <span className="staple-row-workspace" style={{ maxWidth: "24ch" }} title={workspace}>
       {workspace}
     </span>
   );
