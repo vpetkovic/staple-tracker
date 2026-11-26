@@ -470,6 +470,19 @@ wire, so concurrent marks of one criterion are a field conflict, preserved until
 someone decides, and marks of two criteria never collide ([sync.md](sync.md)). The runs
 that usually make them stay machine-local; a mark's `runId` is a label.
 
+A mark is stored by position but reads by its words (`placeCriterionMarks`), because a
+criteria edit moves only the marks the editing device holds: a mark judged at the same
+time on another device arrives by its old position. It reads on its own position while
+that still holds its words, else on the first position that holds them and no other
+mark, else on its own position as a reword. A mark left with no criterion (its criterion
+was removed meanwhile) counts for nothing and is reported in `goal.cleared` (criterion,
+verdict, who and when), present only while one exists. The next criteria edit clears it
+and names it in its `marks.cleared`; a mark written meanwhile first stores every mark
+where it reads, journaled with it, so the write cannot land on a mark that moved. The
+rule is a function of the stored rows alone, so every device and a fresh one read the
+same goal once they hold the same rows. (Pinned by `milestone-goal-sync.test.ts` — *"a
+mark judged while another device edits the criteria"*.)
+
 **Pace** is `goal.pace`: done work, the remaining estimate and the days to the
 target date, from the same certified plans `staple compare` reads. One plan per
 member that is not nested under another member; `laborSeconds` adds their
@@ -652,13 +665,18 @@ id), `description` and `acceptanceCriteria`, the view carries `goal` (see
 resolver fills them: `planPosition` is the milestone's
 own row in the pickup plan, `null` when it is not queued, and `next` is the
 first `eligible` effective row that reports this milestone in its
-`milestonePath` — the real next work under this plan, in the position an agent
-sees it at, and `null` when nothing under the milestone is takeable. A milestone
-that is not queued still has next work: its members are in the unqueued band and
-are still work, just later. `ls` returns the same object without `members`
+`milestonePath`, taken in the order a pickup scoped to the milestone uses
+(`queue next --scope`, `run continue`): rows the plan reaches in effective
+order first, then the milestone's unqueued work in its own order, members by
+rank. It is the real next work under this plan, carried with the position an
+agent sees it at, and `null` when nothing under the milestone is takeable. A
+milestone that is not queued still has next work: its members are in the
+unqueued band and are still work, just later, and a `milestone mv` reorders
+them for `next` as it does for a scoped pickup. `ls` returns the same object without `members`
 and `goal`, plus `memberCount`, sorted by plan position first. (Pinned by
 `store-milestones.test.ts` — *"fills planPosition and next from the resolver"*,
-*"sorts the list by plan position first, then by date"*;
+*"sorts the list by plan position first, then by date"*, *"an unqueued
+milestone's next follows its member order, as a pickup scoped to it does"*;
 `contract-milestones.test.ts` — *"a queued milestone reports its plan position
 and its next eligible row everywhere"*.) The service behind every surface
 is `src/core/milestone-store.ts` (`store.milestones()`), and every membership

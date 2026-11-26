@@ -147,6 +147,44 @@ export function isGoalMet(counts: GoalCounts): boolean {
   return counts.met === counts.total;
 }
 
+// ---------- where a stored mark reads ----------
+
+/**
+ * Which criterion each stored mark is on, read from the criteria as they stand. A mark is stored
+ * by position, and a device that edits the criteria moves the marks it holds; a mark judged
+ * concurrently on another device still lands by its old position, where its words may no longer
+ * be. So a mark reads by its words, the same rule an edit moves marks by
+ * (`followCriterionMarks`): on its own position while that still holds its words, else on the
+ * first position that holds them and no other mark, else on its own position as a reword
+ * (reading unknown there). A mark left with no position (its criterion was removed, or its
+ * position now holds a mark that moved there) is `cleared`. A function of the stored state alone,
+ * so every device, a fresh one included, reads the same marks once they hold the same rows.
+ */
+export function placeCriterionMarks<T extends Pick<CriterionMark, "position" | "criterion">>(
+  criteria: readonly string[],
+  marks: Iterable<T>,
+): { placed: Map<number, T>; cleared: T[] } {
+  const ordered = [...marks].sort((a, b) => a.position - b.position);
+  const placed = new Map<number, T>();
+  const rest: T[] = [];
+  for (const mark of ordered) {
+    if (criteria[mark.position - 1] === mark.criterion) placed.set(mark.position, mark);
+    else rest.push(mark);
+  }
+  const reworded: T[] = [];
+  for (const mark of rest) {
+    const index = criteria.findIndex((text, i) => text === mark.criterion && !placed.has(i + 1));
+    if (index >= 0) placed.set(index + 1, mark);
+    else reworded.push(mark);
+  }
+  const cleared: T[] = [];
+  for (const mark of reworded) {
+    if (mark.position <= criteria.length && !placed.has(mark.position)) placed.set(mark.position, mark);
+    else cleared.push(mark);
+  }
+  return { placed, cleared };
+}
+
 // ---------- marks across a criteria edit ----------
 
 /** What a criteria edit did to the marks on them. Every list is in the marks' old position order. */

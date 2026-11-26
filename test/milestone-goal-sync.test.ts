@@ -179,4 +179,108 @@ describe("criterion marks replicate", () => {
     const run = b.store.runs().start({ actor: "bot-b", scope: milestone });
     expect(b.store.runs().continue({ actor: "bot-b", run: run.id })).toMatchObject({ action: "take", goal: { gate: { byGoalRun: true, ownedByRun: false } } });
   });
+
+});
+
+/**
+ * A mark is stored by its criterion's position. A criteria edit moves the marks the editing device
+ * holds; a mark judged concurrently on another device still arrives by its old position. The mark
+ * reads by its words (`placeCriterionMarks`), so it lands on its criterion, or is reported
+ * cleared when its criterion is gone, on every device and a fresh one.
+ */
+describe("a mark judged while another device edits the criteria", () => {
+  async function threeCriteria(): Promise<{ a: Machine; b: Machine; milestone: string }> {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const a = fleet.machine("a");
+    a.use();
+    a.store.addKind({ id: "milestone", label: "Milestone" });
+    const created = a.store.milestones().create({ title: "October", acceptanceCriteria: ["A", "B", "C"] }, "alice");
+    if (created.preview) throw new Error("unreachable");
+    await a.sync();
+    const b = fleet.machine("b");
+    await b.sync();
+    return { a, b, milestone: created.milestone.id };
+  }
+
+  async function everyDevice(a: Machine, b: Machine, read: (machine: Machine) => void): Promise<void> {
+    const fresh = fleet!.machine("fresh");
+    await fresh.sync();
+    for (const device of [a, b, fresh]) {
+      device.use();
+      read(device);
+    }
+    expect([...differences("tail", stateOf(a.db), stateOf(b.db)), ...differences("fresh", stateOf(a.db), stateOf(fresh.db))]).toEqual([]);
+  }
+
+  it("lands on its criterion when an earlier criterion was removed", async () => {
+    const { a, b, milestone } = await threeCriteria();
+    await tick();
+    b.use();
+    b.store.milestones().markCriterion(milestone, 3, { verdict: "met", evidence: ["C shipped"] }, "bob");
+    await tick();
+    a.use();
+    a.store.updateIssue(milestone, { removeCriteria: [1] }, "alice");
+    await settle(a, b);
+    await everyDevice(a, b, (device) => {
+      const goal = device.store.milestones().get(milestone).goal;
+      expect(goal.criteria.map((criterion) => [criterion.text, criterion.verdict, criterion.markedBy])).toEqual([
+        ["B", "unknown", null],
+        ["C", "met", "bob"],
+      ]);
+      expect(goal).not.toHaveProperty("cleared");
+    });
+  });
+
+  it("is reported cleared when its own criterion was removed, until the next criteria edit", async () => {
+    const { a, b, milestone } = await threeCriteria();
+    await tick();
+    b.use();
+    b.store.milestones().markCriterion(milestone, 3, { verdict: "met", evidence: ["C shipped"] }, "bob");
+    await tick();
+    a.use();
+    a.store.updateIssue(milestone, { removeCriteria: [3] }, "alice");
+    await settle(a, b);
+    await everyDevice(a, b, (device) => {
+      const goal = device.store.milestones().get(milestone).goal;
+      expect(goal.criteria.map((criterion) => criterion.verdict)).toEqual(["unknown", "unknown"]);
+      expect(goal.cleared).toEqual([{ criterion: "C", verdict: "met", markedBy: "bob", markedAt: expect.any(String) }]);
+    });
+    // Rewriting the list with a new criterion at the orphan's old position does not inherit it as
+    // a reword: the edit clears it and says so.
+    a.use();
+    const change = a.store.updateIssueResult(milestone, { acceptanceCriteria: ["A", "B", "D"] }, "alice").criteriaChange;
+    expect(change?.marks.cleared).toEqual([{ criterion: "C", verdict: "met", position: 3 }]);
+    await settle(a, b);
+    await everyDevice(a, b, (device) => {
+      const goal = device.store.milestones().get(milestone).goal;
+      expect(goal.criteria.map((criterion) => [criterion.text, criterion.verdict, criterion.why])).toEqual([
+        ["A", "unknown", "not marked yet"],
+        ["B", "unknown", "not marked yet"],
+        ["D", "unknown", "not marked yet"],
+      ]);
+      expect(goal).not.toHaveProperty("cleared");
+    });
+  });
+
+  it("is not overwritten by a later mark on the position it arrived at", async () => {
+    const { a, b, milestone } = await threeCriteria();
+    await tick();
+    b.use();
+    b.store.milestones().markCriterion(milestone, 3, { verdict: "met", evidence: ["C shipped"] }, "bob");
+    await tick();
+    a.use();
+    // One edit: A removed and D appended, so position 3 now holds D while bob's mark on C arrives there.
+    a.store.updateIssue(milestone, { removeCriteria: [1], addCriteria: ["D"] }, "alice");
+    await settle(a, b);
+    a.use();
+    a.store.milestones().markCriterion(milestone, 3, { verdict: "unmet", evidence: ["D not started"] }, "alice");
+    await settle(a, b);
+    await everyDevice(a, b, (device) => {
+      expect(device.store.milestones().get(milestone).goal.criteria.map((criterion) => [criterion.text, criterion.verdict])).toEqual([
+        ["B", "unknown"],
+        ["C", "met"],
+        ["D", "unmet"],
+      ]);
+    });
+  });
 });

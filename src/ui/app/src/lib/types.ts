@@ -1612,6 +1612,19 @@ export interface MilestoneGoal {
   /** Every criterion met; true when the milestone has none. */
   met: boolean;
   pace: GoalPace;
+  /**
+   * Present only while a mark reads on no criterion: it was judged on one device while another
+   * removed its criterion. It counts for nothing; the next criteria edit clears it. Mirrors core.
+   */
+  cleared?: ClearedCriterionMark[];
+}
+
+/** A mark whose criterion is gone. Mirrors core `ClearedCriterionMark`. */
+export interface ClearedCriterionMark {
+  criterion: string;
+  verdict: CriterionVerdict;
+  markedBy: string;
+  markedAt: string;
 }
 
 // ---------- the pickup queue (R2c / STA-168) ----------
