@@ -34,7 +34,7 @@ const SECONDS: Record<string, number> = {
   "test/plan-lifecycle-surfaces.test.ts": 93,
   "test/run-drive.test.ts": 89,
   "test/characterize-cli-surface.test.ts": 70,
-  "test/command-help.test.ts": 66,
+  "test/command-help.test.ts": 110,
   "test/run-surfaces.test.ts": 59,
   "test/path-migration-crash.test.ts": 59,
   "test/path-migration.test.ts": 56,

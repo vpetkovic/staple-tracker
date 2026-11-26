@@ -26,6 +26,14 @@ function workspace(slug: string): (...args: string[]) => { status: number; stdou
   return (...args: string[]) => runCli(args[0] === "config" ? args : [...args, "--db", db], env);
 }
 
+/**
+ * Each scenario drives about twenty `staple` processes one after another, and every one
+ * pays a Node and tsx start. That is 6-7 s on an idle CI runner and well past the suite's
+ * 20 s default on a shard whose other worker is spawning too (it timed out there four runs
+ * in a row). The budget scales with the work; a hang still fails.
+ */
+const SCENARIO_TIMEOUT = 60_000;
+
 const json = (result: { status: number; stdout: string; stderr: string }): any => {
   expect(result.status, result.stderr).toBe(0);
   return JSON.parse(result.stdout);
@@ -53,7 +61,7 @@ describe("scenario 1: cancelling a horizon's only work", () => {
     expect(now.status).not.toBe("cancelled");
     const milestone = json(st("milestone", "show", "WSA-1", "--json"));
     expect(JSON.stringify(milestone)).toContain(epic);
-  });
+  }, SCENARIO_TIMEOUT);
 });
 
 describe("scenario 2: removing a horizon that holds work and is queued", () => {
@@ -87,5 +95,5 @@ describe("scenario 2: removing a horizon that holds work and is queued", () => {
     expect(json(st("plan", "show", "--json")).horizons.map((h: { identifier: string }) => h.identifier)).toContain("WSB-1");
     expect(json(st("idea", "show", id, "--json")).idea.horizonId).not.toBeNull();
     expect(JSON.stringify(json(st("milestone", "show", "WSB-1", "--json")))).toContain(task);
-  });
+  }, SCENARIO_TIMEOUT);
 });

@@ -11,6 +11,12 @@ import { FakeSyncServer } from "./fixtures/fake-sync-server.js";
 const REPO = "f01d0000-0000-4000-8000-00000000fa11";
 const ENDPOINT = "https://sync.test.example";
 
+/**
+ * One CPU-bound fold over the whole parity fixture: about 13 s on an idle CI runner, so the
+ * suite's 20 s default left no room on a shard whose other worker is busy. A hang still fails.
+ */
+const FOLD_TIMEOUT = 60_000;
+
 it("answers the fold's limits exactly as the Worker does", async () => {
   const server = new FakeSyncServer({ repositoryId: REPO, ...FOLD_PARITY_LIMITS });
   server.enroll("device-a", "stpl_parity");
@@ -63,4 +69,4 @@ it("answers the fold's limits exactly as the Worker does", async () => {
     },
   });
   expect(observed).toEqual(FOLD_PARITY_OBSERVED);
-});
+}, FOLD_TIMEOUT);
