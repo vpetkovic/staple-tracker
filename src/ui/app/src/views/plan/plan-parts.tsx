@@ -4,27 +4,198 @@
  * only: every count, unit, percent, state and flag is the server's.
  */
 import type { ReactNode } from "react";
-import type { IdeaData, PlanUnits } from "@/lib/plan-types";
+import type { HorizonData, IdeaData, IdeaState, PlanUnits } from "@/lib/plan-types";
 import { cn } from "@/lib/utils";
-import { ShippedMark } from "@/detail/ShippedMark";
-import { isShipped, isStarted } from "./plan-model";
-import { percentText } from "./plan-tree";
+import { STATE_WORDS } from "@/detail/plan-record";
+import { ShippedCheck, ShippedMark } from "@/detail/ShippedMark";
+import { dayIndex, dayLabel, horizonDone, isShipped, isStarted } from "./plan-model";
+import { percentText, treeHeader } from "./plan-tree";
+
+/**
+ * An idea's state as a 14px picture: raw a dotted ring, exploring a dashed amber ring with a dot,
+ * shaped a plain ring, started a ring with a wedge filled to the server's percent, shipped the
+ * check. Hidden from assistive technology: it sits beside the state word (`word`), or in a row
+ * whose name says the state.
+ */
+export function StateGlyph({ state, percent = null, word = false, className }: { state: IdeaState; percent?: number | null; word?: boolean; className?: string }) {
+  const glyph = (
+    <span aria-hidden="true" data-plan-glyph={state} className={cn("inline-flex size-3.5 shrink-0", className)}>
+      {state === "shipped" ? <ShippedCheck label="" className="size-3.5 [&_svg]:size-2.5" /> : <GlyphSvg state={state} percent={percent} />}
+    </span>
+  );
+  if (!word) return glyph;
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      {glyph}
+      <span>{STATE_WORDS[state] ?? state}</span>
+    </span>
+  );
+}
+
+function GlyphSvg({ state, percent }: { state: Exclude<IdeaState, "shipped">; percent: number | null }) {
+  const ring = { cx: 7, cy: 7, r: 6, fill: "none", stroke: "currentColor", strokeWidth: 1.6 };
+  switch (state) {
+    case "started": {
+      // Never read as empty or done: at least a sliver, never the whole disc.
+      const share = Math.max(0.04, Math.min(0.999, (percent ?? 0) / 100));
+      const angle = share * 2 * Math.PI;
+      const x = (7 + 3.6 * Math.sin(angle)).toFixed(2);
+      const y = (7 - 3.6 * Math.cos(angle)).toFixed(2);
+      return (
+        <svg viewBox="0 0 14 14" className="size-full text-[color:var(--status-task-icon-in_progress)]">
+          <circle {...ring} />
+          <path d={`M7 7 L7 3.4 A3.6 3.6 0 ${share > 0.5 ? 1 : 0} 1 ${x} ${y} Z`} fill="currentColor" />
+        </svg>
+      );
+    }
+    case "shaped":
+      return (
+        <svg viewBox="0 0 14 14" className="size-full text-text-secondary">
+          <circle {...ring} />
+        </svg>
+      );
+    case "exploring":
+      return (
+        <svg viewBox="0 0 14 14" className="size-full text-[color:var(--status-task-icon-todo)]">
+          <circle {...ring} strokeDasharray="3.2 2.2" />
+          <circle cx={7} cy={7} r={1.8} fill="currentColor" />
+        </svg>
+      );
+    case "dropped":
+      return (
+        <svg viewBox="0 0 14 14" className="size-full text-text-tertiary">
+          <circle {...ring} strokeDasharray="1.2 2.6" strokeLinecap="round" />
+          <path d="M3.5 10.5 10.5 3.5" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" />
+        </svg>
+      );
+    default:
+      return (
+        <svg viewBox="0 0 14 14" className="size-full text-text-tertiary">
+          <circle {...ring} strokeDasharray="1.2 2.6" strokeLinecap="round" />
+        </svg>
+      );
+  }
+}
+
+export type FlagTone = "late" | "notStarted" | "you";
+
+const FLAGS: Record<FlagTone, { words: string; className: string }> = {
+  late: { words: "late", className: "bg-destructive/12 text-flag-late" },
+  notStarted: { words: "not started", className: "bg-[color:var(--status-task-todo)]/16 text-flag-todo" },
+  you: { words: "needs you", className: "bg-[color:var(--status-task-in_progress)]/12 text-flag-you" },
+};
+
+/**
+ * A filled tag for what needs attention, and only that: late, not started, needs you and waiting
+ * for your approval. It always says it in words; the tint repeats it.
+ */
+export function Flag({ tone, children, className, ...data }: { tone: FlagTone; children?: ReactNode; className?: string } & Record<`data-${string}`, string | number | undefined>) {
+  const flag = FLAGS[tone];
+  return (
+    <span {...data} data-plan-flag={tone} className={cn("inline-flex h-4 shrink-0 items-center whitespace-nowrap rounded px-1.5 text-caption leading-4 font-medium", flag.className, className)}>
+      {children ?? flag.words}
+    </span>
+  );
+}
+
+/** Open questions, or anything else that waits on an answer: amber words, not a tag. */
+export function Amber({ children, ...data }: { children: ReactNode } & Record<`data-${string}`, string | number | undefined>) {
+  return (
+    <span {...data} className="text-flag-todo">
+      {children}
+    </span>
+  );
+}
+
+/** `Feb 27, 2027 · in 93 days`: the horizon's date, and its distance from the plan's day when the surface has one. */
+export function HorizonWhen({ date, today }: { date: string; today?: string }) {
+  const days = today ? dayIndex(date) - dayIndex(today) : null;
+  const plural = (n: number) => `${n} day${n === 1 ? "" : "s"}`;
+  return (
+    <span className="text-label text-text-secondary" data-plan-horizon-when={date}>
+      <span className="font-medium text-foreground">{dayLabel(date)}</span>
+      {days === null ? null : ` · ${days === 0 ? "today" : days > 0 ? `in ${plural(days)}` : `${plural(-days)} ago`}`}
+    </span>
+  );
+}
+
+/**
+ * A horizon's header content, the same in the Horizons lens, the horizon drawer and the
+ * Milestones view. Its name and date (`heading` replaces them with a surface's own, such as the
+ * lens's inline editors; null leaves them to a surface that titles the horizon itself), then the
+ * bar, the server's percent and the flags, then its counts and units. `risk` false leaves late,
+ * not started, approval and shipped to a surface that prints them elsewhere.
+ */
+export function HorizonSummary({ horizon, today, heading, risk = true, className }: { horizon: HorizonData; today?: string; heading?: ReactNode; risk?: boolean; className?: string }) {
+  const words = treeHeader(horizon);
+  const done = horizonDone(horizon);
+  const { units } = horizon;
+  const flags = [
+    risk && horizon.awaitingApproval ? (
+      <Flag key="approval" tone="you" data-plan-horizon-awaiting={horizon.identifier}>
+        Waiting for your approval
+      </Flag>
+    ) : null,
+    words.needsYou ? (
+      <Flag key="you" tone="you" data-plan-tree-needs-you={horizon.needsYou}>
+        {words.needsYou}
+      </Flag>
+    ) : null,
+    risk && !done && horizon.lateCount > 0 ? <Flag key="late" tone="late">{horizon.lateCount} late</Flag> : null,
+    risk && !done && horizon.notStartedCount > 0 ? <Flag key="ns" tone="notStarted">{horizon.notStartedCount} not started</Flag> : null,
+    risk ? done ? <ShippedMark key="shipped" className="text-caption" /> : horizon.shippedCount > 0 ? <ShippedMark key="shipped" count={horizon.shippedCount} className="text-caption" /> : null : null,
+  ].filter((flag) => flag !== null);
+  return (
+    <div className={cn("@container min-w-0", className)} data-plan-tree-header={horizon.identifier}>
+      {heading === null ? null : (
+        <div className="flex min-w-0 flex-wrap items-baseline gap-x-2.5 gap-y-0.5">
+          {heading ?? (
+            <>
+              <span className="text-title font-semibold text-foreground">{horizon.name}</span>
+              {horizon.date ? <HorizonWhen date={horizon.date} today={today} /> : null}
+            </>
+          )}
+        </div>
+      )}
+      {horizon.percent !== null || flags.length > 0 ? (
+        <div className={cn("flex flex-wrap items-center gap-x-3 gap-y-1.5", heading !== null && "mt-1.5")}>
+          {horizon.percent !== null ? <SegmentedBar units={units} percent={horizon.percent} complete={horizon.complete} size="lg" className="mt-0 min-w-[120px] flex-[0_1_340px] @max-[760px]:flex-[1_1_100%]" /> : null}
+          {flags.length > 0 ? (
+            <div className="flex flex-wrap items-center gap-1.5" data-plan-horizon-risk={risk ? horizon.identifier : undefined}>
+              {flags}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+      <div className="mt-1.5 text-label text-text-tertiary">
+        <span data-plan-tree-records>{words.records}</span>
+        {words.states ? (
+          <>
+            {" · "}
+            <span data-plan-tree-states>{words.states}</span>
+          </>
+        ) : null}
+        {units.total > 0 ? ` · ${units.done} done, ${units.open} open, ${units.planned} planned` : null}
+      </div>
+    </div>
+  );
+}
 
 /**
  * Done, open and planned, each segment growing by the server's count, never a width of the page's;
  * then the server's percent as the CLI prints it (a whole 100 that is not complete says so).
  */
-export function SegmentedBar({ units, percent, complete }: { units: Pick<PlanUnits, "done" | "open" | "planned">; percent: number | null; complete: boolean }) {
+export function SegmentedBar({ units, percent, complete, size = "sm", className }: { units: Pick<PlanUnits, "done" | "open" | "planned">; percent: number | null; complete: boolean; size?: "sm" | "lg"; className?: string }) {
   const text = percentText(percent, complete);
   const incomplete = text !== null && text.endsWith("incomplete");
   return (
-    <div className="mt-1.5 flex items-center gap-2" aria-label={percent === null ? undefined : `${percent}% done${incomplete ? ", incomplete" : ""}`} data-plan-tree-bar={`${units.done}/${units.open}/${units.planned}`}>
-      <div className="flex h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-muted" title={`${units.done} done · ${units.open} open · ${units.planned} planned`}>
+    <div className={cn("mt-1.5 flex items-center gap-2", className)} aria-label={percent === null ? undefined : `${percent}% done${incomplete ? ", incomplete" : ""}`} data-plan-tree-bar={`${units.done}/${units.open}/${units.planned}`}>
+      <div className={cn("flex min-w-0 flex-1 overflow-hidden rounded-full bg-muted", size === "lg" ? "h-2" : "h-1.5")} title={`${units.done} done · ${units.open} open · ${units.planned} planned`}>
         {units.done > 0 ? <span className="h-full bg-primary" style={{ flexGrow: units.done }} data-segment="done" /> : null}
         {units.open > 0 ? <span className="h-full bg-[color:var(--status-task-in_progress)]" style={{ flexGrow: units.open }} data-segment="open" /> : null}
         {units.planned > 0 ? <span className="h-full bg-border-strong" style={{ flexGrow: units.planned }} data-segment="planned" /> : null}
       </div>
-      {text !== null ? <span className="shrink-0 text-caption tabular-nums text-text-tertiary">{text}</span> : null}
+      {text !== null ? <span className={cn("shrink-0 tabular-nums", size === "lg" ? "text-label font-semibold text-foreground" : "text-caption text-text-tertiary")}>{text}</span> : null}
     </div>
   );
 }
