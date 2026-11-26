@@ -36,7 +36,8 @@ export function HorizonHeader({
   onOpen: (id: string) => void;
   done: boolean;
   folded: boolean;
-  onFold: () => void;
+  /** Null while a focus or filter is on: the section shows every match and cannot fold. */
+  onFold: (() => void) | null;
   drop: DropMark;
 }) {
   const [running, setRunning] = useState(false);
@@ -68,16 +69,20 @@ export function HorizonHeader({
           // The chevron and the actions share the name's line, so the bar and its flags below
           // take the header's whole width, as the summary lays them out on every surface.
           <>
-            <button
-              type="button"
-              aria-expanded={!folded}
-              aria-label={`${folded ? "Show" : "Hide"} ${horizon.name}`}
-              data-plan-horizon-fold={horizon.identifier}
-              onClick={onFold}
-              className="focus-ring -ml-1 inline-flex size-5 min-h-0 shrink-0 self-center items-center justify-center rounded text-text-tertiary hover:bg-surface-hover"
-            >
-              {folded ? <ChevronRight className="size-3.5" aria-hidden /> : <ChevronDown className="size-3.5" aria-hidden />}
-            </button>
+            {onFold === null ? (
+              <span aria-hidden className="-ml-1 size-5 shrink-0" />
+            ) : (
+              <button
+                type="button"
+                aria-expanded={!folded}
+                aria-label={`${folded ? "Show" : "Hide"} ${horizon.name}`}
+                data-plan-horizon-fold={horizon.identifier}
+                onClick={onFold}
+                className="focus-ring -ml-1 inline-flex size-5 min-h-0 shrink-0 self-center items-center justify-center rounded text-text-tertiary hover:bg-surface-hover"
+              >
+                {folded ? <ChevronRight className="size-3.5" aria-hidden /> : <ChevronDown className="size-3.5" aria-hidden />}
+              </button>
+            )}
             {renaming ? (
               <RenameField horizon={horizon} write={write} onClose={() => setRenaming(false)} />
             ) : (

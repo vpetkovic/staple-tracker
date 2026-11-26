@@ -102,7 +102,7 @@ export function PlanTree({
     const key = line.dataset.planOutlineKey;
     // Keys belong to the line itself; its ⋯ menu keeps its own.
     if (key === undefined) return;
-    const move = outlineKey(entries, key, event.key);
+    const move = outlineKey(entries, key, event.key, !unfold);
     if (move === null) return;
     event.preventDefault();
     if ("focus" in move) {
@@ -135,6 +135,7 @@ export function PlanTree({
               entry={entry}
               opener={opener}
               tabIndex={tabIndex}
+              folds={!unfold}
               selected={selected === row.idea.id}
               drag={drag && delivery && !compact && fine ? onDrag ?? (() => {}) : null}
               menu={menu && delivery ? menu(row, tabIndex) : null}
@@ -153,6 +154,7 @@ function OutlineRow({
   entry,
   opener,
   tabIndex,
+  folds,
   selected,
   drag,
   menu,
@@ -163,6 +165,8 @@ function OutlineRow({
   entry: Extract<OutlineEntry, { kind: "row" }>;
   opener: TreeOpener;
   tabIndex: number;
+  /** False while a focus or filter is on: every group is open and nothing can fold, so no chevron is drawn. */
+  folds: boolean;
   selected: boolean;
   drag: ((idea: IdeaData | null) => void) | null;
   menu: ReactNode;
@@ -193,7 +197,7 @@ function OutlineRow({
       data-plan-card-shipped={card && shipped ? "" : undefined}
       role="row"
       aria-level={depth + 1}
-      aria-expanded={open ?? undefined}
+      aria-expanded={folds ? (open ?? undefined) : undefined}
       aria-selected={selected}
       tabIndex={tabIndex}
       draggable={drag ? true : undefined}
@@ -228,7 +232,7 @@ function OutlineRow({
         {Array.from({ length: depth }, (_, index) => (
           <span key={index} aria-hidden className="relative -my-[7px] w-[18px] shrink-0 self-stretch before:absolute before:-top-px before:-bottom-px before:left-2 before:w-px before:bg-border @max-[760px]/tree:hidden" />
         ))}
-        {open === null ? (
+        {open === null || !folds ? (
           <span aria-hidden className="size-[18px] shrink-0" />
         ) : (
           <button

@@ -48,7 +48,11 @@ export function outlineEntries(rows: readonly TreeRow[], state: OutlineState): O
 /** What a key does on the focused line: move focus to another line, open or fold a group, open the idea. */
 export type OutlineMove = { focus: string } | { toggle: string } | { shipOpen: string } | { activate: string } | null;
 
-export function outlineKey(entries: readonly OutlineEntry[], current: string, key: string): OutlineMove {
+/**
+ * `folds` is false while a focus or filter is on: every group is shown open and nothing can fold,
+ * so Left and Right only move focus (to the parent, to the first sub-idea).
+ */
+export function outlineKey(entries: readonly OutlineEntry[], current: string, key: string, folds = true): OutlineMove {
   const index = entries.findIndex((entry) => entry.key === current);
   if (index === -1) return null;
   const entry = entries[index]!;
@@ -63,12 +67,12 @@ export function outlineKey(entries: readonly OutlineEntry[], current: string, ke
       return { focus: entries[entries.length - 1]!.key };
     case "ArrowRight":
       if (entry.kind === "shipped") return { shipOpen: entry.parent };
-      if (entry.open === false) return { toggle: entry.key };
+      if (entry.open === false && folds) return { toggle: entry.key };
       // An open group: to its first sub-idea, which is the next line.
       if (entry.open === true && entries[index + 1]) return { focus: entries[index + 1]!.key };
       return null;
     case "ArrowLeft":
-      if (entry.kind === "row" && entry.open === true) return { toggle: entry.key };
+      if (entry.kind === "row" && entry.open === true && folds) return { toggle: entry.key };
       return entry.parent === null ? null : { focus: entry.parent };
     case "Enter":
     case " ":

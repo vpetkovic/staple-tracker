@@ -179,9 +179,34 @@ describe("while a focus or filter is on", () => {
     const html = atWidth(390, () => board({ plan: plan(IDEAS, [done]), filtering: true }));
     expect(html).not.toContain("data-plan-shipped-fold");
     expect(drawn(html)).toEqual(["co", "r0", "r1", "r2", "r3"]);
-    expect(html).toMatch(/aria-expanded="true"[^>]*data-plan-done-toggle="LAR-now"/);
     // Without the filter the same done horizon starts folded.
     expect(drawn(atWidth(390, () => board({ plan: plan(IDEAS, [done]) })))).toEqual([]);
+  });
+
+  it("draws no fold control, so nothing folds out of sight until the filter is cleared", () => {
+    const done = horizon("later", { shipped: true, percent: 100, complete: true });
+    const html = board({ plan: plan(IDEAS, [horizon("now"), done]), filtering: true });
+    expect(html).not.toContain("data-plan-tree-disclosure");
+    expect(html).not.toContain("data-plan-horizon-fold");
+    expect(html).not.toContain("data-plan-done-toggle");
+    expect(text(html)).toContain("All 4 members landed");
+    expect(text(html)).not.toMatch(/landed · (show|hide)/);
+    // The parent keeps the chevron's room, so its title does not shift.
+    expect(html).toMatch(/data-plan-tree-row="co"[^]*?<span aria-hidden="true" class="size-\[18px\] shrink-0"><\/span>/);
+    // Without the filter each is a control again.
+    const plain = board({ plan: plan(IDEAS, [horizon("now"), done]) });
+    expect(plain).toContain('data-plan-tree-disclosure="co"');
+    expect(plain).toContain('data-plan-horizon-fold="LAR-now"');
+    expect(plain).toContain('data-plan-done-toggle="LAR-later"');
+  });
+
+  it("moves focus with Left and Right and never folds", () => {
+    const rows = planTree({ horizonId: "now", ideas: IDEAS, horizons: [] });
+    const all = outlineEntries(rows, { isOpen: () => false, shipOpen: new Set(), unfold: true });
+    expect(outlineKey(all, "co", "ArrowRight", false)).toEqual({ focus: "r0" });
+    expect(outlineKey(all, "co", "ArrowLeft", false)).toBeNull();
+    expect(outlineKey(all, "r3", "ArrowLeft", false)).toEqual({ focus: "co" });
+    expect(outlineKey(all, "r3", "ArrowRight", false)).toBeNull();
   });
 });
 

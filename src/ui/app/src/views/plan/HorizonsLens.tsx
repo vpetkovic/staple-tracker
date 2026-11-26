@@ -164,8 +164,11 @@ function HorizonSection({ lens, column }: { lens: LensContext; column: BoardColu
   const { mark, handlers, state } = useDropTarget(lens, column);
   return (
     <section aria-label={horizon.name} data-plan-column={column.key} data-plan-drop={state} {...handlers} className="border-b">
-      <HorizonHeader horizon={horizon} today={lens.plan.today} write={lens.write} onOpen={lens.onOpen} done={done} folded={folded} onFold={() => setChosen(!folded)} drop={mark} />
-      {done ? (
+      <HorizonHeader horizon={horizon} today={lens.plan.today} write={lens.write} onOpen={lens.onOpen} done={done} folded={folded} onFold={lens.filtering ? null : () => setChosen(!folded)} drop={mark} />
+      {done && lens.filtering ? (
+        // While filtering the section shows every match and cannot fold: the line only says it landed.
+        <p className="m-0 flex min-h-9 items-center border-b py-1.5 pr-4 pl-[42px] text-label text-text-secondary @max-[760px]/plan:px-3">{landed(horizon.memberCount)}</p>
+      ) : done ? (
         <button
           type="button"
           className="focus-ring-inset flex min-h-9 w-full items-center border-b py-1.5 pr-4 pl-[42px] text-left text-label text-text-secondary hover:bg-surface-hover @max-[760px]/plan:px-3"
@@ -173,7 +176,7 @@ function HorizonSection({ lens, column }: { lens: LensContext; column: BoardColu
           data-plan-done-toggle={horizon.identifier}
           onClick={() => setChosen(!folded)}
         >
-          {horizon.memberCount === 1 ? "The member landed" : `All ${horizon.memberCount} members landed`} · {folded ? "show" : "hide"}
+          {landed(horizon.memberCount)} · {folded ? "show" : "hide"}
         </button>
       ) : null}
       {folded ? null : rows.length > 0 ? (
@@ -186,6 +189,8 @@ function HorizonSection({ lens, column }: { lens: LensContext; column: BoardColu
     </section>
   );
 }
+
+const landed = (members: number) => (members === 1 ? "The member landed" : `All ${members} members landed`);
 
 /**
  * Pinned at the top of the lens while a row is dragged: one target per section, Ready first, so a
