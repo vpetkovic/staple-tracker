@@ -1221,7 +1221,14 @@ const linkedPullRequestShape = z.object({
 const subtreePullRequestShape = linkedPullRequestShape.extend({
   own: z.boolean().describe("Linked on the parent itself; false when only its descendants carry it"),
   tickets: z
-    .array(z.object({ id: z.string(), identifier: z.string(), title: z.string() }))
+    .array(
+      z.object({
+        id: z.string(),
+        identifier: z.string(),
+        title: z.string(),
+        childId: z.string().nullable().describe("The parent's direct child this ticket sits under: its own id for a direct child, null for the parent itself"),
+      }),
+    )
     .describe("Every ticket of the subtree it is linked on: the parent first when own, then in tree order"),
 });
 const subtreePullRequestsDescription =
@@ -1274,6 +1281,7 @@ const ticketCardShape = {
     .nullable()
     .describe("The web UI deep link, <base>?ws=<slug>&issue=<REF>. The base is STAPLE_UI_URL, else the configured UI port on 127.0.0.1; null when STAPLE_UI_URL=off"),
   actions: z.object({ approve: z.boolean(), requestChanges: z.boolean() }),
+  pullRequests: z.array(linkedPullRequestShape).describe("The ticket's own linked pull requests, newest link last; [] when none"),
   subtreePullRequests: z.array(subtreePullRequestShape).nullable().describe(`${subtreePullRequestsDescription}; null on a ticket with no children`),
 };
 type _TicketCardShapeMatchesInterface = Expect<Equals<Flat<z.infer<z.ZodObject<typeof ticketCardShape>>>, Published<TicketCard>>>;

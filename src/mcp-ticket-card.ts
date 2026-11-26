@@ -27,6 +27,7 @@ import { readConfig } from "./config/file.js";
 import { stapleHome } from "./config/home.js";
 import { MILESTONE_KIND } from "./core/milestones.js";
 import type { WorkspaceStore } from "./core/store.js";
+import type { LinkedPullRequest } from "./core/integrations/link-store.js";
 import { type SubtreePullRequest, subtreePullRequests } from "./core/subtree-pull-requests.js";
 import { branchPointer, ticketBranch } from "./core/ticket-branch.js";
 import type { GateDecision, IssueGate, QueuedBy } from "./core/types.js";
@@ -70,6 +71,8 @@ export interface TicketCard {
   url: string | null;
   /** What the card offers: the gate buttons show only while a gate is pending. */
   actions: { approve: boolean; requestChanges: boolean };
+  /** The ticket's own linked pull requests, newest link last; [] when none. */
+  pullRequests: LinkedPullRequest[];
   /** A parent's pull requests and every descendant's (core/subtree-pull-requests.ts); null on a ticket with no children. */
   subtreePullRequests: SubtreePullRequest[] | null;
 }
@@ -177,6 +180,7 @@ export function ticketCard(store: WorkspaceStore, ref: string, uiBase: string | 
     },
     url: uiBase === null ? null : ticketUrl(uiBase, store.slug, issue.identifier),
     actions: { approve: gate?.state === "pending", requestChanges: gate?.state === "pending" },
+    pullRequests: store.externalLinks().pullRequests([issue.id]).get(issue.id) ?? [],
     subtreePullRequests: subtreePullRequests(store, issue.id),
   };
 }
@@ -226,9 +230,12 @@ export function ticketCardText(card: TicketCard): string {
     lines.push(`${attempt.current ? "Attempt" : "Last attempt"} #${attempt.ordinal} by ${attempt.agent}: ${attempt.state}${attempt.outcome ? ` (${attempt.outcome})` : ""}.`);
   }
   if (card.branch) lines.push(`Branch ${card.branch.name}${card.branch.base ? ` (base ${card.branch.base})` : ""}.`);
+  // A parent's line is its whole subtree's, its own included, each naming its tickets; a leaf's its own.
   if (card.subtreePullRequests?.length) {
     const each = card.subtreePullRequests.map((pr) => `${pr.key} ${pr.state ?? "state unknown"} (${pr.tickets.map((t) => t.identifier).join(", ")})`);
     lines.push(`Pull requests: ${each.join("; ")}.`);
+  } else if (card.subtreePullRequests === null && card.pullRequests.length) {
+    lines.push(`Pull requests: ${card.pullRequests.map((pr) => `${pr.key} ${pr.state ?? "state unknown"}`).join("; ")}.`);
   }
   const { estimatedSeconds, elapsedSeconds } = card.timing;
   if (estimatedSeconds !== null || elapsedSeconds) {

@@ -237,6 +237,8 @@ export interface RowPullRequest {
   updatedAt: string | null;
   /** On a parent's row, the tickets of its subtree the pull request is linked on; absent on a leaf's. */
   tickets?: string[];
+  /** The checks on the head commit at the last read; absent when none were read (merged, closed, no checks). */
+  checks?: "passing" | "failing" | "pending";
 }
 
 /**
@@ -259,6 +261,7 @@ export function rowPullRequests(linked: readonly (LinkedPullRequest | SubtreePul
         state: stateOf(pr),
         title: pr.title,
         updatedAt: pr.fetchedAt,
+        ...(pr.checks ? { checks: pr.checks.state } : {}),
         ...("tickets" in pr ? { tickets: pr.tickets.map((ticket) => ticket.identifier) } : {}),
       })),
   };

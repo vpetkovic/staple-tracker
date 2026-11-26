@@ -60,7 +60,12 @@ describe("a parent's subtree pull requests", () => {
     ]);
     // Each entry keeps the link's own facts, and names the ticket by id and title too.
     const nested = subtreePullRequests(store, epic.id)!.find((p) => p.key === "team/repo#20")!;
-    expect(nested).toMatchObject({ number: 20, state: "merged", url: "https://github.com/team/repo/pull/20", tickets: [{ id: a1.id, identifier: a1.identifier, title: "A1" }] });
+    expect(nested).toMatchObject({ number: 20, state: "merged", url: "https://github.com/team/repo/pull/20", tickets: [{ id: a1.id, identifier: a1.identifier, title: "A1", childId: a.id }] });
+    // Each ticket names the parent's direct child it sits under: its own id for a child, null for the parent.
+    const under = (key: string) => subtreePullRequests(store, epic.id)!.find((p) => p.key === key)!.tickets.map((t) => t.childId);
+    expect([under("team/repo#10"), under("team/repo#11"), under("team/repo#30")]).toEqual([[null], [a.id], [b.id]]);
+    // Asked from the middle parent, the same grandchild sits under that parent's own child.
+    expect(subtreePullRequests(store, a.id)!.find((p) => p.key === "team/repo#20")!.tickets[0]!.childId).toBe(a1.id);
     // A middle parent has its own subtree set; a leaf has none.
     expect(keysOf(subtreePullRequests(store, a.id))).toEqual([["team/repo#11", true, [a.identifier]], ["team/repo#20", false, [a1.identifier]]]);
     expect(subtreePullRequests(store, b.id)).toBeNull();

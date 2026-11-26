@@ -22,6 +22,11 @@ export interface PullRequestTicket {
   id: string;
   identifier: string;
   title: string;
+  /**
+   * The parent's direct child this ticket sits under: its own id when it is a direct child,
+   * null for the parent itself. A child's row groups its whole branch's pull requests by it.
+   */
+  childId: string | null;
 }
 
 export interface SubtreePullRequest extends LinkedPullRequest {
@@ -33,6 +38,7 @@ export interface SubtreePullRequest extends LinkedPullRequest {
 
 interface SubtreeRow {
   root: string;
+  top: string | null;
   id: string;
   identifier: string;
   title: string;
@@ -56,16 +62,16 @@ export function subtreePullRequestsFor(
   // Pre-order by the path of creation times from the root; the depth cap stops a corrupt cycle.
   const rows = store.db
     .prepare(
-      `WITH RECURSIVE sub(root, id, identifier, title, path, depth) AS (
-         SELECT i.id, i.id, i.identifier, i.title, '', 0 FROM issues i
+      `WITH RECURSIVE sub(root, top, id, identifier, title, path, depth) AS (
+         SELECT i.id, NULL, i.id, i.identifier, i.title, '', 0 FROM issues i
           WHERE i.id IN (SELECT value FROM json_each(?))
             AND EXISTS (SELECT 1 FROM issues c WHERE c.parent_id = i.id AND (? = 0 OR c.kind <> '${IDEA_KIND}'))
          UNION ALL
-         SELECT sub.root, c.id, c.identifier, c.title, sub.path || '/' || c.created_at || c.id, sub.depth + 1
+         SELECT sub.root, COALESCE(sub.top, c.id), c.id, c.identifier, c.title, sub.path || '/' || c.created_at || c.id, sub.depth + 1
            FROM sub JOIN issues c ON c.parent_id = sub.id
           WHERE sub.depth < ${MAX_TREE_DEPTH} AND (? = 0 OR c.kind <> '${IDEA_KIND}')
        )
-       SELECT root, id, identifier, title FROM sub ORDER BY root, path`,
+       SELECT root, top, id, identifier, title FROM sub ORDER BY root, path`,
     )
     .all(JSON.stringify([...new Set(rootIds)]), hideIdeas, hideIdeas) as unknown as SubtreeRow[];
   if (rows.length === 0) return result;
@@ -82,7 +88,7 @@ export function subtreePullRequestsFor(
       root = row.root;
       byResource = new Map();
     }
-    const ticket = { id: row.id, identifier: row.identifier, title: row.title };
+    const ticket = { id: row.id, identifier: row.identifier, title: row.title, childId: row.top };
     for (const pr of byTicket.get(row.id) ?? []) {
       const entry = byResource.get(pr.resourceId);
       if (entry) {

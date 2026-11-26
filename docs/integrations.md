@@ -107,7 +107,9 @@ A parent, an epic included, also shows every pull request linked on its descenda
 feature is reviewed from its parent without opening each child. Its own come first, then its
 descendants' in tree order. A pull request linked on two tickets of the subtree is listed once
 and names both. Done and cancelled children count, because a merged pull request on a finished
-child is part of the feature's history.
+child is part of the feature's history. While the parent is open, the background refresh
+reads a finished child's open or draft pull request again too, so a pull request merged after
+its child was closed does not stay open on the parent.
 
 - The parent's row badge counts the whole set, and its tooltip names the tickets of each one.
 - The detail's **Pull requests** row keeps the parent's own chips and follows them with each
@@ -115,8 +117,10 @@ child is part of the feature's history.
   the set is under **More details**.
 - `staple show <parent>` prints the set under `pull requests (this ticket and its descendants):`.
   `staple show --json`, MCP `get_task` and `/api/agent-context` carry it as
-  `subtreePullRequests`: each pull request with `own` and `tickets`. `show_ticket` has the
-  same field, and on a ticket with no children it is null.
+  `subtreePullRequests`: each pull request with `own` and `tickets`, and each ticket with
+  `childId`, the parent's direct child it sits under (null for the parent itself). `show_ticket`
+  has the same field, null on a ticket with no children, and every card also carries the
+  ticket's own `pullRequests`.
 - A ticket with no children is unchanged and has no `subtreePullRequests`. A parent with no
   pull requests in its subtree shows nothing in that slot.
 
