@@ -4632,6 +4632,10 @@ const attentionRowShape = {
   ref: z.string().nullable().describe("The ticket the row is about; null for a run over the whole queue"),
   runId: z.string().nullable(),
   conflictId: z.string().nullable(),
+  conflict: z
+    .object({ entity: z.string(), field: z.string(), localValue: z.unknown(), remoteValue: z.unknown() })
+    .nullable()
+    .describe("A sync conflict's field and both devices' values; null on every other row"),
   title: z.string(),
   detail: z.string().describe("Why it waits, in one line"),
   since: z.string().describe("When it started waiting"),

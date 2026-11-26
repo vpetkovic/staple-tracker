@@ -33,6 +33,7 @@ function row(over: Partial<AttentionRow> & Pick<AttentionRow, "kind">): Attentio
     label,
     runId: null,
     conflictId: null,
+    conflict: null,
     title: "Title",
     detail: "detail",
     since: "2026-11-25T00:00:00.000Z",

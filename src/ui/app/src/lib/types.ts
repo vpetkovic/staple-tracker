@@ -3464,6 +3464,8 @@ export interface AttentionRow {
   ref: string | null;
   runId: string | null;
   conflictId: string | null;
+  /** A cloud-conflict row's field and both devices' values; null on every other row. */
+  conflict: { entity: string; field: string; localValue: unknown; remoteValue: unknown } | null;
   title: string;
   detail: string;
   since: string;

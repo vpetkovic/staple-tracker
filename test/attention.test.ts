@@ -126,6 +126,9 @@ describe("workspaceAttention", () => {
     expect(byKind.gate_pending!.action.label).toBe("Approve or request changes");
     expect(byKind.run_stopped!.runId).toBe(seeded.run);
     expect(byKind.cloud_conflict!.conflictId).toBe("conflict-1");
+    // Both values as values, so a surface can show them side by side instead of a truncated line.
+    expect(byKind.cloud_conflict!.conflict).toEqual({ entity: "issue", field: "title", localValue: "b", remoteValue: "c" });
+    for (const row of rows.filter((candidate) => candidate.kind !== "cloud_conflict")) expect(row.conflict).toBeNull();
     expect(byKind.gate_pending!.ageSeconds).toBeGreaterThanOrEqual(3 * 3600 - 5);
   });
 

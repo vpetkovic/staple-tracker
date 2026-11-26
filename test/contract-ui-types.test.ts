@@ -42,6 +42,7 @@ import type { ClaimActivity, ClaimLease, ClaimScope, TimingQuality } from "../sr
 import type { TimingQualityReport } from "../src/core/telemetry/cohort.js";
 import type { CalibrationReport } from "../src/core/telemetry/calibration.js";
 import type { ForecastReport } from "../src/core/telemetry/forecast-report.js";
+import type { RunReferences } from "../src/core/run-references.js";
 import { RUN_STOP_REASONS, RUN_WAIT_REASONS, type RunStatus } from "../src/core/run-store.js";
 import {
   RUN_STOP_REASONS as UI_RUN_STOP_REASONS,
@@ -232,7 +233,9 @@ type _ForecastReportMatches = Expect<Equals<Omit<ForecastReport, "method">, Omit
  * those codes are a public contract that is never renamed; a mirror that drifted would put
  * a reason on screen the server can never send, or miss one it does.
  */
-type _RunEntryMatches = Expect<Equals<RunStatus, Omit<UiRunEntry, "workspace">>>;
+type _RunEntryMatches = Expect<Equals<RunStatus, Omit<UiRunEntry, "workspace" | "title" | "issues">>>;
+/** The run's name and the issues it names (core/run-references.ts), which the page draws as ticket chips. */
+type _RunReferencesMatch = Expect<Equals<RunReferences, Pick<UiRunEntry, "title" | "issues">>>;
 
 /**
  * A milestone's goal check: what the milestone's detail renders criterion by criterion (the
@@ -273,6 +276,7 @@ describe("the browser app's mirror of the wire vocabulary", () => {
       true satisfies _CalibrationReportMatches,
       true satisfies _ForecastReportMatches,
       true satisfies _RunEntryMatches,
+      true satisfies _RunReferencesMatch,
       true satisfies _MilestoneGoalMatches,
     ];
     // GOLDEN, moved by S13 (STA-258): 4 -> 6. The two additions are the connect
@@ -296,7 +300,8 @@ describe("the browser app's mirror of the wire vocabulary", () => {
     // the forecast report the Analytics pages render; see the comment above them.
     // GOLDEN, moved by autopilot runs: 15 -> 16. The run entry; see the comment above it.
     // GOLDEN, moved by milestone goal mode: 16 -> 17. The milestone's goal check; see the comment above it.
-    expect(proofs).toHaveLength(17);
+    // GOLDEN, moved by run names and references: 17 -> 18. A run's title and the issues it names; see the comment above it.
+    expect(proofs).toHaveLength(18);
   });
 
   it("words the same stop and wait reasons as core, in the same order", () => {

@@ -88,6 +88,8 @@ export interface AttentionRow {
   runId: string | null;
   /** Set on a cloud-conflict row. */
   conflictId: string | null;
+  /** A cloud-conflict row's two values, as values (the detail line truncates them); null on every other row. */
+  conflict: AttentionConflict | null;
   title: string;
   /** One line saying why it waits: "awaiting VP", "held by eng-1 · silent 2h". */
   detail: string;
@@ -97,6 +99,14 @@ export interface AttentionRow {
   action: AttentionAction;
   /** A person may take it off the list without acting on it. */
   dismissible: boolean;
+}
+
+/** What two devices disagree about: one field of one record, and each side's value. */
+export interface AttentionConflict {
+  entity: string;
+  field: string;
+  localValue: unknown;
+  remoteValue: unknown;
 }
 
 /** What a kind's collector gets: one workspace, read at one instant. */
@@ -112,10 +122,11 @@ export interface AttentionContext {
   isPerson(name: string): boolean;
 }
 
-type RowDraft = Omit<AttentionRow, "key" | "workspace" | "kind" | "label" | "ageSeconds" | "dismissible" | "runId" | "conflictId"> & {
+type RowDraft = Omit<AttentionRow, "key" | "workspace" | "kind" | "label" | "ageSeconds" | "dismissible" | "runId" | "conflictId" | "conflict"> & {
   id: string;
   runId?: string;
   conflictId?: string;
+  conflict?: AttentionConflict;
 };
 
 export interface AttentionKindSpec {
@@ -390,6 +401,7 @@ export const ATTENTION_KINDS = [
         return {
           id: conflict.id,
           conflictId: conflict.id,
+          conflict: { entity: conflict.entity, field: conflict.field, localValue: conflict.localValue, remoteValue: conflict.remoteValue },
           ref: issue?.identifier ?? null,
           title: issue ? issue.title : `${conflict.entity} ${conflict.entityId}`,
           detail: `${conflict.field}: ${shortValue(conflict.localValue)} here, ${shortValue(conflict.remoteValue)} on another device`,
@@ -484,7 +496,7 @@ export function workspaceAttention(
   };
   const rows: AttentionRow[] = [];
   for (const spec of ATTENTION_KINDS as readonly AttentionKindSpec[]) {
-    for (const { id, runId, conflictId, ...draft } of spec.collect(context)) {
+    for (const { id, runId, conflictId, conflict, ...draft } of spec.collect(context)) {
       rows.push({
         key: `${workspace}/${spec.kind}/${id}`,
         workspace,
@@ -492,6 +504,7 @@ export function workspaceAttention(
         label: spec.label,
         runId: runId ?? null,
         conflictId: conflictId ?? null,
+        conflict: conflict ?? null,
         ...draft,
         ageSeconds: secondsBetween(draft.since, now),
         dismissible: spec.dismissible,

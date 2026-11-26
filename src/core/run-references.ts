@@ -26,6 +26,7 @@
  */
 import type { RunStatus } from "./run-store.js";
 import type { WorkspaceStore } from "./store.js";
+import type { StatusCategory } from "./types.js";
 
 export interface RunIssue {
   issueId: string;
@@ -33,7 +34,7 @@ export interface RunIssue {
   title: string;
   status: string;
   /** The status's category (`active`, `review`, `done`, …); null for a status the vocabulary no longer has. */
-  category: string | null;
+  category: StatusCategory | null;
   kind: string;
 }
 
