@@ -21,6 +21,7 @@ const PACKAGE_ENTRY = join(REPO_ROOT, "src", "package", "staple.ts");
 /** Examples that need more than a scratch workspace, and why. */
 const NOT_RUN: Record<string, string> = {
   "branch <ref> --discover": "asks the local gh for the branch's pull requests at GitHub",
+  "attempt heartbeat <ref>": "needs the session's open attempt, which only its checkout opens; test/claim-heartbeat.test.ts runs it",
 };
 
 /** The CLI examples in the skill, in document order, without the leading `staple `. */

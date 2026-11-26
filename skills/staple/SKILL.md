@@ -33,8 +33,8 @@ commands, set `STAPLE_AGENT` or pass `--agent <name>`, which every write accepts
 when commenting and checkpointing; those writes establish the holder's liveness. A long
 interactive session or stretch that writes nothing may run `record_attempt_event` with
 `event: "heartbeat"` (CLI `staple attempt heartbeat <ref>`) on your open attempt every few
-minutes to keep the claim from reading as silent; a session launched by `staple run drive`
-is beaten by its driver automatically. It stays on this machine, so another device still
+minutes to keep the claim from reading as silent; a session that `run drive` launches gets
+these heartbeats from its driver automatically. It stays on this machine, so another device still
 sees only your synced writes.
 
 ## Choose the narrow operation
