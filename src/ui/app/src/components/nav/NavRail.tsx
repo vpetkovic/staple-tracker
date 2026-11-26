@@ -65,6 +65,7 @@ import { usePendingJoinRequests } from "@/lib/pending-requests";
 import { isAllWorkspaces, scopeName, useSession, type ViewName } from "@/lib/session";
 import { useInboxBadge, type InboxBadge } from "@/lib/attention";
 import { useRuns } from "@/lib/runs";
+import { useTheme } from "@/lib/theme";
 import { bannerLine, liveStateText } from "@/lib/run-text";
 import { runHref } from "@/lib/session-url";
 import type { RunEntry } from "@/lib/types";
@@ -83,8 +84,6 @@ import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 import { integrationRead } from "@/lib/api";
 import { CONNECTIONS_CHANGED, type ConnectionView } from "@/integrations/connection-status";
 import { needsAttention } from "@/settings/integrations/integrations-model";
-
-const THEME_KEY = "staple:theme";
 
 /**
  * One rail row. The active row is marked with `aria-current` and the styling reads that
@@ -564,24 +563,15 @@ function TopRows({ onSelect, onNavigate }: { onSelect: (view: ViewName) => void;
 
 /** The theme, as a switch: a row on the phone, an icon beside Settings on a desk. */
 function ThemeToggle({ asRow }: { asRow: boolean }) {
-  const [dark, setDark] = useState(
-    () => typeof document !== "undefined" && document.documentElement.classList.contains("dark"),
-  );
-  useEffect(() => {
-    document.documentElement.classList.toggle("dark", dark);
-    try {
-      localStorage.setItem(THEME_KEY, dark ? "dark" : "light");
-    } catch {
-      /* private mode: the choice lasts for this page load */
-    }
-  }, [dark]);
+  // One state for every theme control; only a click records a pick (lib/theme.ts).
+  const [dark, choose] = useTheme();
   const props = {
     type: "button" as const,
     role: "switch",
     "aria-checked": dark,
     "aria-label": "Dark mode",
     "data-nav-theme": "",
-    onClick: () => setDark((d) => !d),
+    onClick: () => choose(!dark),
   };
   if (asRow) {
     return (

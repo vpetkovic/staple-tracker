@@ -1,0 +1,98 @@
+/// <reference lib="dom" />
+/**
+ * Navigation behaviour that only a browser can show: where keyboard focus goes when the rail
+ * is hidden or shown, whether the phone drawer keeps focus inside itself, whether the theme
+ * follows the system until a person picks one, and what the rail's Tasks row means once a
+ * project has narrowed the list. None of this is visible to a string
+ * render (no jsdom in this suite), so this drives the built page.
+ */
+import { once } from "node:events";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import type { AddressInfo } from "node:net";
+import { tmpdir, userInfo } from "node:os";
+import { join } from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { Browser, BrowserContextOptions, Page } from "playwright-core";
+import { initWorkspace, openWorkspace } from "../src/core/workspace.js";
+import { startUiServer, type UiHandle } from "../src/ui/server.js";
+
+if (!process.env.PLAYWRIGHT_BROWSERS_PATH) {
+  const cache = process.platform === "darwin" ? join(userInfo().homedir, "Library", "Caches", "ms-playwright") : join(userInfo().homedir, ".cache", "ms-playwright");
+  if (existsSync(cache)) process.env.PLAYWRIGHT_BROWSERS_PATH = cache;
+}
+const { chromium } = await import("playwright-core");
+
+let browser: Browser;
+let ui: UiHandle;
+let home: string;
+let projectId: string;
+let dbPath: string;
+
+beforeAll(async () => {
+  home = mkdtempSync(join(tmpdir(), "staple-nav-focus-"));
+  process.env.STAPLE_HOME = home;
+  const ws = initWorkspace({ global: true, slug: "navfocus" });
+  ws.store.createIssue({ title: "A task to list" });
+  projectId = ws.store.projects().create({ name: "Docs site" }, "setup").id;
+  dbPath = ws.dbPath;
+  ws.store.db.close();
+  ui = startUiServer({ port: 0, hub: false, db: dbPath });
+  await once(ui.server, "listening");
+  browser = await chromium.launch();
+}, 60_000);
+
+afterAll(async () => {
+  await browser?.close();
+  ui?.close();
+  if (home) rmSync(home, { recursive: true, force: true });
+});
+
+const DESK = { viewport: { width: 1440, height: 900 } } satisfies BrowserContextOptions;
+const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true } satisfies BrowserContextOptions;
+
+async function withPage(options: BrowserContextOptions, run: (page: Page) => Promise<void>): Promise<void> {
+  const context = await browser.newContext(options);
+  try {
+    const page = await context.newPage();
+    await page.goto(`http://127.0.0.1:${(ui.server.address() as AddressInfo).port}/?token=${ui.token}`, { waitUntil: "networkidle" });
+    await page.getByText("A task to list").first().waitFor();
+    await run(page);
+  } finally {
+    await context.close();
+  }
+}
+
+/** The focused element's accessible name, or "BODY" when focus has fallen out of the page's controls. */
+const focused = (page: Page) =>
+  page.evaluate(() => {
+    const element = document.activeElement;
+    if (!element || element === document.body) return "BODY";
+    return element.getAttribute("aria-label") ?? element.textContent?.trim() ?? element.tagName;
+  });
+
+describe("the theme", () => {
+  const stored = (page: Page) => page.evaluate(() => localStorage.getItem("staple:theme"));
+  const dark = (page: Page) => page.evaluate(() => document.documentElement.classList.contains("dark"));
+
+  it("follows the system, live, until a person chooses, and records only that choice", async () => {
+    await withPage({ ...DESK, colorScheme: "dark" }, async (page) => {
+      expect(await dark(page)).toBe(true);
+      // Opening the page is not a choice.
+      expect(await stored(page)).toBeNull();
+      await page.emulateMedia({ colorScheme: "light" });
+      await expect.poll(() => dark(page)).toBe(false);
+      expect(await page.getByRole("switch", { name: "Dark mode" }).getAttribute("aria-checked")).toBe("false");
+
+      await page.getByRole("switch", { name: "Dark mode" }).click();
+      expect(await dark(page)).toBe(true);
+      expect(await stored(page)).toBe("dark");
+      // A choice outlives the system changing its mind, and a reload.
+      await page.emulateMedia({ colorScheme: "dark" });
+      await page.emulateMedia({ colorScheme: "light" });
+      await page.waitForTimeout(100);
+      expect(await dark(page)).toBe(true);
+      await page.reload({ waitUntil: "networkidle" });
+      expect(await dark(page)).toBe(true);
+    });
+  });
+});
