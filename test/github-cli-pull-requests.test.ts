@@ -10,9 +10,18 @@ const pull = (number: number, extra: Record<string, unknown> = {}) => ({
   number, title: `PR ${number}`, body: null, state: "open", draft: false, merged_at: null,
   html_url: `${repo.html_url}/pull/${number}`, head: { ref: "feat/x", sha: sha(number), repo: { id: 42 } }, ...extra,
 });
+const done = (name: string, conclusion: string | null, at = "2026-11-25T11:00:00Z") => ({ name, status: "completed", conclusion, completed_at: at });
+const commitStatus = (context: string, state: string, at = "2026-11-25T11:10:00Z") => ({ context, state, updated_at: at });
 function response(data: unknown) { return `HTTP/2.0 200 OK\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(data)}`; }
 
-function fixture(pulls: unknown[], runs: Record<string, unknown[]> = {}) {
+/** One page of a paged list as GitHub serves it: `per_page` (default 30) and `page` from the query. */
+function paged(all: unknown[], query: string | undefined) {
+  const params = new URLSearchParams(query);
+  const per = Number(params.get("per_page") ?? 30), page = Number(params.get("page") ?? 1);
+  return all.slice((page - 1) * per, page * per);
+}
+
+function fixture(pulls: unknown[], runs: Record<string, unknown[]> = {}, statuses: Record<string, unknown[]> = {}) {
   const run = vi.fn<GhRunner>(async (command) => {
     if (command.kind === "version") return "gh version 2.46.0 (2024-03-20)";
     if (command.kind !== "get") throw new Error(`Unexpected ${command.kind}`);
@@ -26,8 +35,20 @@ function fixture(pulls: unknown[], runs: Record<string, unknown[]> = {}) {
     const one = /^repos\/team\/project\/pulls\/(\d+)$/.exec(path!);
     if (one) return response(pulls.find((p) => (p as { number: number }).number === Number(one[1])));
     const checks = /^repos\/team\/project\/commits\/([0-9a-f]+)\/check-runs$/.exec(path!);
+    if (checks && runs.unreadableAfterFirst && new URLSearchParams(query).get("page") !== "1") throw new StapleError("unavailable", "GitHub CLI timed out; try again");
     if (checks && runs.forbidden) throw new StapleError("forbidden", "GitHub denied access; check repository permissions and organization SSO");
-    if (checks) return response({ total_count: (runs[checks[1]!] ?? []).length, check_runs: runs[checks[1]!] ?? [] });
+    if (checks) {
+      const all = runs[checks[1]!] ?? [];
+      return response({ total_count: all.length, check_runs: paged(all, query) });
+    }
+    const status = /^repos\/team\/project\/commits\/([0-9a-f]+)\/status$/.exec(path!);
+    if (status && statuses.forbidden) throw new StapleError("forbidden", "GitHub denied access; check repository permissions and organization SSO");
+    if (status && statuses.limited) throw new StapleError("rate_limited", "GitHub rate limit reached; try again later");
+    if (status) {
+      const all = (statuses[status[1]!] ?? []) as Array<{ state: string }>;
+      const state = all.some((s) => s.state === "failure" || s.state === "error") ? "failure" : all.length && all.every((s) => s.state === "success") ? "success" : "pending";
+      return response({ state, sha: status[1], total_count: all.length, statuses: paged(all, query) });
+    }
     if (path === "repos/team/project/issues/7") return response({ number: 7, title: "Draft", body: null, state: "open", draft: true, html_url: `${repo.html_url}/pull/7`, pull_request: { merged_at: null } });
     throw new Error(`Unexpected endpoint ${command.endpoint}`);
   });
@@ -59,7 +80,6 @@ describe("GitHub pull requests by branch", () => {
   });
 
   it("sums up the checks on the head: any failure fails, else anything running is pending", async () => {
-    const done = (name: string, conclusion: string, at = "2026-11-25T11:00:00Z") => ({ name, status: "completed", conclusion, completed_at: at });
     const { reader } = fixture([pull(3), pull(5, { head: { ref: "feat/x", sha: sha(5), repo: { id: 42 } } }), pull(6, { head: { ref: "feat/x", sha: sha(6), repo: { id: 42 } } })], {
       [sha(3)]: [done("build", "success"), done("test", "failure", "2026-11-25T11:30:00Z"), { name: "lint", status: "in_progress", conclusion: null, completed_at: null }],
       [sha(5)]: [done("build", "success"), { name: "test", status: "queued", conclusion: null, completed_at: null }],
@@ -71,6 +91,76 @@ describe("GitHub pull requests by branch", () => {
       { state: "pending", failing: [], completedAt: "2026-11-25T11:00:00Z" },
       { state: "passing", failing: [], completedAt: "2026-11-25T11:00:00Z" },
     ]);
+  });
+
+  it("reads every page of check runs, so a failure past the first hundred fails", async () => {
+    const runs = Array.from({ length: 150 }, (_, i) => done(`job ${i}`, "success"));
+    runs[140] = done("late", "failure", "2026-11-25T11:40:00Z");
+    const { reader, run } = fixture([pull(3)], { [sha(3)]: runs });
+    const [item] = await reader.pullRequestsForBranches("42", ["feat/x"]);
+    expect(item!.pullRequest?.checks).toEqual({ state: "failing", failing: ["late"], completedAt: "2026-11-25T11:40:00Z" });
+    // A page only when total_count says more runs remain, and one commit status read.
+    const reads = run.mock.calls.map(([c]) => (c.kind === "get" ? c.endpoint : "")).filter((e) => e.includes("/commits/"));
+    expect(reads).toEqual([
+      `repos/team/project/commits/${sha(3)}/check-runs?filter=latest&per_page=100&page=1`,
+      `repos/team/project/commits/${sha(3)}/status?per_page=100&page=1`,
+      `repos/team/project/commits/${sha(3)}/check-runs?filter=latest&per_page=100&page=2`,
+    ]);
+  });
+
+  it("is pending, never passing, when there are more check runs than it reads", async () => {
+    const { reader, run } = fixture([pull(3)], { [sha(3)]: Array.from({ length: 1100 }, (_, i) => done(`job ${i}`, "success")) });
+    const [item] = await reader.pullRequestsForBranches("42", ["feat/x"]);
+    expect(item!.pullRequest?.checks?.state).toBe("pending");
+    expect(run.mock.calls.filter(([c]) => c.kind === "get" && c.endpoint.includes("/check-runs"))).toHaveLength(10);
+  });
+
+  it("keeps what it read when a later page of check runs cannot be read: a failure fails, else pending", async () => {
+    const runs = Array.from({ length: 150 }, (_, i) => done(`job ${i}`, "success"));
+    const { reader } = fixture([pull(3)], { [sha(3)]: runs, unreadableAfterFirst: [] });
+    expect((await reader.pullRequestsForBranches("42", ["feat/x"]))[0]!.pullRequest?.checks?.state).toBe("pending");
+    runs[5] = done("early", "failure");
+    expect((await reader.pullRequestsForBranches("42", ["feat/x"]))[0]!.pullRequest?.checks).toMatchObject({ state: "failing", failing: ["early"] });
+  });
+
+  it("counts a stale run, or a finished run without a known conclusion, as pending", async () => {
+    const { reader } = fixture([pull(3), pull(5, { head: { ref: "feat/x", sha: sha(5), repo: { id: 42 } } })], {
+      [sha(3)]: [done("build", "success"), done("deploy", "stale")],
+      [sha(5)]: [done("build", "success"), done("odd", null), done("new", "something_new")],
+    });
+    const items = await reader.pullRequestsForBranches("42", ["feat/x"]);
+    expect(items.map((i) => i.pullRequest?.checks?.state)).toEqual(["pending", "pending"]);
+  });
+
+  it("reads commit statuses too: a failing status fails, a pending one pends, statuses alone pass", async () => {
+    const head = (n: number) => pull(n, { head: { ref: "feat/x", sha: sha(n), repo: { id: 42 } } });
+    const { reader } = fixture([head(3), head(5), head(6), head(1)], {
+      [sha(3)]: [done("build", "success")], [sha(5)]: [done("build", "success")],
+    }, {
+      [sha(3)]: [commitStatus("ci/jenkins", "failure", "2026-11-25T11:50:00Z"), commitStatus("ci/lint", "error", "2026-11-25T11:20:00Z"), commitStatus("ci/docs", "success")],
+      [sha(5)]: [commitStatus("ci/jenkins", "pending")],
+      [sha(6)]: [commitStatus("ci/jenkins", "success", "2026-11-25T11:45:00Z")],
+    });
+    const items = await reader.pullRequestsForBranches("42", ["feat/x"]);
+    expect(items.map((i) => [i.key, i.pullRequest?.checks])).toEqual([
+      ["team/project#3", { state: "failing", failing: ["ci/jenkins", "ci/lint"], completedAt: "2026-11-25T11:50:00Z" }],
+      ["team/project#5", { state: "pending", failing: [], completedAt: "2026-11-25T11:00:00Z" }],
+      ["team/project#6", { state: "passing", failing: [], completedAt: "2026-11-25T11:45:00Z" }],
+      // Neither check runs nor statuses: no checks, as before.
+      ["team/project#1", null],
+    ]);
+  });
+
+  it("keeps a failing check run failing when the commit statuses cannot be read, and never says passing", async () => {
+    const { reader } = fixture([pull(3)], { [sha(3)]: [done("test", "failure")] }, { forbidden: [] });
+    const [item] = await reader.pullRequestsForBranches("42", ["feat/x"]);
+    expect(item!.pullRequest?.checks).toEqual({ state: "failing", failing: ["test"], completedAt: "2026-11-25T11:00:00Z" });
+    const passing = fixture([pull(3)], { [sha(3)]: [done("test", "success")] }, { forbidden: [] });
+    const [unconfirmed] = await passing.reader.pullRequestsForBranches("42", ["feat/x"]);
+    // Half the answer is unknown, so the checks are unknown, as when check runs cannot be read.
+    expect(unconfirmed!.pullRequest?.checks).toBeNull();
+    // A rate limit still fails the read, as it does for check runs.
+    await expect(fixture([pull(3)], { [sha(3)]: [done("test", "success")] }, { limited: [] }).reader.pullRequestsForBranches("42", ["feat/x"])).rejects.toMatchObject({ code: "rate_limited" });
   });
 
   it("reads one linked pull request with its head and checks", async () => {

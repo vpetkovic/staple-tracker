@@ -2,7 +2,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { workspaceAttention } from "../src/core/attention.js";
 import type { ExternalItem, ExternalItemRef, IntegrationAdapter } from "../src/core/integrations/contracts.js";
+import type { GhRunner } from "../src/core/integrations/gh-process.js";
+import { GitHubCliAdapter } from "../src/core/integrations/github-cli.js";
 import { ProbeCache } from "../src/core/integrations/health.js";
 import { IntegrationOperations } from "../src/core/integrations/operations.js";
 import { rowPullRequests } from "../src/core/integrations/pr-discovery.js";
@@ -190,5 +193,41 @@ describe("the row's pull requests", () => {
     links.remember({ ...pr(90, "merged"), title: "Renamed", fetchedAt: new Date(Date.now() + 9000).toISOString() }, "staple");
     expect(record.mock.calls.filter(([op]) => op.entity === "externalResource")).toHaveLength(1);
     store.db.close();
+  });
+});
+
+describe("a pull request whose only failure is a commit status", () => {
+  it("is a row on the attention list, read through gh like any other failing check", async () => {
+    const home = mkdtempSync(join(tmpdir(), "staple-pr-discovery-"));
+    dirs.push(home);
+    process.env.STAPLE_HOME = home;
+    const ws = initWorkspace({ global: true, slug: "discovery-status" });
+    const repo = { id: 42, full_name: "team/repo", html_url: "https://github.com/team/repo" };
+    const head = "d".repeat(40);
+    const ok = (data: unknown) => `HTTP/2.0 200 OK\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(data)}`;
+    // Every check run passes; an external CI reports its failure only as a commit status.
+    const run = vi.fn<GhRunner>(async (command) => {
+      if (command.kind === "version") return "gh version 2.46.0 (2024-03-20)";
+      if (command.kind !== "get") throw new Error(`Unexpected ${command.kind}`);
+      const path = command.endpoint.split("?")[0];
+      if (path === "user") return ok({ login: "ada" });
+      if (path === "repositories/42") return ok(repo);
+      if (path === "repos/team/repo/pulls") return ok([{ number: 31, title: "PR 31", body: null, state: "open", draft: false, merged_at: null, html_url: "https://github.com/team/repo/pull/31", head: { ref: "feat/status", sha: head, repo: { id: 42 } } }]);
+      if (path === `repos/team/repo/commits/${head}/check-runs`) return ok({ total_count: 1, check_runs: [{ name: "build", status: "completed", conclusion: "success", completed_at: "2026-11-25T11:00:00Z" }] });
+      if (path === `repos/team/repo/commits/${head}/status`) return ok({ state: "failure", sha: head, total_count: 1, statuses: [{ context: "ci/jenkins", state: "failure", updated_at: "2026-11-25T11:30:00Z" }] });
+      throw new Error(`Unexpected endpoint ${command.endpoint}`);
+    });
+    const adapter = new GitHubCliAdapter({ id: "work", host: "github.com", account: "ada" }, { run });
+    const caches = { health: new ProbeCache<never>() as never, detection: new ProbeCache<Array<{ host: string; login: string }>>() };
+    const service = new IntegrationOperations(ws.store, { home, caches, factories: new Map([["github:cli", () => adapter]]) });
+    await service.execute({ action: "configure", connectionId: "work", host: "github.com", account: "ada" });
+    await service.execute({ action: "map", connectionId: "work", containerId: "42", actor: "ada" });
+    const task = ws.store.createIssue({ title: "External CI" });
+    setTicketBranch(ws.store, task.id, { branch: "feat/status" }, "ada");
+    await service.execute({ action: "discover" });
+    expect(workspaceAttention(ws.store).filter((row) => row.kind === "pr_checks_failing")).toEqual([
+      expect.objectContaining({ ref: task.identifier, detail: "checks failing on team/repo#31: ci/jenkins", since: "2026-11-25T11:30:00Z" }),
+    ]);
+    ws.store.db.close();
   });
 });

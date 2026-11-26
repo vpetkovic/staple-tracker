@@ -37,6 +37,14 @@ describe("bounded GitHub CLI process", () => {
     await expect(missing({ kind: "auth-status" })).rejects.toMatchObject({ code: "unavailable", detail: { reason: "missing_cli" } });
   });
 
+  it("runs the check run and commit status reads a pull request's check summary makes", async () => {
+    const run = runner("console.log(JSON.stringify(process.argv.slice(2)))");
+    const commit = `repos/team/project/commits/${"a".repeat(40)}`;
+    for (const endpoint of [`${commit}/check-runs?filter=latest&per_page=100&page=2`, `${commit}/status?per_page=100&page=1`])
+      expect(JSON.parse(await run({ ...read, endpoint })).at(-1)).toBe(endpoint);
+    await expect(run({ ...read, endpoint: `${commit}/statuses` })).rejects.toMatchObject({ code: "validation" });
+  });
+
   it("rejects arbitrary endpoints and hosts before execution", async () => {
     const run = runner("console.log('should not run')");
     for (const endpoint of ["https://evil.test/user", "../auth/token", "graphql", "repos/a/b/issues/1;touch x", "-XPOST"])

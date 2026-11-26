@@ -43,7 +43,7 @@ export function createGhRunner(settings: {
 
 function apiArgs(command: Extract<GhCommand, { kind: "get" }>): string[] {
   if (!/^[a-z0-9][a-z0-9.-]*(?::[0-9]+)?$/i.test(command.host)
-    || !/^(?:user(?:\/repos)?|repositories\/[1-9][0-9]*|repos\/[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+(?:\/issues\/[1-9][0-9]*|\/pulls(?:\/[1-9][0-9]*)?|\/commits\/[0-9a-f]{40,64}\/check-runs)?|search\/issues)(?:\?[^\s#]*)?$/.test(command.endpoint)) {
+    || !/^(?:user(?:\/repos)?|repositories\/[1-9][0-9]*|repos\/[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+(?:\/issues\/[1-9][0-9]*|\/pulls(?:\/[1-9][0-9]*)?|\/commits\/[0-9a-f]{40,64}\/(?:check-runs|status))?|search\/issues)(?:\?[^\s#]*)?$/.test(command.endpoint)) {
     throw new StapleError("validation", "Unsupported GitHub read request");
   }
   return ["api", "--hostname", command.host, "--method", "GET", "--include", "--header", "Accept: application/vnd.github+json", command.endpoint];
