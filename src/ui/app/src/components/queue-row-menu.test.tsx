@@ -56,9 +56,20 @@ describe("what the menu may offer for a row", () => {
     expect(held.heldBy).toBe("codex-1");
   });
 
-  it("still refuses when the holder is anonymous, rather than offering a doomed write", () => {
-    const held = queueRowMenuState(row({ identifier: "STA-66", status: "in_progress" }), planned);
-    expect(held.heldBy).toBe("someone");
+  it("does not call an active row held when nobody has it checked out, and invents no name", () => {
+    // A status edit from the UI moves a row to in_progress without a checkout. The store calls
+    // such a row unclaimed, and its dequeue has nobody to protect, so removal stays offered.
+    const free = queueRowMenuState(row({ identifier: "STA-66", status: "in_progress" }), planned);
+    expect(free.heldBy).toBeNull();
+    expect(free.queued).toBe(true);
+  });
+
+  it("calls a row held whenever an agent has it checked out, as the store's claimed does", () => {
+    for (const status of ["todo", "in_progress", "blocked"] as const) {
+      expect(
+        queueRowMenuState(row({ identifier: "STA-66", status, checkoutAgent: "codex-1" }), planned).heldBy,
+      ).toBe("codex-1");
+    }
   });
 
   it("does not call a row held merely for being unfinished", () => {
