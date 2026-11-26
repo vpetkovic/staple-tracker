@@ -207,3 +207,113 @@ it("closes the + Horizon form on Escape and returns focus to its button", async 
     await close();
   }
 }, 20_000);
+
+/** Does a tap `dx`, `dy` from the control's centre still land on it? */
+const reaches = (page: Page, selector: string, reach: number) =>
+  page.locator(selector).evaluate((control, r) => {
+    const box = control.getBoundingClientRect();
+    const x = box.left + box.width / 2;
+    const y = box.top + box.height / 2;
+    const hits = (px: number, py: number) => document.elementFromPoint(px, py)?.closest("button") === control;
+    return { above: hits(x, y - r), below: hits(x, y + r), left: hits(x - r, y), right: hits(x + r, y) };
+  }, reach);
+
+async function phone(width: number, lens = "horizons", ws = "fernhill"): Promise<{ page: Page; close: () => Promise<void> }> {
+  const context = await browser.newContext({ viewport: { width, height: 844 }, hasTouch: true, isMobile: true });
+  const page = await context.newPage();
+  page.setDefaultTimeout(5000);
+  await page.goto(route(`&ws=${ws}&plan-lens=${lens}`));
+  await page.locator(`[data-plan-lens="${lens}"][aria-selected="true"]`).waitFor();
+  return { page, close: () => context.close() };
+}
+
+it("puts the lens tabs beside the page name on a phone, and switches lens through them", async () => {
+  const { page, close } = await phone(390);
+  try {
+    const slot = page.locator("header [data-phone-header-slot]");
+    expect(await slot.locator("[data-plan-lens]").count()).toBe(3);
+    expect(await page.locator("[data-plan-bar] [data-plan-lens]").count()).toBe(0);
+    // One line: "Plan" and the three segments share a centre, and the row is as tall as before.
+    const row = await page.locator("header h1").evaluate((title) => {
+      const centre = (box: DOMRect) => box.top + box.height / 2;
+      const tabs = [...document.querySelectorAll("[data-phone-header-slot] [data-plan-lens]")].map((tab) => tab.getBoundingClientRect());
+      return {
+        spread: Math.round(Math.max(...tabs.map(centre), centre(title.getBoundingClientRect())) - Math.min(...tabs.map(centre), centre(title.getBoundingClientRect()))),
+        height: Math.round(title.parentElement!.parentElement!.getBoundingClientRect().height),
+        segment: Math.round(tabs[0]!.height),
+      };
+    });
+    expect(row.spread).toBeLessThanOrEqual(2);
+    expect(row.height).toBeLessThanOrEqual(53);
+    expect(row.segment).toBe(36);
+    await slot.locator('[data-plan-lens="timeline"]').click();
+    await expect.poll(() => page.locator('[data-plan-lens="timeline"]').getAttribute("aria-selected")).toBe("true");
+    await page.locator("[data-plan-timeline-frame]").waitFor();
+    await slot.locator('[data-plan-lens="ideas"]').click();
+    await expect.poll(() => page.locator('[data-plan-lens="ideas"]').getAttribute("aria-selected")).toBe("true");
+  } finally {
+    await close();
+  }
+}, 20_000);
+
+it("fits the three lens tabs and their counts beside the page name at 320px", async () => {
+  const { page, close } = await phone(320);
+  try {
+    const fit = await page.locator("[data-phone-header-slot] [role=tablist]").evaluate((list) => ({ scroll: list.scrollWidth, client: list.clientWidth, right: Math.round(list.getBoundingClientRect().right) }));
+    expect(fit.scroll).toBeLessThanOrEqual(fit.client);
+    expect(fit.right).toBeLessThanOrEqual(320);
+    expect(await page.locator('[data-plan-lens="ideas"]').textContent()).toMatch(/Ideas\s*\d+/);
+  } finally {
+    await close();
+  }
+}, 20_000);
+
+it("keeps the phone toolbar to one row of 44px with every pill, the filter and + Idea in view, each with a 40px tap", async () => {
+  const { page, close } = await phone(375);
+  try {
+    const bar = page.locator("[data-plan-bar]");
+    expect(Math.round(await bar.evaluate((element) => element.getBoundingClientRect().height))).toBeLessThanOrEqual(44);
+    const pills = page.getByRole("group", { name: "Show only" });
+    expect(await pills.getByRole("button").allTextContents()).toHaveLength(3);
+    // Nothing is clipped: the pills need no sideways scroll and every control is inside the screen.
+    expect(await pills.evaluate((group) => group.scrollWidth - group.clientWidth)).toBeLessThanOrEqual(0);
+    const controls = ['[data-plan-focus="you"]', '[data-plan-focus="late"]', '[data-plan-focus="notStarted"]', "[data-plan-search-toggle]", "[data-plan-capture-open]"];
+    for (const selector of controls) {
+      const box = await page.locator(selector).evaluate((control) => control.getBoundingClientRect().toJSON() as DOMRect);
+      expect(box.left, selector).toBeGreaterThanOrEqual(0);
+      expect(box.right, selector).toBeLessThanOrEqual(375);
+      // 19px either side of its centre still lands on it: a 40px area (the filter and + Idea meet
+      // edge to edge, and Chromium rounds a hit point to whole pixels, so 19.5 would test the 41st).
+      expect(await reaches(page, selector, 19), selector).toEqual({ above: true, below: true, left: true, right: true });
+    }
+    // The filter and + Idea are icons at 32px.
+    for (const selector of ["[data-plan-search-toggle]", "[data-plan-capture-open]"]) {
+      expect(await page.locator(selector).evaluate((control) => Math.round(control.getBoundingClientRect().width)), selector).toBe(32);
+    }
+  } finally {
+    await close();
+  }
+}, 20_000);
+
+it("keeps the lens tabs in the toolbar at 1280px, and on their own compact row in a narrow desk container", async () => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 844 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(5000);
+  try {
+    await page.goto(route("&ws=fernhill&plan-lens=horizons"));
+    await page.locator('[data-plan-lens="horizons"][aria-selected="true"]').waitFor();
+    expect(await page.locator("[data-plan-bar] [data-plan-lens]").count()).toBe(3);
+    expect(await page.locator("[data-phone-header-slot]").count()).toBe(0);
+    await page.setViewportSize({ width: 768, height: 844 });
+    await page.evaluate(() => {
+      const view = document.querySelector<HTMLElement>("[data-plan-view]")!;
+      view.style.flex = "none";
+      view.style.width = "510px";
+    });
+    expect(await page.locator("[data-plan-bar] [data-plan-lens]").count()).toBe(3);
+    await expect.poll(() => page.locator('[data-plan-bar] [data-plan-lens="ideas"]').evaluate((tab) => Math.round(tab.getBoundingClientRect().height))).toBe(36);
+    expect(await page.locator('[data-plan-focus="late"]').evaluate((pill) => Math.round(pill.getBoundingClientRect().height))).toBe(30);
+  } finally {
+    await context.close();
+  }
+}, 20_000);
