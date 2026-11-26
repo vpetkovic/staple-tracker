@@ -39,9 +39,10 @@ import { ageText, attentionGo, attentionSections, rowSubject } from "./attention
 import { type AttentionHandlers, useAttention } from "./use-attention";
 import "@/components/task-list/task-list.css";
 
-export function AttentionView({ onAuthError }: { onAuthError: (error: AuthError) => void }) {
+// `onAuthError` is every view's prop; the Inbox's read is the root's (lib/attention.ts), which reports auth itself.
+export function AttentionView(_props: { onAuthError: (error: AuthError) => void }) {
   // The rows, what each action does and the writes: use-attention.ts. This component renders.
-  const { resource, busy, refusal, clearRefusal, handlers } = useAttention(onAuthError);
+  const { resource, busy, refusal, clearRefusal, handlers } = useAttention();
 
   return (
     <div className="h-full overflow-y-auto" data-attention-view="">

@@ -41,11 +41,14 @@ import {
   getMilestone,
   getMilestones,
   getProjects,
+  getAttention,
   getRuns,
   hasToken,
   searchIssues,
 } from "@/lib/api";
 import { buildRunsState, RunsContext } from "@/lib/runs";
+import { AttentionContext } from "@/lib/attention";
+import { reconcileInboxSeen } from "@/lib/inbox-seen-store";
 import { buildFilterContext, type MilestoneFacts, type ProjectFacts } from "@/lib/filter-dimensions";
 import {
   loadFilters,
@@ -453,6 +456,17 @@ export function App() {
   const runsState = useMemo(() => buildRunsState(runEntries ?? [], bump, runsNow), [runEntries, bump, runsNow]);
 
   /**
+   * THE INBOX'S ROWS — one read of every workspace's (`/api/attention` without `ws`), held here
+   * like the runs, so the rail's count and the Inbox page agree (lib/attention.ts). Each read
+   * also moves this browser's "seen" baseline (lib/inbox-seen.ts).
+   */
+  const loadAttention = useCallback(() => getAttention({}), []);
+  const attention = useResource(loadAttention, [version], onAuthError);
+  useEffect(() => {
+    if (attention.data) reconcileInboxSeen(attention.data);
+  }, [attention.data]);
+
+  /**
    * A DELETED PROJECT LEAVES NO FILTER BEHIND. Its id may still be selected in any saved
    * scope — a Tasks scope last filtered a week ago, the legacy fallback — and would greet
    * the reader with a chip over an empty list. Once the served list has arrived (never on
@@ -769,6 +783,7 @@ export function App() {
   return (
     <SessionContext value={session}>
       <RunsContext value={runsState}>
+      <AttentionContext value={attention}>
         {/*
           All four mounts sit above the shell on purpose. A palette has to outlive view
           switches, a create dialog has to be triggerable from the header or a keystroke
@@ -793,6 +808,7 @@ export function App() {
         <AppShell>
           <MountBoundary key={session.view} label="This view" placement="inline"><View onAuthError={onAuthError} /></MountBoundary>
         </AppShell>
+      </AttentionContext>
       </RunsContext>
     </SessionContext>
   );
