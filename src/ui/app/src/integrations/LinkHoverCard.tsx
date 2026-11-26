@@ -12,6 +12,8 @@ import type { ExternalLinkPreview } from "../../../../core/integrations/link-sto
 import { containerLabel, linkTone, providerName, savedAge, shortKey, type LinkTone } from "./link-state";
 import type { ExternalLink, SourceItem } from "./model";
 import { LinkGlyph, LinkStatePill, ProviderMark } from "./parts";
+import { ChecksMark, TicketButtons } from "./PullRequestParts";
+import { checksWords, linkEntry, type EntryTicket } from "./pull-requests";
 import { useHoverCard } from "./useHoverCard";
 
 export function LinkHoverCard({
@@ -56,6 +58,7 @@ export function SingleLinkCard({
   link,
   workspace,
   issueId,
+  also = [],
   refresh,
   onShowAll,
   onUnlinked,
@@ -63,6 +66,8 @@ export function SingleLinkCard({
   link: ExternalLink;
   workspace: string;
   issueId: string;
+  /** A parent's own pull request that one of its descendants carries too: those tickets. */
+  also?: readonly EntryTicket[];
   refresh: () => void;
   onShowAll: () => void;
   /** Called once the link is gone, before the chip that opened this card unmounts: move focus somewhere that stays. */
@@ -71,6 +76,8 @@ export function SingleLinkCard({
   const item = link.resource;
   const age = savedAge(item);
   const provider = providerName(item.ref.providerId);
+  const entry = item.ref.kind === "pull_request" ? linkEntry(link) : null;
+  const checks = entry ? checksWords(entry) : null;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const unlink = async () => {
@@ -101,6 +108,18 @@ export function SingleLinkCard({
           {age ? age.sentence : "Linked by URL, not read yet"}
         </span>
       </p>
+      {checks ? (
+        <p data-link-checks={entry!.checks} className="m-0 flex min-w-0 items-start gap-1.5 text-label text-text-secondary">
+          <ChecksMark checks={entry!.checks} className="mt-0.5" />
+          <span className="min-w-0 wrap-anywhere">{checks.charAt(0).toUpperCase() + checks.slice(1)}</span>
+        </p>
+      ) : null}
+      {also.length ? (
+        <p data-link-also="" className="m-0 flex min-w-0 flex-wrap items-center gap-x-1.5 text-label text-text-tertiary">
+          Also on
+          <TicketButtons workspace={workspace} tickets={also} />
+        </p>
+      ) : null}
       {error ? (
         <p role="alert" className="m-0 text-label text-[var(--plain-risk-fg)] wrap-anywhere">
           {error}

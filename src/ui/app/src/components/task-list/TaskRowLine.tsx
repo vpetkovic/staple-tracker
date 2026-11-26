@@ -50,6 +50,7 @@ import { KindGlyph } from "./KindGlyph";
 import { LabelPills } from "./LabelPills";
 import { ParentRollupBar } from "./ParentRollup";
 import { PrBadge } from "./PrBadge";
+import { isSubtreeSet } from "@/integrations/pull-requests";
 import { PrioritySignal } from "./PrioritySignal";
 import { DeskPickupCue, HorizonCompactChip, MilestoneCue, PickupCue, PickupPill } from "./RowCues";
 import { rowMilestoneCue } from "./row-cues";
@@ -315,8 +316,12 @@ export function TaskRowLine({
    * never shows a date"), the plan is the width's ("not at 390px").
    */
   const plan = config.plan ?? FULL_ROW_PLAN;
-  /** The pull request badge draws this row's pull requests; the counted link badge then leaves them out. */
-  const prBadge = Boolean(columns.pr && plan.prBadge && row.pullRequests?.length);
+  /**
+   * The pull request badge draws this row's pull requests; the counted link badge then leaves
+   * them out. A parent's subtree set keeps its badge on a phone held upright, folded to a glyph
+   * and the total: the counted link badge that would stand in knows only the parent's own.
+   */
+  const prBadge = Boolean(columns.pr && row.pullRequests?.length && (plan.prBadge || isSubtreeSet(row.pullRequests, issue.identifier)));
   /**
    * On a compact row the claim is an avatar, and when the holder IS the assignee the second
    * avatar would repeat the same initials beside it. One is drawn; the claim's carries more.
@@ -644,7 +649,7 @@ export function TaskRowLine({
             ) : null}
             {/* Last of the signals, so the who slot and the trailing slot after them stay clean columns. */}
             <ExternalLinkBadges summary={row.externalLinks} workspace={row.workspace} issueId={issue.id} issueRef={issue.identifier} withoutPullRequests={prBadge} />
-            {prBadge ? <PrBadge pullRequests={row.pullRequests} showNumber={plan.prNumber} /> : null}
+            {prBadge ? <PrBadge pullRequests={row.pullRequests} showNumber={plan.prNumber} counted={!plan.prBadge} workspace={row.workspace} issueId={issue.id} issueRef={issue.identifier} /> : null}
           </span>
           {columns.claim || columns.assignee ? (
             <WhoCue
@@ -767,7 +772,7 @@ export function TaskRowLine({
           <Avatar name={issue.assignee} kind="human" size={20} className="staple-row-assignee" />
         ) : null}
         <ExternalLinkBadges summary={row.externalLinks} workspace={row.workspace} issueId={issue.id} issueRef={issue.identifier} withoutPullRequests={prBadge} />
-        {prBadge ? <PrBadge pullRequests={row.pullRequests} showNumber={plan.prNumber} /> : null}
+        {prBadge ? <PrBadge pullRequests={row.pullRequests} showNumber={plan.prNumber} counted={!plan.prBadge} workspace={row.workspace} issueId={issue.id} issueRef={issue.identifier} /> : null}
         {columns.date && plan.date ? (
           <time className="staple-row-date" dateTime={issue.updatedAt} title={issue.updatedAt}>
             {formatRowDate(issue.updatedAt, now)}

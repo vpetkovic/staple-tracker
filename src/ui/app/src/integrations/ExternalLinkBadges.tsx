@@ -6,6 +6,30 @@ import { leadingTone } from "./link-state";
 import { LinkGlyph } from "./parts";
 import { LinkHoverCard, LinkListCard, previewTones } from "./LinkHoverCard";
 
+/** A row's counted badge: a glyph and a number, quiet until hovered, a 44px target on a finger. */
+export const ROW_COUNT_BADGE =
+  "focus-ring relative inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-label tabular-nums text-text-tertiary hover:bg-[var(--surface-selected)] hover:text-foreground focus-visible:bg-[var(--surface-selected)] data-[state=open]:bg-[var(--surface-selected)] data-[state=open]:text-foreground pointer-coarse:min-h-0 pointer-coarse:before:absolute pointer-coarse:before:inset-x-0 pointer-coarse:before:-inset-y-2.5 pointer-coarse:before:content-['']";
+
+/**
+ * From a row, the way to all of a ticket's links: its External links tab on the wanted
+ * section, opening the ticket first when it is not the one already open.
+ */
+export function useShowExternalLinks(workspace: string, issueId: string, issueRef: string | undefined, kind: "issue" | "pull_request") {
+  const session = useOptionalSession();
+  return () => {
+    requestExternalSection(kind);
+    if (
+      session?.selection?.workspace === workspace &&
+      (session.selection.id === issueId || session.selection.ref === issueId)
+    )
+      openDetailTab("external-links");
+    else {
+      openTabOnArrival(issueRef ?? issueId, "external-links");
+      session?.open(workspace, issueId);
+    }
+  };
+}
+
 /**
  * A task row's linked issues and pull requests: a glyph and a count each, the list on hover, focus or tap.
  * `withoutPullRequests` when the row's pull request badge (PrBadge) already draws them, so a pull
@@ -46,28 +70,16 @@ function Badge({
   issueId: string;
   issueRef?: string;
 }) {
-  const session = useOptionalSession();
+  const showAll = useShowExternalLinks(workspace, issueId, issueRef, kind);
   if (!group.count) return null;
   const label = `${group.count} linked ${kind === "issue" ? "issue" : "pull request"}${group.count === 1 ? "" : "s"}`;
-  const showAll = () => {
-    requestExternalSection(kind);
-    if (
-      session?.selection?.workspace === workspace &&
-      (session.selection.id === issueId || session.selection.ref === issueId)
-    )
-      openDetailTab("external-links");
-    else {
-      openTabOnArrival(issueRef ?? issueId, "external-links");
-      session?.open(workspace, issueId);
-    }
-  };
   return (
     <LinkHoverCard
       aria-label={label}
       cardLabel={label}
       align="end"
       data-link-badge={kind}
-      className="focus-ring relative inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-label tabular-nums text-text-tertiary hover:bg-[var(--surface-selected)] hover:text-foreground focus-visible:bg-[var(--surface-selected)] data-[state=open]:bg-[var(--surface-selected)] data-[state=open]:text-foreground pointer-coarse:min-h-0 pointer-coarse:before:absolute pointer-coarse:before:inset-x-0 pointer-coarse:before:-inset-y-2.5 pointer-coarse:before:content-['']"
+      className={ROW_COUNT_BADGE}
       card={(close) => (
         <LinkListCard
           kind={kind}

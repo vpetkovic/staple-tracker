@@ -232,7 +232,7 @@ export const TASK_LIST_PRESETS: Record<TaskListPreset, PresetShape> = {
       select: false,
       disclosure: false,
       date: false,
-      pr: false,
+      pr: true,
       worklog: false,
       actions: false,
     },

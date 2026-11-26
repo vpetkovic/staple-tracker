@@ -27,6 +27,8 @@ import {
 } from "@/integrations/links-view";
 import { groupLinks, type ExternalLink } from "@/integrations/model";
 import { useConnections } from "@/integrations/useConnections";
+import { SubtreeLinkSection } from "@/integrations/SubtreeLinkSection";
+import { descendantEntries, subtreeEntries, type PullRequestEntry } from "@/integrations/pull-requests";
 import type { TabProps } from "./registry";
 
 const message = (caught: unknown) => (caught instanceof Error ? caught.message : String(caught));
@@ -75,6 +77,7 @@ export function ExternalLinksTab({ detail, workspace, refresh, onAuthError, hold
   return (
     <ExternalLinksView
       links={links}
+      subtree={{ entries: descendantEntries(subtreeEntries(detail)), workspace, shownId: detail.issue.id }}
       loading={resource.loading && !links.length}
       loadError={resource.error?.message ?? null}
       connections={loaded ? connections : null}
@@ -95,6 +98,8 @@ export function ExternalLinksTab({ detail, workspace, refresh, onAuthError, hold
 
 export interface ExternalLinksViewProps {
   links: ExternalLink[];
+  /** On a parent: the pull requests only the tickets inside it carry, listed after its own links. */
+  subtree?: { entries: PullRequestEntry[]; workspace: string; shownId: string };
   /** The first read is under way and nothing is known yet. */
   loading: boolean;
   loadError: string | null;
@@ -111,6 +116,7 @@ export interface ExternalLinksViewProps {
 
 export function ExternalLinksView({
   links,
+  subtree,
   loading,
   loadError,
   connections,
@@ -123,7 +129,11 @@ export function ExternalLinksView({
   now,
 }: ExternalLinksViewProps) {
   const known = connections ?? [];
-  const counts = filterCounts(links);
+  const inside = subtree?.entries ?? [];
+  // The filter counts what the tab lists: a parent's descendants' pull requests are part of it.
+  const own = filterCounts(links);
+  const counts = { all: own.all + inside.length, issue: own.issue, pull_request: own.pull_request + inside.length };
+  const showInside = inside.length > 0 && section !== "issue";
   const shown = links.filter((l) => section === "all" || l.resource.ref.kind === section);
   const groups = new Map(groupLinks(links).flatMap((g) => g.links.map((l) => [l.id, g.links] as const)));
   const oldest = oldestRefresh(links, known);
@@ -131,7 +141,7 @@ export function ExternalLinksView({
   const canRefresh = links.some((l) => isRefreshable(l, known));
   const notices = connections ? connectionNotices(links, connections) : [];
 
-  if (!loading && !links.length && !loadError)
+  if (!loading && !links.length && !inside.length && !loadError)
     return (
       <div data-external-links className="flex flex-col items-center gap-3 rounded-[10px] border border-dashed px-6 py-8 text-center">
         <Link2 aria-hidden className="size-5 text-text-tertiary" />
@@ -206,11 +216,14 @@ export function ExternalLinksView({
           onWrite={onWrite}
           now={now}
         />
-      ) : links.length ? (
+      ) : links.length && !showInside ? (
         <p className="py-6 text-center text-body text-text-tertiary">
           {section === "issue" ? "No linked issues" : "No linked pull requests"}
         </p>
+      ) : !links.length && !showInside && inside.length ? (
+        <p className="py-6 text-center text-body text-text-tertiary">No linked issues</p>
       ) : null}
+      {showInside ? <SubtreeLinkSection entries={inside} workspace={subtree!.workspace} shownId={subtree!.shownId} /> : null}
     </div>
   );
 }

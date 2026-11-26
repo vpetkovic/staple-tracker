@@ -856,7 +856,9 @@ export interface PullRequestRef {
   state: "draft" | "open" | "merged" | "closed" | "unknown";
   /** Optional; tooltip only. */
   title?: string | null;
-  /** On a parent's row, the tickets of its subtree this pull request is linked on (tooltip only); absent on a leaf's. */
+  /** How the head commit's checks stand; absent when none were read, and for a merged or closed pull request. */
+  checks?: "passing" | "failing" | "pending";
+  /** On a parent's row, the tickets of its subtree this pull request is linked on; absent on a leaf's. */
   tickets?: string[];
   /** ISO-8601. Optional; tooltip only. */
   updatedAt?: string | null;
