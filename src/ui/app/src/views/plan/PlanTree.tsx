@@ -268,7 +268,7 @@ function OutlineRow({
       </div>
       <div
         role="gridcell"
-        className="col-start-2 row-start-1 flex justify-end self-start pt-1 [&_button]:m-0 [&_button]:size-9 @min-[760px]/tree:col-auto @min-[760px]/tree:row-auto @min-[760px]/tree:self-center @min-[760px]/tree:pt-0 @min-[760px]/tree:opacity-0 @min-[760px]/tree:[&_button]:size-7 @min-[760px]/tree:group-hover/row:opacity-100 @min-[760px]/tree:group-focus-visible/row:opacity-100 @min-[760px]/tree:focus-within:opacity-100"
+        className="col-start-2 row-start-1 -mb-3 flex justify-end self-start pt-1 @min-[760px]/tree:mb-0 [&_button]:m-0 [&_button]:size-9 @min-[760px]/tree:col-auto @min-[760px]/tree:row-auto @min-[760px]/tree:self-center @min-[760px]/tree:pt-0 @min-[760px]/tree:opacity-0 @min-[760px]/tree:[&_button]:size-7 @min-[760px]/tree:group-hover/row:opacity-100 @min-[760px]/tree:group-focus-visible/row:opacity-100 @min-[760px]/tree:focus-within:opacity-100"
       >
         {menu}
       </div>
