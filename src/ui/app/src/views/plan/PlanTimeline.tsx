@@ -312,8 +312,10 @@ function BaselineGhost({ idea, x }: { idea: IdeaData; x: (day: number) => number
 
 /** The derived bar: solid over the work that has happened, dashed to the forecast, hatched past the plan. */
 function ActualBar({ idea, x, px, today }: { idea: IdeaData; x: (day: number) => number; px: number; today: number }) {
-  if (!idea.actual.start) return null;
-  const start = dayIndex(idea.actual.start);
+  // Work that landed with no recorded start (delivered outside the tracker) is the day it landed.
+  const first = idea.actual.start ?? idea.actual.end;
+  if (!first) return null;
+  const start = dayIndex(first);
   const done = idea.actual.end ? dayIndex(idea.actual.end) : today;
   const forecast = idea.actual.forecastEnd ? dayIndex(idea.actual.forecastEnd) : null;
   const plannedEnd = idea.planned.target ? dayIndex(idea.planned.target) : null;
@@ -351,9 +353,10 @@ function ActualBar({ idea, x, px, today }: { idea: IdeaData; x: (day: number) =>
 function spanOf(idea: IdeaData): { start: number; end: number } | null {
   const planned = windowOf(idea);
   if (planned) return planned;
-  if (!idea.actual.start) return null;
-  const end = idea.actual.end ?? idea.actual.forecastEnd ?? idea.actual.start;
-  return { start: dayIndex(idea.actual.start), end: dayIndex(end) };
+  const first = idea.actual.start ?? idea.actual.end;
+  if (!first) return null;
+  const end = idea.actual.end ?? idea.actual.forecastEnd ?? first;
+  return { start: dayIndex(first), end: dayIndex(end) };
 }
 
 /**

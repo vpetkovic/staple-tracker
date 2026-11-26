@@ -8,7 +8,8 @@ import { describe, expect, it } from "vitest";
 import type { HorizonData, IdeaData, PlanData } from "@/lib/plan-types";
 import { Markdown } from "@/lib/markdown";
 import { ShippedMark } from "@/detail/ShippedMark";
-import { cardMenuItems, DeliveryChips, HorizonsBoard, IdeasBoard, ThinkingChips } from "./PlanBoards";
+import { planActionItems, planPrimary } from "@/detail/plain-actions";
+import { cardMenuItems, DeliveryChips, HorizonsBoard, IdeasBoard, shelfRestore, ThinkingChips } from "./PlanBoards";
 import { DependencyArrows, PlanTimeline } from "./PlanTimeline";
 import { RunSettingForm, runSettingLabel } from "./RunSetting";
 import { dependencyEdges, horizonDone, horizonsColumns, ideasColumns, inHorizonsLens, inIdeasLens } from "./plan-model";
@@ -21,6 +22,7 @@ function idea(id: string, extra: Partial<IdeaData> = {}): IdeaData {
     kind: "idea",
     title: `Idea ${id}`,
     description: null,
+    briefLine: null,
     maturity: "raw",
     stage: "raw",
     parentId: null,
@@ -302,6 +304,15 @@ describe("shipped is one mark", () => {
     expect(html).not.toContain('data-plan-shipped-cap="started"');
     expect(html).toContain('aria-label="Idea shipped shipped"');
   });
+
+  it("caps a record that landed with no recorded start, as one delivered outside the tracker, on the day it landed", () => {
+    const delivered = idea("delivered", { maturity: "shaped", stage: "shipped", state: "shipped", horizonId: "now", actual: { start: null, end: "2026-10-03", forecastEnd: null }, delivered: { on: "2026-10-03", note: null } });
+    const html = renderToStaticMarkup(<PlanTimeline plan={plan([delivered])} write={async () => true} onOpen={() => {}} selected={null} />);
+    expect(html).toContain('data-plan-timeline-row="delivered"');
+    expect(html).toContain('data-plan-actual="delivered"');
+    expect(html).toContain('data-plan-shipped-cap="delivered"');
+    expect(html).not.toContain('data-plan-undated-idea="delivered"');
+  });
 });
 
 describe("dependencies on the timeline", () => {
@@ -346,6 +357,13 @@ describe("dependencies on the timeline", () => {
     expect(html).toMatch(/data-plan-arrow="a&gt;b"|data-plan-arrow="a>b"/);
     expect(html).toMatch(/class="stroke-destructive"[^>]*data-plan-arrow="a(&gt;|>)c"|data-plan-arrow="a(&gt;|>)c"[^>]*class="stroke-destructive"/);
     expect(html).toMatch(/class="stroke-text-secondary"[^>]*data-plan-arrow="a(&gt;|>)b"|data-plan-arrow="a(&gt;|>)b"[^>]*class="stroke-text-secondary"/);
+  });
+
+  it("draws an arrow from the day a record landed when it has no planned window or recorded start", () => {
+    const landed = idea("landed", { actual: { start: null, end: "2026-10-05", forecastEnd: null }, delivered: { on: "2026-10-05", note: null } });
+    const ideas = new Map([landed, b].map((entry) => [entry.id, entry]));
+    const html = renderToStaticMarkup(<DependencyArrows edges={[{ from: "landed", to: "b" }]} ideas={ideas} rowTops={new Map([["landed", 0], ["b", 40]])} rowHeight={40} x={(day) => day} left={0} width={10} />);
+    expect(html).toContain('data-plan-arrows="1"');
   });
 
   it("draws nothing for a row not laid out", () => {
@@ -419,5 +437,17 @@ describe("a card's menu", () => {
     const columns = ideasColumns(plan([offered]));
     const menu = cardMenuItems(offered, columns.find((column) => column.key === "m:exploring")!, columns);
     expect(menu.others.map((item) => item.id)).toEqual(["shape", "drop"]);
+  });
+});
+
+describe("the Dropped shelf", () => {
+  it("restores through the restore the record offers, the same write as the drawer's Restore", () => {
+    const gone = idea("gone", { maturity: "dropped", stage: "dropped", state: "dropped", horizonId: "now", actions: [{ id: "restore", label: "Restore", who: "person" }] });
+    const drawer = planPrimary(planActionItems("", gone));
+    expect(drawer?.id).toBe("restore");
+    expect(shelfRestore(gone)?.call).toEqual(drawer?.call);
+    // Never straight to raw: a dropped record that holds a horizon cannot be raw.
+    expect(shelfRestore(gone)?.call).toMatchObject({ verb: "update", body: { ref: "gone", maturity: "exploring" } });
+    expect(shelfRestore(idea("held", { maturity: "dropped", stage: "dropped", state: "dropped", actions: [{ id: "restore", label: "Restore", who: "person", disabledReason: "not now" }] }))?.call).toBeUndefined();
   });
 });

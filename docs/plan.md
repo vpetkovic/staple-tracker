@@ -60,7 +60,9 @@ stateDiagram-v2
 ```
 
 Steps marked (person) are the person's. Restoring a dropped idea can return it to raw,
-exploring or shaped. A horizon's state follows the work on it.
+exploring or shaped: to raw only while it holds no horizon and no planned dates (a raw idea has
+neither), to shaped only when its plan passes the shaped gate. The Plan view restores to
+exploring. A horizon's state follows the work on it.
 
 ## 1. Turn it on
 
@@ -157,7 +159,10 @@ You never add an idea's work to the horizon's milestone by hand. The work of eve
 horizon is the milestone's membership, so moving the idea moves its work. A ticket you put in a
 milestone yourself stays where you put it.
 
-Add, rename, date and remove horizons from the column header and **+ Horizon**. Removing one
+Add, rename, date and remove horizons from the column header and **+ Horizon**. Each horizon
+has its own name, in any case, so `idea ls --horizon <name>` and `list_ideas` know which one you
+mean; they list what the horizon carries, sub-ideas following a parent on it included, and the dropped
+ideas scheduled on it. Removing one
 returns its ideas to Unscheduled. A horizon that still holds open work, or sits in the queue,
 cannot be removed until you move that work or take it off the queue. The refusal names what to
 move.
@@ -287,11 +292,14 @@ tracker. It no longer holds its horizon open.
 
 ## 8. Read the Timeline
 
-The **Timeline** lens draws each idea on a month axis, grouped by horizon:
+The **Timeline** lens draws each idea on a month axis, grouped by the horizon that carries it, as
+**Horizons** places it: a sub-idea scheduled on no horizon of its own sits under its parent in its
+parent's horizon. Then the ideas no horizon carries.
 
 - **planned**: the window you set. Drag the bar to move it, drag its ends to change the dates;
 - **actual**: a solid bar from the first start to the last finish of its work, then dashed to
-  the forecast end, hatched where it runs past the plan;
+  the forecast end, hatched where it runs past the plan. Work that landed with no start on
+  record, and an idea delivered outside the tracker, mark the day it landed;
 - **baseline**: an outline behind the bar when the plan moved after the work started.
 
 Vertical lines mark today and each dated horizon. An arrow runs from an idea to every idea that

@@ -425,6 +425,13 @@ already has is no change and succeeds as one, in any state; out of dropped is re
 exploring is going back from shaped and exploring otherwise; to raw is going back to raw, an
 action (`back_to_raw`) that no state offers, so its refusal says so in those words.
 
+A restore lands the record in the state it restores into, so it is held to what that state may
+carry, as a capture straight into a maturity is: into shaped only through the shaped gate, into
+raw only while it holds no horizon and no planned dates (raw offers neither schedule nor plan
+dates, and a dropped record keeps both). Otherwise it is refused, naming what it holds and that
+exploring or shaped hold it. The page's Restore, in the drawer and the Dropped shelf alike, is the
+offered `restore` action, which restores to exploring.
+
 ### Delivered outside the tracker
 
 Work that shipped before the tracker existed, or somewhere it does not reach, is a record the person
@@ -844,7 +851,11 @@ Milestones view is byte for byte what it was.
 **Timeline is time.** Planned, baseline and actual windows on a month axis, today and dated
 horizon lines, a ✓ end-cap where a record shipped, and an arrow from each record to every record
 that waits on it, red when the record waiting starts before the one it waits on ends. Drag to move
-and resize, where the state offers plan dates.
+and resize, where the state offers plan dates. Rows group by the horizon that carries them
+(`carriedBy`), as the Horizons columns do, so a sub-idea following its parent's horizon sits under
+its parent there; then the records no horizon carries. An actual window with an end and no start
+(delivered outside the tracker, or work completed without a recorded start) is a row marking the
+day it landed, with its end-cap, never a "No dates yet" chip.
 
 **Shipped is one mark** (`detail/ShippedMark.tsx`): a check in the done hue's icon token and the
 words, `✓ Shipped Oct 3` or `✓ 4 shipped`, never the colour alone. The card, the horizon header,

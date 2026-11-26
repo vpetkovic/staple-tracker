@@ -22,6 +22,7 @@ function idea(id: string, extra: Partial<IdeaData> = {}): IdeaData {
     kind: "idea",
     title: id,
     description: null,
+    briefLine: null,
     maturity: "raw",
     stage: "raw",
     parentId: null,
@@ -110,6 +111,22 @@ describe("timeline", () => {
     expect(groups[1]!.rows.map((row) => [row.idea.id, row.depth])).toEqual([["r8", 0]]);
     expect(groups[2]!.undated.map((i) => i.id)).toEqual(["raw"]);
     expect(timelineGroups(p, new Set(["ga"]))[0]!.rows.map((row) => row.idea.id)).toEqual(["ga"]);
+  });
+
+  it("puts a sub-idea that follows its parent's horizon in that horizon's group, under its parent, as the Horizons lens does", () => {
+    // Scheduled on none of its own: the horizon its parent is on carries it.
+    const follower = idea("r9", { maturity: "exploring", stage: "exploring", state: "exploring", parentId: "ga", horizonId: null, carriedBy: "now", planned: { start: "2027-01-04", target: "2027-02-20" } });
+    const groups = timelineGroups(plan([ga, r0, r2, follower, raw]));
+    expect(groups[0]!.rows.map((row) => [row.idea.id, row.depth])).toEqual([["ga", 0], ["r0", 1], ["r2", 1], ["r9", 1]]);
+    expect(groups.find((group) => group.horizon === null)!.rows).toEqual([]);
+  });
+
+  it("gives a shipped record whose work has an end and no start a row, not a 'No dates yet' chip", () => {
+    // Delivered outside the tracker, or work completed without being started: the day it landed is its actual window.
+    const delivered = idea("delivered", { maturity: "shaped", stage: "shipped", state: "shipped", horizonId: "now", actual: { start: null, end: "2026-11-03", forecastEnd: null }, delivered: { on: "2026-11-03", note: null } });
+    const [group] = timelineGroups(plan([delivered]));
+    expect(group!.rows.map((row) => row.idea.id)).toEqual(["delivered"]);
+    expect(group!.undated).toEqual([]);
   });
 
   it("spans whole months around every date it draws", () => {
