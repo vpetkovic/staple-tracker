@@ -9,7 +9,7 @@
  */
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { openSqlite } from "../sqlite.js";
 import { stapleHome } from "../../config/home.js";
 import { Hub, isAbsentRow } from "../hub.js";
 import { currentDbPathFor } from "../path-migration.js";
@@ -120,7 +120,7 @@ function shareMessage(args: { name: string; sharedBy: string | null; invitedAs: 
 /** The workspace's hub slug and prefix, as its own database records them. */
 function workspaceNameOf(dbPath: string): { slug: string; prefix: string | null } {
   assertInTestSandbox(dbPath, "workspace database");
-  const db = new DatabaseSync(dbPath, { readOnly: true });
+  const db = openSqlite(dbPath, { readOnly: true });
   try {
     const read = (key: string) =>
       (db.prepare("SELECT value FROM meta WHERE key = ?").get(key) as { value: string } | undefined)?.value ?? null;

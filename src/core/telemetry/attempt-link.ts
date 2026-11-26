@@ -19,7 +19,8 @@
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
+import { openSqlite } from "../sqlite.js";
 import type { AttemptLink } from "./budget-store.js";
 import { viewAttempt } from "./attempt-derive.js";
 import type { AttemptLinker } from "./ingest.js";
@@ -42,7 +43,7 @@ function readAttemptAt(path: string, attemptId: string): Reading | null {
   if (path === "" || !existsSync(path)) return null;
   let db: DatabaseSync | null = null;
   try {
-    db = new DatabaseSync(path, { readOnly: true });
+    db = openSqlite(path, { readOnly: true });
     const view = viewAttempt(db, attemptId);
     return view === null ? null : { open: view.state !== "ended", startedAt: view.startedAt, endedAt: view.endedAt };
   } catch {
@@ -65,7 +66,7 @@ export function attemptLinkerFor(home: string): AttemptLinker {
     let found: Candidate[] = [];
     const path = join(home, "hub.db");
     if (existsSync(path)) {
-      const hub = new DatabaseSync(path, { readOnly: true });
+      const hub = openSqlite(path, { readOnly: true });
       try {
         if (hub.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'attempt_presence'").get()) {
           const role = hub.prepare("SELECT 1 FROM pragma_table_info('attempt_presence') WHERE name = 'role'").get() !== undefined ? "p.role" : "'worker'";

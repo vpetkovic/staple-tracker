@@ -1,7 +1,8 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
+import { openSqlite } from "./sqlite.js";
 import { stapleHome } from "../config/home.js";
 import { openDb, tx } from "./db.js";
 import { migrateHub } from "./schema.js";
@@ -388,7 +389,7 @@ export class Hub {
     if (!existsSync(path)) {
       throw new StapleError("not_found", `No hub database at ${path}.`);
     }
-    return new Hub(new DatabaseSync(path, { readOnly: true }), path);
+    return new Hub(openSqlite(path, { readOnly: true }), path);
   }
 
   close(): void {
