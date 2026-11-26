@@ -208,6 +208,8 @@ export interface IdeaView {
   kind: string;
   title: string;
   description: string | null;
+  /** The brief's first written line, for a card to show; null while it has none. The detail carries the whole brief. */
+  briefLine: string | null;
   maturity: Maturity;
   stage: Stage;
   parentId: string | null;
@@ -727,6 +729,11 @@ export class PlanStore {
     return row;
   }
 
+
+  /** Whether the plan still lists this horizon: a removed one (a cancelled milestone) holds nothing, as the plan reads it. */
+  private listedHorizon(id: string | null): boolean {
+    return id !== null && this.db.prepare(`SELECT 1 AS hit FROM issues WHERE id = ? AND ${LISTED_HORIZON}`).get(id) !== undefined;
+  }
 
   private horizonRow(ref: string, forWrite = true): PlanRow {
     const row = this.row(ref, forWrite);
@@ -1426,6 +1433,7 @@ export class PlanStore {
         kind: row.kind,
         title: row.title,
         description: row.description,
+        briefLine: firstLine(this.documentBody(row.id, BRIEF_KEY)),
         maturity,
         stage,
         parentId: row.parent_id !== null && byId.has(row.parent_id) ? row.parent_id : null,
@@ -1721,8 +1729,10 @@ export class PlanStore {
     if (moves) {
       const action = maturityAction({ state: before, maturity: readMaturity(row.plan_maturity) }, maturity);
       if (action !== null) allow(action);
-      // Shaped only when the plan, as this write leaves it, passes the gate.
-      if (action === "shape") assertShaped(displayRef(row), this.gateOf(row.id, sections));
+      // Shaped only when the plan, as this write leaves it, passes the gate: marked shaped, or restored into shaped.
+      if (action === "shape" || (action === "restore" && maturity === "shaped")) assertShaped(displayRef(row), this.gateOf(row.id, sections));
+      // Restored into raw, it is raw: what it holds follows the table, as a capture into raw does (never scheduled, no dates).
+      if (action === "restore" && maturity === "raw") assertRestorableToRaw(row, this.listedHorizon(row.plan_horizon_id));
       // The rest of one write is held to the state its maturity change leads to: shaping a raw idea
       // and scheduling it is one decision. A started or shipped record keeps its state.
       if (before !== "started" && before !== "shipped") state = maturity;
@@ -2242,11 +2252,18 @@ export class PlanStore {
     return issue.id;
   }
 
+  /** A name names one horizon: the surfaces that take a horizon by name (`--horizon`, list_ideas) resolve it. */
+  private assertHorizonNameFree(name: string, except: string | null): void {
+    const taken = this.horizonRows().find((row) => row.id !== except && row.title.trim().toLowerCase() === name.toLowerCase());
+    if (taken) throw new StapleError("validation", `A horizon is already named ${taken.title} (${taken.identifier}); give this one another name.`, { horizon: taken.identifier });
+  }
+
   /** A dated horizon goes in date order among the dated ones; an undated one goes last. */
   createHorizon(input: { name: string; date?: string | null }, actor: string | null, options: PlanWriteOptions = {}): HorizonView {
     this.assertEnabled();
     this.steer("horizons", null, options);
     const name = oneLine(input.name ?? "", "A horizon's name");
+    this.assertHorizonNameFree(name, null);
     const date = input.date ? parsePlanDate(input.date) : null;
     const id = this.store.journaled(() => {
       const rows = this.horizonRows();
@@ -2264,8 +2281,10 @@ export class PlanStore {
     if (patch.name !== undefined) this.allowHorizon(row, "rename");
     if (patch.date !== undefined) this.allowHorizon(row, "date");
     if (patch.before !== undefined) this.allowHorizon(row, "reorder");
+    const name = patch.name === undefined ? undefined : oneLine(patch.name, "A horizon's name");
+    if (name !== undefined) this.assertHorizonNameFree(name, row.id);
     this.store.journaled(() => {
-      if (patch.name !== undefined) this.store.updateIssue(row.id, { title: oneLine(patch.name, "A horizon's name") }, actor, undefined, { plan: true });
+      if (name !== undefined) this.store.updateIssue(row.id, { title: name }, actor, undefined, { plan: true });
       if (patch.date !== undefined) {
         this.store.milestones().update(row.id, { targetDate: patch.date === null ? null : parsePlanDate(patch.date) }, actor, { plan: true });
       }
@@ -2475,6 +2494,63 @@ export function mergeSections(base: PlanSections, patch: PlanPatch): PlanSection
     });
   }
   return out;
+}
+
+/**
+ * The horizon a reference names: its id, its identifier or its name, in any case. A name that
+ * names none, or that several horizons carry (two devices can each create one), is refused
+ * rather than read as no horizon, which would answer the unscheduled records instead.
+ */
+export function horizonNamed(view: Pick<PlanView, "horizons">, ref: string): HorizonView {
+  const wanted = ref.trim().toLowerCase();
+  const exact = view.horizons.find((horizon) => horizon.id === ref || horizon.identifier.toLowerCase() === wanted);
+  if (exact) return exact;
+  const named = view.horizons.filter((horizon) => horizon.name.trim().toLowerCase() === wanted);
+  if (named.length === 1) return named[0]!;
+  if (named.length > 1) {
+    throw new StapleError("validation", `${named.length} horizons are named "${ref}": ${named.map((horizon) => horizon.identifier).join(", ")}. Name one by its identifier.`, { horizons: named.map((horizon) => horizon.identifier) });
+  }
+  const known = view.horizons.map((horizon) => `${horizon.name} (${horizon.identifier})`).join(", ");
+  throw new StapleError("not_found", `No horizon is named "${ref}". The horizons are: ${known || "none"}.`);
+}
+
+/**
+ * The records on a horizon: those it carries (`carriedBy`), scheduled on it or following a parent
+ * scheduled on it, as its column and counts read them; and the dropped ones scheduled on it, which
+ * keep their horizon though nothing carries them.
+ */
+export function ideasOnHorizon(view: PlanView, ref: string): IdeaView[] {
+  const horizon = horizonNamed(view, ref);
+  return view.ideas.filter((idea) => idea.carriedBy === horizon.id || (idea.state === "dropped" && idea.horizonId === horizon.id));
+}
+
+/** Where a record sits, in words: its horizon, `<horizon> (via parent)` when it follows one, else `unscheduled`. */
+export function horizonWords(idea: Pick<IdeaView, "horizonId" | "carriedBy">, view: Pick<PlanView, "horizons">): string {
+  const on = view.horizons.find((horizon) => horizon.id === idea.horizonId);
+  if (on) return on.name;
+  const via = view.horizons.find((horizon) => horizon.id === idea.carriedBy);
+  return via ? `${via.name} (via parent)` : "unscheduled";
+}
+
+/** The first line with text in it, trimmed and without the Markdown marker that opens it (a heading, quote or list item); null for none. */
+function firstLine(text: string | null): string | null {
+  return text?.split("\n").map((line) => line.trim().replace(/^(#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)/, "").trim()).find((line) => line !== "") ?? null;
+}
+
+/**
+ * A dropped record keeps its horizon and planned dates. Raw holds neither (it offers no schedule
+ * and no plan dates), and a record restored into raw could not shed them: so it is restored to
+ * exploring or shaped instead, which hold both.
+ */
+function assertRestorableToRaw(row: Pick<PlanRow, "identifier" | "title" | "plan_start" | "plan_target">, onHorizon: boolean): void {
+  const held = [onHorizon ? "a horizon" : null, row.plan_start !== null || row.plan_target !== null ? "planned dates" : null].filter((part): part is string => part !== null);
+  if (held.length === 0) return;
+  const subject = displayRef(row);
+  throw new StapleError(
+    "validation",
+    `${subject.charAt(0).toUpperCase()}${subject.slice(1)} cannot be restored to raw while it holds ${held.join(" and ")}, which a raw idea never has: restore it to exploring or shaped.`,
+    { state: "dropped", action: "restore", held },
+  );
 }
 
 /** The shaped gate as a refusal: what the plan still needs, named. */
