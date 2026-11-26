@@ -32,11 +32,11 @@ import { AttentionContext } from "@/lib/attention";
 import { SessionContext, type StapleSession } from "@/lib/session";
 import { DEFAULT_SORT } from "@/lib/sort-modes";
 import type { IssueRow, RunEntry } from "@/lib/types";
+import { AutopilotLayout } from "@/views/autopilot/AutopilotPage";
 import { buildGroups, flattenFlat } from "@/views/tree/tree-model";
 import { initWorkspace, openWorkspace } from "../../../../../core/workspace.ts";
 import { startUiServer } from "../../../../server.ts";
 import { AutopilotBadge, AutopilotNotice } from "./AutopilotBadge";
-import { RunHistoryList } from "./RunHistoryDialog";
 import { RunStopNoticeCard } from "./RunStopNotices";
 import { stopNotice } from "@/lib/run-stops";
 
@@ -403,39 +403,57 @@ describe("a folded parent", () => {
   });
 });
 
-describe("the run history", () => {
-  it("lists live runs first, then every ended one with its stop reason in plain words", () => {
-    const markup = render(<RunHistoryList entries={entries} showWorkspace={false} now={NOW} />);
-    const liveAt = markup.indexOf(`data-run-history="${runIds.live}"`);
-    expect(liveAt).toBeGreaterThan(markup.indexOf(">Running now<"));
-    expect(liveAt).toBeLessThan(markup.indexOf(">Earlier<"));
+describe("the Autopilot page", () => {
+  const page = (selectedRunId: string | null, runs: readonly RunEntry[] = entries) =>
+    render(
+      <AutopilotLayout entries={runs} selectedRunId={selectedRunId} onSelectRun={noop} onOpenTicket={noop} showWorkspace={false} loading={false} error={null} now={NOW} wide />,
+    );
+  /** One run's pane: the markup from its detail on. */
+  const run = (name: string) => {
+    const markup = page(runIds[name]!);
+    return markup.slice(markup.indexOf(`data-run-detail="${runIds[name]}"`));
+  };
 
-    const item = (name: string) => {
-      const start = markup.indexOf(`data-run-history="${runIds[name]}"`);
-      const end = markup.indexOf("data-run-history=", start + 20);
-      return markup.slice(start, end === -1 ? undefined : end);
-    };
-    expect(item("stopped")).toContain('data-run-stop-reason="stopped_by_human"');
-    expect(item("stopped")).toContain("Stopped by vp.");
-    expect(item("stopped")).toContain("wrong thing");
-    expect(item("failed")).toContain('data-run-stop-reason="failure_streak"');
+  it("lists live runs first, then every ended one, and says how each ended in plain words", () => {
+    const list = page(null);
+    const liveAt = list.indexOf(`data-run-item="${runIds.live}"`);
+    expect(liveAt).toBeGreaterThan(list.indexOf("Running now"));
+    expect(liveAt).toBeLessThan(list.indexOf("Earlier"));
+    for (const name of ["stopped", "failed", "done"]) expect(list.indexOf(`data-run-item="${runIds[name]}"`)).toBeGreaterThan(list.indexOf("Earlier"));
+
+    expect(run("stopped")).toContain('data-run-stop-reason="stopped_by_human"');
+    // The person is named once, in the reason itself.
+    expect(run("stopped")).toContain("Stopped by vp");
+    expect(run("stopped").match(/Stopped by vp/g)).toHaveLength(1);
+    expect(run("stopped")).toContain("wrong thing");
+    expect(run("failed")).toContain('data-run-stop-reason="failure_streak"');
     // The retried ticket failed twice: named once.
-    expect(item("failed")).toMatch(/[A-Z]+-\d+ failed twice in a row/);
-    expect(item("failed")).toContain("A stop rule ended it.");
-    expect(item("failed")).toContain("Failed: the agent session ended with an error (exit 1)");
-    expect(item("failed")).toContain("Failed: the agent session ran out of time");
-    expect(item("done")).toContain('data-run-stop-reason="scope_empty"');
-    expect(item("done")).toContain("Finished: nothing left to do");
-    expect(item("done")).toContain("It finished on its own.");
-    expect(item("done")).toContain('data-outcome="done"');
+    expect(run("failed").replace(/<[^>]+>/g, "")).toMatch(/[A-Z]+-\d+ failed twice in a row/);
+    expect(run("failed")).toContain("A stop rule ended it.");
+    expect(run("failed")).toContain("The agent session ended with an error (exit 1).");
+    expect(run("failed")).toContain("The agent session ran out of time.");
+    expect(run("done")).toContain('data-run-stop-reason="scope_empty"');
+    expect(run("done")).toContain("Finished: nothing left to do");
+    expect(run("done")).toContain("It finished on its own.");
+    expect(run("done")).toContain('data-outcome="done"');
     // Live runs carry Stop and Pause; ended ones carry neither.
-    expect(item("live")).toContain("data-run-stop=");
-    expect(item("live")).toContain('data-run-pause="pause"');
-    expect(item("done")).not.toContain("data-run-stop=");
+    expect(run("live")).toContain("data-run-stop=");
+    expect(run("live")).toContain('data-run-pause="pause"');
+    expect(run("done")).not.toContain("data-run-stop=");
+  });
+
+  it("names every ticket a run took by its current status and title, not its bare id", () => {
+    const done = entryOf("done");
+    const take = done.run.tickets[0]!;
+    const issue = done.issues.find((candidate) => candidate.issueId === take.issueId)!;
+    const row = run("done");
+    expect(row).toContain(`data-run-ticket="${take.identifier}"`);
+    expect(row).toContain(issue.title);
+    expect(row).toContain(`${issue.identifier}: ${issue.title}`);
   });
 
   it("says so when there are none", () => {
-    expect(render(<RunHistoryList entries={[]} showWorkspace={false} />)).toContain("data-run-history-empty");
+    expect(page(null, [])).toContain("data-run-history-empty");
   });
 });
 
@@ -459,7 +477,7 @@ describe("the run-stopped notice", () => {
 });
 
 describe("a run started, paused or stopped elsewhere", () => {
-  it("shows in the rail within one read, and leaves it when it ends, into the history ended by the person who stopped it", async () => {
+  it("shows in the rail within one read, and leaves it when it ends, into the page's earlier runs, ended by the person who stopped it", async () => {
     const database = openWorkspace(dbPath);
     const runs = database.store.runs();
     const epic = database.store.createIssue({ title: "Stop me" });
@@ -478,8 +496,10 @@ describe("a run started, paused or stopped elsewhere", () => {
     expect((await post("/api/run/stop", { id, actor: "vp" })).status).toBe(200);
     await reload();
     expect(runRow(render(<NavRail onHide={noop} />, 1440), id)).toBe("");
-    const markup = render(<RunHistoryList entries={entries} showWorkspace={false} now={NOW} />);
-    expect(markup).toContain(`data-run-history="${id}"`);
+    const markup = render(
+      <AutopilotLayout entries={entries} selectedRunId={null} onSelectRun={noop} onOpenTicket={noop} showWorkspace={false} loading={false} error={null} now={NOW} wide={false} />,
+    );
+    expect(markup.indexOf(`data-run-item="${id}"`)).toBeGreaterThan(markup.indexOf("Earlier"));
     expect(entries.find((entry) => entry.run.id === id)!.run.stop).toMatchObject({ reason: "stopped_by_human", by: "vp" });
   });
 });
