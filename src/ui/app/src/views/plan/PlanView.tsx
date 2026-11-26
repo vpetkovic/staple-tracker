@@ -2,7 +2,7 @@
  * The Plan destination (design/plan.md): ideas and horizons above the tracker.
  *
  * Three lenses on the same ideas under one toolbar: Ideas (columns by maturity, capture at the
- * top of Raw), Horizons (Unscheduled and each horizon in order) and Timeline (planned, baseline
+ * top of Raw), Horizons (Not scheduled and each horizon in order) and Timeline (planned, baseline
  * and actual windows on a month axis). The toolbar's "Show only" focus and filter narrow every
  * lens alike, keeping each match's parents. Any card or row opens the idea in the shared detail
  * drawer, the same one every issue opens in; the drawer chooses its tabs and actions by the

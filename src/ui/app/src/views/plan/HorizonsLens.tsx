@@ -1,7 +1,7 @@
 /**
  * The Horizons lens is delivery, drawn as an outline: one scroller (`data-plan-board`) of stacked
- * sections. First "Ready, not scheduled" (shaped records no horizon carries; one quiet line when
- * there are none), then each horizon with its sticky header and its plan as one tree
+ * sections. First "Not scheduled" (the records no horizon carries; one quiet line when there are
+ * none), then each horizon with its sticky header and its plan as one tree
  * (`PlanTree`). A row's `⋯` moves it; on a wide tree under a fine pointer it also drags onto a
  * section, or onto the drop rail pinned at the top while a drag is on. A section the idea's state
  * would refuse is never marked as a target.
@@ -34,8 +34,16 @@ interface LensContext {
   onDrag: (idea: IdeaData | null) => void;
 }
 
+/** What the lens calls the place a record with no horizon sits: the section, the drop rail and the move menu. */
+const NOT_SCHEDULED = "Not scheduled";
+
+/** The lens's sections: the model's columns, the first one named as the lens names it. */
+export function lensColumns(plan: PlanData): BoardColumn[] {
+  return horizonsColumns(plan).map((column) => (column.horizon ? column : { ...column, title: NOT_SCHEDULED }));
+}
+
 export function HorizonsBoard({ plan, write, onOpen, selected, filtering = false }: BoardProps) {
-  const columns = horizonsColumns(plan);
+  const columns = lensColumns(plan);
   const [dragging, setDragging] = useState<IdeaData | null>(null);
   const lens: LensContext = { plan, columns, write, onOpen, selected, filtering, dragging, onDrag: setDragging };
   return (
@@ -107,11 +115,11 @@ function SectionTree({ lens, column, rows, label }: { lens: LensContext; column:
   );
 }
 
-/** Shaped records no horizon carries yet: a section like any horizon's, or one quiet line when there are none. */
+/** The records no horizon carries: a section like any horizon's, or one quiet line when there are none. */
 export function ReadySection({ lens, column }: { lens: LensContext; column: BoardColumn }) {
   const rows = planTree({ horizonId: null, ideas: lens.plan.ideas, horizons: lens.plan.horizons });
   const { mark, handlers, state } = useDropTarget(lens, column);
-  const title = "Ready, not scheduled";
+  const title = NOT_SCHEDULED;
   // A filter that leaves nothing here says nothing about what is waiting: the line is left out.
   if (rows.length === 0 && lens.filtering) return null;
   if (rows.length === 0) {
@@ -128,7 +136,7 @@ export function ReadySection({ lens, column }: { lens: LensContext; column: Boar
         )}
       >
         <span className="text-body font-semibold text-text-secondary">{title}</span>
-        <span className="text-label text-text-tertiary">Nothing is waiting for a horizon. A shaped idea lands here until you schedule it.</span>
+        <span className="text-label text-text-tertiary">Nothing here. A shaped idea lands here until you give it a horizon.</span>
       </section>
     );
   }
@@ -145,7 +153,7 @@ export function ReadySection({ lens, column }: { lens: LensContext; column: Boar
       >
         <h2 className="m-0 text-title font-semibold">{title}</h2>
         <span className="text-label text-text-secondary">
-          {waiting} idea{waiting === 1 ? "" : "s"} waiting for a horizon
+          {waiting} idea{waiting === 1 ? "" : "s"} with no horizon
         </span>
       </header>
       <SectionTree lens={lens} column={column} rows={rows} label={title} />
@@ -193,7 +201,7 @@ function HorizonSection({ lens, column }: { lens: LensContext; column: BoardColu
 const landed = (members: number) => (members === 1 ? "The member landed" : `All ${members} members landed`);
 
 /**
- * Pinned at the top of the lens while a row is dragged: one target per section, Ready first, so a
+ * Pinned at the top of the lens while a row is dragged: one target per section, Not scheduled first, so a
  * section far down the page is reachable without scrolling. Marked the same way as the sections.
  */
 export function DropRail({ lens }: { lens: Pick<LensContext, "plan" | "columns" | "write" | "dragging" | "onDrag"> }) {
@@ -220,7 +228,7 @@ function RailTarget({ lens, column }: { lens: Pick<LensContext, "plan" | "write"
         mark === "over" && "bg-surface-selected",
       )}
     >
-      {column.horizon ? column.horizon.name : "Ready"}
+      {column.horizon ? column.horizon.name : NOT_SCHEDULED}
     </div>
   );
 }

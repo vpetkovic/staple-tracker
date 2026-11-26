@@ -439,6 +439,14 @@ describe("the rare actions", () => {
   });
 });
 
+describe("the horizon field", () => {
+  it("calls no horizon Not scheduled, the name the Horizons lens gives it", () => {
+    const shaped = idea({ horizonId: null, carriedBy: null, actions: [] });
+    const html = tab(record(shaped));
+    expect(text(html.slice(html.indexOf('data-plan-field="horizon"')))).toMatch(/^[^<]*Not scheduled/);
+  });
+});
+
 describe("the header line", () => {
   const line = (rec: IdeaDetailData) => renderToStaticMarkup(<IdeaStatusLine record={rec} />);
 

@@ -153,7 +153,7 @@ A row without its own "done when" **inherits** the plan's acceptance criteria. T
 that, and when the task is created it carries the label `acceptance-inherited` until someone
 writes a sharper one.
 
-A shaped idea moves from the Ideas lens to **Ready, not scheduled** at the top of the
+A shaped idea moves from the Ideas lens to **Not scheduled** at the top of the
 **Horizons** lens. If someone later edits it so it no longer passes, it stays shaped and reads
 **shaped · plan incomplete**, with Scaffold held back until the plan passes again.
 
@@ -170,10 +170,10 @@ its sub-ideas, then mark it shaped.
 
 ## 5. Schedule it on a horizon
 
-The **Horizons** lens is an outline: **Ready, not scheduled**, the shaped ideas with no horizon
-yet, then a section per horizon. Drag a shaped idea onto a horizon's section, or use its ⋯ menu.
-While you drag, a rail of targets pins to the top so a far horizon is in reach, and only the
-places the idea's state allows light up. Dragging takes a mouse or a pen and a Plan area at least
+The **Horizons** lens is an outline: **Not scheduled**, the shaped, started and shipped ideas
+with no horizon, then a section per horizon. Drag a shaped idea onto a horizon's section, or use
+its ⋯ menu. While you drag, a rail of targets pins to the top so a far horizon is in reach, and
+only the places the idea's state allows light up. Dragging takes a mouse or a pen and a Plan area at least
 760 px wide; otherwise use the ⋯ menu.
 
 Give a horizon a date (**add a date**) and it becomes a release line: it shows on the Timeline

@@ -193,12 +193,12 @@ function Fields({ record, plan, write }: { record: IdeaDetailData; plan: PlanDat
             <QuietSelect
               aria-label="Horizon"
               value={idea.horizonId ?? ""}
-              options={[{ value: "", label: "Unscheduled" }, ...plan.horizons.map((option) => ({ value: option.id, label: horizonWords(option) }))]}
+              options={[{ value: "", label: "Not scheduled" }, ...plan.horizons.map((option) => ({ value: option.id, label: horizonWords(option) }))]}
               onChange={(event) => save({ horizon: event.target.value || null })}
               data-plan-detail-horizon
             />
           ) : (
-            <span data-plan-field="horizon">{horizon ? horizonWords(horizon) : <EmptyValue>{later ?? "Unscheduled"}</EmptyValue>}</span>
+            <span data-plan-field="horizon">{horizon ? horizonWords(horizon) : <EmptyValue>{later ?? "Not scheduled"}</EmptyValue>}</span>
           )}
         </PropertyRow>
         <PropertyRow label="Part of" id="parent">

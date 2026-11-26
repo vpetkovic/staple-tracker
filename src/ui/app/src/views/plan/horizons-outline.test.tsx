@@ -1,5 +1,5 @@
 /**
- * The Horizons lens as an outline: "Ready, not scheduled" in place of the Unscheduled column,
+ * The Horizons lens as an outline: "Not scheduled" first, by that one name everywhere it appears,
  * a parent's shipped leaves gathered into one line, groups folded on a compact tree, nothing
  * folded while a filter is on, drop targets marked only where the idea's state offers the move,
  * the date links only where the horizon offers a date, and the keys that walk the outline.
@@ -8,7 +8,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
 import type { HorizonData, IdeaData, PlanData } from "@/lib/plan-types";
-import { DropRail, HorizonsBoard, ReadySection } from "./HorizonsLens";
+import { DropRail, HorizonsBoard, lensColumns, ReadySection } from "./HorizonsLens";
+import { cardMenuItems } from "./plan-board";
 import { horizonsColumns } from "./plan-model";
 import { outlineEntries, outlineKey, shippedKey } from "./plan-outline";
 import { planTree } from "./plan-tree";
@@ -125,23 +126,34 @@ afterEach(() => {
   delete (globalThis as { window?: unknown }).window;
 });
 
-describe("Ready, not scheduled", () => {
-  it("is one quiet line when nothing waits for a horizon, still a drop target for unscheduling", () => {
+describe("Not scheduled", () => {
+  it("is one quiet line when no record lacks a horizon, still a drop target for unscheduling", () => {
     const html = board();
-    expect(html).toMatch(/<section aria-label="Ready, not scheduled" data-plan-column="h:"/);
-    expect(text(html)).toContain("Ready, not scheduled Nothing is waiting for a horizon. A shaped idea lands here until you schedule it.");
+    expect(html).toMatch(/<section aria-label="Not scheduled" data-plan-column="h:"/);
+    expect(text(html)).toContain("Not scheduled Nothing here. A shaped idea lands here until you give it a horizon.");
     expect(html).not.toContain("data-plan-ready");
-    expect(text(html)).not.toContain("Unscheduled");
+    expect(text(html)).not.toMatch(/Unscheduled|Ready, not scheduled/);
   });
 
-  it("is a section with its rows when shaped ideas wait, and says how many", () => {
+  it("is a section with its rows when records have no horizon, and says how many", () => {
     const waiting = [idea("a", { horizonId: null }), idea("b", { horizonId: null })];
     const html = board({ plan: plan([...IDEAS, ...waiting]) });
     const ready = html.slice(html.indexOf('data-plan-column="h:"'), html.indexOf('data-plan-column="h:now"'));
     expect(ready).toContain("data-plan-ready");
-    expect(text(ready)).toContain("2 ideas waiting for a horizon");
+    expect(text(ready)).toContain("Not scheduled 2 ideas with no horizon");
     expect(drawn(ready)).toEqual(["a", "b"]);
-    expect(text(ready)).not.toContain("Nothing is waiting");
+    expect(text(ready)).not.toContain("Nothing here");
+    const one = board({ plan: plan([...IDEAS, waiting[0]!]) });
+    expect(text(one)).toContain("1 idea with no horizon");
+  });
+
+  it("is the same name on the drop rail and in a row's move menu", () => {
+    const movable = idea("m", { actions: [{ id: "schedule", label: "Schedule", who: "person" }] });
+    const data = plan([...IDEAS, movable]);
+    const columns = lensColumns(data);
+    const rail = renderToStaticMarkup(<DropRail lens={{ plan: data, columns, write: async () => true, dragging: movable, onDrag: noop }} />);
+    expect(text(rail)).toContain("Move to Not scheduled Now Later");
+    expect(cardMenuItems(movable, columns[1]!, columns).moves.map((move) => move.title)).toEqual(["Not scheduled", "Later"]);
   });
 });
 
