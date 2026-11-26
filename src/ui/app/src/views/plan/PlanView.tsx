@@ -14,6 +14,7 @@
  */
 import { Lightbulb, Plus, Search, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { GuardRefusal } from "@/components/GuardRefusal";
 import { PlainCard } from "@/components/plain/PlainCard";
 import { Button } from "@/components/ui/button";
@@ -268,8 +269,22 @@ const PILLS: ReadonlyArray<{ id: Exclude<PlanFocus, "all">; label: string; dot: 
 ];
 
 /**
+ * The phone shell's slot beside the page name (AppShell), or null: on the desk, and wherever the
+ * shell drew none, the lens tabs stay in the toolbar.
+ */
+function usePhoneHeaderSlot(): HTMLElement | null {
+  const desk = useIsDesk();
+  const [slot, setSlot] = useState<HTMLElement | null>(null);
+  useLayoutEffect(() => setSlot(desk ? null : document.querySelector<HTMLElement>("[data-phone-header-slot]")), [desk]);
+  return slot;
+}
+
+/**
  * The one toolbar: lens tabs with their counts, the "Show only" pills, the lens's own tools, the
- * filter and, outside Ideas (whose capture sits at the top of Raw), the capture button.
+ * filter and, outside Ideas (whose capture sits at the top of Raw), the capture button. On a phone
+ * the tabs sit beside the page name in the shell's header (a portal keeps them in the `Tabs` root),
+ * and under 620px of the Plan container the rest is one 44px row of compact controls, each with a
+ * 40px tap through an invisible inset.
  */
 export function PlanBar({ lens, plan, focus, onFocus, text, onText, onCapture, onViewIdeas, tools }: {
   lens: Lens;
@@ -283,6 +298,7 @@ export function PlanBar({ lens, plan, focus, onFocus, text, onText, onCapture, o
   tools: ReactNode;
 }) {
   const desk = useIsDesk();
+  const slot = usePhoneHeaderSlot();
   const { ref, width } = useElementWidth<HTMLDivElement>();
   // The segmented control under the phone width of the Plan container; before it is measured, the shell's.
   const sheet = width === null ? !desk : width < PLAN_WIDTH.phone;
@@ -290,14 +306,15 @@ export function PlanBar({ lens, plan, focus, onFocus, text, onText, onCapture, o
   const lenses = LENSES.map((item) => ({ ...item, count: item.id === "ideas" ? plan.ideas.filter((idea) => inIdeasLens(plan, idea)).length : item.id === "horizons" ? plan.horizons.length : null }));
   // A pill with nothing to show is left out, unless it is the one on: it stays so it can be turned off.
   const pills = PILLS.filter((pill) => counts[pill.id] > 0 || focus === pill.id);
+  const tabs = <DetailTabStrip sheet={slot !== null || sheet} compact label="Plan lens" items={lenses} active={lens} marker="data-plan-lens" />;
   return (
     // One row from 620px of the Plan container: the pills give way and scroll before anything wraps.
-    <div ref={ref} className="flex flex-wrap items-center gap-x-2 gap-y-1.5 border-b px-gutter py-2 @min-[620px]/plan:flex-nowrap" data-plan-bar>
-      <div className="min-w-0 shrink-0 @max-[620px]/plan:basis-full">
-        <DetailTabStrip sheet={sheet} label="Plan lens" items={lenses} active={lens} marker="data-plan-lens" />
-      </div>
+    <div ref={ref} className="flex flex-wrap items-center gap-x-2 gap-y-1.5 border-b px-gutter py-2 @max-[620px]/plan:pt-1.5 @max-[620px]/plan:pb-[5px] @min-[620px]/plan:flex-nowrap" data-plan-bar>
+      {slot ? createPortal(tabs, slot) : <div className="min-w-0 shrink-0 @max-[620px]/plan:basis-full">{tabs}</div>}
       {pills.length > 0 ? (
-        <div role="group" aria-label="Show only" className="flex min-w-0 items-center gap-1.5 overflow-x-auto [scrollbar-width:none] @max-[620px]/plan:flex-1 @min-[620px]/plan:ml-1 @min-[620px]/plan:border-l @min-[620px]/plan:pl-3">
+        // Under 620px the group's box reaches 5px past the pills, so their 40px taps are not clipped by its scroll.
+        // A tap inset is measured from inside the border: 6px on a bordered pill, 5px on the outlined filter, 4px on + Idea.
+        <div role="group" aria-label="Show only" className="flex min-w-0 items-center gap-1.5 overflow-x-auto [scrollbar-width:none] @max-[620px]/plan:-my-[5px] @max-[620px]/plan:flex-1 @max-[620px]/plan:gap-1 @max-[620px]/plan:py-[5px] @min-[620px]/plan:ml-1 @min-[620px]/plan:border-l @min-[620px]/plan:pl-3">
           {pills.map((pill) => {
             const on = focus === pill.id;
             return (
@@ -308,7 +325,8 @@ export function PlanBar({ lens, plan, focus, onFocus, text, onText, onCapture, o
                 data-plan-focus={pill.id}
                 onClick={() => onFocus(on ? "all" : pill.id)}
                 className={cn(
-                  "focus-ring-inset inline-flex h-[26px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 text-label text-text-secondary transition-colors hover:bg-surface-hover @max-[620px]/plan:h-8 @max-[620px]/plan:text-body",
+                  "focus-ring-inset relative inline-flex h-[26px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 text-label text-text-secondary transition-colors hover:bg-surface-hover",
+                  "@max-[620px]/plan:h-[30px] @max-[620px]/plan:min-h-0 @max-[620px]/plan:gap-1 @max-[620px]/plan:px-2 @max-[620px]/plan:text-[12px] @max-[620px]/plan:before:absolute @max-[620px]/plan:before:-inset-y-1.5 @max-[620px]/plan:before:inset-x-0 @max-[620px]/plan:before:content-['']",
                   on && "border-primary bg-primary text-primary-foreground hover:bg-primary",
                 )}
               >
@@ -320,7 +338,7 @@ export function PlanBar({ lens, plan, focus, onFocus, text, onText, onCapture, o
           })}
         </div>
       ) : null}
-      <span aria-hidden className="ms-auto" />
+      <span aria-hidden className="ms-auto @max-[620px]/plan:hidden" />
       {/* Under 900px a lens's tools move into the lens (Horizons draws + Horizon at its end). */}
       {tools ? <span className="contents @max-[900px]/plan:hidden">{tools}</span> : null}
       <PlanSearch text={text} onText={onText} />
@@ -360,7 +378,7 @@ function PlanSearch({ text, onText }: { text: string; onText: (text: string) => 
           }}
         />
       </div>
-      <Button variant="outline" size="icon" className="hidden size-8 @max-[1100px]/plan:inline-flex" aria-label={open ? "Close the filter" : "Filter the plan"} aria-expanded={open} onClick={toggle} data-plan-search-toggle>
+      <Button variant="outline" size="icon" className="relative hidden size-8 @max-[1100px]/plan:inline-flex @max-[620px]/plan:min-h-0 @max-[620px]/plan:before:absolute @max-[620px]/plan:before:-inset-[5px] @max-[620px]/plan:before:content-['']" aria-label={open ? "Close the filter" : "Filter the plan"} aria-expanded={open} onClick={toggle} data-plan-search-toggle>
         {open ? <X aria-hidden /> : <Search aria-hidden />}
       </Button>
     </>
@@ -380,10 +398,10 @@ function CapturePopover({ onCapture, onViewIdeas }: { onCapture: (title: string)
       }}
     >
       <PopoverTrigger asChild>
-        {/* Icon-only between the phone width and 900px, where the bar has no room for the word. */}
-        <Button size="sm" className="h-8 @min-[620px]/plan:@max-[900px]/plan:w-8 @min-[620px]/plan:@max-[900px]/plan:px-0" aria-label="Capture an idea" data-plan-capture-open>
+        {/* Icon-only under 900px, where the bar has no room for the word. */}
+        <Button size="sm" className="relative h-8 @max-[900px]/plan:w-8 @max-[900px]/plan:px-0 @max-[620px]/plan:min-h-0 @max-[620px]/plan:before:absolute @max-[620px]/plan:before:-inset-1 @max-[620px]/plan:before:content-['']" aria-label="Capture an idea" data-plan-capture-open>
           <Plus aria-hidden />
-          <span className="@min-[620px]/plan:@max-[900px]/plan:hidden">Idea</span>
+          <span className="@max-[900px]/plan:hidden">Idea</span>
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-80 max-w-[calc(100vw-2rem)] p-3">
@@ -423,21 +441,23 @@ function CapturePopover({ onCapture, onViewIdeas }: { onCapture: (title: string)
  * Exploring's cards, stacked under 760px.
  */
 function PlanSkeleton({ lens }: { lens: Lens }) {
+  const slot = usePhoneHeaderSlot();
+  const tabs = <Skeleton className={cn("h-8 w-[232px] shrink-0", slot ? "h-10 w-[220px] rounded-xl" : "@max-[620px]/plan:h-10 @max-[620px]/plan:w-full")} />;
   return (
     <div className="@container/plan flex h-full min-h-0 flex-col overflow-hidden" aria-busy="true" data-plan-loading={lens}>
       <span role="status" className="sr-only">
         Loading the plan
       </span>
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 border-b px-gutter py-2 @min-[620px]/plan:flex-nowrap">
-        <Skeleton className="h-8 w-[232px] shrink-0 @max-[620px]/plan:h-9 @max-[620px]/plan:w-full" />
-        <div className="flex min-w-0 items-center gap-1.5 overflow-hidden @max-[620px]/plan:flex-1 @min-[620px]/plan:ml-1 @min-[620px]/plan:border-l @min-[620px]/plan:pl-3">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 border-b px-gutter py-2 @max-[620px]/plan:pt-1.5 @max-[620px]/plan:pb-[5px] @min-[620px]/plan:flex-nowrap">
+        {slot ? createPortal(tabs, slot) : tabs}
+        <div className="flex min-w-0 items-center gap-1.5 overflow-hidden @max-[620px]/plan:flex-1 @max-[620px]/plan:gap-1 @min-[620px]/plan:ml-1 @min-[620px]/plan:border-l @min-[620px]/plan:pl-3">
           {[92, 64, 100].map((width) => (
-            <Skeleton key={width} className="h-[26px] shrink-0 rounded-full @max-[620px]/plan:h-8" style={{ width }} />
+            <Skeleton key={width} className="h-[26px] shrink-0 rounded-full @max-[620px]/plan:h-[30px]" style={{ width }} />
           ))}
         </div>
         <span className="ms-auto @max-[620px]/plan:hidden" />
         <Skeleton className="h-8 w-[200px] shrink-0 @max-[1100px]/plan:w-8" />
-        {lens === "ideas" ? null : <Skeleton className="h-8 w-[68px] shrink-0 @min-[620px]/plan:@max-[900px]/plan:w-8" />}
+        {lens === "ideas" ? null : <Skeleton className="h-8 w-[68px] shrink-0 @max-[900px]/plan:w-8" />}
       </div>
       {lens === "horizons" ? <HorizonsSkeleton /> : lens === "timeline" ? <TimelineSkeleton /> : <IdeasSkeleton />}
     </div>

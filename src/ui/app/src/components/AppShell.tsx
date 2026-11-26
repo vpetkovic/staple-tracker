@@ -385,6 +385,11 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <div className="flex min-w-0 items-baseline gap-2">
                   <h1 className="truncate text-[20px] font-semibold tracking-tight">{title}</h1>
                 </div>
+                {/*
+                  A view's own controls beside its name, where the row has room: the view portals
+                  them in (the Plan lenses do). Empty, it is not drawn, so every other row is as it was.
+                */}
+                <div data-phone-header-slot className="flex min-w-0 flex-1 items-center justify-end empty:hidden" />
                 {/* `FilterBar` owns its own `ml-auto`, so this row says nothing about its right. */}
                 {hasHeaderControls ? <FilterBar /> : null}
               </div>

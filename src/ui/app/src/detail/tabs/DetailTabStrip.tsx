@@ -3,8 +3,10 @@ import { TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 
 /** The same strip for a drawer's tabs and the Plan lenses, including horizontal reveal. */
-export function DetailTabStrip({ sheet, label, items, active, marker }: {
+export function DetailTabStrip({ sheet, compact = false, label, items, active, marker }: {
   sheet: boolean;
+  /** The segmented control at 36px (the Plan lenses beside a page name), not a drawer's 40px. */
+  compact?: boolean;
   label: string;
   items: readonly { id: string; label: string; count?: number | null }[];
   active?: string;
@@ -32,7 +34,7 @@ export function DetailTabStrip({ sheet, label, items, active, marker }: {
     strip.scrollTo({ left: Math.max(0, trigger.offsetLeft - (strip.clientWidth - trigger.offsetWidth) / 2), behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
   }, [active]);
   return <div className="staple-detail-tabfade min-w-0" data-fade-start={edges.start ? "" : undefined} data-fade-end={edges.end ? "" : undefined}>
-    <TabsList ref={stripRef} aria-label={label} variant={sheet ? "default" : "line"} className={cn("staple-detail-tabstrip w-full justify-start", sheet && "staple-detail-segments")}>
+    <TabsList ref={stripRef} aria-label={label} variant={sheet ? "default" : "line"} data-size={sheet && compact ? "compact" : undefined} className={cn("staple-detail-tabstrip w-full justify-start", sheet && "staple-detail-segments")}>
       {items.map(item => <TabsTrigger key={item.id} value={item.id} className="focus-ring-inset flex-none" aria-label={item.count ? `${item.label}, ${item.count}` : undefined} {...(marker ? { [marker]: item.id } : {})}>{item.label}{item.count ? <span className="ml-1.5 tabular-nums text-text-tertiary">{item.count}</span> : null}</TabsTrigger>)}
     </TabsList>
   </div>;

@@ -318,6 +318,31 @@
   font-size: 14px;
 }
 
+/*
+ * The compact control: the Plan lenses beside the page name on a phone, and on their own row in a
+ * narrow Plan container. 36px segments in a 40px track, 13px labels. Each segment's tap reaches the
+ * track's edge (40px) through an invisible inset, so the smaller thumb is not a smaller target.
+ */
+.staple-detail-segments[data-size="compact"] {
+  height: 40px;
+  padding: 2px;
+  border-radius: 12px;
+}
+
+.staple-detail-segments[data-size="compact"] [role="tab"] {
+  height: 36px;
+  min-height: 36px;
+  padding-inline: 10px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.staple-detail-segments[data-size="compact"] [role="tab"]::before {
+  content: "";
+  position: absolute;
+  inset: -2px 0;
+}
+
 /* The strip is stuck and content scrolls under it: a hairline says where the strip ends. */
 .staple-detail-panel[data-mode="sheet"] [data-detail-tabs][data-stuck] {
   border-bottom-color: var(--border);
