@@ -21,7 +21,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildBrief } from "../src/core/run-brief.js";
-import { DRIVE_PROVIDERS, PLACEHOLDERS, type PlaceholderValues, sessionCommand } from "../src/core/run-driver.js";
+import { DRIVE_PROVIDERS, PLACEHOLDERS, type DriveEvent, type DriveOptions, type PlaceholderValues, drive, sessionCommand } from "../src/core/run-driver.js";
 import { mainLineGuardGap, mainLineMoves, mainLineSnapshot } from "../src/core/main-line-guard.js";
 import { openWorkspace } from "../src/core/open.js";
 import { CLI_ENTRY, REPO_ROOT, TSX_CLI, bareEnv, removeDir, runCliAtAsync, tempDir } from "./fixtures/characterize-support.js";
@@ -649,6 +649,104 @@ describe("the main-line guard", () => {
     expect(mainLineMoves({ master: null, main: "aaaa" }, after)).toEqual(["master (none) -> cccc"]);
     expect(mainLineSnapshot(root)).toBeNull();
   });
+});
+
+describe("a driven session keeps its claim live", () => {
+  /**
+   * In process, so the heartbeat's interval can be short: `drive()` itself over a scratch
+   * workspace, the fake agent's `sleep` session (alive, writing nothing) as the session. The
+   * steal threshold is a few seconds and the wait is real, so the claim's silence is too.
+   */
+  async function driveSleeper(heartbeatMs: number, tweak: (store: DriveOptions["store"]) => DriveOptions["store"] = (store) => store) {
+    const { dir, refs } = await workspace(["thinks for a long time"]);
+    const dbFile = join(dir, ".staple", "staple.db");
+    const opened = openWorkspace(dbFile);
+    const runs = opened.store.runs();
+    const run = runs.start({ actor: ACTOR, scope: "queue" });
+    const events: DriveEvent[] = [];
+    const controller = new AbortController();
+    const driving = drive({
+      store: tweak(opened.store),
+      runs,
+      dbFile,
+      runId: run.id,
+      agent: "custom",
+      command: fake("sleep")[3]!,
+      model: null,
+      fullAccess: false,
+      finish: "in_review",
+      cwd: dir,
+      instructions: null,
+      ticketTimeoutMs: null,
+      retryAfterSeconds: null,
+      pollMs: 100,
+      attemptHeartbeatMs: heartbeatMs,
+      killGraceMs: 2000,
+      env: bareEnv(env()),
+      signal: controller.signal,
+      report: (event) => events.push(event),
+    });
+    const pidsFile = join(dir, `${refs[0]}.pids`);
+    for (let i = 0; i < 150 && !existsSync(pidsFile); i++) await new Promise((r) => setTimeout(r, 100));
+    expect(existsSync(pidsFile), JSON.stringify(events)).toBe(true);
+    return { dir, ref: refs[0]!, store: opened.store, events, controller, driving };
+  }
+
+  const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  it("a live session that writes nothing is never stale; once it exits, the claim goes quiet and steal-if-stale takes it", async () => {
+    const { dir, ref, store, events, controller, driving } = await driveSleeper(200);
+    try {
+      // Alive and silent past the threshold: the driver's heartbeats keep the claim live.
+      await pause(3000);
+      expect(store.claimActivity(ref)!.idleSeconds).toBeLessThan(2);
+      const refused = await cli(dir, ["checkout", ref, "--steal-if-stale", "2s", "--json"], "thief");
+      expect(refused.status, refused.stdout).not.toBe(0);
+      expect((await showIssue(dir, ref)).checkoutAgent).toBe(ACTOR);
+
+      // The session ends (the driver is interrupted: the ticket stays held) and nothing beats.
+      controller.abort();
+      expect((await driving).interrupted).toBe(true);
+      expect(events.find((e) => e.event === "session_ended")).toMatchObject({ ended: "interrupted" });
+      expect((await showIssue(dir, ref)).checkoutAgent).toBe(ACTOR);
+      await pause(3000);
+      expect(store.claimActivity(ref)!.idleSeconds).toBeGreaterThanOrEqual(2);
+      const stolen = await cli(dir, ["checkout", ref, "--steal-if-stale", "2s", "--json"], "thief");
+      expect(stolen.status, stolen.stderr).toBe(0);
+      expect((await showIssue(dir, ref)).checkoutAgent).toBe("thief");
+      expect(events.some((e) => e.event === "attempt_heartbeat_failed")).toBe(false);
+    } finally {
+      controller.abort();
+      await driving.catch(() => undefined);
+      store.db.close();
+    }
+  }, 60_000);
+
+  it("a heartbeat the store refuses is reported once and never fails the driver or the session", async () => {
+    let calls = 0;
+    const { store, events, controller, driving } = await driveSleeper(100, (store) =>
+      Object.assign(Object.create(store) as typeof store, {
+        recordAttemptEvent: () => {
+          calls += 1;
+          throw new Error("database is locked");
+        },
+      }),
+    );
+    try {
+      await pause(1000);
+      expect(calls).toBeGreaterThan(2);
+      expect(events.filter((e) => e.event === "attempt_heartbeat_failed")).toEqual([
+        { event: "attempt_heartbeat_failed", ref: expect.any(String), message: "database is locked" },
+      ]);
+      expect(events.some((e) => e.event === "session_ended")).toBe(false);
+      controller.abort();
+      expect((await driving).interrupted).toBe(true);
+    } finally {
+      controller.abort();
+      await driving.catch(() => undefined);
+      store.db.close();
+    }
+  }, 60_000);
 });
 
 describe("run drive options", () => {

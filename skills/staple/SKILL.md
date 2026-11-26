@@ -25,10 +25,11 @@ to work around a missing workspace.
 
 Use one agent identity throughout the session. Pass MCP `actor` on writes, or set
 `STAPLE_AGENT` for CLI commands. Keep the identity used to claim work when commenting
-and checkpointing; those writes establish the holder's liveness. During a long stretch
-that writes nothing, `record_attempt_event` with `event: "heartbeat"` (CLI `staple attempt
-heartbeat <ref>`) on your open attempt keeps the claim from reading as silent. It stays on
-this machine, so another device still sees only your synced writes.
+and checkpointing; those writes establish the holder's liveness. A long interactive session
+or stretch that writes nothing may run `record_attempt_event` with `event: "heartbeat"` (CLI
+`staple attempt heartbeat <ref>`) on your open attempt every few minutes to keep the claim
+from reading as silent; a session launched by `staple run drive` is beaten by its driver
+automatically. It stays on this machine, so another device still sees only your synced writes.
 
 ## Choose the narrow operation
 

@@ -584,11 +584,13 @@ Every \`in_progress\` task shows its claim: \`ls\` and \`show\` print
 that is working from one a usage limit killed hours ago.
 
 Silence counts the holder only: their events, comments and document revisions
-on the task, and the heartbeat of their **open** attempt. A long stretch of work
-that writes nothing (a build, a test run, a long edit) stays live if you send
-\`staple attempt heartbeat <ref>\` (MCP \`record_attempt_event\` with
-\`event: "heartbeat"\`) every few minutes; when the process exits the beats stop
-and the claim goes quiet, which is the point. A heartbeat is machine-local: it
+on the task, and the heartbeat of their **open** attempt. A long interactive
+session or stretch of work that writes nothing (a build, a test run, a long
+edit) stays live if you run \`staple attempt heartbeat <ref>\` (MCP
+\`record_attempt_event\` with \`event: "heartbeat"\`) every few minutes.
+\`staple run drive\` does it for you: while a session it launched is alive, the
+driver beats that session's attempt on its poll. When the process exits the
+beats stop and the claim goes quiet, which is the point. A heartbeat is machine-local: it
 writes no event or transition and does not sync, so another machine still judges
 your claim by your synced writes (comments, the worklog). Another actor's
 heartbeat or read never refreshes your claim, and an ended attempt's heartbeat

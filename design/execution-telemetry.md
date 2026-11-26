@@ -584,6 +584,17 @@ stays on the machine that wrote it, the rule holds where the attempt lives;
 another device judges the claim by the holder's synced writes, as claims
 themselves are local to a database unless a lease is held.
 
+Who sends it: an interactive session that works for a long time without writing
+runs the verb itself (the agent guide says so), and `staple run drive` sends it
+for the sessions it launches. The take checked the ticket out to the run's actor,
+which opened the worker attempt, so the driver beats that attempt (`role:
+worker`) on the poll tick it already has while the session's process is alive, no
+more often than every 10 s. The heartbeat never fails the driver: a `conflict`
+(the session handed the ticket on, released it, or lost it to a steal) is the
+claim leaving the session's hands and is skipped in silence, and any other
+refusal is reported once per session as `attempt_heartbeat_failed`. When the
+process exits the beats stop, so a ticket a dead session left held goes quiet.
+
 ### Concurrency context
 
 Every transition records what else was running when it happened, because a

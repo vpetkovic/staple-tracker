@@ -373,7 +373,11 @@ staple run drive [--run <id> | --scope <queue|ref> [--max-tickets N] [--until T]
   drivers resuming one ticket. `runs/` carries its own `.gitignore` of `*`.
 - **Attached driver.** While it runs, the driver keeps `driver.json` in that
   directory (pid, host, agent, heartbeat every poll, the ticket and session pid)
-  and removes it on exit. `run status` (`run_status`) answers it as `driver`,
+  and removes it on exit. On the same poll, while the session's process is
+  alive, it beats the ticket's attempt (`staple attempt heartbeat`, at most
+  every `ATTEMPT_HEARTBEAT_MS`, 10 s, design/execution-telemetry.md
+  "Heartbeat"), so the claim of a session that writes nothing stays live and
+  goes quiet once the process exits. `run status` (`run_status`) answers it as `driver`,
   with `alive` (is the pid running; null when the driver is on another host),
   so a UI can show a run is being driven. One driver per run: `driver.lock`,
   created exclusively and holding the owner's pid, makes a second `run drive`
@@ -392,7 +396,9 @@ staple run drive [--run <id> | --scope <queue|ref> [--max-tickets N] [--until T]
   the goal section the goal run's would, and `--gate-owner` and `--goal-cap` are read
   and refused as `run start` reads them; no gate is opened.
 - **`--json`** prints one object per line: `attached`, `take`,
-  `session_started`, `session_ended` (`ended`: `exited`, `timeout`, `stopped`,
+  `session_started`, `attempt_heartbeat_failed` (`ref`, `message`: a heartbeat
+  the store refused for a reason other than the claim leaving the session, once
+  per message per session; the session goes on), `session_ended` (`ended`: `exited`, `timeout`, `stopped`,
   `interrupted`; `exitCode`; the stated `outcome` and `reason`, null when the
   tracker reads it), `wait`, `stop` (the stop answer's `reason`, `message`,
   `detail` and `recorded`), `stale_session_forgotten` (`pid`, `ticket`,

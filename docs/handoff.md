@@ -47,7 +47,8 @@ staple ls --status in_progress
 A working agent comments and updates its worklog, so its *silent* stays short.
 During a long stretch that writes nothing, it sends `staple attempt heartbeat APP-12`
 (MCP `record_attempt_event`, `event: "heartbeat"`) on its open attempt, which keeps
-*silent* short too. A dead session stops beating and goes on being silent. Only the
+*silent* short too; `staple run drive` sends it for the sessions it launches, while their
+process is alive. A dead session stops beating and goes on being silent. Only the
 holder's own writes and heartbeats count; a heartbeat stays on the machine that sent
 it, so another machine sees the holder's synced comments and worklog only. Agents read the same numbers from the `claim`
 object in MCP `get_task`. In a real handoff the silence is usually hours; this
