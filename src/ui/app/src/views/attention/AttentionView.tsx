@@ -1,5 +1,5 @@
 /**
- * The Attention destination: the work waiting on a person.
+ * The Inbox: the work waiting on a person.
  *
  * The pickup queue answers what an agent may take; this page answers what only a person can
  * move — gates, resubmitted gates, blockers a person owns, reviews, tickets made ready again
@@ -12,182 +12,192 @@
  * one fact about one workspace — so "All workspaces" lists every workspace's rows, each with
  * its workspace pill, and a workspace page lists that workspace's.
  *
- * THE ROW. The milestone desk card's recipe (`rounded-xl border bg-card`): the ticket
- * identifier and title, the one line that says why it waits, the workspace pill the task rows
- * wear and how long it has waited, and ONE action. Opening a ticket, a gate or a review goes
- * to the ticket's detail, where Approve and Request changes already live; a stopped run opens
- * the run history at that run; a conflict asks which value to keep. A silent claim only opens
- * the ticket: taking work over is never offered from here.
+ * THE PAGE is one dense list, the full width of the content card and its one scroller, cut
+ * into sections with sticky headers that fold. A row says what it is, why it waits, how long,
+ * and offers ONE action named by its verb (InboxParts.tsx). Opening a ticket, a gate or a
+ * review goes to the ticket's detail, where Approve and Request changes already live; a
+ * stopped run opens that run; a conflict opens in place and asks which value to keep. A
+ * silent claim only opens the ticket: taking work over is never offered from here.
  *
- * Presentational pieces take props and read no context, so `attention-render.test.tsx`
- * renders them to static markup.
+ * THE KEYBOARD. The rows are one tab stop (`useRovingFocus`) across sections: Up and Down
+ * (and k, j) move, Home and End jump, Enter or Space acts, e dismisses, Right and Left open
+ * and close a conflict. The focused row's buttons follow it in the tab order.
  */
-import { ArrowUpRight, ChevronDown, Inbox, X } from "lucide-react";
+import { Inbox } from "lucide-react";
+import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { GuardRefusal } from "@/components/GuardRefusal";
 import { EmptyState } from "@/components/plain/States";
+import { useRovingFocus } from "@/components/task-list/roving";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import type { AuthError } from "@/lib/api";
+import { type Selection, useSession } from "@/lib/session";
 import type { AttentionList, AttentionRow } from "@/lib/types";
-import { ErrorState, LoadingState, SectionHeading } from "@/views/ViewChrome";
-import { ageText, attentionGo, attentionSections, rowSubject } from "./attention-model";
+import { ErrorState } from "@/views/ViewChrome";
+import { attentionSections } from "./attention-model";
+import { drawerOrder, drawnRows, inboxKey } from "./inbox-model";
+import { ElsewhereLine, FailedBanner, InboxRow, InboxSection, InboxSkeleton, actOnRow } from "./InboxParts";
 import { type AttentionHandlers, useAttention } from "./use-attention";
 import "@/components/task-list/task-list.css";
 
 // `onAuthError` is every view's prop; the Inbox's read is the root's (lib/attention.ts), which reports auth itself.
 export function AttentionView(_props: { onAuthError: (error: AuthError) => void }) {
   // The rows, what each action does and the writes: use-attention.ts. This component renders.
-  const { resource, busy, refusal, clearRefusal, handlers } = useAttention();
+  const { resource, elsewhere, fresh, busy, refusal, clearRefusal, handlers } = useAttention();
+  const session = useSession();
 
   return (
-    <div className="h-full overflow-y-auto" data-attention-view="">
-      <div className="mx-auto max-w-3xl px-4 py-5">
-        <p className="text-reading text-muted-foreground">
-          Work only a person can move. The pickup queue is the plan and is not repeated here.
-        </p>
-        {refusal ? <GuardRefusal refusal={refusal} onDismiss={clearRefusal} className="mt-3" /> : null}
-        {resource.error ? <ErrorState error={resource.error} /> : null}
-        {resource.data === undefined ? (
-          resource.error ? null : <LoadingState />
-        ) : (
-          <AttentionLists list={resource.data} busy={busy} handlers={handlers} />
-        )}
-      </div>
+    <div className="@container/inbox h-full overflow-y-auto" data-attention-view="">
+      {refusal ? <GuardRefusal refusal={refusal} onDismiss={clearRefusal} className="m-3" /> : null}
+      {resource.error ? (
+        <div className="px-4">
+          <ErrorState error={resource.error} />
+        </div>
+      ) : null}
+      {resource.data === undefined ? (
+        resource.error ? null : <InboxSkeleton />
+      ) : (
+        <AttentionLists
+          // Folds, the open conflict and the focused row belong to one workspace's list.
+          key={session.ws}
+          list={resource.data}
+          busy={busy}
+          handlers={handlers}
+          allWorkspaces={session.ws === ""}
+          selected={session.selection}
+          isNew={(row) => fresh.has(row.key)}
+          elsewhere={elsewhere}
+          onShowAll={() => session.setWs("")}
+        />
+      )}
     </div>
   );
 }
 
 export type { AttentionHandlers };
 
-export function AttentionLists({ list, busy, handlers }: { list: AttentionList; busy: string | null; handlers: AttentionHandlers }) {
+export function AttentionLists({
+  list,
+  busy,
+  handlers,
+  allWorkspaces,
+  selected = null,
+  isNew,
+  elsewhere = 0,
+  onShowAll,
+  onVisibleOrder,
+}: {
+  list: AttentionList;
+  busy: string | null;
+  handlers: AttentionHandlers;
+  /** The page lists every workspace: rows wear their workspace. */
+  allWorkspaces: boolean;
+  /** The ticket open in the drawer. */
+  selected?: Selection | null;
+  /** New since the person last looked. Absent, no row is marked. */
+  isNew?: (row: AttentionRow) => boolean;
+  /** Rows waiting in the other workspaces, for a one-workspace page. */
+  elsewhere?: number;
+  onShowAll?: () => void;
+  /** The drawer's previous and next walk the rows on screen (lib/session.ts `publishVisibleOrder`). */
+  onVisibleOrder?: (order: readonly Selection[]) => void;
+}) {
   const sections = attentionSections(list.rows);
+  const [folded, setFolded] = useState<Record<string, boolean>>({});
+  // One conflict is open at most; on an older payload, one conflict's menu.
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const drawn = drawnRows(sections, folded);
+  const roving = useRovingFocus(drawn.map((row) => row.key));
+
+  const order = useMemo(() => drawerOrder(drawnRows(attentionSections(list.rows), folded)), [list.rows, folded]);
+  useEffect(() => {
+    onVisibleOrder?.(order);
+  }, [onVisibleOrder, order]);
+  // Unmount only: a list no longer on screen leaves the drawer nothing to walk.
+  useEffect(() => () => onVisibleOrder?.([]), [onVisibleOrder]);
+
+  const expand = (key: string) => (open: boolean) => setExpanded(open ? key : null);
+
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    // Keys belong to the focused row itself; its buttons and an open menu keep their own.
+    const key = (event.target as HTMLElement).dataset.attentionRow;
+    if (key === undefined || event.altKey || event.ctrlKey || event.metaKey) return;
+    const row = drawn.find((candidate) => candidate.key === key);
+    if (!row) return;
+    const isBusy = busy === row.key;
+    const move = inboxKey(
+      drawn.map((candidate) => candidate.key),
+      key,
+      event.key,
+      { dismissible: row.dismissible && !isBusy, resolve: row.action.verb === "resolve" && !isBusy, expanded: expanded === key },
+    );
+    if (move === null) return;
+    event.preventDefault();
+    if ("dismiss" in move) {
+      handlers.dismiss(row);
+      if (move.focus) roving.go(move.focus);
+    } else if ("focus" in move) roving.go(move.focus);
+    else if ("act" in move) actOnRow(row, { busy: isBusy, expanded: expanded === key }, handlers, expand(key));
+    else if ("expand" in move) setExpanded(key);
+    else setExpanded(null);
+  };
+
   return (
-    <>
+    <div className="flex min-h-full flex-col">
+      {list.failed.map((failure) => (
+        <FailedBanner key={failure.workspace} workspace={failure.workspace} message={failure.message} />
+      ))}
       {sections.length === 0 ? (
-        <div data-attention-empty="" className="mt-6">
-          <EmptyState icon={Inbox} title="Nothing is waiting on you">
-            No gate, review, blocker, stopped run, silent claim or sync conflict needs a person
-            {list.workspaces.length > 1 ? ` in ${list.workspaces.length} workspaces` : ""}.
+        <div data-attention-empty="" className="my-auto">
+          <EmptyState
+            icon={Inbox}
+            title="Nothing is waiting on you"
+            action={
+              elsewhere > 0 ? (
+                <Button variant="outline" size="sm" className="pointer-coarse:min-h-11" onClick={onShowAll}>
+                  {`${elsewhere} waiting in other workspaces`}
+                </Button>
+              ) : undefined
+            }
+          >
+            Approvals, reviews, blockers you own, stopped runs, silent claims and sync conflicts land here. The queue is the
+            agents' plan and is not repeated.
           </EmptyState>
         </div>
       ) : (
-        <div className="mt-5 flex flex-col gap-5">
+        <div
+          onKeyDown={onKeyDown}
+          onFocus={(event) => {
+            const row = (event.target as HTMLElement).closest<HTMLElement>("[data-attention-row]");
+            if (row?.dataset.attentionRow) roving.set(row.dataset.attentionRow);
+          }}
+        >
           {sections.map((section) => (
-            <section key={section.kind} aria-label={section.label} data-attention-section={section.kind}>
-              <SectionHeading>
-                {section.label} <span className="tabular-nums">{section.rows.length}</span>
-              </SectionHeading>
-              <ul className="flex flex-col gap-2">
-                {section.rows.map((row) => (
-                  <li key={row.key}>
-                    <AttentionCard row={row} busy={busy === row.key} handlers={handlers} />
-                  </li>
-                ))}
-              </ul>
-            </section>
+            <InboxSection
+              key={section.kind}
+              section={section}
+              folded={folded[section.kind] === true}
+              onToggle={() => setFolded((current) => ({ ...current, [section.kind]: !current[section.kind] }))}
+            >
+              {section.rows.map((row) => (
+                <InboxRow
+                  key={row.key}
+                  row={row}
+                  allWorkspaces={allWorkspaces}
+                  isNew={isNew?.(row) ?? false}
+                  selected={selected !== null && selected.workspace === row.workspace && selected.ref === row.ref}
+                  busy={busy === row.key}
+                  expanded={expanded === row.key}
+                  active={roving.activeKey === row.key}
+                  handlers={handlers}
+                  onExpand={expand(row.key)}
+                  rowRef={roving.register(row.key)}
+                />
+              ))}
+            </InboxSection>
           ))}
+          {elsewhere > 0 && !allWorkspaces ? <ElsewhereLine count={elsewhere} onShowAll={onShowAll} /> : null}
         </div>
       )}
-      {list.failed.map((failure) => (
-        <p key={failure.workspace} data-attention-failed={failure.workspace} className="mt-4 text-label text-muted-foreground">
-          Could not read {failure.workspace}: {failure.message}
-        </p>
-      ))}
-    </>
-  );
-}
-
-export function AttentionCard({ row, busy, handlers }: { row: AttentionRow; busy: boolean; handlers: AttentionHandlers }) {
-  const subject = rowSubject(row);
-  return (
-    <div
-      data-attention-row={row.key}
-      data-attention-kind={row.kind}
-      className="flex flex-col gap-3 rounded-xl border bg-card px-3.5 py-3 sm:flex-row sm:items-center"
-    >
-      <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-baseline gap-2">
-          {subject ? <span className="shrink-0 font-mono text-[11px] text-text-tertiary">{subject}</span> : null}
-          <span className="min-w-0 text-reading font-medium wrap-anywhere">{row.title}</span>
-        </div>
-        <p className="mt-0.5 text-label text-muted-foreground wrap-anywhere" data-attention-detail="">
-          {row.detail}
-        </p>
-        <div className="mt-1.5 flex min-w-0 items-center gap-2 text-caption text-text-tertiary">
-          <span
-            className="staple-row-workspace"
-            // The task row's pill, untruncated: here it is the only place the row names its workspace.
-            style={{ maxWidth: "none" }}
-            data-attention-workspace={row.workspace}
-            title={`Workspace: ${row.workspace}`}
-          >
-            {row.workspace}
-          </span>
-          <time dateTime={row.since} title={row.since} className="tabular-nums">
-            {ageText(row)}
-          </time>
-        </div>
-      </div>
-      <div className="flex shrink-0 items-center gap-2 max-sm:[&>*]:flex-1">
-        <AttentionAction row={row} busy={busy} handlers={handlers} />
-        {row.dismissible ? (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="max-sm:min-h-11"
-            disabled={busy}
-            data-attention-dismiss={row.key}
-            aria-label={`Dismiss ${subject ?? row.title}`}
-            onClick={() => handlers.dismiss(row)}
-          >
-            <X aria-hidden />
-            Dismiss
-          </Button>
-        ) : null}
-      </div>
     </div>
-  );
-}
-
-/** The row's one action. A conflict asks which value to keep; everything else opens what it names. */
-function AttentionAction({ row, busy, handlers }: { row: AttentionRow; busy: boolean; handlers: AttentionHandlers }) {
-  const className = "max-sm:min-h-11";
-  if (row.action.verb === "resolve" && row.conflictId) {
-    return (
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="outline" size="sm" className={className} disabled={busy} data-attention-action={row.action.verb}>
-            {row.action.label}
-            <ChevronDown aria-hidden />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="pointer-coarse:[&_[role=menuitem]]:min-h-11">
-          <DropdownMenuItem data-attention-take="local" onSelect={() => handlers.resolve(row, "local")}>
-            Keep this device's value
-          </DropdownMenuItem>
-          <DropdownMenuItem data-attention-take="remote" onSelect={() => handlers.resolve(row, "remote")}>
-            Take the other device's value
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    );
-  }
-  return (
-    <Button
-      variant="outline"
-      size="sm"
-      className={className}
-      disabled={busy || attentionGo(row) === null}
-      data-attention-action={row.action.verb}
-      onClick={() => handlers.act(row)}
-    >
-      {row.action.label}
-      <ArrowUpRight aria-hidden />
-    </Button>
   );
 }
