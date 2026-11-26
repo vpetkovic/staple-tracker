@@ -76,10 +76,8 @@ function WorkspacePlan({ workspace, onAuthError }: { workspace: string; onAuthEr
   const frame = useRef<HTMLDivElement>(null);
   const scrollReady = useRef(false);
   const restored = useRef(false);
-  const [column, setColumn] = useState(() => memory.current.column[lens]);
   const chooseLens = (next: Lens) => {
     scrollReady.current = false;
-    setColumn(memory.current.column[next]);
     setLens(next);
   };
   useEffect(() => {
@@ -196,12 +194,6 @@ function WorkspacePlan({ workspace, onAuthError }: { workspace: string; onAuthEr
           onOpen={open}
           selected={selected}
           capture={capture}
-          currentColumn={column}
-          onColumn={(next: string) => {
-            setColumn(next);
-            memory.current.column[lens] = next;
-            savePlanMemory(workspace, memory.current);
-          }}
         />
       </TabsContent>
       </Tabs>

@@ -9,13 +9,13 @@
  */
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
-import type { HorizonData, IdeaData } from "@/lib/plan-types";
+import type { IdeaData } from "@/lib/plan-types";
 import { useIsDesk, useMediaQuery } from "@/lib/use-media";
 import { cn } from "@/lib/utils";
 import { ideaPlanHref } from "@/detail/PlannedIdeaLinks";
 import { STATE_WORDS } from "@/detail/plan-record";
 import { ShippedCheck } from "@/detail/ShippedMark";
-import { Amber, Flag, HorizonSummary, PLAN_WIDTH, SegmentedBar, StateGlyph, planIncomplete, useElementWidth } from "./plan-parts";
+import { Amber, Flag, PLAN_WIDTH, SegmentedBar, StateGlyph, planIncomplete, useElementWidth } from "./plan-parts";
 import { dayLabel } from "./plan-model";
 import { outlineEntries, outlineKey, type OutlineEntry } from "./plan-outline";
 import type { TreeRow } from "./plan-tree";
@@ -24,15 +24,6 @@ export { SegmentedBar } from "./plan-parts";
 
 /** How a row opens its record: in place (the lens's drawer), or as a link to it in Plan (the drawer and Milestones). */
 export type TreeOpener = { onOpen: (id: string) => void } | { workspace: string };
-
-/**
- * The horizon's own lines, the same on every surface: its bar and percent, "Needs you", its leaf
- * records, members, states and units. A surface that titles the horizon and prints its risk
- * itself (Milestones) draws it without them.
- */
-export function TreeHeader({ horizon, className }: { horizon: HorizonData; className?: string }) {
-  return <HorizonSummary horizon={horizon} heading={null} risk={false} className={className} />;
-}
 
 /** The grid every line of the outline shares: two columns on a compact tree, four from 760px, five from 1040px. */
 const GRID =

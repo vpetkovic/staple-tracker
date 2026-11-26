@@ -173,8 +173,7 @@ function Milestones({ horizonView, desk = true }: { horizonView: HorizonData; de
 }
 
 const inSession = (node: React.ReactNode) => renderToStaticMarkup(<SessionContext.Provider value={fakeSession({ ws: "staple" })}>{node}</SessionContext.Provider>);
-// Now's column is the current one, so a phone, which shows one column, shows it too.
-const lens = (horizons?: HorizonData[]) => lensColumn(renderToStaticMarkup(<HorizonsBoard plan={plan(horizons)} write={async () => true} onOpen={noop} selected={null} currentColumn="h:now" />));
+const lens = (horizons?: HorizonData[]) => lensColumn(renderToStaticMarkup(<HorizonsBoard plan={plan(horizons)} write={async () => true} onOpen={noop} selected={null} />));
 const drawer = (h = NOW_H) => inSession(<Drawer horizonView={h} />);
 const milestones = (h = NOW_H) => inSession(<Milestones horizonView={h} />);
 

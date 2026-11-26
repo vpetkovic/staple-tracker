@@ -1,11 +1,9 @@
 /**
- * The board shell the Ideas and Horizons lenses share. From the desk breakpoint the columns
- * share the width and scroll sideways inside the board's own frame only when they cannot fit;
- * below it the board is one column with a switcher above it. Cards drag on the desk, and every
- * card has a Move menu, which is how a phone or a keyboard moves it.
+ * What the Ideas and Horizons lenses share: the props a lens takes, and a record's ⋯ menu, which
+ * lists the moves its state offers and is how a phone or a keyboard moves it.
  */
 import { MoreHorizontal } from "lucide-react";
-import { useEffect, useState, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
+import type { KeyboardEvent } from "react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -16,11 +14,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type { IdeaData, PlanData } from "@/lib/plan-types";
-import { useIsDesk } from "@/lib/use-media";
-import { cn } from "@/lib/utils";
 import { moveActionOf, moveOffered, planActionItems, type PlanItem } from "@/detail/plain-actions";
-import { planCounts } from "./plan-counts";
-import { dropBody, dropChanges, riskOf, type BoardColumn, type DropTarget } from "./plan-model";
+import { dropBody, dropChanges, type BoardColumn, type DropTarget } from "./plan-model";
 
 export type Write = (verb: string, body: Record<string, unknown>) => Promise<boolean>;
 
@@ -29,89 +24,10 @@ export interface BoardProps {
   write: Write;
   onOpen: (id: string) => void;
   selected: string | null;
-  currentColumn?: string;
-  onColumn?: (column: string) => void;
   /** A focus or filter text is on: fold nothing away, so every match shows. */
   filtering?: boolean;
   /** Captures a raw idea; the Ideas lens draws its field at the top of Raw. */
   capture?: (title: string) => Promise<boolean>;
-}
-
-export function Board({ columns, footer, currentColumn, onColumn, column }: Pick<BoardProps, "currentColumn" | "onColumn"> & { columns: BoardColumn[]; footer?: ReactNode; column: (column: BoardColumn, desk: boolean) => ReactNode }) {
-  const desk = useIsDesk();
-  const [localColumn, setLocalColumn] = useState(columns[0]?.key ?? "");
-  const current = currentColumn ?? localColumn;
-  const setCurrent = (next: string) => { setLocalColumn(next); onColumn?.(next); };
-  useEffect(() => {
-    if (!columns.some((entry) => entry.key === current) && columns[0]) setCurrent(columns[0].key);
-  }, [columns, current]);
-  const shown = desk ? columns : columns.filter((entry) => entry.key === current);
-
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      {desk ? null : (
-        <div role="tablist" aria-label="Column" className="flex gap-1.5 overflow-x-auto px-gutter py-2" data-plan-column-switcher>
-          {columns.map((entry) => {
-            const risk = entry.horizon ? { late: entry.horizon.lateCount } : riskOf(entry.ideas);
-            return (
-              <button
-                key={entry.key}
-                type="button"
-                role="tab"
-                aria-selected={entry.key === current}
-                data-plan-column-tab={entry.key}
-                onClick={() => setCurrent(entry.key)}
-                className={cn(
-                  "flex min-h-9 shrink-0 items-center gap-1.5 rounded-full border px-3 text-label",
-                  entry.key === current ? "border-border-strong bg-surface-selected font-semibold text-foreground" : "text-text-secondary",
-                )}
-              >
-                {entry.title}
-                <span className="text-text-tertiary">{entry.horizon ? planCounts(entry.horizon) : entry.ideas.length}</span>
-                {risk.late > 0 ? <span aria-label={`${risk.late} late`} className="size-1.5 rounded-full bg-destructive" /> : null}
-              </button>
-            );
-          })}
-        </div>
-      )}
-      <div className={cn("min-h-0 flex-1", desk ? "flex gap-3 overflow-x-auto px-gutter py-3" : "overflow-y-auto px-gutter pb-4")} data-plan-board>
-        {shown.map((entry) => column(entry, desk))}
-      </div>
-      {footer}
-    </div>
-  );
-}
-
-/** A column's frame: its section, and the drop that writes what the idea's state offers. */
-export function ColumnFrame({ plan, column, write, desk, children }: { plan: PlanData; column: BoardColumn; write: Write; desk: boolean; children: ReactNode }) {
-  const [over, setOver] = useState(false);
-  const onDrop = (event: DragEvent) => {
-    event.preventDefault();
-    setOver(false);
-    const id = event.dataTransfer.getData("text/plain");
-    const idea = plan.ideas.find((candidate) => candidate.id === id);
-    // Only a move the idea's lifecycle state offers is sent (plain-actions, from the core table).
-    if (idea && dropChanges(idea, column.drop) && moveOffered(idea, column.drop)) void write("update", { ref: idea.id, ...dropBody(column.drop) });
-  };
-  return (
-    <section
-      aria-label={column.title}
-      data-plan-column={column.key}
-      onDragOver={(event) => {
-        event.preventDefault();
-        setOver(true);
-      }}
-      onDragLeave={() => setOver(false)}
-      onDrop={onDrop}
-      className={cn(
-        "flex flex-col rounded-lg border bg-surface-sunken",
-        desk ? "min-w-56 flex-1 basis-0" : "w-full",
-        over && "border-ring bg-surface-hover",
-      )}
-    >
-      {children}
-    </section>
-  );
 }
 
 /**
