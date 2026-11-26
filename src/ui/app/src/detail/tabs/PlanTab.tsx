@@ -1,44 +1,38 @@
 /**
- * The Plan tab: an idea's plan as the person shapes it, in the shared drawer.
+ * The Plan tab: an idea's plan as the person shapes it, in the shared drawer, read as a document.
  *
- * Every editor here renders only when the record's lifecycle state offers its action
- * (`offers`, from the core table through the payload): a raw idea shows no horizon or dates to
- * set, a shipped one shows its plan read-only, and nothing is offered that the store would
- * refuse. Maturity moves and promotion are the header's buttons; this tab holds the editors that
- * need input: the plan sections an agent scaffolds from (PlanSections.tsx), and Scaffold's
- * preview and confirm. What is derived (stage, progress, actual dates, lateness) is shown, never
- * edited.
+ * What it needs first leads ("Where it stands", PlanStanding.tsx), then its properties, then its
+ * work once started, then a sticky row of section chips and the plan's sections
+ * (PlanSections.tsx), the decisions, the sub-ideas, and the rare actions last. The layout follows
+ * the tab's own width with a container query (`@container/plantab`), compact under 512px of
+ * content, which is a 560px drawer less its gutters: the drawer can be a full page or a phone's
+ * sheet.
+ *
+ * Every editor here renders only when the record's lifecycle state offers its action (`offers`,
+ * from the core table through the payload): a raw idea shows no horizon or dates to set, a
+ * shipped one shows its plan read-only, and nothing is offered that the store would refuse.
+ * Maturity moves and promotion are the header's buttons. What is derived (stage, progress,
+ * actual dates, lateness) is shown, never edited.
  */
-import { Link2, Unlink } from "lucide-react";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { ChevronDown, Link2, Unlink } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ComponentProps, type CSSProperties, type RefObject } from "react";
 import { GuardRefusal } from "@/components/GuardRefusal";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { getPlan } from "@/lib/api";
-import { Markdown } from "@/lib/markdown";
 import type { IdeaDetailData, PlanData } from "@/lib/plan-types";
 import { useSession } from "@/lib/session";
 import { useResource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
-import { Chip, Progress } from "@/views/plan/PlanBoards";
-import { DeliveredMark, ShippedMark } from "../ShippedMark";
 import { dayLabel, descendantsOf } from "@/views/plan/plan-model";
+import { Flag, SegmentedBar, StateGlyph } from "@/views/plan/plan-parts";
 import { offers } from "../plain-actions";
 import { STATE_WORDS, onScaffoldRequest, planRecordOf, usePlanWrite, type PlanWrite } from "../plan-record";
-import { Completeness, EditButton, PlanSectionsView, ScaffoldSection, Section, useProse } from "./PlanSections";
+import { EmptyValue, PropertyList, PropertyRow } from "../PropertyGrid";
+import { AddLine, FoldButton, PlanSectionsView, Section } from "./PlanSections";
+import { WhereItStands } from "./PlanStanding";
+import { datedDecision, planSectionsOf, type PlanSectionEntry, type PlanSectionId } from "./plan-tab-model";
 import type { TabProps } from "./registry";
-
-/**
- * The lifecycle as phases: thinking until work exists, then started, then shipped. Maturity and
- * the horizon are separate facts shown below it, so being scheduled never reads as being further
- * along than exploring.
- */
-const PHASES = [
-  { id: "thinking", label: "Thinking" },
-  { id: "started", label: "Started" },
-  { id: "shipped", label: "Shipped" },
-] as const;
 
 export function PlanTab({ detail, workspace, onAuthError, refresh }: TabProps) {
   const record = planRecordOf(detail);
@@ -48,111 +42,139 @@ export function PlanTab({ detail, workspace, onAuthError, refresh }: TabProps) {
   const { write, refusal } = usePlanWrite(workspace, refresh);
   const [scaffoldOpen, setScaffoldOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const stick = useTabStripHeight(rootRef);
   // The header's Scaffold opens the preview here: it is never a one-click write.
   useEffect(() => onScaffoldRequest(() => setScaffoldOpen(true)), []);
   if (!record) return null;
+  const { idea } = record;
   const scaffold = async (fingerprint: string) => {
     setBusy(true);
-    if (await write("scaffold", { ref: record.idea.id, fingerprint })) setScaffoldOpen(false);
+    if (await write("scaffold", { ref: idea.id, fingerprint })) setScaffoldOpen(false);
     setBusy(false);
   };
+  // Started or shipped: the work in the tracker is what it is now, so it comes right under the properties.
+  const workFirst = idea.state === "started" || idea.state === "shipped";
+  const jump = (id: PlanSectionId) => jumpTo(rootRef.current, id);
   return (
-    <div className="space-y-6" data-plan-tab={record.idea.id} data-plan-state={record.idea.state}>
+    <div ref={rootRef} className="@container/plantab space-y-6" style={{ "--plan-stick": `${stick}px` } as CSSProperties} data-plan-tab={idea.id} data-plan-state={idea.state}>
       {refusal ? <GuardRefusal refusal={refusal} /> : null}
-      <Stage record={record} />
-      <Delivered record={record} write={write} />
-      <Completeness record={record} />
-      {record.scaffold ? <ScaffoldSection preview={record.scaffold} open={scaffoldOpen} onToggle={() => setScaffoldOpen((open) => !open)} onConfirm={(fingerprint) => void scaffold(fingerprint)} busy={busy} /> : null}
+      <WhereItStands record={record} write={write} onJump={jump} scaffold={{ open: scaffoldOpen, onToggle: () => setScaffoldOpen((open) => !open), onConfirm: (fingerprint) => void scaffold(fingerprint), busy }} />
       <Fields record={record} plan={plan} write={write} />
-      <Brief record={record} write={write} />
+      {workFirst ? <Work record={record} write={write} /> : null}
+      <SectionNav record={record} onJump={jump} />
       <PlanSectionsView record={record} write={write} />
-      <Questions record={record} write={write} />
       <Decisions record={record} write={write} />
       <SubIdeas record={record} workspace={workspace} />
-      <Work record={record} write={write} />
+      {workFirst ? null : <Work record={record} write={write} />}
+      <RareActions record={record} write={write} />
     </div>
   );
 }
 
-function Stage({ record }: { record: IdeaDetailData }) {
-  const { idea } = record;
-  // Its own state, as every lens reads it: the rollup and the horizon never move the phase.
-  const phase = idea.state === "shipped" ? "shipped" : idea.state === "started" ? "started" : "thinking";
-  const at = PHASES.findIndex((entry) => entry.id === phase);
-  return (
-    <Section label="Stage" testId="stage">
-      <ol className="flex flex-wrap gap-1 text-caption" data-plan-phases={phase}>
-        {idea.state === "dropped" ? (
-          <li className="rounded-full border border-destructive/60 px-2 py-0.5 text-destructive">dropped</li>
-        ) : (
-          PHASES.map((entry, index) => (
-            <li
-              key={entry.id}
-              className={cn(
-                "rounded-full border px-2 py-0.5",
-                index < at && "border-transparent bg-muted text-text-secondary",
-                index === at && "border-primary bg-primary text-primary-foreground",
-                index > at && "text-text-tertiary",
-              )}
-            >
-              {entry.label}
-              {entry.id === "thinking" && index === at ? ` · ${STATE_WORDS[idea.maturity]?.toLowerCase() ?? idea.maturity}` : ""}
-            </li>
-          ))
-        )}
-      </ol>
-      <div className="mt-2 flex flex-wrap gap-1.5 text-caption">
-        {idea.late ? <Chip tone="red">late</Chip> : null}
-        {idea.notStarted ? <Chip tone="amber">not started</Chip> : null}
-        {idea.state === "shipped" && !idea.delivered ? <ShippedMark on={idea.actual.end} withYear /> : null}
-      </div>
-    </Section>
-  );
+/** The drawer's sticky tab strip's height: where the section chips stick, under it. */
+function useTabStripHeight(rootRef: RefObject<HTMLElement | null>): number {
+  const [height, setHeight] = useState(0);
+  useLayoutEffect(() => {
+    const strip = rootRef.current?.closest("[data-detail-layout]")?.querySelector<HTMLElement>("[data-detail-tabs]");
+    if (!strip || typeof ResizeObserver === "undefined") return;
+    const measure = () => setHeight(strip.offsetHeight);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(strip);
+    return () => observer.disconnect();
+  }, [rootRef]);
+  return height;
+}
+
+const reducedMotion = () => typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+
+/** Scrolls a section (or its chip on the "Not written yet" line) to just under the stuck chips, and moves focus there. */
+function jumpTo(root: HTMLElement | null, id: PlanSectionId): void {
+  const target = root?.querySelector<HTMLElement>(`[data-plan-anchor="${id}"]`);
+  const scroller = root?.closest<HTMLElement>(".staple-detail-scroll");
+  const nav = root?.querySelector<HTMLElement>("[data-plan-section-nav]");
+  if (!target || !scroller) return;
+  const covered = (Number.parseFloat(root ? getComputedStyle(root).getPropertyValue("--plan-stick") : "0") || 0) + (nav?.offsetHeight ?? 0);
+  const top = scroller.scrollTop + target.getBoundingClientRect().top - scroller.getBoundingClientRect().top - covered - 12;
+  scroller.scrollTo({ top: Math.max(0, top), behavior: reducedMotion() ? "auto" : "smooth" });
+  target.focus({ preventScroll: true });
 }
 
 /**
- * Delivered outside the tracker: the person's mark, its day and note, and the person's button to
- * clear it; or, where the state offers it, the form that marks it. The page is the person.
+ * One chip per section in plan order: filled where it has content, starred where shaping
+ * requires it, with a count for lists. A chip goes to its section; one whose section is not
+ * drawn (empty, and edits not offered) goes nowhere.
  */
-function Delivered({ record, write }: { record: IdeaDetailData; write: PlanWrite }) {
-  const { idea } = record;
-  const today = new Date().toISOString().slice(0, 10);
-  const [on, setOn] = useState(today);
-  const [note, setNote] = useState("");
-  const [busy, setBusy] = useState(false);
-  const run = async (delivered: { on: string; note: string } | null) => {
-    setBusy(true);
-    await write("update", { ref: idea.id, delivered });
-    setBusy(false);
-  };
-  if (idea.delivered) {
-    return (
-      <Section label="Delivered outside the tracker" testId="delivered">
-        <DeliveredMark on={idea.delivered.on} className="text-label" />
-        {idea.delivered.note ? <Markdown text={idea.delivered.note} className="staple-detail-prose mt-2 text-body" /> : null}
-        {offers(idea, "clear_delivered") ? (
-          <Button variant="outline" size="sm" className="mt-2" disabled={busy} onClick={() => void run(null)} data-plan-action="clear_delivered">
-            Clear the delivered mark
-          </Button>
-        ) : null}
-      </Section>
-    );
-  }
-  if (!offers(idea, "mark_delivered")) return null;
+function SectionNav({ record, onJump }: { record: IdeaDetailData; onJump: (id: PlanSectionId) => void }) {
+  const { completeness: c, idea } = record;
+  const reachable = (entry: PlanSectionEntry) => entry.filled || offers(idea, entry.id === "decisions" ? "decide" : "edit");
   return (
-    <Section label="Delivered outside the tracker" testId="delivered">
-      <p className="m-0 text-label text-text-secondary">Work that shipped before or outside the tracker: it reads shipped, with no ticket.</p>
-      <div className="mt-2 flex flex-wrap items-center gap-2">
-        <input type="date" aria-label="Delivered on" className="h-9 rounded-md border bg-field px-2" value={on} max={today} onChange={(event) => setOn(event.target.value)} data-plan-delivered-on />
-        <Button size="sm" disabled={busy || on === ""} onClick={() => void run({ on, note })} data-plan-action="mark_delivered">
-          Mark delivered
-        </Button>
-      </div>
-      <Textarea className="mt-2 min-h-16" placeholder="A note: where and how it was delivered (optional)" value={note} onChange={(event) => setNote(event.target.value)} data-plan-delivered-note />
-    </Section>
+    <nav aria-label="Plan sections" className="staple-plan-nav sticky z-[5] flex gap-1.5 overflow-x-auto border-b bg-card py-2.5" data-plan-section-nav data-plan-completeness={`${c.starred}/${c.starredTotal}`}>
+      <span className="sr-only">
+        {c.starred} of {c.starredTotal} required sections, {c.filled} of {c.total} in all
+      </span>
+      {planSectionsOf(record).map((entry) => (
+        <button
+          key={entry.id}
+          type="button"
+          disabled={!reachable(entry)}
+          onClick={() => onJump(entry.id)}
+          data-plan-chip={entry.id}
+          data-filled={entry.filled ? "" : undefined}
+          data-required={entry.star ? "" : undefined}
+          title={reachable(entry) ? undefined : "Not written"}
+          className={cn(
+            "focus-ring inline-flex h-[26px] min-h-0 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-label whitespace-nowrap hover:bg-surface-hover disabled:cursor-default disabled:opacity-60 disabled:hover:bg-transparent pointer-coarse:h-8 @max-[512px]/plantab:h-8 @max-[512px]/plantab:text-body",
+            entry.filled ? "text-foreground" : "text-text-tertiary",
+          )}
+        >
+          <span aria-hidden className={cn("size-[7px] shrink-0 rounded-full border-[1.5px]", entry.filled ? "border-foreground bg-foreground" : "border-border-strong")} />
+          {entry.label}
+          {entry.star ? (
+            <>
+              <span aria-hidden className="text-caption text-flag-todo">
+                ★
+              </span>
+              <span className="sr-only">, required</span>
+            </>
+          ) : null}
+          {entry.count !== null ? <span className="text-text-tertiary tabular-nums">{entry.count}</span> : null}
+          {entry.filled ? null : <span className="sr-only">, not written</span>}
+        </button>
+      ))}
+    </nav>
   );
 }
 
+/** A native date field that reads as text until hovered or focused. */
+const QUIET = "h-8 min-w-0 max-w-full rounded-md border border-transparent bg-transparent px-2 -ml-2 text-body text-foreground hover:bg-surface-hover focus-visible:border-ring focus-visible:outline-none pointer-coarse:h-10 pointer-coarse:text-[16px]";
+
+/**
+ * A select that reads as its chosen option's words with a caret: the native control lies over
+ * them, transparent, so the picker, the keyboard and the accessible name are the platform's.
+ */
+function QuietSelect({ options, value, className, ...props }: Omit<ComponentProps<"select">, "children" | "value"> & { value: string; options: Array<{ value: string; label: string }> }) {
+  const chosen = options.find((option) => option.value === value)?.label ?? "";
+  return (
+    <span className={cn("relative -ml-2 inline-flex h-8 max-w-full min-w-0 items-center gap-1.5 rounded-md px-2 text-body text-foreground hover:bg-surface-hover has-[select:focus-visible]:ring-2 has-[select:focus-visible]:ring-ring pointer-coarse:h-10", className)}>
+      <span className="truncate">{chosen}</span>
+      <ChevronDown aria-hidden className="size-3.5 shrink-0 text-text-tertiary" />
+      <select value={value} className="absolute inset-0 size-full min-h-0 cursor-pointer appearance-none opacity-0" {...props}>
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </span>
+  );
+}
+
+const horizonWords = (horizon: { name: string; date: string | null }) => `◇ ${horizon.name}${horizon.date ? ` · ${dayLabel(horizon.date)}` : ""}`;
+const windowWords = (start: string | null, end: string | null) => `${start ? dayLabel(start, false) : "…"} – ${end ? dayLabel(end) : "…"}`;
+
+/** Horizon, Part of and Planned, edited in place where offered; Baseline (when it differs) and Actual read-only. */
 function Fields({ record, plan, write }: { record: IdeaDetailData; plan: PlanData | null; write: PlanWrite }) {
   const { idea } = record;
   const ref = idea.id;
@@ -161,144 +183,105 @@ function Fields({ record, plan, write }: { record: IdeaDetailData; plan: PlanDat
   const parents = (plan?.ideas ?? []).filter((other) => other.id !== idea.id && !below.has(other.id) && other.state !== "dropped" && !other.promoted);
   const started = idea.stage === "started" || idea.stage === "shipped";
   const horizon = plan?.horizons.find((h) => h.id === idea.horizonId) ?? record.horizon;
+  const later = idea.state === "raw" ? "After it is explored" : null;
+  const baseline = idea.baseline && (idea.baseline.start !== idea.planned.start || idea.baseline.target !== idea.planned.target) ? idea.baseline : null;
   return (
-    <div className="grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-2.5 text-label" data-plan-fields>
-      <span className="text-text-tertiary">Maturity</span>
-      <span data-plan-field="maturity">{STATE_WORDS[idea.maturity] ?? idea.maturity}</span>
-
-      <span className="text-text-tertiary">Horizon</span>
-      {offers(idea, "schedule") && plan ? (
-        <select className="h-9 min-w-0 rounded-md border bg-field px-2" value={idea.horizonId ?? ""} onChange={(event) => save({ horizon: event.target.value || null })} data-plan-detail-horizon>
-          <option value="">Unscheduled</option>
-          {plan.horizons.map((option) => (
-            <option key={option.id} value={option.id}>
-              {option.name}
-              {option.date ? ` · ${dayLabel(option.date)}` : ""}
-            </option>
-          ))}
-        </select>
-      ) : (
-        <span data-plan-field="horizon">{horizon ? `${horizon.name}${horizon.date ? ` · ${dayLabel(horizon.date)}` : ""}` : "Unscheduled"}</span>
-      )}
-
-      <span className="text-text-tertiary">Part of</span>
-      {offers(idea, "reparent") && plan ? (
-        <select className="h-9 min-w-0 rounded-md border bg-field px-2" value={idea.parentId ?? ""} onChange={(event) => save({ parent: event.target.value || null })} data-plan-detail-parent>
-          <option value="">Nothing (top level)</option>
-          {parents.map((other) => (
-            <option key={other.id} value={other.id}>
-              {other.title}
-            </option>
-          ))}
-        </select>
-      ) : (
-        <span data-plan-field="parent">{record.parent?.title ?? "Nothing (top level)"}</span>
-      )}
-
-      <span className="text-text-tertiary">Planned</span>
-      {offers(idea, "plan_dates") ? (
-        <div className="flex flex-wrap items-center gap-1.5">
-          <input type="date" aria-label="Planned start" className="h-9 rounded-md border bg-field px-2" value={idea.planned.start ?? ""} max={idea.planned.target ?? undefined} onChange={(event) => save({ plannedStart: event.target.value || null })} data-plan-detail-start />
-          <span className="text-text-tertiary">to</span>
-          <input type="date" aria-label="Planned target" className="h-9 rounded-md border bg-field px-2" value={idea.planned.target ?? ""} min={idea.planned.start ?? undefined} onChange={(event) => save({ plannedTarget: event.target.value || null })} data-plan-detail-target />
-        </div>
-      ) : (
-        <span data-plan-field="planned">{idea.planned.start || idea.planned.target ? `${dayLabel(idea.planned.start)} to ${dayLabel(idea.planned.target)}` : "Not planned"}</span>
-      )}
-
-      {idea.baseline ? (
-        <>
-          <span className="text-text-tertiary">Baseline</span>
-          <span data-plan-detail-baseline>
-            {dayLabel(idea.baseline.start)} to {dayLabel(idea.baseline.target)}
-          </span>
-        </>
-      ) : null}
-      {started ? (
-        <>
-          <span className="text-text-tertiary">Actual</span>
-          <span>
-            {idea.actual.start ? dayLabel(idea.actual.start) : "not begun"}
-            {" to "}
-            {idea.actual.end ? dayLabel(idea.actual.end) : idea.actual.forecastEnd ? `about ${dayLabel(idea.actual.forecastEnd)} (forecast)` : "open"}
-          </span>
-        </>
-      ) : null}
+    <div data-plan-fields>
+      <PropertyList layout="grid">
+        <PropertyRow label="Horizon" id="horizon">
+          {offers(idea, "schedule") && plan ? (
+            <QuietSelect
+              aria-label="Horizon"
+              value={idea.horizonId ?? ""}
+              options={[{ value: "", label: "Unscheduled" }, ...plan.horizons.map((option) => ({ value: option.id, label: horizonWords(option) }))]}
+              onChange={(event) => save({ horizon: event.target.value || null })}
+              data-plan-detail-horizon
+            />
+          ) : (
+            <span data-plan-field="horizon">{horizon ? horizonWords(horizon) : <EmptyValue>{later ?? "Unscheduled"}</EmptyValue>}</span>
+          )}
+        </PropertyRow>
+        <PropertyRow label="Part of" id="parent">
+          {offers(idea, "reparent") && plan ? (
+            <QuietSelect
+              aria-label="Part of"
+              value={idea.parentId ?? ""}
+              options={[{ value: "", label: "Top level" }, ...parents.map((other) => ({ value: other.id, label: other.title }))]}
+              onChange={(event) => save({ parent: event.target.value || null })}
+              data-plan-detail-parent
+            />
+          ) : (
+            <span data-plan-field="parent">{record.parent?.title ?? <EmptyValue>Top level</EmptyValue>}</span>
+          )}
+        </PropertyRow>
+        <PropertyRow label="Planned" id="planned" span={offers(idea, "plan_dates")}>
+          {offers(idea, "plan_dates") ? (
+            <span className="flex min-w-0 flex-wrap items-center gap-x-1">
+              <input type="date" aria-label="Planned start" className={cn(QUIET, "w-[8.5rem] pointer-coarse:w-[10rem]")} value={idea.planned.start ?? ""} max={idea.planned.target ?? undefined} onChange={(event) => save({ plannedStart: event.target.value || null })} data-plan-detail-start />
+              {/* The dash wraps with the target, never alone at a line's end. */}
+              <span className="inline-flex items-center gap-x-1 whitespace-nowrap">
+                <span aria-hidden className="pr-1 text-text-tertiary">
+                  –
+                </span>
+                <input type="date" aria-label="Planned target" className={cn(QUIET, "ml-0 w-[8.5rem] pointer-coarse:w-[10rem]")} value={idea.planned.target ?? ""} min={idea.planned.start ?? undefined} onChange={(event) => save({ plannedTarget: event.target.value || null })} data-plan-detail-target />
+              </span>
+            </span>
+          ) : (
+            <span data-plan-field="planned">{idea.planned.start || idea.planned.target ? windowWords(idea.planned.start, idea.planned.target) : <EmptyValue>{later ?? "Not planned"}</EmptyValue>}</span>
+          )}
+        </PropertyRow>
+        {baseline ? (
+          <PropertyRow label="Baseline" id="baseline">
+            <span data-plan-detail-baseline>{windowWords(baseline.start, baseline.target)}</span>
+          </PropertyRow>
+        ) : null}
+        {started ? (
+          <PropertyRow label="Actual" id="actual">
+            <span>
+              {idea.actual.start ? dayLabel(idea.actual.start, false) : "not begun"}
+              {" – "}
+              {idea.actual.end ? dayLabel(idea.actual.end) : idea.actual.forecastEnd ? `about ${dayLabel(idea.actual.forecastEnd)}` : "open"}
+            </span>
+          </PropertyRow>
+        ) : null}
+      </PropertyList>
     </div>
   );
 }
 
-function Brief({ record, write }: { record: IdeaDetailData; write: PlanWrite }) {
-  const editable = offers(record.idea, "edit");
-  const prose = useProse({ value: record.brief ?? "", editable, onSave: (brief) => void write("update", { ref: record.idea.id, brief }) });
-  return (
-    <Section label="Brief" testId="brief" action={editable && !prose.editing && record.brief ? <EditButton label="Brief" testId="brief" onClick={prose.start} /> : null}>
-      {prose.editing ? (
-        <Textarea
-          autoFocus
-          value={prose.draft}
-          onChange={(event) => prose.setDraft(event.target.value)}
-          onBlur={prose.finish}
-          onKeyDown={(event) => event.key === "Escape" && (event.preventDefault(), prose.cancel())}
-          placeholder="What is it, who is it for, what does done look like?"
-          className="min-h-24"
-          data-plan-detail-brief
-        />
-      ) : record.brief ? (
-        <Markdown text={record.brief} className="staple-detail-prose text-body" />
-      ) : editable ? (
-        <button type="button" className="w-full rounded-md border border-dashed px-3 py-2 text-left text-body text-text-tertiary hover:bg-surface-hover" onClick={prose.start} data-plan-section-empty="brief">
-          What is it, who is it for, what does done look like?
-        </button>
-      ) : (
-        <p className="m-0 text-body text-text-secondary">No brief.</p>
-      )}
-    </Section>
-  );
-}
-
-function Questions({ record, write }: { record: IdeaDetailData; write: PlanWrite }) {
-  const ref = record.idea.id;
-  const asks = offers(record.idea, "ask");
-  if (!asks && record.questions.length === 0) return null;
-  return (
-    <Section label="Open questions" testId="questions">
-      <ul className="space-y-1">
-        {record.questions.map((question, index) => (
-          <li key={`${index}-${question.text}`}>
-            <div className="flex min-h-8 items-start gap-2">
-              <label className={cn("flex flex-1 items-start gap-2 text-label", question.resolved && "text-text-tertiary line-through")}>
-                <input type="checkbox" className="mt-1" disabled={!asks} checked={question.resolved} onChange={(event) => void write("resolve", { ref, position: index + 1, resolved: event.target.checked })} />
-                <span>
-                  {question.text}
-                  {question.deferred ? <span className="ml-1.5 text-caption text-text-tertiary">(deferred)</span> : null}
-                </span>
-              </label>
-              {asks && !question.resolved ? (
-                <Button variant="ghost" size="sm" className="h-8 shrink-0 text-caption" onClick={() => void write("resolve", { ref, position: index + 1, deferred: !question.deferred })} data-plan-defer={index + 1}>
-                  {question.deferred ? "Undefer" : "Defer"}
-                </Button>
-              ) : null}
-            </div>
-          </li>
-        ))}
-      </ul>
-      {asks ? <AddLine placeholder="Add a question…" onAdd={(text) => write("question", { ref, text })} testId="question" /> : null}
-    </Section>
-  );
-}
-
+/**
+ * The three latest decisions, newest first, each with its day where the text starts with one;
+ * "Show all" for the rest, and the field that records the next.
+ */
 function Decisions({ record, write }: { record: IdeaDetailData; write: PlanWrite }) {
+  const [all, setAll] = useState(false);
   const decides = offers(record.idea, "decide");
   if (!decides && record.decisions.length === 0) return null;
+  const latest = [...record.decisions].reverse();
+  const shown = all ? latest : latest.slice(0, 3);
   return (
-    <Section label="Decisions" testId="decisions">
-      <ul className="space-y-1 text-label">
-        {record.decisions.map((decision, index) => (
-          <li key={`${index}-${decision}`}>• {decision}</li>
-        ))}
-      </ul>
-      {decides ? <AddLine placeholder="Record a decision…" onAdd={(text) => write("decision", { ref: record.idea.id, text })} testId="decision" /> : null}
+    <Section label="Decisions" testId="decisions" hint={record.decisions.length > 0 ? String(record.decisions.length) : undefined}>
+      {shown.length > 0 ? (
+        <ol className="m-0 list-none p-0">
+          {shown.map((decision, index) => {
+            const { date, text } = datedDecision(decision);
+            return (
+              <li key={`${index}-${decision}`} className="grid grid-cols-[3.25rem_minmax(0,1fr)] gap-x-2.5 border-t py-1.5 first:border-t-0">
+                <time dateTime={date ?? undefined} className="pt-px text-label whitespace-nowrap text-text-tertiary">
+                  {date ? dayLabel(date, false) : ""}
+                </time>
+                <p className="m-0 text-body">{text}</p>
+              </li>
+            );
+          })}
+        </ol>
+      ) : null}
+      {record.decisions.length > 3 ? (
+        <FoldButton open={all} onToggle={() => setAll((value) => !value)} testId="decisions">
+          Show all {record.decisions.length}
+        </FoldButton>
+      ) : null}
+      {decides ? <AddLine placeholder="Record a decision…" onAdd={(text) => write("decision", { ref: record.idea.id, text })} testId="decision" className="mt-2" /> : null}
     </Section>
   );
 }
@@ -307,18 +290,24 @@ function SubIdeas({ record, workspace }: { record: IdeaDetailData; workspace: st
   const session = useSession();
   if (record.children.length === 0) return null;
   return (
-    <Section label={`Sub-ideas (${record.children.length})`} testId="children">
-      <ul className="space-y-1">
+    <Section label="Sub-ideas" hint={String(record.children.length)} testId="children">
+      <ul className="m-0 list-none overflow-hidden rounded-lg border p-0">
         {record.children.map((child) => (
-          <li key={child.id}>
+          <li key={child.id} className="border-t first:border-t-0">
             <button
               type="button"
-              className="flex min-h-9 w-full items-center gap-2 rounded px-1 text-left text-label hover:bg-surface-hover"
+              className="focus-ring flex min-h-9 w-full items-center gap-2 px-3 py-1.5 text-left text-body hover:bg-surface-hover pointer-coarse:min-h-11"
               onClick={() => session.open(workspace, child.identifier ?? child.id)}
               data-plan-child={child.id}
             >
+              <StateGlyph state={child.state} percent={child.percent} />
               <span className="min-w-0 flex-1 truncate">{child.title}</span>
-              {child.late ? <Chip tone="red">late</Chip> : child.notStarted ? <Chip tone="amber">not started</Chip> : <Chip>{STATE_WORDS[child.state]?.toLowerCase() ?? child.stage}</Chip>}
+              {child.late && child.state !== "shipped" ? <Flag tone="late" /> : null}
+              {child.notStarted ? <Flag tone="notStarted" /> : null}
+              <span className="shrink-0 text-label text-text-tertiary">
+                {STATE_WORDS[child.state] ?? child.state}
+                {child.state === "started" && child.percent !== null ? ` · ${child.percent}%` : ""}
+              </span>
             </button>
           </li>
         ))}
@@ -327,6 +316,7 @@ function SubIdeas({ record, workspace }: { record: IdeaDetailData; workspace: st
   );
 }
 
+/** Its linked work as one list: identifier, title, status, a bar and the percent; unlink where offered; adopt where offered. */
 function Work({ record, write }: { record: IdeaDetailData; write: PlanWrite }) {
   const { idea } = record;
   const ref = idea.id;
@@ -334,68 +324,83 @@ function Work({ record, write }: { record: IdeaDetailData; write: PlanWrite }) {
   const adopts = offers(idea, "adopt");
   if (!adopts && record.linked.length === 0 && idea.linkCount === 0) return null;
   return (
-    <Section label="Work in the tracker" testId="work">
-      {idea.linkCount > 0 && idea.percent !== null ? <Progress percent={idea.percent} /> : null}
-      {record.linked.length === 0 && idea.linkCount > 0 ? <p className="mt-1 text-caption text-text-tertiary">{idea.promoted ? "This record is the epic; its tasks are its work." : "Linked through its sub-ideas."}</p> : null}
-      <ul className="mt-2 space-y-2">
-        {record.linked.map((link) => (
-          <li key={link.id} className={cn("rounded-md border px-2.5 py-2", link.missing && "border-dashed")} data-plan-link={link.identifier} data-plan-link-missing={link.missing || undefined}>
-            <div className="flex items-start gap-2">
-              <div className="min-w-0 flex-1">
-                {link.missing ? (
-                  <>
-                    <div className="flex items-center gap-1.5 text-label">
-                      <Chip tone="amber">missing</Chip>
-                      <span className="truncate font-mono text-text-tertiary">{link.id}</span>
-                    </div>
-                    <div className="text-caption text-text-tertiary">This issue is no longer on this device. The idea keeps its stage; unlink it if it is gone for good.</div>
-                  </>
-                ) : (
-                  <>
-                    <div className="text-label">
-                      <span className="font-mono text-text-tertiary">{link.identifier}</span> {link.title}
-                    </div>
-                    <div className="text-caption text-text-tertiary">
-                      {link.status} · {link.doneLeaves}/{link.leaves} done{link.milestone ? ` · in ${link.milestone.title} (${link.milestone.state}${link.milestone.run ? `, run ${link.milestone.run.state}` : ""})` : ""}
-                    </div>
-                  </>
-                )}
-              </div>
+    <Section label="Work in the tracker" testId="work" hint={record.linked.length > 0 ? String(record.linked.length) : undefined}>
+      {record.linked.length === 0 && idea.linkCount > 0 ? <p className="m-0 text-label text-text-tertiary">{idea.promoted ? "This record is the epic; its tasks are its work." : "Linked through its sub-ideas."}</p> : null}
+      {record.linked.length > 0 ? (
+        <ul className="m-0 list-none overflow-hidden rounded-lg border p-0">
+          {record.linked.map((link) => (
+            <li key={link.id} className={cn("staple-plan-link grid items-center gap-x-3 gap-y-1 border-t px-3 py-2 text-body first:border-t-0", link.missing && "border-dashed")} data-plan-link={link.identifier} data-plan-link-missing={link.missing || undefined}>
+              {link.missing ? (
+                <div className="staple-plan-link-wide min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <Flag tone="notStarted">missing</Flag>
+                    <span className="truncate font-mono text-label text-text-tertiary">{link.id}</span>
+                  </div>
+                  <div className="mt-0.5 text-caption text-text-tertiary">This issue is no longer on this device. The idea keeps its stage; unlink it if it is gone for good.</div>
+                </div>
+              ) : (
+                <>
+                  <span className="font-mono text-label text-text-tertiary">{link.identifier}</span>
+                  <span className="min-w-0 truncate" title={link.title}>
+                    {link.title}
+                  </span>
+                  <span className="staple-plan-wide truncate text-label text-text-tertiary">{link.status.replace(/_/g, " ")}</span>
+                  <SegmentedBar units={{ done: link.doneLeaves, open: link.leaves - link.doneLeaves, planned: 0 }} percent={link.percent} complete className="staple-plan-link-bar mt-0" />
+                </>
+              )}
               {unlinks ? (
-                <Button variant="ghost" size="icon" className="size-8 shrink-0" aria-label={`Unlink ${link.identifier}`} onClick={() => void write("unlink", { ref, issue: link.id })} data-plan-unlink={link.identifier}>
-                  <Unlink aria-hidden />
+                <Button variant="ghost" size="icon" className="staple-plan-link-unlink size-7 pointer-coarse:size-9" aria-label={`Unlink ${link.identifier}`} onClick={() => void write("unlink", { ref, issue: link.id })} data-plan-unlink={link.identifier}>
+                  <Unlink aria-hidden className="size-3.5" />
                 </Button>
               ) : null}
-            </div>
-            {link.missing ? null : <Progress percent={link.percent} />}
-          </li>
-        ))}
-      </ul>
-      {adopts ? (
-        <AddLine placeholder="Adopt an issue by its identifier" onAdd={(issue) => write("adopt", { ref, issue })} testId="adopt" icon={<Link2 className="size-4" aria-hidden />} button="Adopt" />
+            </li>
+          ))}
+        </ul>
       ) : null}
+      {adopts ? <AddLine placeholder="Adopt an issue by its identifier" onAdd={(issue) => write("adopt", { ref, issue })} testId="adopt" icon={<Link2 className="size-3.5 shrink-0" aria-hidden />} button="Adopt" className="mt-2" /> : null}
     </Section>
   );
 }
 
-function AddLine({ placeholder, onAdd, testId, icon, button }: { placeholder: string; onAdd: (text: string) => Promise<boolean>; testId: string; icon?: ReactNode; button?: string }) {
-  const [text, setText] = useState("");
+/**
+ * The rare actions, quiet, at the end of the tab: "Delivered outside the tracker…" opens the
+ * form that marks it (the day, a note, Mark delivered) in place. Everything else rare is in ⋯.
+ */
+function RareActions({ record, write }: { record: IdeaDetailData; write: PlanWrite }) {
+  const { idea } = record;
+  const [open, setOpen] = useState(false);
+  const today = new Date().toISOString().slice(0, 10);
+  const [on, setOn] = useState(today);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  if (idea.delivered || !offers(idea, "mark_delivered")) return null;
+  const mark = async () => {
+    setBusy(true);
+    if (await write("update", { ref: idea.id, delivered: { on, note } })) setOpen(false);
+    setBusy(false);
+  };
   return (
-    <form
-      className="mt-2 flex items-center gap-2"
-      data-plan-add={testId}
-      onSubmit={async (event) => {
-        event.preventDefault();
-        if (text.trim() && (await onAdd(text.trim()))) setText("");
-      }}
-    >
-      {icon}
-      <Input value={text} onChange={(event) => setText(event.target.value)} placeholder={placeholder} aria-label={placeholder} className="h-9" />
-      {button ? (
-        <Button type="submit" size="sm" variant="outline">
-          {button}
+    <div className="border-t pt-3" data-plan-rare>
+      {open ? (
+        <div data-plan-delivered-form>
+          <h3 className="m-0 text-body font-semibold text-foreground">Delivered outside the tracker</h3>
+          <p className="m-0 mt-1 text-label text-text-secondary">Work that shipped before or outside the tracker: it reads shipped, with no ticket.</p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <input type="date" aria-label="Delivered on" className="h-9 rounded-md border bg-field px-2 pointer-coarse:text-[16px]" value={on} max={today} onChange={(event) => setOn(event.target.value)} data-plan-delivered-on />
+            <Button size="sm" disabled={busy || on === ""} onClick={() => void mark()} data-plan-action="mark_delivered">
+              Mark delivered
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+          </div>
+          <Textarea className="mt-2 min-h-16" placeholder="A note: where and how it was delivered (optional)" value={note} onChange={(event) => setNote(event.target.value)} data-plan-delivered-note />
+        </div>
+      ) : (
+        <Button variant="ghost" size="sm" className="-ml-2.5 text-text-secondary" aria-expanded={false} onClick={() => setOpen(true)} data-plan-delivered-open>
+          Delivered outside the tracker…
         </Button>
-      ) : null}
-    </form>
+      )}
+    </div>
   );
 }
