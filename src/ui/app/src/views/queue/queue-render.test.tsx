@@ -95,7 +95,7 @@ describe("a plan entry", () => {
   it("rolls a container up into a meter and counts, with a fold arrow that says it is open", () => {
     expect(html).toMatch(/<div[^>]*aria-expanded="true"[^>]*data-queue-entry="STA-66"/);
     expect(html).toContain('aria-label="Fold STA-66"');
-    expect(html).toContain("3 tasks · 1 ready");
+    expect(html).toContain("3 tasks</span><span> · <b>1</b> ready");
     expect(html).toMatch(/class="q-meter q-meter-sm" role="img" aria-label="1 ready, 2 waiting"/);
   });
 
@@ -248,6 +248,9 @@ describe("a write that went wrong", () => {
 
   it("offers no retry for a write with no order to apply", () => {
     expect(renderToStaticMarkup(<ConflictBanner canRetry={false} busy={false} onRetry={noop} onDismiss={noop} />)).not.toContain("Apply my move again");
+    const html = renderSection(workedExample(), { failure: { ...conflict, intended: null } });
+    expect(html).toContain("data-queue-conflict");
+    expect(html).not.toContain("Apply my move again");
   });
 
   it("shows any other refusal as the store's own sentence", () => {

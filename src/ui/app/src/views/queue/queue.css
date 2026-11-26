@@ -565,15 +565,17 @@
  */
 .q-tag, .q-textbtn, .q-link, .q-handle, .q-more, .q-act, .q-chev, .q-fold, .q-next-title { min-height: 0; }
 @media (pointer: coarse) {
-  .q-more, .q-act, .q-handle, .q-chev, .q-fold, .q-textbtn, .q-tag, .q-link { position: relative; }
-  .q-more::before, .q-act::before, .q-handle::before, .q-chev::before, .q-fold::before, .q-textbtn::before, .q-tag::before {
+  .q-more, .q-act, .q-handle, .q-chev, .q-fold, .q-textbtn, .q-tag, .q-link, .q-next-open, .q-add, .q-band-head { position: relative; }
+  /* Where the handle's area meets the fold arrow's, the handle wins: grabbing is the harder gesture. */
+  .q-handle { z-index: 1; }
+  .q-more::before, .q-act::before, .q-handle::before, .q-chev::before, .q-fold::before, .q-textbtn::before, .q-tag::before,
+  .q-next-open::before, .q-add::before, .q-band-head::before {
     content: "";
     position: absolute;
-    inset: -5px;
-    min-width: 44px;
-    min-height: 44px;
     left: 50%;
     top: 50%;
+    width: max(100%, 44px);
+    height: max(100%, 44px);
     transform: translate(-50%, -50%);
   }
 }

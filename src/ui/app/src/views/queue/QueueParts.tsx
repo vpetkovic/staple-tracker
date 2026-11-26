@@ -335,7 +335,7 @@ export function NextRow({ state, onOpen, onShow }: { state: NextState; onOpen: (
         variant="ghost"
         size="xs"
         data-queue-next-open
-        className="q-next-open"
+        className="q-next-open bg-card px-2.5 hover:bg-surface-hover"
         onClick={(event) => {
           event.stopPropagation();
           onOpen(row.identifier);

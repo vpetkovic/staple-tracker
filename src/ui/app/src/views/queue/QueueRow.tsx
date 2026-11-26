@@ -111,6 +111,29 @@ export function StateCell({
   );
 }
 
+/** A roll-up with its ready count in bold: the number a reader scans the column for. */
+function RollUpWords({ text }: { text: string }) {
+  return (
+    <>
+      {text.split(" · ").map((part, i) => {
+        const ready = /^(\d+) ready$/.exec(part);
+        return (
+          <span key={part}>
+            {i > 0 ? " · " : null}
+            {ready ? (
+              <>
+                <b>{ready[1]}</b> ready
+              </>
+            ) : (
+              part
+            )}
+          </span>
+        );
+      })}
+    </>
+  );
+}
+
 /** A plan entry's state: a container's roll-up, an entry the order already reached, or its own row's state. */
 function EntryState({ block, onJump }: { block: EntryBlock; onJump: (identifier: string) => void }) {
   const { plan } = block;
@@ -120,8 +143,12 @@ function EntryState({ block, onJump }: { block: EntryBlock; onJump: (identifier:
       <span className="q-state q-rollup">
         <Meter counts={countsOf(plan.expansion)} small />
         <span className="q-words">
-          <span className="q-wide">{rollUp(plan.expansion)}</span>
-          <span className="q-narrow">{rollUp(plan.expansion, true)}</span>
+          <span className="q-wide">
+            <RollUpWords text={rollUp(plan.expansion)} />
+          </span>
+          <span className="q-narrow">
+            <RollUpWords text={rollUp(plan.expansion, true)} />
+          </span>
         </span>
       </span>
     );
