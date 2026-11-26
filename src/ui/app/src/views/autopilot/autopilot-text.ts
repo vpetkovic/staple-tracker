@@ -238,13 +238,9 @@ export function instructionsLine(entry: Pick<RunEntry, "instructionsChanged">): 
   return `${plural(changed.length, "instruction document")} changed since its last take: ${keys.join(", ")}`;
 }
 
-/** The run with this id; a unique prefix of eight or more characters names it too, as a short link does. */
+/** The run with this id. The address carries the whole id (`session.openRun`), so nothing shorter names a run. */
 export function findRun(entries: readonly RunEntry[], runId: string): RunEntry | null {
-  const exact = entries.find((entry) => entry.run.id === runId);
-  if (exact) return exact;
-  if (runId.length < 8) return null;
-  const matches = entries.filter((entry) => entry.run.id.startsWith(runId));
-  return matches.length === 1 ? matches[0]! : null;
+  return entries.find((entry) => entry.run.id === runId) ?? null;
 }
 
 /**

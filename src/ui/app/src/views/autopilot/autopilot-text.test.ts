@@ -167,10 +167,9 @@ describe("which run the page shows", () => {
     expect(shownRun([ended, live], null, false)).toBeNull();
   });
 
-  it("finds a run by its id or a unique prefix of eight characters, and nothing else", () => {
+  it("finds a run by its whole id, and by nothing shorter", () => {
     expect(findRun([ended, live], ended.run.id)).toBe(ended);
-    expect(findRun([ended, live], "b2be7256")).toBe(ended);
-    expect(findRun([ended, live], "b2be")).toBeNull();
+    expect(findRun([ended, live], ended.run.id.slice(0, 8))).toBeNull();
     expect(shownRun([ended, live], "nope-nope", true)).toBeNull();
   });
 });

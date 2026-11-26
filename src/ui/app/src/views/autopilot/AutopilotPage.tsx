@@ -12,7 +12,7 @@
  * ticket means. AutopilotView.tsx is the thin wrapper that reads them from the app.
  */
 import { Bot, Check, Copy } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { EmptyState } from "@/components/plain/States";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -190,6 +190,21 @@ export function AutopilotLayout({ wide, ...props }: AutopilotPageProps & { wide:
 export function AutopilotPage(props: AutopilotPageProps) {
   const { ref, width } = useElementWidth<HTMLDivElement>();
   const wide = width === null ? null : width >= AUTOPILOT_WIDE;
+
+  // One pane swaps the list for a run and back, and takes whatever held the focus with it.
+  // The run's title takes it going in; the item the reader came from takes it coming back.
+  const { selectedRunId } = props;
+  const previous = useRef(selectedRunId);
+  useEffect(() => {
+    const from = previous.current;
+    previous.current = selectedRunId;
+    if (from === selectedRunId || wide !== false) return;
+    const root = ref.current;
+    if (!root || (document.activeElement !== null && document.activeElement !== document.body)) return;
+    const target = selectedRunId === null ? (from === null ? null : root.querySelector<HTMLElement>(`[data-run-item="${CSS.escape(from)}"]`)) : root.querySelector<HTMLElement>("[data-run-title]");
+    target?.focus();
+  }, [selectedRunId, wide, ref]);
+
   return (
     <div ref={ref} data-autopilot-view="" className="@container/auto flex h-full min-h-0 flex-col">
       <AutopilotLayout {...props} wide={wide} />

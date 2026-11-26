@@ -17,7 +17,7 @@
  * below `<main>`, not an overlay, so every view's own scroll container ends above it.
  */
 import { MoreHorizontal } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useInboxBadge } from "@/lib/attention";
 import { useBackToClose } from "@/lib/back-to-close";
 import { useRuns } from "@/lib/runs";
@@ -213,6 +213,16 @@ export function ViewTabBar() {
   const [moreOpen, setMoreOpen] = useState(false);
   // Phone Back closes the sheet rather than leaving the page.
   useBackToClose(moreOpen, () => setMoreOpen(false));
+  // The sheet has no trigger of its own to hand the focus back to: when it closes, the More tab takes it.
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (wasOpen.current && !moreOpen) {
+      const frame = requestAnimationFrame(() => document.querySelector<HTMLElement>('[data-view-tab="more"]')?.focus());
+      wasOpen.current = false;
+      return () => cancelAnimationFrame(frame);
+    }
+    wasOpen.current = moreOpen;
+  }, [moreOpen]);
   return (
     <>
       <ViewTabs

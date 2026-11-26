@@ -10,8 +10,8 @@
  *
  * ONE COMPACT CARD, WHEREVER IT IS. Each place shows the newest notice only, as one card
  * (the run by name, why it ended with the tickets it names as chips, the one thing to do,
- * "View run" to the run's page, dismiss); "N more" expands to three, and past three the history has
- * them all. A stack of full cards took 493px of an 844px phone.
+ * "View run" to the run's page, dismiss); "N more" expands to three, and past three the Autopilot page
+ * lists every run. A stack of full cards took 493px of an 844px phone.
  *
  *   ON A DESK   the bottom-right corner, over the page.
  *   ON A PHONE  in the flow above the run strip and the tab bar, so it never covers them.
@@ -34,7 +34,7 @@ import type { RunEntry } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { RefText } from "@/components/ticket/TicketChip";
 
-/** How many notices show once expanded; the rest wait behind "and N more" (the history lists them all). */
+/** How many notices show once expanded; the rest wait behind "and N more" (the Autopilot page lists every run). */
 export const NOTICE_LIMIT = 3;
 
 export type NoticePlacement = "corner" | "strip" | "drawer";
@@ -95,7 +95,7 @@ export function RunStopNoticeCard({
         </p>
         <p className="m-0 max-w-full text-label text-text-secondary wrap-anywhere" data-run-stop-reason="">
           <RefText text={notice.reason} issues={run?.issues ?? []} onOpen={onOpenTicket ? (ref) => onOpenTicket(notice, ref) : undefined} />
-          {showWorkspace ? <span className="text-text-tertiary"> · {notice.workspace}</span> : null}
+          {showWorkspace ? <span className="text-text-tertiary"> · <span className="whitespace-nowrap">{notice.workspace}</span></span> : null}
         </p>
         {notice.note ? (
           <p data-run-stop-note="" className="m-0 line-clamp-2 max-w-full text-label text-text-secondary wrap-anywhere">

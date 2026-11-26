@@ -5,8 +5,9 @@
  *
  *   INBOX, AUTOPILOT  two rows with no heading, above everything: what waits on a person
  *                (with how many, and a dot when some are new) and what agents are doing (how
- *                many runs are live, then one sub-row per live run that leads to it). Both read
- *                every workspace, so they sit above the workspace list.
+ *                many runs are live, then one sub-row per live run that leads to it). The
+ *                Inbox count is every workspace's; the runs are the ones the Autopilot page
+ *                lists, which follows the workspace the page is on.
  *   WORKSPACES   every workspace, listed — All workspaces first — so what the page is
  *                scoped to, and the way to change it, are on screen without opening a menu.
  *                One click switches. Past `RAIL_WORKSPACE_LIMIT` the rest sit behind "More

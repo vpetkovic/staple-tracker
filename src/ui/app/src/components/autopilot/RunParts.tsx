@@ -56,10 +56,9 @@ export function stopConfirmCopy(entry: Pick<RunEntry, "run">): { title: string; 
 }
 
 /**
- * Stop, confirmed. `touch` makes it a 44px target (the phone strip); the rail and the history
- * use the desk size, which a coarse pointer grows to 44px anyway.
+ * Stop, confirmed. It lives on the run's page; a coarse pointer grows it to 44px.
  */
-export function StopRunButton({ entry, touch = false, className }: { entry: RunEntry; touch?: boolean; className?: string }) {
+export function StopRunButton({ entry, className }: { entry: RunEntry; className?: string }) {
   const { refresh } = useRuns();
   const [confirming, setConfirming] = useState(false);
   const [note, setNote] = useState("");
@@ -102,7 +101,6 @@ export function StopRunButton({ entry, touch = false, className }: { entry: RunE
         }}
         className={cn(
           "text-[var(--plain-risk-fg)] hover:text-[var(--plain-risk-fg)] pointer-coarse:h-11",
-          touch && "h-11 min-w-11 px-3",
           className,
         )}
       >

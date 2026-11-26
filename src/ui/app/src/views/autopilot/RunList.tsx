@@ -11,9 +11,10 @@ import { isWorking, listTime, runPill, runTitle, scopeLine, tally, type TallyTon
 import { RunDot, WorkspacePill } from "./autopilot-parts";
 
 const TALLY_CLASS: Record<TallyTone, string> = {
-  ok: "text-[var(--plain-ok-fg)]",
+  // Done is the expected outcome and stays quiet; only a failure takes a colour.
+  ok: "text-text-secondary",
   risk: "text-[var(--plain-risk-fg)]",
-  quiet: "text-text-tertiary",
+  quiet: "text-text-tertiary group-aria-[current=true]/run:text-text-secondary",
 };
 
 function RunItem({
@@ -39,14 +40,14 @@ function RunItem({
         data-run-item={run.id}
         aria-current={current ? "true" : undefined}
         onClick={() => onSelect(run.id)}
-        className="focus-ring-inset grid w-full grid-cols-[14px_minmax(0,1fr)_auto] items-center gap-x-2.5 gap-y-0.5 border-b px-4 py-2.5 text-left hover:bg-surface-hover aria-[current=true]:bg-surface-selected"
+        className="group/run focus-ring-inset grid w-full grid-cols-[14px_minmax(0,1fr)_auto] items-center gap-x-2.5 gap-y-0.5 border-b px-4 py-2.5 text-left hover:bg-surface-hover aria-[current=true]:bg-surface-selected"
       >
         <RunDot tone={pill.tone} pulse={isWorking(entry)} className="justify-self-center" />
         <span className="truncate text-body font-medium text-foreground" title={title}>
           {title}
         </span>
-        <span className="text-label whitespace-nowrap text-text-tertiary tabular-nums">{listTime(run, now)}</span>
-        <span className="col-[2/-1] flex min-w-0 items-center gap-1.5 text-label text-text-tertiary">
+        <span className="text-label whitespace-nowrap text-text-tertiary tabular-nums group-aria-[current=true]/run:text-text-secondary">{listTime(run, now)}</span>
+        <span className="col-[2/-1] flex min-w-0 items-center gap-1.5 text-label text-text-tertiary group-aria-[current=true]/run:text-text-secondary">
           <span className="truncate">
             {scopeLine(entry)} · {run.actor}
           </span>

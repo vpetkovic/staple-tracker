@@ -23,3 +23,13 @@
     animation: none;
   }
 }
+
+/*
+ * The selected run's quiet text sits on the selected surface, where the tertiary grey falls
+ * under 4.5:1 in the dark theme. The workspace pill's colour is set by task-list.css, so it
+ * is raised here, beside the utilities that raise the rest of the item.
+ */
+[data-run-item][aria-current="true"] .staple-row-workspace {
+  color: var(--text-secondary);
+}
+

@@ -49,7 +49,10 @@ function Header({ entry, showWorkspace, open }: { entry: RunEntry; showWorkspace
   const ref = scopeRef(entry);
   return (
     <header className="grid grid-cols-[minmax(0,1fr)] items-start gap-x-4 gap-y-1.5 @min-[900px]/auto:grid-cols-[minmax(0,1fr)_auto]">
-      <h2 className="m-0 text-[18px] leading-6 font-semibold tracking-[-0.01em] text-foreground text-pretty wrap-anywhere">{runTitle(entry)}</h2>
+      {/* Focusable from code: the one-pane page lands here when a run opens (AutopilotPage.tsx). */}
+      <h2 tabIndex={-1} data-run-title="" className="m-0 rounded-sm text-[18px] leading-6 font-semibold tracking-[-0.01em] text-foreground text-pretty wrap-anywhere outline-none focus-ring">
+        {runTitle(entry)}
+      </h2>
       {live ? (
         <div className="order-3 flex flex-wrap gap-2 @min-[900px]/auto:order-none" data-run-controls="">
           <PauseResumeButton entry={entry} className="@max-[900px]/auto:h-10 @max-[900px]/auto:flex-1" />
@@ -143,7 +146,8 @@ function EndedNow({ entry, open, now }: { entry: RunEntry; open: Open; now: Date
       className={cn("flex flex-col gap-2.5 rounded-xl border px-4 py-3.5", !toned && "bg-surface-sunken")}
       style={toned ? { backgroundColor: `var(--plain-${state.tone}-bg)`, borderColor: `var(--plain-${state.tone}-border)` } : undefined}
     >
-      <p className={EYEBROW}>
+      {/* On a toned panel the eyebrow takes the tone's own text colour: the tertiary grey falls short on those backgrounds. */}
+      <p className={EYEBROW} style={toned ? { color: `var(--plain-${state.tone}-fg)` } : undefined}>
         <span className="uppercase">{endedEyebrow(run, now)}</span>
       </p>
       <p className="m-0 text-title leading-[22px] font-semibold text-foreground text-pretty">
@@ -221,7 +225,7 @@ const MARK_STYLE = {
 const OUTCOME_CLASS = {
   done: "text-text-secondary",
   failed: "text-[var(--plain-risk-fg)]",
-  open: "text-[var(--status-task-in_progress)]",
+  open: "text-flag-you",
 } as const;
 
 /** One take: its number, an outcome mark on the line that joins them, the ticket, the outcome in a word, how long, when. */
