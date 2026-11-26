@@ -12,7 +12,6 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import type { HorizonData, IdeaData, IdeaDetailData } from "@/lib/plan-types";
 import { useSession } from "@/lib/session";
 import type { IssueDetail } from "@/lib/types";
-import { Chip } from "@/views/plan/PlanBoards";
 import { PlanTree } from "@/views/plan/PlanTree";
 import { Amber, Flag, HorizonSummary, StateGlyph } from "@/views/plan/plan-parts";
 import { planTree } from "@/views/plan/plan-tree";
@@ -21,7 +20,7 @@ import type { IssueActionsController } from "./IssueActions";
 import { cn } from "./parts/cn";
 import { RunSettingDialog, runSettingLabel } from "@/views/plan/RunSetting";
 import { horizonActionItems, planActionItems, planPrimary, type PlanItem } from "./plain-actions";
-import { DeliveredMark, ShippedMark } from "./ShippedMark";
+import { DeliveredMark } from "./ShippedMark";
 import { STATE_WORDS, requestScaffold } from "./plan-record";
 import { openDetailTab } from "./tabs/registry";
 
