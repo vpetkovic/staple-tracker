@@ -80,31 +80,6 @@ const focused = (page: Page) =>
     return element.getAttribute("aria-label") ?? element.textContent?.trim() ?? element.tagName;
   });
 
-describe("focus when the desk rail is hidden and shown", () => {
-  it("moves to Show navigation when the rail is hidden, and back into the rail when it is shown", async () => {
-    await withPage(DESK, async (page) => {
-      await page.getByRole("button", { name: "Hide navigation" }).focus();
-      await page.keyboard.press("Enter");
-      await page.locator("[data-nav-show]").waitFor();
-      expect(await focused(page)).toBe("Show navigation");
-
-      await page.keyboard.press("Enter");
-      await page.locator("[data-nav-rail]").waitFor();
-      expect(await focused(page)).toBe("Hide navigation");
-    });
-  });
-
-  it("leaves focus where it is when [ is pressed from outside the rail", async () => {
-    await withPage(DESK, async (page) => {
-      const search = page.locator("[data-top-search]");
-      await search.focus();
-      await page.keyboard.press("[");
-      await page.locator("[data-nav-show]").waitFor();
-      expect(await focused(page)).toBe("Find a task or run a command");
-    });
-  });
-});
-
 describe("the phone drawer", () => {
   it("keeps Tab inside the drawer and makes the page behind it inert while it is open", async () => {
     await withPage(PHONE, async (page) => {

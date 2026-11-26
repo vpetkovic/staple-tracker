@@ -72,7 +72,7 @@ import { ViewTabBar } from "@/components/nav/ViewTabBar";
 import { WorkspaceSwitcher } from "@/components/nav/WorkspaceSwitcher";
 import {
   loadRailCollapsed,
-  railFocusTarget,
+  overlayFocusTarget,
   railKeyAction,
   saveRailCollapsed,
 } from "@/components/nav/nav-model";
@@ -294,26 +294,19 @@ export function AppShell({ children }: { children: ReactNode }) {
   }, [overlayOpen, toggleRail]);
 
   /**
-   * Focus follows the rail (`railFocusTarget` in nav-model.ts): into the phone's sheet when
-   * it opens, so the keyboard lands inside it rather than behind it. Otherwise only focus
-   * that went away with the control holding it is caught: hiding the rail, or closing the
-   * sheet by Escape, the scrim or a row, lands on "Show navigation" (the phone's Menu), and
-   * showing the desk rail from that button lands in the rail. Focus that is still on
-   * something, such as a dialog a row opened, stays put.
+   * Focus follows the sheet: into the rail when it opens, so the keyboard lands inside
+   * it rather than behind it; back to the "Show navigation" button when it closes —
+   * by Escape, the scrim or a row — rather than dropping to `<body>`. The button is
+   * absent when the sheet closed because the window grew, and then there is nothing to
+   * return to and nothing is done.
    */
-  const wasRailVisible = useRef(railVisible);
+  const wasOverlayOpen = useRef(false);
   useEffect(() => {
-    const active = document.activeElement;
-    const target = railFocusTarget({
-      wasVisible: wasRailVisible.current,
-      visible: railVisible,
-      overlay: !wide,
-      focusLost: active === null || active === document.body,
-    });
-    wasRailVisible.current = railVisible;
+    const target = overlayFocusTarget(wasOverlayOpen.current, overlayOpen);
+    wasOverlayOpen.current = overlayOpen;
     if (target === "rail") document.querySelector<HTMLElement>("[data-nav-rail] button")?.focus();
     if (target === "show-navigation") document.querySelector<HTMLElement>("[data-nav-show]")?.focus();
-  }, [railVisible, wide]);
+  }, [overlayOpen]);
 
   const title = viewLabel(session.view);
   const scope = scopeName(session);

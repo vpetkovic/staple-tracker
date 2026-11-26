@@ -8,8 +8,8 @@ import {
   isRailToggleKey,
   loadRailCollapsed,
   navItemForView,
+  overlayFocusTarget,
   projectCaption,
-  railFocusTarget,
   railKeyAction,
   railWorkspaces,
   chooseRailWorkspace,
@@ -208,36 +208,12 @@ describe("what the shell does with a key", () => {
   });
 });
 
-describe("where focus goes when the rail appears or goes away", () => {
-  const change = (over: Partial<Parameters<typeof railFocusTarget>[0]>) => ({
-    wasVisible: false,
-    visible: false,
-    overlay: false,
-    focusLost: false,
-    ...over,
-  });
-
-  it("moves into the phone's sheet whenever it opens", () => {
-    expect(railFocusTarget(change({ visible: true, overlay: true }))).toBe("rail");
-    expect(railFocusTarget(change({ visible: true, overlay: true, focusLost: true }))).toBe("rail");
-  });
-
-  it("catches focus the hidden rail took with it, on the desk and from the sheet", () => {
-    expect(railFocusTarget(change({ wasVisible: true, focusLost: true }))).toBe("show-navigation");
-    expect(railFocusTarget(change({ wasVisible: true, overlay: true, focusLost: true }))).toBe("show-navigation");
-  });
-
-  it("lands in the desk rail when the button that showed it went away", () => {
-    expect(railFocusTarget(change({ visible: true, focusLost: true }))).toBe("rail");
-  });
-
-  it("leaves focus that is still somewhere alone, and moves nothing when nothing changed", () => {
-    expect(railFocusTarget(change({ wasVisible: true }))).toBeNull();
-    expect(railFocusTarget(change({ visible: true }))).toBeNull();
-    // The sheet closing because a row opened a dialog: the dialog has focus and keeps it.
-    expect(railFocusTarget(change({ wasVisible: true, overlay: true }))).toBeNull();
-    expect(railFocusTarget(change({ wasVisible: true, visible: true, focusLost: true }))).toBeNull();
-    expect(railFocusTarget(change({ focusLost: true }))).toBeNull();
+describe("where focus goes when the sheet opens or closes", () => {
+  it("lands in the rail on open, returns to the show button on close, and moves otherwise not at all", () => {
+    expect(overlayFocusTarget(false, true)).toBe("rail");
+    expect(overlayFocusTarget(true, false)).toBe("show-navigation");
+    expect(overlayFocusTarget(true, true)).toBeNull();
+    expect(overlayFocusTarget(false, false)).toBeNull();
   });
 });
 
