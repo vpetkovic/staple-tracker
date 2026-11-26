@@ -1287,7 +1287,8 @@ describe("tool response shapes (31/31)", () => {
           timing: { estimatedSeconds: null, elapsedSeconds: null },
           url: `http://127.0.0.1:4400/?ws=${WS}&issue=CON-1`,
           actions: { approve: false, requestChanges: false },
-          // CON-1 is a parent with no pull requests in its subtree.
+          // CON-1 has no pull request of its own, and none in its subtree.
+          pullRequests: [],
           subtreePullRequests: [],
         },
       }),

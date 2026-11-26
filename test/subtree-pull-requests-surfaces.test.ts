@@ -9,7 +9,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ExternalItem } from "../src/core/integrations/contracts.js";
 import { resolveWorkspace } from "../src/core/workspace.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
@@ -91,6 +92,9 @@ describe("a parent's subtree pull requests on every surface", () => {
   it("staple show --json and get_task carry the set; a leaf carries none", async () => {
     const shown = await cliJson("show", refs.epic);
     expect(brief(shown.subtreePullRequests)).toEqual(expected());
+    // Each ticket names the epic's direct child it sits under (null for the epic itself).
+    expect(shown.subtreePullRequests.map((p: { tickets: Array<{ id: string; identifier: string; childId: string | null }> }) => p.tickets.map((t) => (t.childId === null ? null : t.childId === t.id ? t.identifier : `under ${t.childId}`))))
+      .toEqual([[null], [refs.a], [refs.a, refs.b]]);
     const task = await mcp.call("get_task", { ref: refs.epic, ws: "app" });
     expect(task.isError, JSON.stringify(task.content)).toBeFalsy();
     const structured = task.structuredContent as { subtreePullRequests: typeof shown.subtreePullRequests };
@@ -122,8 +126,16 @@ describe("a parent's subtree pull requests on every surface", () => {
     expect(brief(ticket.subtreePullRequests)).toEqual(expected());
     const text = (card.content as Array<{ text: string }>)[0]!.text;
     expect(text).toContain(`Pull requests: team/repo#10 open (${refs.epic}); team/repo#20 merged (${refs.a}); team/repo#30 draft (${refs.a}, ${refs.b}).`);
+    // Its own pull requests ride along on the card, as a leaf's do.
+    expect((ticket as unknown as { pullRequests: Array<{ key: string }> }).pullRequests.map((p) => p.key)).toEqual(["team/repo#10"]);
     const leaf = await mcp.call("show_ticket", { ref: refs.a, ws: "app" });
-    expect((leaf.structuredContent as { ticket: Record<string, unknown> }).ticket.subtreePullRequests).toBeNull();
+    const leafCard = (leaf.structuredContent as { ticket: { subtreePullRequests: unknown; pullRequests: Array<{ key: string; state: string }> } }).ticket;
+    expect(leafCard.subtreePullRequests).toBeNull();
+    expect(leafCard.pullRequests.map((p) => [p.key, p.state])).toEqual([["team/repo#20", "merged"], ["team/repo#30", "draft"]]);
+    expect((leaf.content as Array<{ text: string }>)[0]!.text).toContain("Pull requests: team/repo#20 merged; team/repo#30 draft.");
+    const bare = await mcp.call("show_ticket", { ref: refs.quietChild, ws: "app" });
+    expect((bare.structuredContent as { ticket: { pullRequests: unknown[] } }).ticket.pullRequests).toEqual([]);
+    expect((bare.content as Array<{ text: string }>)[0]!.text).not.toContain("Pull requests");
   });
 
   it("the detail carries the set and the row draws it; a leaf row keeps its own", async () => {
@@ -139,7 +151,80 @@ describe("a parent's subtree pull requests on every surface", () => {
       [20, "merged", [refs.a]],
     ]);
     expect(row(refs.b).pullRequests!.map((p) => p.number)).toEqual([30]);
+    // No checks were read on these: the field is absent, not null.
+    expect(rows.flatMap((r) => r.pullRequests ?? []).some((p) => "checks" in p)).toBe(false);
     expect(row(refs.quiet).pullRequests).toBeUndefined();
     expect(row(refs.quietChild).pullRequests).toBeUndefined();
+  });
+
+  it("the rows read every parent's set in one subtree walk over the one pull request read", async () => {
+    const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+    try {
+      await http("/api/issues?ws=app");
+      const sql = prepare.mock.calls.map(([text]) => String(text));
+      // Two parents on the page (the epic, the quiet parent), one walk; the rows' pull requests read once.
+      expect(sql.filter((text) => text.includes("WITH RECURSIVE sub(root"))).toHaveLength(1);
+      expect(sql.filter((text) => text.includes("r.kind='pull_request'"))).toHaveLength(1);
+    } finally {
+      prepare.mockRestore();
+    }
+  });
+
+  it("a child's link, unlink, move, cancel and pull request read reach the parent on the next poll", async () => {
+    const poll = async () => ((await http("/api/poll?ws=app")) as { fingerprint: string }).fingerprint;
+    const setOf = async (ref: string) => brief((await http(`/api/issue?ws=app&ref=${ref}`)).subtreePullRequests);
+    const rowOf = async (ref: string) =>
+      ((await http("/api/issues?ws=app")) as Array<{ issue: { identifier: string }; pullRequests?: Array<{ number: number; state: string; checks?: string }> }>)
+        .find((r) => r.issue.identifier === ref)!.pullRequests?.map((p) => (p.checks ? [p.number, p.state, p.checks] : [p.number, p.state]));
+    // Another process writes (an agent's CLI), as it does while the page is open.
+    const { store } = resolveWorkspace({ ws: "app" });
+    try {
+      const first = store.createIssue({ title: "First parent" });
+      const second = store.createIssue({ title: "Second parent" });
+      const child = store.createIssue({ title: "Moving child", parent: first.id });
+      store.createIssue({ title: "Stays", parent: first.id });
+      store.createIssue({ title: "Stays too", parent: second.id });
+      let before = await poll();
+      const changed = async () => {
+        const now = await poll();
+        expect(now).not.toBe(before);
+        before = now;
+      };
+
+      store.externalLinks().link(child.id, pr(60, "open"), "ada");
+      await changed();
+      expect(await setOf(first.identifier)).toEqual([["team/repo#60", false, [child.identifier]]]);
+      expect(await rowOf(first.identifier)).toEqual([[60, "open"]]);
+
+      store.updateIssue(child.identifier, { parent: second.identifier }, "ada");
+      await changed();
+      expect(await setOf(first.identifier)).toEqual([]);
+      expect(await rowOf(first.identifier)).toBeUndefined();
+      expect(await setOf(second.identifier)).toEqual([["team/repo#60", false, [child.identifier]]]);
+
+      store.updateIssue(child.identifier, { status: "cancelled" }, "ada");
+      await changed();
+      expect(await setOf(second.identifier)).toEqual([["team/repo#60", false, [child.identifier]]]);
+
+      // A newer read of the pull request: checks failing, then merged.
+      store.externalLinks().remember({ ...pr(60, "open"), fetchedAt: "2026-11-25T13:00:00.000Z",
+        pullRequest: { headBranch: "feat/x", headSha: "a".repeat(40), checks: { state: "failing", failing: ["test"], completedAt: "2026-11-25T12:59:00Z" } } });
+      await changed();
+      const failing = (await http(`/api/issue?ws=app&ref=${second.identifier}`)).subtreePullRequests[0];
+      expect(failing).toMatchObject({ state: "open", checks: { state: "failing", failing: ["test"] }, fetchedAt: "2026-11-25T13:00:00.000Z" });
+      // The row carries the checks' state too, on the parent and on the child's own row.
+      expect(await rowOf(second.identifier)).toEqual([[60, "open", "failing"]]);
+      expect(await rowOf(child.identifier)).toEqual([[60, "open", "failing"]]);
+      store.externalLinks().remember({ ...pr(60, "merged"), fetchedAt: "2026-11-25T14:00:00.000Z" });
+      await changed();
+      expect(await rowOf(second.identifier)).toEqual([[60, "merged"]]);
+      expect((await http(`/api/issue?ws=app&ref=${second.identifier}`)).subtreePullRequests[0]).toMatchObject({ state: "merged", checks: null });
+
+      store.externalLinks().unlink(child.id, store.externalLinks().list(child.id)[0]!.resource.id, "ada");
+      await changed();
+      expect(await setOf(second.identifier)).toEqual([]);
+    } finally {
+      store.db.close();
+    }
   });
 });

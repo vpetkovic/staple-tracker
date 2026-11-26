@@ -9,6 +9,7 @@ import { GitHubCliAdapter } from "../src/core/integrations/github-cli.js";
 import { ProbeCache } from "../src/core/integrations/health.js";
 import { IntegrationOperations } from "../src/core/integrations/operations.js";
 import { rowPullRequests } from "../src/core/integrations/pr-discovery.js";
+import { subtreePullRequests } from "../src/core/subtree-pull-requests.js";
 import { setTicketBranch } from "../src/core/ticket-branch.js";
 import { StapleError } from "../src/core/types.js";
 import { initWorkspace } from "../src/core/workspace.js";
@@ -170,6 +171,46 @@ describe("finding the pull requests opened for a ticket's branch", () => {
     await service.execute({ action: "discover" });
     expect(details).toHaveBeenCalledTimes(1);
     expect(store.externalLinks().pullRequests().get(task.id)![0]!.checks?.state).toBe("passing");
+    store.db.close();
+  });
+
+  it("reads a finished child's live pull request again while its parent is open, so the parent's set is current", async () => {
+    const { store, service, details } = await setup(() => []);
+    await service.execute({ action: "map", connectionId: "work", containerId: "42", actor: "ada" });
+    const epic = store.createIssue({ title: "Epic" });
+    const done = store.createIssue({ title: "Done child", parent: epic.id });
+    const cancelled = store.createIssue({ title: "Cancelled child", parent: epic.id });
+    // A child still in flight keeps the epic open.
+    store.createIssue({ title: "Open child", parent: epic.id });
+    const later = new Date(Date.now() + 1000).toISOString();
+    store.externalLinks().link(done.id, pr(81, "open"), "ada");
+    store.externalLinks().link(cancelled.id, pr(82, "open"), "ada");
+    store.updateIssue(done.identifier, { status: "done" }, "ada");
+    store.updateIssue(cancelled.identifier, { status: "cancelled" }, "ada");
+    // Merged and closed on GitHub after the children were finished.
+    details.mockImplementation(async (r: ExternalItemRef) => ({ ...pr(Number(r.id), r.id === "81" ? "merged" : "closed"), fetchedAt: later }));
+    const report = (await service.execute({ action: "discover" })) as { refreshed: number };
+    expect(report.refreshed).toBe(2);
+    expect(subtreePullRequests(store, epic.id)!.map((p) => [p.key, p.state])).toEqual([["team/repo#81", "merged"], ["team/repo#82", "closed"]]);
+    // Read once each, however many open ancestors draw them; a finished one is not read again.
+    store.createIssue({ title: "Grandparent" });
+    const again = (await service.execute({ action: "discover" })) as { refreshed: number };
+    expect(again.refreshed).toBe(0);
+    expect(details).toHaveBeenCalledTimes(2);
+    store.db.close();
+  });
+
+  it("leaves a finished child's pull request alone once its parent is finished too", async () => {
+    const { store, service, details } = await setup(() => []);
+    await service.execute({ action: "map", connectionId: "work", containerId: "42", actor: "ada" });
+    const epic = store.createIssue({ title: "Epic" });
+    const child = store.createIssue({ title: "Child", parent: epic.id });
+    store.externalLinks().link(child.id, pr(83, "open"), "ada");
+    store.updateIssue(child.identifier, { status: "done" }, "ada");
+    store.updateIssue(epic.identifier, { status: "done" }, "ada");
+    const report = (await service.execute({ action: "discover" })) as { refreshed: number };
+    expect(report.refreshed).toBe(0);
+    expect(details).not.toHaveBeenCalled();
     store.db.close();
   });
 });

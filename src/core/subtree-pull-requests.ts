@@ -22,6 +22,11 @@ export interface PullRequestTicket {
   id: string;
   identifier: string;
   title: string;
+  /**
+   * The parent's direct child this ticket sits under: its own id when it is a direct child,
+   * null for the parent itself. A child's row groups its whole branch's pull requests by it.
+   */
+  childId: string | null;
 }
 
 export interface SubtreePullRequest extends LinkedPullRequest {
@@ -33,6 +38,7 @@ export interface SubtreePullRequest extends LinkedPullRequest {
 
 interface SubtreeRow {
   root: string;
+  top: string | null;
   id: string;
   identifier: string;
   title: string;
@@ -41,30 +47,36 @@ interface SubtreeRow {
 /**
  * The subtree set of each given ticket that has a visible child, keyed by its id. A ticket
  * without one is absent from the map. Pull requests that cannot be drawn are listed all the
- * same: what a surface draws is its own choice (`rowPullRequests`).
+ * same: what a surface draws is its own choice (`rowPullRequests`). A caller that has already
+ * read the workspace's pull requests (`ExternalLinkStore.pullRequests()`) passes them as
+ * `linked`, and the subtree walk is the only query.
  */
-export function subtreePullRequestsFor(store: WorkspaceStore, rootIds: readonly string[]): Map<string, SubtreePullRequest[]> {
+export function subtreePullRequestsFor(
+  store: WorkspaceStore,
+  rootIds: readonly string[],
+  linked?: ReadonlyMap<string, readonly LinkedPullRequest[]>,
+): Map<string, SubtreePullRequest[]> {
   const result = new Map<string, SubtreePullRequest[]>();
   if (rootIds.length === 0) return result;
   const hideIdeas = store.planningOn() ? 0 : 1;
   // Pre-order by the path of creation times from the root; the depth cap stops a corrupt cycle.
   const rows = store.db
     .prepare(
-      `WITH RECURSIVE sub(root, id, identifier, title, path, depth) AS (
-         SELECT i.id, i.id, i.identifier, i.title, '', 0 FROM issues i
+      `WITH RECURSIVE sub(root, top, id, identifier, title, path, depth) AS (
+         SELECT i.id, NULL, i.id, i.identifier, i.title, '', 0 FROM issues i
           WHERE i.id IN (SELECT value FROM json_each(?))
             AND EXISTS (SELECT 1 FROM issues c WHERE c.parent_id = i.id AND (? = 0 OR c.kind <> '${IDEA_KIND}'))
          UNION ALL
-         SELECT sub.root, c.id, c.identifier, c.title, sub.path || '/' || c.created_at || c.id, sub.depth + 1
+         SELECT sub.root, COALESCE(sub.top, c.id), c.id, c.identifier, c.title, sub.path || '/' || c.created_at || c.id, sub.depth + 1
            FROM sub JOIN issues c ON c.parent_id = sub.id
           WHERE sub.depth < ${MAX_TREE_DEPTH} AND (? = 0 OR c.kind <> '${IDEA_KIND}')
        )
-       SELECT root, id, identifier, title FROM sub ORDER BY root, path`,
+       SELECT root, top, id, identifier, title FROM sub ORDER BY root, path`,
     )
     .all(JSON.stringify([...new Set(rootIds)]), hideIdeas, hideIdeas) as unknown as SubtreeRow[];
   if (rows.length === 0) return result;
 
-  const linked = store.externalLinks().pullRequests([...new Set(rows.map((row) => row.id))]);
+  const byTicket = linked ?? store.externalLinks().pullRequests([...new Set(rows.map((row) => row.id))]);
   let root: string | null = null;
   let byResource = new Map<string, SubtreePullRequest>();
   const finish = () => {
@@ -76,8 +88,8 @@ export function subtreePullRequestsFor(store: WorkspaceStore, rootIds: readonly 
       root = row.root;
       byResource = new Map();
     }
-    const ticket = { id: row.id, identifier: row.identifier, title: row.title };
-    for (const pr of linked.get(row.id) ?? []) {
+    const ticket = { id: row.id, identifier: row.identifier, title: row.title, childId: row.top };
+    for (const pr of byTicket.get(row.id) ?? []) {
       const entry = byResource.get(pr.resourceId);
       if (entry) {
         if (!entry.tickets.some((t) => t.id === row.id)) entry.tickets.push(ticket);
