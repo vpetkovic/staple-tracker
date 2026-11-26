@@ -201,12 +201,13 @@ function HorizonSection({ lens, column }: { lens: LensContext; column: BoardColu
 const landed = (members: number) => (members === 1 ? "The member landed" : `All ${members} members landed`);
 
 /**
- * Pinned at the top of the lens while a row is dragged: one target per section, Not scheduled first, so a
- * section far down the page is reachable without scrolling. Marked the same way as the sections.
+ * Pinned at the top of the lens while a row is dragged: one target per section, Not scheduled
+ * first, so a section far down the page is reachable without scrolling; with many horizons it
+ * wraps onto more lines rather than clip one. Marked the same way as the sections.
  */
 export function DropRail({ lens }: { lens: Pick<LensContext, "plan" | "columns" | "write" | "dragging" | "onDrag"> }) {
   return (
-    <div role="group" aria-label="Move to" className="absolute inset-x-0 top-0 z-20 flex items-center gap-1.5 overflow-x-auto border-b bg-card px-4 py-1.5 shadow-sm" data-plan-drop-rail>
+    <div role="group" aria-label="Move to" className="absolute inset-x-0 top-0 z-20 flex flex-wrap items-center gap-1.5 border-b bg-card px-4 py-1.5 shadow-sm" data-plan-drop-rail>
       <span className="shrink-0 text-caption text-text-tertiary">Move to</span>
       {lens.columns.map((column) => (
         <RailTarget key={column.key} lens={lens} column={column} />
