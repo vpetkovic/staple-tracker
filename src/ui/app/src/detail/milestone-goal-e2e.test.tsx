@@ -318,13 +318,16 @@ describe("the run-stopped notice, from /api/runs", () => {
     // One card, the newest; the other waits behind "1 more".
     expect(html.match(/data-run-stop-notice=/g)).toHaveLength(1);
     expect(html).toContain(`data-run-stop-notice="${refs.goalRun}"`);
-    expect(html).toContain(`>Autopilot · ${refs.m}<`);
+    // Without the run in hand the card keeps the notice's own title, which names the scope.
+    expect(html).toContain(`>Autopilot finished · ${refs.m}<`);
+    expect(html).toContain(">View run<");
     expect(html).toContain(`>Review ${refs.m}<`);
     expect(html).toContain('data-run-stop-more="1"');
     expect(html).toContain(`Dismiss: Autopilot finished · ${refs.m}: Goal met: ${refs.m} is waiting for approval`);
     expect(html).not.toContain("Dismiss all");
     // The reason wraps rather than being cut short.
-    expect(html).toContain('<span class="wrap-anywhere">Goal met:');
+    expect(/data-run-stop-reason=""[^>]*wrap-anywhere|wrap-anywhere[^>]*data-run-stop-reason=""/.test(html)).toBe(true);
+    expect(html).toContain("Goal met:");
     // Expanded: both, and the way back and the dismiss-all.
     const open = list({ placement: "corner", initiallyExpanded: true });
     expect(open.match(/data-run-stop-notice=/g)).toHaveLength(2);
@@ -332,6 +335,32 @@ describe("the run-stopped notice, from /api/runs", () => {
     expect(open).toContain("Show fewer");
     expect(open).toContain("Dismiss all");
     expect(open).not.toContain("data-run-stop-more");
+  });
+
+  it("with the run in hand, names it and makes the tickets in its reason openable", () => {
+    const notices = pendingStopNotices(endRuns, all);
+    const runOf = (notice: { key: string }) => endRuns.find((entry) => `${entry.workspace}/${entry.run.id}` === notice.key) ?? null;
+    const opened: string[] = [];
+    const html = render(
+      <RunStopNoticeList
+        notices={notices}
+        placement="corner"
+        initiallyExpanded
+        runOf={runOf}
+        onOpenRef={noop}
+        onOpenTicket={(_notice, ref) => opened.push(ref)}
+        onDetails={noop}
+        onDismiss={noop}
+        onDismissAll={noop}
+      />,
+      endRuns,
+    );
+    const goal = endRuns.find((entry) => entry.run.id === refs.goalRun)!;
+    expect(html).toContain(`>Autopilot finished: ${goal.title}<`);
+    // The reason's ticket is a chip that opens it, not bare text.
+    const reason = /data-run-stop-reason=""[^>]*>([\s\S]*?)<\/p>/.exec(html)![1]!;
+    expect(reason).toContain("<button");
+    expect(reason).toContain(refs.m);
   });
 
   it("with nothing to say, keeps the live region and draws no box, so a phone shows no empty bar", () => {

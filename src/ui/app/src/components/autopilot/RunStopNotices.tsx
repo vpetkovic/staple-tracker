@@ -9,7 +9,8 @@
  * kept in localStorage and shared with Stop, which marks the run it stopped.
  *
  * ONE COMPACT CARD, WHEREVER IT IS. Each place shows the newest notice only, as one card
- * (title, reason, link, dismiss); "N more" expands to three, and past three the history has
+ * (the run by name, why it ended with the tickets it names as chips, the one thing to do,
+ * "View run" to the run's page, dismiss); "N more" expands to three, and past three the history has
  * them all. A stack of full cards took 493px of an 844px phone.
  *
  *   ON A DESK   the bottom-right corner, over the page.
@@ -23,33 +24,46 @@
  * The live region is always rendered, empty and unpadded when there is nothing to say, so
  * the first notice is announced; the padded, bordered box exists only around notices.
  */
-import { Bot, X } from "lucide-react";
+import { X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { attentionIsOpen, attentionLabel, pendingStopNotices, type StopNotice } from "@/lib/run-stops";
+import { attentionIsOpen, attentionLabel, pendingStopNotices, stopKey, type StopNotice } from "@/lib/run-stops";
 import { markStopsSeen, reconcileStopSeen, useStopSeen } from "@/lib/stop-seen-store";
 import { useRuns } from "@/lib/runs";
 import { isAllWorkspaces, useSession } from "@/lib/session";
+import type { RunEntry } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { RunStatePill } from "./RunParts";
+import { RefText } from "@/components/ticket/TicketChip";
 
 /** How many notices show once expanded; the rest wait behind "and N more" (the history lists them all). */
 export const NOTICE_LIMIT = 3;
 
 export type NoticePlacement = "corner" | "strip" | "drawer";
 
+/** The run a notice is about, when the page's read holds it: its name, and the issues its reason names. */
+export type NoticeRun = Pick<RunEntry, "run" | "title" | "issues">;
+
+/** "Autopilot stopped: Quick wins wave". Without the run, the notice's own title (it names the scope). */
+export function noticeHeading(notice: Pick<StopNotice, "title">, run: Pick<NoticeRun, "run" | "title"> | null): string {
+  return run ? `Autopilot ${run.run.state === "completed" ? "finished" : "stopped"}: ${run.title}` : notice.title;
+}
+
 /** One notice, compact. Pure: what it does is the caller's. */
 export function RunStopNoticeCard({
   notice,
+  run = null,
   raised = false,
   showWorkspace = false,
   more = 0,
   onMore,
   openRef = null,
   onOpenRef,
+  onOpenTicket,
   onDetails,
   onDismiss,
 }: {
   notice: StopNotice;
+  /** The run itself, for its name and for the tickets its reason names. */
+  run?: NoticeRun | null;
   /** The issue open in the detail, if any: a link to it is not offered (it is on screen). */
   openRef?: { workspace: string; ref: string } | null;
   /** Over the page (the desk's corner): a shadow separates it from what is under it. */
@@ -59,32 +73,55 @@ export function RunStopNoticeCard({
   more?: number;
   onMore?: () => void;
   onOpenRef: (notice: StopNotice) => void;
+  /** A ticket named inside the reason. */
+  onOpenTicket?: (notice: StopNotice, ref: string) => void;
   onDetails: (notice: StopNotice) => void;
   onDismiss: (notice: StopNotice) => void;
 }) {
   const label = `${notice.title}: ${notice.reason}${notice.note ? ` ("${notice.note}")` : ""}`;
   const link = notice.attention && !attentionIsOpen(notice, openRef) ? notice.attention : null;
+  const heading = noticeHeading(notice, run);
   return (
     <article
       data-run-stop-notice={notice.runId}
       aria-label={label}
-      className={cn("flex min-w-0 items-start gap-2 rounded-lg border bg-surface-raised py-1.5 pr-1 pl-2.5 text-body", raised && "shadow-md")}
+      className={cn("flex min-w-0 items-start gap-2.5 rounded-xl border bg-surface-raised py-2.5 pr-1.5 pl-3 text-body", raised && "shadow-md")}
     >
-      <Bot aria-hidden className="mt-2 size-4 shrink-0 text-text-tertiary" />
-      <div className="flex min-w-0 flex-1 flex-col items-start gap-1 py-1">
-        {/* The title is the way to the run's details. */}
-        <button
-          type="button"
-          data-run-stop-details={notice.runId}
-          onClick={() => onDetails(notice)}
-          title={`${notice.title}. Show the run`}
-          className="max-w-full truncate rounded-sm text-left font-medium text-foreground hover:underline focus-ring"
-        >
-          {notice.short}
-          {showWorkspace ? <span className="font-normal text-text-tertiary"> · {notice.workspace}</span> : null}
-        </button>
-        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-          <RunStatePill text={notice.reason} tone={notice.tone} wrap />
+      {/* The tone as a dot; the reason beside it says it in words. */}
+      <span aria-hidden data-run-state={notice.tone} className="mt-1.5 size-2 shrink-0 rounded-full" style={{ backgroundColor: `var(--plain-${notice.tone}-fg)` }} />
+      <div className="flex min-w-0 flex-1 flex-col items-start gap-1">
+        <p className="m-0 max-w-full truncate font-semibold text-foreground" title={heading} data-run-stop-heading="">
+          {heading}
+        </p>
+        <p className="m-0 max-w-full text-label text-text-secondary wrap-anywhere" data-run-stop-reason="">
+          <RefText text={notice.reason} issues={run?.issues ?? []} onOpen={onOpenTicket ? (ref) => onOpenTicket(notice, ref) : undefined} />
+          {showWorkspace ? <span className="text-text-tertiary"> · {notice.workspace}</span> : null}
+        </p>
+        {notice.note ? (
+          <p data-run-stop-note="" className="m-0 line-clamp-2 max-w-full text-label text-text-secondary wrap-anywhere">
+            &ldquo;{notice.note}&rdquo;
+          </p>
+        ) : null}
+        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+          {link ? (
+            <button
+              type="button"
+              data-run-stop-open={link.ref}
+              onClick={() => onOpenRef(notice)}
+              className="inline-flex h-7 shrink-0 items-center rounded-md bg-primary px-2.5 text-label font-medium text-primary-foreground hover:bg-primary/90 focus-ring pointer-coarse:h-11"
+            >
+              {attentionLabel(link)}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            data-run-stop-details={notice.runId}
+            onClick={() => onDetails(notice)}
+            title={`${notice.title}. Show the run`}
+            className="inline-flex h-7 shrink-0 items-center rounded-md border border-border-strong bg-card px-2.5 text-label font-medium text-foreground hover:bg-surface-hover focus-ring pointer-coarse:h-11"
+          >
+            View run
+          </button>
           {onMore && more > 0 ? (
             <button
               type="button"
@@ -96,28 +133,13 @@ export function RunStopNoticeCard({
             </button>
           ) : null}
         </div>
-        {notice.note ? (
-          <p data-run-stop-note="" className="m-0 line-clamp-2 max-w-full text-label text-text-secondary wrap-anywhere">
-            &ldquo;{notice.note}&rdquo;
-          </p>
-        ) : null}
       </div>
-      {link ? (
-        <button
-          type="button"
-          data-run-stop-open={link.ref}
-          onClick={() => onOpenRef(notice)}
-          className="mt-0.5 inline-flex h-8 shrink-0 items-center rounded-md bg-primary px-2.5 text-label font-medium text-primary-foreground hover:bg-primary/90 focus-ring pointer-coarse:h-11"
-        >
-          {attentionLabel(link)}
-        </button>
-      ) : null}
       <button
         type="button"
         aria-label={`Dismiss: ${label}`}
         data-run-stop-dismiss={notice.runId}
         onClick={() => onDismiss(notice)}
-        className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-md text-text-secondary hover:bg-surface-hover hover:text-foreground focus-ring pointer-coarse:size-11"
+        className="-mt-1 inline-flex size-8 shrink-0 items-center justify-center rounded-md text-text-secondary hover:bg-surface-hover hover:text-foreground focus-ring pointer-coarse:size-11"
       >
         <X aria-hidden className="size-4" />
       </button>
@@ -142,20 +164,25 @@ const BOX: Record<NoticePlacement, string> = {
 export function RunStopNoticeList({
   notices,
   placement,
+  runOf,
   showWorkspace = false,
   initiallyExpanded = false,
   openRef = null,
   onOpenRef,
+  onOpenTicket,
   onDetails,
   onDismiss,
   onDismissAll,
 }: {
   notices: readonly StopNotice[];
   placement: NoticePlacement;
+  /** The run behind a notice, by the notice's key; a notice without one keeps its own title. */
+  runOf?: (notice: StopNotice) => NoticeRun | null;
   openRef?: { workspace: string; ref: string } | null;
   showWorkspace?: boolean;
   initiallyExpanded?: boolean;
   onOpenRef: (notice: StopNotice) => void;
+  onOpenTicket?: (notice: StopNotice, ref: string) => void;
   onDetails: (notice: StopNotice) => void;
   onDismiss: (notice: StopNotice) => void;
   onDismissAll: () => void;
@@ -168,12 +195,14 @@ export function RunStopNoticeList({
     <RunStopNoticeCard
       key={notice.key}
       notice={notice}
+      run={runOf?.(notice) ?? null}
       raised={placement === "corner"}
       showWorkspace={showWorkspace}
       more={!open && index === 0 ? behind : 0}
       onMore={() => setExpanded(true)}
       openRef={openRef}
       onOpenRef={onOpenRef}
+      onOpenTicket={onOpenTicket}
       onDetails={onDetails}
       onDismiss={onDismiss}
     />
@@ -238,13 +267,17 @@ export function RunStopNotices({ placement }: { placement: NoticePlacement }) {
 
   const pending = useMemo(() => pendingStopNotices(entries, seen), [entries, seen]);
   const notices = inShell && session.selection !== null ? [] : pending;
+  const runs = useMemo(() => new Map(entries.map((entry) => [stopKey(entry), entry])), [entries]);
 
   return (
     <RunStopNoticeList
       notices={notices}
       placement={placement}
+      runOf={(notice) => runs.get(notice.key) ?? null}
       showWorkspace={isAllWorkspaces(session)}
       openRef={session.selection}
+      // A ticket named in the reason opens in the drawer; the notice stays until it is dismissed or its own action is taken.
+      onOpenTicket={(notice, ref) => session.open(notice.workspace, ref)}
       onOpenRef={(notice) => {
         markStopsSeen([notice.key]);
         if (notice.attention) session.open(notice.workspace, notice.attention.ref);
