@@ -391,7 +391,7 @@ function NextCell({ row }: { row: TreeRow }) {
   );
 }
 
-/** `Nov 10 – Jan 9`, `by Feb 27`, `from Sep 27`: the planned window; nothing once shipped. */
+/** `Nov 10 – Jan 9`, `by Mar 5`, `from Sep 27`: the planned window; nothing once shipped. */
 function plannedWords(idea: IdeaData): string {
   if (idea.state === "shipped") return "";
   const { start, target } = idea.planned;

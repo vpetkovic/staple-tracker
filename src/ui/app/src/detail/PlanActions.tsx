@@ -74,7 +74,7 @@ export function IdeaStatusLine({ record, className, children }: { record: IdeaDe
   );
 }
 
-/** `Exploring · aimed at ◇ Post-MVP · planned Aug 12 – Apr 24, 2027`: what the state and the payload say, in words. */
+/** `Exploring · aimed at ◇ Later · planned Sep 1 – Mar 15, 2027`: what the state and the payload say, in words. */
 function statusWords(record: IdeaDetailData): string {
   const { idea, horizon } = record;
   const state = idea.state === "shipped" && idea.actual.end ? `Shipped ${dayLabel(idea.actual.end)}` : (STATE_WORDS[idea.state] ?? idea.state);

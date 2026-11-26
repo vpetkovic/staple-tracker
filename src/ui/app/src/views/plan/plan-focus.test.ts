@@ -64,8 +64,8 @@ const step = (who: PlanStepData["who"]): PlanStepData => ({
   questions: ["Which?"],
 });
 
-const root = idea("root", { title: "Exercise GA" });
-const middle = idea("middle", { parentId: "root", title: "Catalog" });
+const root = idea("root", { title: "Checkout" });
+const middle = idea("middle", { parentId: "root", title: "Gift cards" });
 const late = idea("late", { parentId: "middle", title: "Late leaf", late: true, state: "started" });
 const shippedLate = idea("shipped-late", { title: "Landed late", late: true, state: "shipped" });
 const asks = idea("asks", { title: "Asks the person", nextStep: step("person"), state: "exploring" });

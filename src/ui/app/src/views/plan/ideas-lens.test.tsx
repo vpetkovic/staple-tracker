@@ -111,9 +111,9 @@ describe("an exploring card", () => {
   });
 
   it("shows the brief's first line when the payload has one", () => {
-    const html = board([exploring("b", { briefLine: "Let a person flag a bad exercise." }), exploring("n")]);
+    const html = board([exploring("b", { briefLine: "Let a shopper save a cart for later." }), exploring("n")]);
     expect(card(html, "b")).toContain("data-plan-brief");
-    expect(text(card(html, "b"))).toContain("Let a person flag a bad exercise.");
+    expect(text(card(html, "b"))).toContain("Let a shopper save a cart for later.");
     expect(card(html, "n")).not.toContain("data-plan-brief");
   });
 

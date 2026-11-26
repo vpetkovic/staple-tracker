@@ -432,18 +432,18 @@ describe("the header line", () => {
   const line = (rec: IdeaDetailData) => renderToStaticMarkup(<IdeaStatusLine record={rec} />);
 
   it("is one line: the glyph, the state, where it is aimed, the planned window and the flags", () => {
-    const rec = record(idea({ horizonId: "h1", notStarted: true, planned: { start: "2026-08-12", target: "2027-04-24" } }));
-    rec.horizon = { id: "h1", name: "Post-MVP", date: null } as IdeaDetailData["horizon"];
+    const rec = record(idea({ horizonId: "h1", notStarted: true, planned: { start: "2026-09-01", target: "2027-03-15" } }));
+    rec.horizon = { id: "h1", name: "Later", date: null } as IdeaDetailData["horizon"];
     const html = line(rec);
     expect(html).toContain('data-plan-glyph="exploring"');
-    expect(text(html)).toContain("Exploring · aimed at ◇ Post-MVP · planned Aug 12 – Apr 24, 2027");
+    expect(text(html)).toContain("Exploring · aimed at ◇ Later · planned Sep 1 – Mar 15, 2027");
     expect(html).toContain('data-plan-flag="notStarted"');
     expect(text(html)).not.toContain("Idea ·");
   });
 
   it("says the percent once started, and on rather than aimed at", () => {
-    const rec = record(idea({ state: "started", stage: "started", percent: 56, horizonId: "h1" }));
-    rec.horizon = { id: "h1", name: "MVP", date: "2027-02-27" } as IdeaDetailData["horizon"];
-    expect(text(line(rec))).toContain("Started · 56% done · on ◇ MVP (Feb 27)");
+    const rec = record(idea({ state: "started", stage: "started", percent: 45, horizonId: "h1" }));
+    rec.horizon = { id: "h1", name: "Launch", date: "2027-03-05" } as IdeaDetailData["horizon"];
+    expect(text(line(rec))).toContain("Started · 45% done · on ◇ Launch (Mar 5)");
   });
 });

@@ -94,13 +94,13 @@ function horizon(id: string, extra: Partial<HorizonData> = {}): HorizonData {
 }
 
 const shipped = (id: string, parentId: string) => idea(id, { parentId, state: "shipped", stage: "shipped", actual: { start: null, end: "2026-10-03", forecastEnd: null }, percent: 100 });
-// Exercise GA on Now: three shipped leaves and one started sub-idea.
-const ga = idea("ga", { title: "Exercise GA", childIds: ["r0", "r1", "r2", "r3"] });
-const r0 = shipped("r0", "ga");
-const r1 = shipped("r1", "ga");
-const r2 = shipped("r2", "ga");
-const r3 = idea("r3", { parentId: "ga", state: "started", stage: "started", percent: 30, own: { done: 1, open: 2, planned: 0, total: 3 } });
-const IDEAS = [ga, r0, r1, r2, r3];
+// A parent on Now: three shipped leaves and one started sub-idea.
+const co = idea("co", { title: "Checkout", childIds: ["r0", "r1", "r2", "r3"] });
+const r0 = shipped("r0", "co");
+const r1 = shipped("r1", "co");
+const r2 = shipped("r2", "co");
+const r3 = idea("r3", { parentId: "co", state: "started", stage: "started", percent: 30, own: { done: 1, open: 2, planned: 0, total: 3 } });
+const IDEAS = [co, r0, r1, r2, r3];
 
 const plan = (ideas: IdeaData[] = IDEAS, horizons: HorizonData[] = [horizon("now"), horizon("later")]): PlanData => ({ enabled: true, today: "2026-11-13", horizons, ideas });
 const text = (html: string) => html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
@@ -148,28 +148,28 @@ describe("Ready, not scheduled", () => {
 describe("a parent's shipped leaves", () => {
   it("gather into one line ahead of the rest, the leaves not drawn until it opens", () => {
     const html = board();
-    expect(html).toContain('data-plan-shipped-fold="ga"');
+    expect(html).toContain('data-plan-shipped-fold="co"');
     expect(text(html)).toContain("3 shipped: Idea r0, Idea r1, Idea r2");
-    expect(drawn(html)).toEqual(["ga", "r3"]);
+    expect(drawn(html)).toEqual(["co", "r3"]);
   });
 
   it("open on request, and stay gathered with fewer than two", () => {
     const rows = planTree({ horizonId: "now", ideas: IDEAS, horizons: [] });
     const keys = (shipOpen: Set<string>) => outlineEntries(rows, { isOpen: () => true, shipOpen, unfold: false }).map((entry) => entry.key);
-    expect(keys(new Set())).toEqual(["ga", shippedKey("ga"), "r3"]);
-    expect(keys(new Set(["ga"]))).toEqual(["ga", "r0", "r1", "r2", "r3"]);
-    const one = planTree({ horizonId: "now", ideas: [ga, r0, r3], horizons: [] });
-    expect(outlineEntries(one, { isOpen: () => true, shipOpen: new Set(), unfold: false }).map((entry) => entry.key)).toEqual(["ga", "r0", "r3"]);
+    expect(keys(new Set())).toEqual(["co", shippedKey("co"), "r3"]);
+    expect(keys(new Set(["co"]))).toEqual(["co", "r0", "r1", "r2", "r3"]);
+    const one = planTree({ horizonId: "now", ideas: [co, r0, r3], horizons: [] });
+    expect(outlineEntries(one, { isOpen: () => true, shipOpen: new Set(), unfold: false }).map((entry) => entry.key)).toEqual(["co", "r0", "r3"]);
   });
 });
 
 describe("a compact tree", () => {
   it("starts its groups folded, the folded parent saying how many sub-ideas it holds", () => {
     const html = atWidth(390, () => board());
-    expect(drawn(html)).toEqual(["ga"]);
-    expect(html).toMatch(/aria-expanded="false" data-plan-tree-disclosure="ga"/);
+    expect(drawn(html)).toEqual(["co"]);
+    expect(html).toMatch(/aria-expanded="false" data-plan-tree-disclosure="co"/);
     expect(text(html)).toContain("4 sub-ideas");
-    expect(drawn(atWidth(1280, () => board()))).toEqual(["ga", "r3"]);
+    expect(drawn(atWidth(1280, () => board()))).toEqual(["co", "r3"]);
   });
 });
 
@@ -178,7 +178,7 @@ describe("while a focus or filter is on", () => {
     const done = horizon("now", { shipped: true, percent: 100, complete: true });
     const html = atWidth(390, () => board({ plan: plan(IDEAS, [done]), filtering: true }));
     expect(html).not.toContain("data-plan-shipped-fold");
-    expect(drawn(html)).toEqual(["ga", "r0", "r1", "r2", "r3"]);
+    expect(drawn(html)).toEqual(["co", "r0", "r1", "r2", "r3"]);
     expect(html).toMatch(/aria-expanded="true"[^>]*data-plan-done-toggle="LAR-now"/);
     // Without the filter the same done horizon starts folded.
     expect(drawn(atWidth(390, () => board({ plan: plan(IDEAS, [done]) })))).toEqual([]);
@@ -233,24 +233,24 @@ describe("the keys on a focused row", () => {
   const entries = (open: boolean, shipOpen = new Set<string>()) => outlineEntries(rows, { isOpen: () => open, shipOpen, unfold: false });
 
   it("move up and down the visible lines and stop at the ends", () => {
-    expect(outlineKey(entries(true), "ga", "ArrowDown")).toEqual({ focus: shippedKey("ga") });
-    expect(outlineKey(entries(true), "r3", "ArrowUp")).toEqual({ focus: shippedKey("ga") });
+    expect(outlineKey(entries(true), "co", "ArrowDown")).toEqual({ focus: shippedKey("co") });
+    expect(outlineKey(entries(true), "r3", "ArrowUp")).toEqual({ focus: shippedKey("co") });
     expect(outlineKey(entries(true), "r3", "ArrowDown")).toBeNull();
-    expect(outlineKey(entries(true), "ga", "ArrowUp")).toBeNull();
+    expect(outlineKey(entries(true), "co", "ArrowUp")).toBeNull();
   });
 
   it("open a folded group with Right, then step into it; fold it with Left, or go to the parent", () => {
-    expect(outlineKey(entries(false), "ga", "ArrowRight")).toEqual({ toggle: "ga" });
-    expect(outlineKey(entries(true), "ga", "ArrowRight")).toEqual({ focus: shippedKey("ga") });
-    expect(outlineKey(entries(true), "ga", "ArrowLeft")).toEqual({ toggle: "ga" });
-    expect(outlineKey(entries(true), "r3", "ArrowLeft")).toEqual({ focus: "ga" });
-    expect(outlineKey(entries(true, new Set(["ga"])), "r1", "ArrowLeft")).toEqual({ focus: "ga" });
+    expect(outlineKey(entries(false), "co", "ArrowRight")).toEqual({ toggle: "co" });
+    expect(outlineKey(entries(true), "co", "ArrowRight")).toEqual({ focus: shippedKey("co") });
+    expect(outlineKey(entries(true), "co", "ArrowLeft")).toEqual({ toggle: "co" });
+    expect(outlineKey(entries(true), "r3", "ArrowLeft")).toEqual({ focus: "co" });
+    expect(outlineKey(entries(true, new Set(["co"])), "r1", "ArrowLeft")).toEqual({ focus: "co" });
   });
 
   it("open the idea with Enter or Space, and the shipped line's leaves from that line", () => {
     expect(outlineKey(entries(true), "r3", "Enter")).toEqual({ activate: "r3" });
-    expect(outlineKey(entries(true), "ga", " ")).toEqual({ activate: "ga" });
-    expect(outlineKey(entries(true), shippedKey("ga"), "Enter")).toEqual({ shipOpen: "ga" });
-    expect(outlineKey(entries(true), shippedKey("ga"), "ArrowRight")).toEqual({ shipOpen: "ga" });
+    expect(outlineKey(entries(true), "co", " ")).toEqual({ activate: "co" });
+    expect(outlineKey(entries(true), shippedKey("co"), "Enter")).toEqual({ shipOpen: "co" });
+    expect(outlineKey(entries(true), shippedKey("co"), "ArrowRight")).toEqual({ shipOpen: "co" });
   });
 });

@@ -59,7 +59,7 @@ const now: HorizonData = {
   id: "now",
   identifier: "LAR-1",
   name: "Now",
-  date: "2027-02-27",
+  date: "2027-03-05",
   rank: 1,
   status: "todo",
   shipped: false,
@@ -87,12 +87,12 @@ const now: HorizonData = {
 const asks: PlanStepData = { ideaId: "asks", title: "", parentId: "thinking", parentTitle: null, horizonId: "now", state: "exploring", need: "answer_questions", who: "person", instruction: "", questions: ["Which?"] };
 
 // Delivery: a parent with a late started child, and a shaped sibling that is neither.
-const parent = idea("parent", { title: "Exercise GA" });
-const late = idea("late", { parentId: "parent", title: "Catalog", state: "started", stage: "started", late: true, percent: 40 });
+const parent = idea("parent", { title: "Checkout" });
+const late = idea("late", { parentId: "parent", title: "Gift cards", state: "started", stage: "started", late: true, percent: 40 });
 const calm = idea("calm", { title: "Calm" });
 // Thinking: an exploring parent whose exploring child needs the person, and one that does not.
 const thinking = idea("thinking", { title: "Mobile", maturity: "exploring", stage: "exploring", state: "exploring", carriedBy: null, horizonId: null, planned: { start: null, target: null } });
-const needsYou = idea("asks", { title: "Passkeys", parentId: "thinking", maturity: "exploring", stage: "exploring", state: "exploring", carriedBy: null, horizonId: null, planned: { start: null, target: null }, nextStep: asks });
+const needsYou = idea("asks", { title: "Dark mode", parentId: "thinking", maturity: "exploring", stage: "exploring", state: "exploring", carriedBy: null, horizonId: null, planned: { start: null, target: null }, nextStep: asks });
 const quiet = idea("quiet", { title: "Quiet", maturity: "raw", stage: "raw", state: "raw", carriedBy: null, horizonId: null, planned: { start: null, target: null } });
 
 const PLAN: PlanData = { enabled: true, today: "2026-11-25", horizons: [now], ideas: [parent, late, calm, thinking, needsYou, quiet] };
@@ -117,7 +117,7 @@ describe("the focus narrows every lens", () => {
   });
 
   it("narrows by the filter text the same way", () => {
-    expect(marked(lensHtml("horizons", "all", "catalog"), "data-plan-tree-row")).toEqual(["parent", "late"]);
+    expect(marked(lensHtml("horizons", "all", "gift"), "data-plan-tree-row")).toEqual(["parent", "late"]);
   });
 
   it("says nothing matches, with a way out, where the narrowed plan has nothing for the lens", () => {

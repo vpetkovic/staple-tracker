@@ -858,7 +858,7 @@ under 760px only the ⋯, which holds them as the horizon's offered actions. *ad
 that changed the name, and stays open when refused.
 
 `HorizonSummary` (`plan-parts.tsx`) is the horizon's header on every surface, in three lines:
-the name and the date with its distance from `plan.today` (`Feb 27, 2027 · in 93 days`); a
+the name and the date with its distance from `plan.today` (`Mar 5, 2027 · in 99 days`); a
 segmented bar of done, open and planned `units` with the server's `percent` (`100% incomplete`
 while not `complete`, [Accounting](#accounting)) and its flags, *Waiting for your approval*
 (`awaitingApproval`), *Needs you: n* (`needsYou`: its plan steps whose `who` is the person), late

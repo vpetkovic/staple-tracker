@@ -197,7 +197,7 @@ removed until you move that work or take it off the queue. The refusal names wha
 A horizon reads the same in three places: its section in the **Horizons** lens, its drawer, and
 its detail in **Milestones**. Each shows the same header and the same outline.
 
-The header gives the name and date (`Feb 27, 2027 · in 93 days`); a bar split into done, open
+The header gives the name and date (`Mar 5, 2027 · in 99 days`); a bar split into done, open
 and planned work with its percentage, **Needs you: n** when n of its next steps wait on you, and
 its late, not started and shipped counts; then `3 ideas (+1 parent) · 2 members`, the ideas on
 it with parent ideas counted apart and the tickets in its milestone, and its ideas by state

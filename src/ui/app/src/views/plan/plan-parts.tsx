@@ -153,7 +153,7 @@ export function Amber({ children, ...data }: { children: ReactNode } & Record<`d
   );
 }
 
-/** `Feb 27, 2027 · in 93 days`: the horizon's date, and its distance from the plan's day when the surface has one. */
+/** `Mar 5, 2027 · in 99 days`: the horizon's date, and its distance from the plan's day when the surface has one. */
 export function HorizonWhen({ date, today }: { date: string; today?: string }) {
   const days = today ? dayIndex(date) - dayIndex(today) : null;
   const plural = (n: number) => `${n} day${n === 1 ? "" : "s"}`;
