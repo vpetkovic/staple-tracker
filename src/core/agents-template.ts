@@ -301,8 +301,8 @@ What is still yours to do:
 
 ## Act under one identity, all session
 
-Set \`STAPLE_AGENT\` (or pass \`--agent\` / \`--author\` / MCP \`actor\`) and **use the
-same value you claimed with for the entire session.**
+Set \`STAPLE_AGENT\` (or pass \`--agent\`, which every write accepts before or after the
+command, or MCP \`actor\`) and **use the same value you claimed with for the entire session.**
 
 This is not bookkeeping. Liveness is derived from your claim plus the newest
 event, comment, document revision or attempt heartbeat *by the holder*. Write a comment under a different name and it

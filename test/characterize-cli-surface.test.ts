@@ -266,7 +266,10 @@ describe("command inventory", () => {
   // became real commands.
   // MOVED: `-h` left this list when every command learned `--help` and `-h`
   // (test/command-help.test.ts): `staple -h` is `staple --help`, pinned below.
-  it.each(["bogus", "Init", "INIT", "ini", "--version", "task", "list", "diagnose"])(
+  // MOVED: `--version` left this list when the global flags became accepted before the
+  // command (test/cli-global-flags.test.ts): a leading flag is read as a global flag, and one
+  // that is not is refused by name, below. The packaged `staple --version` never reaches here.
+  it.each(["bogus", "Init", "INIT", "ini", "task", "list", "diagnose"])(
     "`%s` is NOT a command and is rejected as validation",
     (token) => {
       const result = cli(token);
@@ -275,6 +278,12 @@ describe("command inventory", () => {
     },
     20_000,
   );
+
+  it("`--version` from source is a leading flag that is not global, refused by name", () => {
+    const result = cli("--version");
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('"--version" is not a global flag');
+  });
 
   /**
    * The message a wrapper script greps. Pinned verbatim, backticks included.
@@ -536,7 +545,9 @@ describe("help surface", () => {
 
   it("pins the global-flag and status footer scripts read", () => {
     const help = cli("help").stdout;
-    expect(help).toContain("Global flags: --db <path>, --ws <slug|prefix>  (default: walk up for .staple/staple.db,");
+    expect(help).toContain("Global flags (before or after the command, with the same meaning):");
+    expect(help).toContain("--db <path>, --ws <slug|prefix>  (default: walk up for .staple/staple.db,");
+    expect(help).toContain("--agent <name>  who acts on any write; else $STAPLE_AGENT, else $USER.");
     /**
      * ISSUE_STATUSES order, verbatim — `board` renders its columns in exactly
      * this sequence for a DEFAULT workspace, so `done` sitting BEFORE `blocked`
