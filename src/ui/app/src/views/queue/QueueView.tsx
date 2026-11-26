@@ -420,9 +420,7 @@ export function QueueTreeLine({
  *
  * `useRovingFocus` is the SAME hook `TreeGrid` and `TaskList` use — exactly one row in the
  * list is tabbable and the arrows move which one — so a reader who has learned the tree has
- * learned this. Enter and Space select, which is `role="option"`'s own contract, and moving
- * focus selects too: the rail is a reading of the row you are on, and a keyboard user who had
- * to press an extra key to see it would be reading a stale panel the whole way down the list.
+ * learned this. Enter and Space open the focused row's details, as `TaskList` does.
  */
 function QueueRowList({
   label,
@@ -470,6 +468,11 @@ function QueueRowList({
               } else if (event.key === "ArrowUp") {
                 event.preventDefault();
                 focus.go(at(index - 1));
+              } else if ((event.key === "Enter" || event.key === " ") && event.target === event.currentTarget) {
+                // Only a key on the row itself: Enter on the row's `⋯` (or inside its menu,
+                // whose events bubble here through the portal) belongs to that control.
+                event.preventDefault();
+                onOpen(identifier);
               }
             }}
           />

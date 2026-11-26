@@ -25,17 +25,17 @@
  *   shown alongside them and greyed: a queued row cannot be queued again (the store answers
  *   a replay with `replayed: true` and no write), so offering it would be offering a no-op.
  *
- * ── WHY REMOVAL IS REFUSED ONCE THE WORK HAS STARTED ──────────────────────────────────
+ * ── WHY REMOVAL IS REFUSED WHILE AN AGENT HOLDS THE ROW ───────────────────────────────
  *
- * A task somebody is actively holding is not a plan any more — it is work in progress, and
+ * A task an agent has checked out is not a plan any more — it is work in progress, and
  * quietly dropping it out of the order behind the holder's back is how an agent ends up
  * finishing something nobody can find. So the item is DISABLED and it SAYS SO, naming the
  * holder. The primitive requires the sentence (see `dropdown-menu.tsx`): a disabled item
  * with no reason tells a reader the thing is possible and refuses to say what is in the way.
+ * A row with no checkout has no holder, whatever its status, and is never refused.
  *
- * It is a REFUSAL TO OFFER, not a permission check. The store is still the authority — a
- * removal that raced a checkout is refused there, and `GuardRefusal` says so. This only
- * stops the UI from advertising an action it can see will fail.
+ * It is a REFUSAL TO OFFER, not a permission check: the store's dequeue does not look at
+ * the holder, and refuses only a write built on a stale plan revision.
  */
 import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpRight, ArrowUpToLine, CircleDot, ListPlus, ListX, SquareArrowUp } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
@@ -53,7 +53,6 @@ import {
 import { StatusChoiceItems } from "@/components/task-list/RowStatusMenu";
 import type { RowStatusChoice } from "@/components/task-list/row-status";
 import { useBackToClose } from "@/lib/back-to-close";
-import { statusCategory } from "@/lib/settings";
 import type { TaskRow } from "@/components/task-list";
 
 /** What the menu may offer for one row, and what it must refuse. */
@@ -77,19 +76,19 @@ export interface QueueRowMenuState {
  * A SET, built once by the caller, rather than a scan per row: this is called for every
  * rendered row of an unvirtualised list on a 1.5s poll.
  *
- * `heldBy` is the row's own `checkoutAgent` plus the `active` category, which is the same
- * pair `store.queue()`'s ladder uses to call a row `claimed`. Reading the row rather than
- * the queue is deliberate: the menu must answer for a row that is not in the plan at all
- * and therefore has no effective row to consult.
+ * `heldBy` is the row's own `checkoutAgent`, which is exactly what `store.queue()`'s ladder
+ * calls `claimed`. Status does not enter into it: a status edit moves a row to an active
+ * status without checking it out, and that row has no holder to name or protect. Reading
+ * the row rather than the queue is deliberate: the menu must answer for a row that is not
+ * in the plan at all and therefore has no effective row to consult.
  */
 export function queueRowMenuState(
   row: Pick<TaskRow, "issue">,
   queuedIds: ReadonlySet<string>,
 ): QueueRowMenuState {
-  const active = statusCategory(row.issue.status) === "active";
   return {
     queued: queuedIds.has(row.issue.identifier),
-    heldBy: active ? row.issue.checkoutAgent ?? "someone" : null,
+    heldBy: row.issue.checkoutAgent ?? null,
   };
 }
 

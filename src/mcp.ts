@@ -1,3 +1,4 @@
+import "./quiet-sqlite-warning.js";
 import { hubWorkspaces } from "./core/integrations/mapping.js";
 import { IntegrationOperations, integrationCommandSchema, INTEGRATION_READ_ACTIONS, INTEGRATION_WRITE_ACTIONS, INTEGRATION_CONFIG_ACTIONS } from "./core/integrations/operations.js";
 /**
@@ -24,8 +25,9 @@ import type { VocabularyOp, WorkspaceStore } from "./core/store.js";
 import { MILESTONE_STATES, assertNotReservedActor } from "./core/milestones.js";
 import { CRITERION_VERDICTS, PACE_VERDICTS } from "./core/milestone-goal.js";
 import { KIND_APPEARANCE_SOURCES, type KindWithAppearance } from "./core/kind-appearance.js";
-import { readFileSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
+import { readInputFile } from "./core/input-file.js";
 import { stapleHome } from "./config/home.js";
 import { readWorkspaceManifest } from "./core/repo-identity.js";
 import { SurfaceAutoSync } from "./core/cloud/auto-triggers.js";
@@ -2538,7 +2540,7 @@ server.registerTool(
       if ((path === undefined) === (bytes_base64 === undefined)) {
         throw new StapleError("validation", "attach_file needs a path or bytes_base64, and not both.");
       }
-      const bytes = path !== undefined ? readFileSync(path) : Buffer.from(bytes_base64!, "base64");
+      const bytes = path !== undefined ? readInputFile(path, "attach_file path") : Buffer.from(bytes_base64!, "base64");
       const name = filename ?? (path !== undefined ? basename(path) : "");
       if (!name) throw new StapleError("validation", "attach_file needs a filename when the bytes are base64.");
       return storeFor(ws).attachFile(ref, {

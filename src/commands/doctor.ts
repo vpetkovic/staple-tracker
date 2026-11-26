@@ -35,7 +35,8 @@ import { parseArgs } from "node:util";
 import { spawnSync } from "node:child_process";
 import { accessSync, constants, existsSync, statSync, statfsSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
+import { openSqlite } from "../core/sqlite.js";
 import { effectiveConfig, readConfig, resolveHome, setHomeOverride, stapleHome } from "../config/index.js";
 import { Hub, absentRowRefusal, isAbsentRow } from "../core/hub.js";
 import {
@@ -140,7 +141,7 @@ function message(error: unknown): string {
  * than a claim: a write attempted through these handles fails.
  */
 function readOnlyDb(path: string): DatabaseSync {
-  return new DatabaseSync(path, { readOnly: true });
+  return openSqlite(path, { readOnly: true });
 }
 
 function hubPresent(): string | null {
@@ -281,7 +282,7 @@ function checkLocator(): CheckResult {
 }
 
 function integrityOf(dbPath: string): string {
-  const db = new DatabaseSync(dbPath, { readOnly: true });
+  const db = openSqlite(dbPath, { readOnly: true });
   try {
     const rows = db.prepare("PRAGMA integrity_check").all() as Array<{ integrity_check: string }>;
     return rows.map((r) => r.integrity_check).join("; ");

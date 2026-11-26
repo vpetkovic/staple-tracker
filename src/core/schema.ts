@@ -1,4 +1,5 @@
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
+import { openSqlite } from "./sqlite.js";
 import { describeSchema, runMigrations } from "./migrations/runner.js";
 import type { SchemaState } from "./migrations/types.js";
 import { WORKSPACE_TARGET, WORKSPACE_LATEST_VERSION } from "./migrations/workspace/index.js";
@@ -83,7 +84,7 @@ export function hubSchemaState(db: DatabaseSync): SchemaState {
  * caller decides anything.
  */
 export function inspectWorkspaceSchema(dbPath: string): SchemaState {
-  const db = new DatabaseSync(dbPath, { readOnly: true });
+  const db = openSqlite(dbPath, { readOnly: true });
   try {
     return describeSchema(db, WORKSPACE_TARGET);
   } finally {

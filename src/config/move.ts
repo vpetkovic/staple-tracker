@@ -20,7 +20,7 @@
  */
 import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { relative, resolve, sep } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { openSqlite } from "../core/sqlite.js";
 import { StapleError } from "../core/types.js";
 import { assertUsableHome, bootstrapLocatorPath, writeBootstrapLocator } from "./locator.js";
 
@@ -48,7 +48,7 @@ function isWithin(parent: string, child: string): boolean {
 function checkpoint(dbPath: string): void {
   if (!existsSync(dbPath)) return;
   try {
-    const db = new DatabaseSync(dbPath);
+    const db = openSqlite(dbPath);
     try {
       db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
     } finally {
@@ -64,7 +64,7 @@ function checkpoint(dbPath: string): void {
 function staleHubPathCount(hubDb: string, oldHome: string): number {
   if (!existsSync(hubDb)) return 0;
   try {
-    const db = new DatabaseSync(hubDb);
+    const db = openSqlite(hubDb);
     try {
       /**
        * `''` is an absent row (`ABSENT_PATH` in `src/core/hub.ts`, spelled out here
@@ -159,7 +159,7 @@ export function moveHome(options: { from: string; to: string; locatorPath?: stri
     }
     const hubCopy = resolve(to, "hub.db");
     if (existsSync(hubCopy)) {
-      const db = new DatabaseSync(hubCopy);
+      const db = openSqlite(hubCopy);
       try {
         db.prepare("SELECT count(*) AS n FROM workspaces").get();
       } finally {

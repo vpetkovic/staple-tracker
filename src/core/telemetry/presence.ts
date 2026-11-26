@@ -23,7 +23,8 @@
  */
 import { existsSync, realpathSync } from "node:fs";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
+import { openSqlite } from "../sqlite.js";
 import { stapleHome } from "../../config/home.js";
 import { openDb } from "../db.js";
 import { journalFor, resolveDeviceId } from "../journal.js";
@@ -176,7 +177,7 @@ export function rebuildPresence(home: string = stapleHome()): number {
       let db: DatabaseSync | null = null;
       try {
         assertInTestSandbox(workspace.path, "workspace database");
-        db = new DatabaseSync(workspace.path, { readOnly: true });
+        db = openSqlite(workspace.path, { readOnly: true });
         writeRows(hub, workspace.slug, ownAttempts(db, device));
         read += 1;
       } catch {
@@ -203,7 +204,7 @@ export function presenceCounts(home: string = stapleHome()): PresenceCounts | nu
   if (!existsSync(path)) return null;
   return {
     count(exclude, accountRef) {
-      const hub = new DatabaseSync(path, { readOnly: true });
+      const hub = openSqlite(path, { readOnly: true });
       try {
         const table = hub.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'attempt_presence'").get();
         if (!table) return null;

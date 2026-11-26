@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { openSqlite } from "./sqlite.js";
 import { resolveHome } from "../config/index.js";
 import { defaultBinDir } from "../install/launcher.js";
 import { schemaRepairGuidance } from "../install/schema-repair.js";
@@ -81,7 +81,7 @@ export function snapshotPathFor(dbPath: string, from: number, now: Date): string
  * and at the version the source was stamped with when it was read.
  */
 function verifySnapshot(snapshotPath: string, expectedVersion: number): void {
-  const snap = new DatabaseSync(snapshotPath, { readOnly: true });
+  const snap = openSqlite(snapshotPath, { readOnly: true });
   try {
     const rows = snap.prepare("PRAGMA integrity_check").all() as Array<{ integrity_check: string }>;
     const verdict = rows.map((row) => row.integrity_check).join("; ");
@@ -124,7 +124,7 @@ export function snapshotWorkspaceForUpgrade(
   const snapshotPath = snapshotPathFor(dbPath, state.current, now);
   try {
     mkdirSync(dirname(snapshotPath), { recursive: true });
-    const reader = new DatabaseSync(dbPath, { readOnly: true });
+    const reader = openSqlite(dbPath, { readOnly: true });
     try {
       reader.exec(`VACUUM INTO '${snapshotPath.replace(/'/g, "''")}'`);
     } finally {

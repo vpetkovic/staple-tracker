@@ -13,7 +13,8 @@
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
+import { openSqlite } from "../sqlite.js";
 import { readConfig } from "../../config/file.js";
 import { StapleError, nowIso } from "../types.js";
 import type { AttemptTransition } from "./attempt-records.js";
@@ -71,7 +72,7 @@ const WINDOW_TOLERANCE_MS = WINDOW_TOLERANCE_SECONDS * 1000;
 function openHubForRead(home: string): DatabaseSync | null {
   const path = join(home, "hub.db");
   if (!existsSync(path)) return null;
-  const db = new DatabaseSync(path, { readOnly: true });
+  const db = openSqlite(path, { readOnly: true });
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('budget_samples', 'limit_windows')").all();
   if (tables.length < 2) {
     db.close();

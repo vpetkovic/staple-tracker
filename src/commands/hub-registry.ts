@@ -57,7 +57,7 @@
  */
 import { existsSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { openSqlite } from "../core/sqlite.js";
 import { parseArgs } from "node:util";
 import { stapleHome } from "../config/home.js";
 import { Hub } from "../core/hub.js";
@@ -1419,7 +1419,7 @@ function resolveWorkspaceDb(given: string): string {
  */
 function probeCandidate(dbPath: string): { prefix: string; repositoryId: string | null } {
   const repositoryId = readWorkspaceManifest(dbPath)?.repositoryId ?? null;
-  const db = new DatabaseSync(dbPath, { readOnly: true });
+  const db = openSqlite(dbPath, { readOnly: true });
   try {
     const prefix = readMeta(new WorkspaceStore(db, "", ""), "prefix");
     if (prefix === null) {

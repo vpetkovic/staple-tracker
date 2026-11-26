@@ -106,7 +106,8 @@
  */
 import { existsSync } from "node:fs";
 import { basename, dirname } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
+import { openSqlite } from "./sqlite.js";
 import { Hub, absentRowRefusal, isAbsentRow, type WorkspaceEntry } from "./hub.js";
 import { LEGACY_WORKSPACE_DIRNAME, WORKSPACE_DIRNAME, normalizePath } from "./path-migration.js";
 import { findRepositoryIdCollisions, readWorkspaceManifest } from "./repo-identity.js";
@@ -270,7 +271,7 @@ function probeSlugAt(dbPath: string): SlugProbe {
   let db: DatabaseSync | null = null;
   try {
     assertInTestSandbox(dbPath, "workspace database");
-    db = new DatabaseSync(dbPath, { readOnly: true });
+    db = openSqlite(dbPath, { readOnly: true });
     // Armed FIRST, like `openDb`, so the read queues instead of erroring.
     db.exec(`PRAGMA busy_timeout=${BUSY_TIMEOUT_MS}`);
     const row = db.prepare("SELECT value FROM meta WHERE key = 'slug'").get() as
