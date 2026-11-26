@@ -18,11 +18,10 @@ vi.mock("@/detail/parts", async (original) => ({ ...(await original<typeof impor
 
 const { AutopilotView } = await import("./AutopilotView");
 
-function render(run: string | null): string {
-  const listed = workingEntry();
+function render(run: string | null, runs = buildRunsState([workingEntry()], () => {}, "2026-11-26T12:08:00.000Z")): string {
   return renderToStaticMarkup(
     <SessionContext value={fakeSession({ view: "autopilot", run })}>
-      <RunsContext value={buildRunsState([listed], () => {}, "2026-11-26T12:08:00.000Z")}>
+      <RunsContext value={runs}>
         <AutopilotView onAuthError={() => {}} />
       </RunsContext>
     </SessionContext>,
@@ -34,6 +33,23 @@ describe("the Autopilot view", () => {
     const listed = workingEntry();
     expect(render(listed.run.id)).toContain(`data-autopilot-panes="run"`);
     expect(render(null)).toContain(`data-autopilot-panes="list"`);
+  });
+
+  it("says the runs read failed, and waits on a skeleton only while the first read is out", () => {
+    const failed = render(null, buildRunsState([], () => {}, null, { loading: false, error: new Error("the workspace file is locked") }));
+    expect(failed).toContain("the workspace file is locked");
+    expect(failed).not.toContain("data-run-loading");
+    const loading = render(null, buildRunsState([], () => {}, null, { loading: true, error: undefined }));
+    expect(loading).toContain("data-run-loading");
+    // Loading is the read's own word, not a guess from what it has answered: a read that is
+    // not out and holds no runs is the empty page, not a skeleton.
+    expect(render(null, buildRunsState([], () => {}, null))).toContain("data-run-history-empty");
+  });
+
+  it("keeps the runs it has when a later read fails", () => {
+    const stale = render(null, buildRunsState([workingEntry()], () => {}, "2026-11-26T12:08:00.000Z", { loading: false, error: new Error("offline") }));
+    expect(stale).toContain("data-run-list");
+    expect(stale).not.toContain("offline");
   });
 
   it("lists a linked run the page's read does not hold, and shows it", () => {

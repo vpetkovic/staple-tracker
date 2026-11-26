@@ -35,9 +35,9 @@ export function AutopilotView({ onAuthError }: { onAuthError: (error: AuthError)
       onSelectRun={session.openRun}
       onOpenTicket={(workspace, ref) => session.open(workspace, ref)}
       showWorkspace={isAllWorkspaces(session)}
-      // The runs read has no loading flag of its own: no server clock yet means not read yet.
-      loading={runs.now === null}
-      error={null}
+      loading={runs.loading}
+      // A failed read with runs already on the page keeps them; with none, the page says what failed.
+      error={runs.entries.length === 0 ? (runs.error ?? null) : null}
       now={now}
     />
   );

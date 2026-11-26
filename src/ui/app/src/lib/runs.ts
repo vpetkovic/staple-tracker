@@ -37,13 +37,22 @@ export interface RunsState {
   refresh: () => void;
   /** The server's clock at the last read (`/api/runs` `now`); null before the first. */
   now: string | null;
+  /** The first read is still out: nothing has answered yet. */
+  loading: boolean;
+  /** What the last read failed with; `entries` keeps what an earlier read answered. */
+  error: Error | undefined;
 }
 
 export function claimKey(workspace: string, issueId: string): string {
   return `${workspace}/${issueId}`;
 }
 
-export function buildRunsState(entries: readonly RunEntry[], refresh: () => void = () => {}, now: string | null = null): RunsState {
+export function buildRunsState(
+  entries: readonly RunEntry[],
+  refresh: () => void = () => {},
+  now: string | null = null,
+  read: Pick<RunsState, "loading" | "error"> = { loading: false, error: undefined },
+): RunsState {
   const live = entries.filter((entry) => isLiveRun(entry.run));
   const claimed = new Map<string, RunEntry>();
   for (const entry of live) {
@@ -55,7 +64,7 @@ export function buildRunsState(entries: readonly RunEntry[], refresh: () => void
   for (const entry of live) {
     if (entry.run.scope.kind !== "queue") scopes.set(claimKey(entry.workspace, entry.run.scope.issueId), entry);
   }
-  return { entries, live, claimed, scopes, refresh, now };
+  return { entries, live, claimed, scopes, refresh, now, loading: read.loading, error: read.error };
 }
 
 /**

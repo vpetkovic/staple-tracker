@@ -2,7 +2,7 @@
  * Which run the Autopilot page shows when its address names none.
  */
 import { describe, expect, it } from "vitest";
-import { currentRef, defaultRun, runAnswerFor } from "./runs";
+import { buildRunsState, currentRef, defaultRun, runAnswerFor } from "./runs";
 import type { RunEntry } from "./types";
 
 const entry = (id: string, state: string): RunEntry => ({ workspace: "app", run: { id, state } }) as unknown as RunEntry;
@@ -38,5 +38,15 @@ describe("currentRef", () => {
     expect(currentRef({ run, issues }, "APP-5")).toBe("APP-9");
     expect(currentRef({ run, issues }, "APP-6")).toBe("APP-6");
     expect(currentRef({ run, issues }, "APP-7")).toBe("APP-7");
+  });
+});
+
+describe("the runs read's own state", () => {
+  it("carries whether the first read is still out and what it failed with, so a page can say either", () => {
+    const failed = new Error("the workspace file is locked");
+    expect(buildRunsState([]).loading).toBe(false);
+    expect(buildRunsState([]).error).toBeUndefined();
+    expect(buildRunsState([], () => {}, null, { loading: true, error: undefined }).loading).toBe(true);
+    expect(buildRunsState([], () => {}, null, { loading: false, error: failed }).error).toBe(failed);
   });
 });
