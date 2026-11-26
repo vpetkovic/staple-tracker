@@ -60,13 +60,15 @@ does not authorize claiming work. Do not fetch a whole workspace tree for one ti
    and relevant context as keyed documents using `put_document`. Include the
    material needed to resume the work, rather than only pointing to a past chat.
 4. Comment at meaningful milestones and keep a `worklog` document current with
-   Done, Next and Files touched. Use `base_revision` when replacing a document;
+   Done, Next and Files touched: `checkpoint` (CLI `staple checkpoint <ref> --done
+   ... --next ... --files ... [--branch <name>]`) replaces it in one call and can
+   record the branch with it. Use `base_revision` when replacing another document;
    re-read and merge after `revision_conflict`.
 5. Verify the outcome and record concrete evidence, including pending checks.
    Attach screenshots and logs as files, not base64 in documents. Use the project's
    review status while a PR awaits merge. Mark done only when its completion rules
    are met; tracking work never grants permission to commit, merge or deploy it.
-6. Before interruption or handoff, checkpoint the worklog and branch pointer and
+6. Before interruption or handoff, `checkpoint` the worklog and branch and
    leave ownership explicit. Resume from that context rather than starting over.
    Automated runs require the latest worklog to be written during the current
    session (interactive hooks use the current ticket tenure), with content under

@@ -172,7 +172,7 @@ Run:       ${input.runId} (actor ${input.actor})
 
 1. Branch. Put the work on its own branch, off the current HEAD: \`git switch -c ${branch}\` (or \`git switch ${branch}\` if it exists). Record it: \`staple comment ${input.ref} "working on branch ${branch}"\`.
 2. Plan. Write a short plan to a file and store it: \`staple doc ${input.ref} plan --put <file>\`.
-3. Work. Keep a worklog (Done / Next / Files touched) and store it after each step and before handoff: \`staple doc ${input.ref} worklog --put <file>\`. Comment milestones on the ticket as you go.
+3. Work. Keep a worklog (Done / Next / Files touched) and store it after each step and before handoff: \`staple checkpoint ${input.ref} --done "..." --next "..." --files "..."\` (or \`staple doc ${input.ref} worklog --put <file>\`). Comment milestones on the ticket as you go.
 4. Gates. Run this repository's own checks (build, typecheck, tests, whatever its README or CONTRIBUTING names). Read the counts, not only the exit code. Green gates are not evidence on their own.
 5. Adversarial review, before you finish. Review your change as a skeptic whose job is to find where it fails the acceptance criteria. Reproduce, do not read: run the thing and observe each criterion hold, including an edge case. If you can start a separate reviewer (a sub-agent), give it this instruction and act on its findings; otherwise do the review yourself. Fix what it finds and review again. Record the findings and what you did about each as a comment: \`staple comment ${input.ref} "review: ..."\`.
 6. Commit your work on ${branch}. If the repository has a remote you may push ${branch} and open a draft pull request against the branch you started from.

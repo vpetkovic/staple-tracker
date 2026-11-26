@@ -1,3 +1,4 @@
+import "./quiet-sqlite-warning.js";
 import { configuredHumanName } from "./mcp-view-actions.js";
 /**
  * staple CLI — the human/CI surface. Mirrors the MCP tools.
@@ -7,6 +8,7 @@ import { configuredHumanName } from "./mcp-view-actions.js";
 import { parseArgs } from "node:util";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { readStdinToEnd } from "./onboarding/prompts.js";
+import { readInputFile } from "./core/input-file.js";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { join, resolve } from "node:path";
@@ -37,6 +39,8 @@ import type { AttemptOptions } from "./core/telemetry/attempts.js";
 import { runCloudCommand } from "./commands/cloud.js";
 import { runIntegrationsCommand } from "./commands/integrations.js";
 import { runBranchCommand } from "./commands/branch.js";
+import { runCheckpointCommand } from "./commands/checkpoint.js";
+import { ticketBranch } from "./core/ticket-branch.js";
 import { runFileCommand } from "./commands/file.js";
 import { runHubRegistryCommand } from "./commands/hub-registry.js";
 import { EXIT_CODES, exitCodeFor } from "./commands/exit-codes.js";
@@ -1156,6 +1160,10 @@ Flow
               it; record the branch at checkout. --discover looks for the branch's
               pull requests through the local gh and links them (read-only at
               GitHub; never changes status). See staple branch --help
+  checkpoint <ref> [--done T] [--next T] [--files T] [--branch NAME]
+              the handoff in one call: replace the worklog with Done, Next and
+              Files touched (an omitted section is written empty) and, with
+              --branch, record the branch too. See staple checkpoint --help
   release <ref> [--agent A] [--if-stale <dur>]
               give a claim back -> todo; --if-stale frees a claim whose holder
               has been silent at least <dur> (any caller)
@@ -1427,7 +1435,7 @@ Exit codes: 0 ok · 1 unknown · 2 validation · 3 not_found · 4 conflict
             19 rate_limited · 20 unavailable · 21 offline (19–21 are retryable; try again later)`;
 
 /** Commands whose own module answers `--help` / `-h` with a page of its own. */
-const OWN_HELP: ReadonlySet<string> = new Set(["integrations","branch","attempt", "attempts", "budget", "calibrate", "cloud", "compare", "forecast", "queue", "run", "timing"]);
+const OWN_HELP: ReadonlySet<string> = new Set(["integrations","branch","checkpoint","attempt", "attempts", "budget", "calibrate", "cloud", "compare", "forecast", "queue", "run", "timing"]);
 
 /**
  * `staple <command> --help` for a command with no page of its own: its entries in HELP (every
@@ -1766,6 +1774,9 @@ function main() {
       if (ctx.ancestors.length > 0) {
         console.log(`path   ${[...ctx.ancestors.map((a) => a.identifier), i.identifier].join(" > ")}`);
       }
+      // The branch the work lives on (`staple branch`, `staple checkpoint --branch`), only when one is recorded.
+      const branch = ticketBranch(store, i.id);
+      if (branch) console.log(`branch ${branch.name}${branch.base ? ` · base ${branch.base}` : ""}${branch.source === "comment" ? " (from a comment)" : ""}`);
       if (i.description) console.log(`\n${i.description}`);
       if (i.acceptanceCriteria?.length) {
         console.log("\nacceptance criteria:");
@@ -2707,6 +2718,9 @@ function main() {
     case "branch":
       return runBranchCommand(rest);
 
+    case "checkpoint":
+      return runCheckpointCommand(rest);
+
     case "file":
       runFileCommand(rest);
       break;
@@ -2747,7 +2761,7 @@ function main() {
       }
       if (values.put !== undefined) {
         const body =
-          values.put === "-" ? readStdinToEnd() : readFileSync(values.put, "utf8");
+          values.put === "-" ? readStdinToEnd() : readInputFile(values.put, "--put", "utf8");
         const result = store.putDocument(ref, key, body, {
           baseRevision: values.base ? Number(values.base) : undefined,
           changeSummary: values.summary,

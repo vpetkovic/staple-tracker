@@ -311,8 +311,8 @@ describe("tool inventory", () => {
   // The ticket card added show_ticket: 70 -> 71. The progress view added show_progress: 71 -> 72.
   // The queue view added show_queue: 72 -> 73. A person's click in a view added the app-only
   // approve_gate_from_view and request_changes_from_view: 73 -> 75. The ticket branch added
-  // set_branch: 88 -> 89.
-  it("exposes exactly these 89 tools with these annotations and output schemas", async () => {
+  // set_branch: 88 -> 89. The one-call handoff added checkpoint: 89 -> 90.
+  it("exposes exactly these 90 tools with these annotations and output schemas", async () => {
     const tools = await harness.listTools();
     const inventory = tools.map((t) => ({
       name: t.name,
@@ -404,6 +404,12 @@ describe("tool inventory", () => {
       {
         name: "set_branch",
         annotations: { title: "Set branch", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      /** The handoff: a new worklog revision on every call, so not idempotent. */
+      {
+        name: "checkpoint",
+        annotations: { title: "Checkpoint", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
         hasOutputSchema: true,
       },
       /**
@@ -1949,6 +1955,8 @@ describe("tool response shapes (31/31)", () => {
       "set_estimate",
       // Pinned in test/ticket-pull-requests-surfaces.test.ts, against `staple branch --json`.
       "set_branch",
+      // Pinned in test/checkpoint-surfaces.test.ts, against `staple checkpoint --json`.
+      "checkpoint",
       "checkout_task",
       "release_task",
       "set_blocked_by",

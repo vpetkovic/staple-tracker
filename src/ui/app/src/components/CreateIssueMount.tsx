@@ -20,7 +20,7 @@
  * into a component that does not care about it.
  */
 import { useEffect, useState } from "react";
-import { dialogIsOpen, isTyping } from "@/lib/keyboard";
+import { floatingSurfaceIsOpen, isTyping } from "@/lib/keyboard";
 import { onOpenCreateIssue } from "@/lib/shell-events";
 import { CreateIssueDialog } from "./CreateIssueDialog";
 import { useBackToClose } from "@/lib/back-to-close";
@@ -46,10 +46,12 @@ export function CreateIssueMount() {
       if (event.key !== "c" && event.key !== "C") return;
       // A modifier means the user meant cmd-C / ctrl-C / alt-C, none of which are ours.
       if (event.metaKey || event.ctrlKey || event.altKey) return;
-      // `isTyping`: a bare letter must not fire out of a text box. `dialogIsOpen`: Radix
-      // marks the rest of the page inert while any dialog is open, and opening a second
-      // one over the palette would trap focus between the two.
-      if (isTyping(event.target) || dialogIsOpen()) return;
+      // `isTyping`: a bare letter must not fire out of a text box. `floatingSurfaceIsOpen`:
+      // a dialog, menu, select or popover owns the key while it is up. A second dialog
+      // over the palette would trap focus between the two, and one over a row's menu
+      // would stack on top of it. The menu content happens to stop keydown on its own
+      // (components/ui/dropdown-menu.tsx); this guard must not lean on that.
+      if (isTyping(event.target) || floatingSurfaceIsOpen()) return;
       event.preventDefault();
       setKind(undefined);
       setOpen(true);

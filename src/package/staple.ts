@@ -16,6 +16,9 @@
  * not parse anything else: every other flag belongs to the surface it is dispatched to.
  */
 
+// First, so node:sqlite's ExperimentalWarning never reaches stderr (see the module).
+import "../quiet-sqlite-warning.js";
+
 /** Replaced at build time by scripts/build-package.ts. Absent when run from source. */
 declare const __STAPLE_VERSION__: string;
 

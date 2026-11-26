@@ -370,10 +370,15 @@ run), with content under Done, Next, and Files touched. Write "none" when a
 section has nothing to report. Comments alone do not satisfy this check.
 
 \`\`\`bash
-staple doc ${ref} worklog --put worklog.md
+staple checkpoint ${ref} --done "..." --next "..." --files "..." [--branch <name>]
 staple doc ${ref} worklog              # read the latest
 staple doc ${ref} worklog --revisions  # the history, checkpoint by checkpoint
 \`\`\`
+
+\`staple checkpoint\` (MCP \`checkpoint\`) replaces the worklog with the three
+sections below in one call, and with \`--branch\` records the branch in the same
+write. A section you leave out is stored empty, which the run's check refuses.
+\`staple doc ${ref} worklog --put worklog.md\` writes the same document from a file.
 
 Three sections, always:
 

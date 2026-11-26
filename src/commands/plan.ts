@@ -11,6 +11,7 @@
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { parseArgs } from "node:util";
+import { readInputFile } from "../core/input-file.js";
 import { configuredHumanName } from "../mcp-view-actions.js";
 import { horizonWords, ideasOnHorizon, type HorizonView, type IdeaDetail, type IdeaView, type PlanView, type PlanWriteOptions, type ScaffoldPreview } from "../core/plan-store.js";
 import { splitDepends, type BreakdownRowInput, type PlanPatch } from "../core/plan-sections.js";
@@ -347,7 +348,7 @@ export function runIdeaCommand(rest: string[]): void {
     case "import": {
       const path = need(first, "a plan file (markdown)");
       const result = plan.importPlan(
-        { name: basename(path), markdown: readFileSync(path, "utf8") },
+        { name: basename(path), markdown: readInputFile(path, "idea import", "utf8") },
         { parent: values.parent ?? null, horizon: values.horizon ?? null, maturity: values.maturity },
         actor,
         options,

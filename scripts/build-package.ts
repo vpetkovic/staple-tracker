@@ -70,9 +70,11 @@ const sourcePkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"
 
 /**
  * Everything except Node's own built-ins is bundled. `node:sqlite` is the load-bearing
- * one — it is a builtin, so it must stay external, and esbuild's node platform already
- * externalises the `node:` scheme. Nothing else may survive as an import: the published
- * runtime has no node_modules to resolve from. verifyNoExternalImports enforces that.
+ * one, a builtin the bundle loads at run time through `process.getBuiltinModule`
+ * (src/core/sqlite.ts), so it is not an import at all. The other built-ins stay
+ * external because esbuild's node platform externalises the `node:` scheme. Nothing
+ * else may survive as an import: the published runtime has no node_modules to
+ * resolve from. verifyNoExternalImports enforces that.
  */
 async function bundle(dir: string): Promise<{ bundledPackages: string[]; externals: string[] }> {
   const result = await build({

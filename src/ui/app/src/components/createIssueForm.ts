@@ -139,6 +139,18 @@ export function forWorkspaceSwitch(state: CreateFormState): CreateFormState {
   return { ...state, parent: "", project: "" };
 }
 
+/**
+ * The project, dropped once it is no longer on offer: deleted while the form was open, the
+ * select falls back to "No project", and the form must say the same, or the payload carries
+ * an id the server refuses with not_found. `undefined` is "the list has not arrived", which
+ * is not "it is gone"; an empty list is a real answer (the last project was deleted).
+ * Returns the same object when nothing changes, so a state setter can bail out.
+ */
+export function withKnownProject(state: CreateFormState, offered: readonly string[] | undefined): CreateFormState {
+  if (offered === undefined || state.project === "" || offered.includes(state.project)) return state;
+  return { ...state, project: "" };
+}
+
 /** The payload the dialog POSTs. Empty optional fields are omitted, not emptied. */
 export function buildCreatePayload(
   state: CreateFormState,

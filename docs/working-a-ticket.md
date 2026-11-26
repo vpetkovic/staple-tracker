@@ -69,8 +69,22 @@ plan @ revision 1
 ```
 
 **4. Work, and checkpoint as it goes.** Short progress notes go in comments (MCP
-`add_comment`). After each step, the agent replaces its worklog, a document with three
-sections:
+`add_comment`). After each step, the agent checkpoints: one call replaces its worklog,
+a document with three sections, and records the branch:
+
+```bash
+staple checkpoint APP-1 --branch feat/healthz \
+  --done "- /healthz route returns 200 (9c8d7e6)." \
+  --next "- Add the build version and a test." \
+  --files "- src/server/health.ts"          # MCP checkpoint
+```
+
+```text
+APP-1  worklog @ revision 1
+  branch feat/healthz (set)
+```
+
+The worklog it writes:
 
 ```markdown
 ## Done
@@ -83,13 +97,10 @@ sections:
 - src/server/health.ts
 ```
 
-```bash
-staple doc APP-1 worklog --put worklog.md   # MCP put_document, key "worklog"
-```
-
-```text
-worklog @ revision 1
-```
+A second checkpoint replaces the first, as a new revision. A section left out is
+written as its heading with nothing under it, so a thin handoff shows; write "none"
+when a section has nothing to report. `staple doc APP-1 worklog --put worklog.md` (MCP
+`put_document`, key `worklog`) writes the same document from a file.
 
 The worklog is what makes a ticket resumable. It is written after every step, not
 at the end, because the events that end a session early (a usage limit, a killed
