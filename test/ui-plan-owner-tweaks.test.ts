@@ -91,7 +91,6 @@ for (const width of [1280, 390]) {
       const strip = page.locator('[aria-label="Plan lens"]');
       expect(await strip.getAttribute("data-variant")).toBe(width < 768 ? "default" : "line");
       expect(await strip.getAttribute("class")).toContain("staple-detail-tabstrip");
-      if (width === 390) await page.locator("[data-plan-column-tab]").nth(1).click();
       await page.locator('[data-plan-lens="timeline"]').click();
       // The filter folds behind a button when the Plan container is narrower than 1100px.
       const filter = page.getByRole("textbox", { name: "Filter the plan", exact: true });
@@ -121,7 +120,8 @@ for (const width of [1280, 390]) {
       expect(await page.locator('[aria-label="Issue detail"]').count()).toBe(0);
       await page.goto(route("plan", "&ws=larkspur&plan-lens=horizons"));
       await expect.poll(() => page.locator('[data-plan-lens="horizons"]').getAttribute("aria-selected")).toBe("true");
-      if (width === 390) expect(await page.locator("[data-plan-column-tab]").nth(1).getAttribute("aria-selected")).toBe("true");
+      // Horizons is one outline at every width: no column to remember.
+      expect(await page.locator("[data-plan-column-tab]").count()).toBe(0);
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
       expect(errors).toEqual([]);
     } finally { await context.close(); }

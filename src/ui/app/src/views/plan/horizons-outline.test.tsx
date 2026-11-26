@@ -1,0 +1,256 @@
+/**
+ * The Horizons lens as an outline: "Ready, not scheduled" in place of the Unscheduled column,
+ * a parent's shipped leaves gathered into one line, groups folded on a compact tree, nothing
+ * folded while a filter is on, drop targets marked only where the idea's state offers the move,
+ * the date links only where the horizon offers a date, and the keys that walk the outline.
+ * Rendered to strings, as the page's other tests are; the keys are pinned on the pure outline.
+ */
+import { renderToStaticMarkup } from "react-dom/server";
+import { afterEach, describe, expect, it } from "vitest";
+import type { HorizonData, IdeaData, PlanData } from "@/lib/plan-types";
+import { DropRail, HorizonsBoard, ReadySection } from "./HorizonsLens";
+import { horizonsColumns } from "./plan-model";
+import { outlineEntries, outlineKey, shippedKey } from "./plan-outline";
+import { planTree } from "./plan-tree";
+
+const ZERO = { done: 0, open: 0, planned: 0, total: 0 };
+const noop = () => {};
+
+function idea(id: string, extra: Partial<IdeaData> = {}): IdeaData {
+  return {
+    id,
+    identifier: null,
+    promoted: false,
+    kind: "idea",
+    title: `Idea ${id}`,
+    description: null,
+    briefLine: null,
+    maturity: "shaped",
+    stage: "scheduled",
+    parentId: null,
+    horizonId: "now",
+    planned: { start: null, target: null },
+    baseline: null,
+    rank: 0,
+    links: [],
+    missingLinks: [],
+    linkCount: 0,
+    resolvedLinks: 0,
+    units: ZERO,
+    unsized: false,
+    own: ZERO,
+    umbrella: false,
+    carriedBy: extra.horizonId === undefined ? "now" : extra.horizonId,
+    progress: null,
+    percent: null,
+    actual: { start: null, end: null, forecastEnd: null },
+    late: false,
+    notStarted: false,
+    delivered: null,
+    childIds: [],
+    openQuestions: 0,
+    planIncomplete: [],
+    completeness: { starred: 3, starredTotal: 3, filled: 5, total: 10 },
+    dependsOn: [],
+    state: "shaped",
+    actions: [],
+    nextStep: null,
+    createdAt: "2026-11-01T00:00:00.000Z",
+    updatedAt: "2026-11-01T00:00:00.000Z",
+    ...extra,
+  };
+}
+
+function horizon(id: string, extra: Partial<HorizonData> = {}): HorizonData {
+  return {
+    id,
+    identifier: `LAR-${id}`,
+    name: id === "now" ? "Now" : "Later",
+    date: "2026-12-31",
+    rank: 1,
+    status: "in_progress",
+    shipped: false,
+    memberCount: 4,
+    ideaCount: 4,
+    lateCount: 0,
+    notStartedCount: 0,
+    shippedCount: 0,
+    units: ZERO,
+    unsizedCount: 0,
+    records: { leaves: 4, shipped: 0, started: 0, shaped: 4, exploring: 0, raw: 0, parentCount: 0 },
+    progress: null,
+    percent: null,
+    complete: false,
+    runMode: null,
+    goal: [],
+    awaitingApproval: false,
+    late: false,
+    state: "active",
+    actions: [{ id: "rename", label: "Rename", who: "person" }],
+    planSteps: [],
+    needsYou: 0,
+    ...extra,
+  };
+}
+
+const shipped = (id: string, parentId: string) => idea(id, { parentId, state: "shipped", stage: "shipped", actual: { start: null, end: "2026-10-03", forecastEnd: null }, percent: 100 });
+// Exercise GA on Now: three shipped leaves and one started sub-idea.
+const ga = idea("ga", { title: "Exercise GA", childIds: ["r0", "r1", "r2", "r3"] });
+const r0 = shipped("r0", "ga");
+const r1 = shipped("r1", "ga");
+const r2 = shipped("r2", "ga");
+const r3 = idea("r3", { parentId: "ga", state: "started", stage: "started", percent: 30, own: { done: 1, open: 2, planned: 0, total: 3 } });
+const IDEAS = [ga, r0, r1, r2, r3];
+
+const plan = (ideas: IdeaData[] = IDEAS, horizons: HorizonData[] = [horizon("now"), horizon("later")]): PlanData => ({ enabled: true, today: "2026-11-13", horizons, ideas });
+const text = (html: string) => html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
+const board = (over: { plan?: PlanData; filtering?: boolean } = {}) => renderToStaticMarkup(<HorizonsBoard plan={over.plan ?? plan()} write={async () => true} onOpen={noop} selected={null} filtering={over.filtering} />);
+const drawn = (html: string) => [...html.matchAll(/data-plan-tree-row="([^"]+)"/g)].map((m) => m[1]);
+
+/** Render as if the viewport were `width` px: what `matchMedia` would answer. */
+function atWidth(width: number, draw: () => string): string {
+  (globalThis as { window?: unknown }).window = {
+    matchMedia: (query: string) => {
+      const min = /min-width:\s*(\d+)px/.exec(query);
+      return { matches: min ? width >= Number(min[1]) : query.includes("pointer: fine") ? width >= 768 : false, addEventListener: noop, removeEventListener: noop };
+    },
+  };
+  try {
+    return draw();
+  } finally {
+    delete (globalThis as { window?: unknown }).window;
+  }
+}
+afterEach(() => {
+  delete (globalThis as { window?: unknown }).window;
+});
+
+describe("Ready, not scheduled", () => {
+  it("is one quiet line when nothing waits for a horizon, still a drop target for unscheduling", () => {
+    const html = board();
+    expect(html).toMatch(/<section aria-label="Ready, not scheduled" data-plan-column="h:"/);
+    expect(text(html)).toContain("Ready, not scheduled Nothing is waiting for a horizon. A shaped idea lands here until you schedule it.");
+    expect(html).not.toContain("data-plan-ready");
+    expect(text(html)).not.toContain("Unscheduled");
+  });
+
+  it("is a section with its rows when shaped ideas wait, and says how many", () => {
+    const waiting = [idea("a", { horizonId: null }), idea("b", { horizonId: null })];
+    const html = board({ plan: plan([...IDEAS, ...waiting]) });
+    const ready = html.slice(html.indexOf('data-plan-column="h:"'), html.indexOf('data-plan-column="h:now"'));
+    expect(ready).toContain("data-plan-ready");
+    expect(text(ready)).toContain("2 ideas waiting for a horizon");
+    expect(drawn(ready)).toEqual(["a", "b"]);
+    expect(text(ready)).not.toContain("Nothing is waiting");
+  });
+});
+
+describe("a parent's shipped leaves", () => {
+  it("gather into one line ahead of the rest, the leaves not drawn until it opens", () => {
+    const html = board();
+    expect(html).toContain('data-plan-shipped-fold="ga"');
+    expect(text(html)).toContain("3 shipped: Idea r0, Idea r1, Idea r2");
+    expect(drawn(html)).toEqual(["ga", "r3"]);
+  });
+
+  it("open on request, and stay gathered with fewer than two", () => {
+    const rows = planTree({ horizonId: "now", ideas: IDEAS, horizons: [] });
+    const keys = (shipOpen: Set<string>) => outlineEntries(rows, { isOpen: () => true, shipOpen, unfold: false }).map((entry) => entry.key);
+    expect(keys(new Set())).toEqual(["ga", shippedKey("ga"), "r3"]);
+    expect(keys(new Set(["ga"]))).toEqual(["ga", "r0", "r1", "r2", "r3"]);
+    const one = planTree({ horizonId: "now", ideas: [ga, r0, r3], horizons: [] });
+    expect(outlineEntries(one, { isOpen: () => true, shipOpen: new Set(), unfold: false }).map((entry) => entry.key)).toEqual(["ga", "r0", "r3"]);
+  });
+});
+
+describe("a compact tree", () => {
+  it("starts its groups folded, the folded parent saying how many sub-ideas it holds", () => {
+    const html = atWidth(390, () => board());
+    expect(drawn(html)).toEqual(["ga"]);
+    expect(html).toMatch(/aria-expanded="false" data-plan-tree-disclosure="ga"/);
+    expect(text(html)).toContain("4 sub-ideas");
+    expect(drawn(atWidth(1280, () => board()))).toEqual(["ga", "r3"]);
+  });
+});
+
+describe("while a focus or filter is on", () => {
+  it("folds nothing: compact groups open, shipped leaves apart and a done horizon open", () => {
+    const done = horizon("now", { shipped: true, percent: 100, complete: true });
+    const html = atWidth(390, () => board({ plan: plan(IDEAS, [done]), filtering: true }));
+    expect(html).not.toContain("data-plan-shipped-fold");
+    expect(drawn(html)).toEqual(["ga", "r0", "r1", "r2", "r3"]);
+    expect(html).toMatch(/aria-expanded="true"[^>]*data-plan-done-toggle="LAR-now"/);
+    // Without the filter the same done horizon starts folded.
+    expect(drawn(atWidth(390, () => board({ plan: plan(IDEAS, [done]) })))).toEqual([]);
+  });
+});
+
+describe("dragging to schedule", () => {
+  // On Now, it may be scheduled elsewhere; dropping it on Now again changes nothing.
+  const movable = idea("m", { actions: [{ id: "schedule", label: "Schedule", who: "person" }] });
+  // Its state offers no scheduling at all.
+  const held = idea("h");
+  const lensFor = (dragging: IdeaData) => ({ plan: plan([...IDEAS, movable, held]), columns: horizonsColumns(plan([...IDEAS, movable, held])), write: async () => true, dragging, onDrag: noop });
+  const marks = (html: string) => Object.fromEntries([...html.matchAll(/data-plan-drop-target="([^"]*)" data-plan-drop="(\w+)" class="([^"]*)"/g)].map((m) => [m[1], { state: m[2], ring: m[3]!.includes("border-ring") }]));
+
+  it("marks on the drop rail only the sections the idea's state offers and that move it", () => {
+    expect(marks(renderToStaticMarkup(<DropRail lens={lensFor(movable)} />))).toEqual({
+      "h:": { state: "allowed", ring: true },
+      "h:now": { state: "refused", ring: false },
+      "h:later": { state: "allowed", ring: true },
+    });
+    expect(Object.values(marks(renderToStaticMarkup(<DropRail lens={lensFor(held)} />)))).toEqual([
+      { state: "refused", ring: false },
+      { state: "refused", ring: false },
+      { state: "refused", ring: false },
+    ]);
+  });
+
+  it("gives a section that would refuse the drop no highlight", () => {
+    const ready = (dragging: IdeaData) => {
+      const lens = { ...lensFor(dragging), onOpen: noop, selected: null, filtering: false };
+      return renderToStaticMarkup(<ReadySection lens={lens} column={lens.columns[0]!} />);
+    };
+    expect(ready(movable)).toMatch(/data-plan-drop="allowed" class="[^"]*shadow-\[inset_0_0_0_2px_var\(--color-ring\)\]/);
+    expect(ready(held)).toContain('data-plan-drop="refused"');
+    expect(ready(held)).not.toContain("--color-ring");
+  });
+});
+
+describe("a horizon's date", () => {
+  it("offers add a date and clear only where the horizon offers its date", () => {
+    const html = (h: HorizonData) => board({ plan: plan([], [h]) });
+    expect(html(horizon("now", { date: null }))).not.toContain("data-plan-horizon-date");
+    expect(html(horizon("now"))).not.toContain("data-plan-horizon-clear-date");
+    const dated = [{ id: "date", label: "Change date", who: "person" as const }];
+    expect(html(horizon("now", { date: null, actions: dated }))).toContain('data-plan-horizon-date="LAR-now"');
+    expect(html(horizon("now", { actions: dated }))).toContain('data-plan-horizon-clear-date="LAR-now"');
+  });
+});
+
+describe("the keys on a focused row", () => {
+  const rows = planTree({ horizonId: "now", ideas: IDEAS, horizons: [] });
+  const entries = (open: boolean, shipOpen = new Set<string>()) => outlineEntries(rows, { isOpen: () => open, shipOpen, unfold: false });
+
+  it("move up and down the visible lines and stop at the ends", () => {
+    expect(outlineKey(entries(true), "ga", "ArrowDown")).toEqual({ focus: shippedKey("ga") });
+    expect(outlineKey(entries(true), "r3", "ArrowUp")).toEqual({ focus: shippedKey("ga") });
+    expect(outlineKey(entries(true), "r3", "ArrowDown")).toBeNull();
+    expect(outlineKey(entries(true), "ga", "ArrowUp")).toBeNull();
+  });
+
+  it("open a folded group with Right, then step into it; fold it with Left, or go to the parent", () => {
+    expect(outlineKey(entries(false), "ga", "ArrowRight")).toEqual({ toggle: "ga" });
+    expect(outlineKey(entries(true), "ga", "ArrowRight")).toEqual({ focus: shippedKey("ga") });
+    expect(outlineKey(entries(true), "ga", "ArrowLeft")).toEqual({ toggle: "ga" });
+    expect(outlineKey(entries(true), "r3", "ArrowLeft")).toEqual({ focus: "ga" });
+    expect(outlineKey(entries(true, new Set(["ga"])), "r1", "ArrowLeft")).toEqual({ focus: "ga" });
+  });
+
+  it("open the idea with Enter or Space, and the shipped line's leaves from that line", () => {
+    expect(outlineKey(entries(true), "r3", "Enter")).toEqual({ activate: "r3" });
+    expect(outlineKey(entries(true), "ga", " ")).toEqual({ activate: "ga" });
+    expect(outlineKey(entries(true), shippedKey("ga"), "Enter")).toEqual({ shipOpen: "ga" });
+    expect(outlineKey(entries(true), shippedKey("ga"), "ArrowRight")).toEqual({ shipOpen: "ga" });
+  });
+});

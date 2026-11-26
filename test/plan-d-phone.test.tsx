@@ -8,7 +8,7 @@ import { HorizonsBoard } from "../src/ui/app/src/views/plan/PlanBoards.js";
 
 vi.mock("../src/ui/app/src/lib/use-media", () => ({ useIsDesk: () => false }));
 
-it("uses server counts and late warnings in the phone's horizon switcher", () => {
+it("uses server counts and late warnings in the horizon's header on a phone", () => {
   const db = openDb(":memory:");
   migrateWorkspace(db);
   const store = new WorkspaceStore(db, "test", "LAR");
@@ -17,11 +17,11 @@ it("uses server counts and late warnings in the phone's horizon switcher", () =>
   Object.assign(plan.horizons[0], { ideaCount: 7, records: { leaves: 7, shipped: 0, started: 0, shaped: 7, exploring: 0, parentCount: 0 }, memberCount: 9, lateCount: 4 });
   const html = renderToStaticMarkup(<HorizonsBoard plan={plan} write={async () => true} onOpen={() => {}} selected={null} />);
   expect(html).toContain("7 ideas · 9 members");
-  expect(html).toContain('aria-label="4 late"');
+  expect(html).toMatch(/data-plan-flag="late"[^>]*>4 late</);
   db.close();
 });
 
-it("uses singular idea and member wording in the phone switcher", () => {
+it("uses singular idea and member wording in the horizon's header on a phone", () => {
   const db = openDb(":memory:");
   migrateWorkspace(db);
   const store = new WorkspaceStore(db, "test", "LAR");
