@@ -234,7 +234,8 @@ describe("Where it stands, started and shipped", () => {
     const html = standing(tab(record(held, { missingForShaped: ["a goal"] })));
     expect(html).toContain("data-plan-missing");
     expect(text(html)).not.toContain("It started while still exploring");
-    const done = standing(tab(record(started({ maturity: "shaped", actions: [...EDITS, act("adopt")] }), { missingForShaped: [] })));
+    // Shaped already: no note, even were the action listed.
+    const done = standing(tab(record(started({ maturity: "shaped", actions: [...EDITS, act("adopt"), act("shape")] }), { missingForShaped: [] })));
     expect(text(done)).not.toContain("mark it shaped");
     expect(done).not.toContain("data-plan-missing");
   });
