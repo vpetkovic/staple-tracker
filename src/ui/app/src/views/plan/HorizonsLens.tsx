@@ -1,262 +1,218 @@
 /**
- * The Horizons lens is delivery: shaped, started and shipped records by horizon, with progress,
- * the shipped mark and the horizon's Queue and Run. Each column draws its horizon's plan as one
- * tree; a top row is framed as its delivery card.
+ * The Horizons lens is delivery, drawn as an outline: one scroller (`data-plan-board`) of stacked
+ * sections. First "Ready, not scheduled" (shaped records no horizon carries; one quiet line when
+ * there are none), then each horizon with its sticky header and its plan as one tree
+ * (`PlanTree`). A row's `⋯` moves it; on a wide tree under a fine pointer it also drags onto a
+ * section, or onto the drop rail pinned at the top while a drag is on. A section the idea's state
+ * would refuse is never marked as a target.
  */
-import { CalendarPlus, ChevronDown, ChevronRight, ListPlus, Milestone, MoreHorizontal, Plus, SlidersHorizontal, Trash2, X } from "lucide-react";
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { Milestone, Plus } from "lucide-react";
+import { useState, type DragEvent, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import type { IdeaData, PlanData } from "@/lib/plan-types";
 import { cn } from "@/lib/utils";
-import { horizonActionItems, offers, type PlanItem } from "@/detail/plain-actions";
-import { RunSettingDialog, runSettingLabel } from "./RunSetting";
+import { moveOffered } from "@/detail/plain-actions";
+import { HorizonHeader, type DropMark } from "./HorizonHeader";
 import { PlanTree } from "./PlanTree";
-import { Board, ColumnFrame, MoveMenu, openOnKey, type BoardProps, type Write } from "./plan-board";
-import { HorizonSummary, HorizonWhen } from "./plan-parts";
+import { MoveMenu, type BoardProps, type Write } from "./plan-board";
+import { dropBody, dropChanges, horizonDone, horizonsColumns, type BoardColumn } from "./plan-model";
 import { planTree, type TreeRow } from "./plan-tree";
-import { horizonDone, horizonsColumns, isShipped, type BoardColumn } from "./plan-model";
 
-export function HorizonsBoard(props: BoardProps) {
-  const columns = horizonsColumns(props.plan);
+export { HorizonMenuItem } from "./HorizonHeader";
+
+/** What every section of the lens shares: the plan, its sections and the drag in progress. */
+interface LensContext {
+  plan: PlanData;
+  columns: BoardColumn[];
+  write: Write;
+  onOpen: (id: string) => void;
+  selected: string | null;
+  filtering: boolean;
+  /** The idea being dragged, from its `dragstart` to its `dragend` or drop. */
+  dragging: IdeaData | null;
+  onDrag: (idea: IdeaData | null) => void;
+}
+
+export function HorizonsBoard({ plan, write, onOpen, selected, filtering = false }: BoardProps) {
+  const columns = horizonsColumns(plan);
+  const [dragging, setDragging] = useState<IdeaData | null>(null);
+  const lens: LensContext = { plan, columns, write, onOpen, selected, filtering, dragging, onDrag: setDragging };
   return (
-    <Board
-      columns={columns}
-      currentColumn={props.currentColumn}
-      onColumn={props.onColumn}
-      column={(column, desk) => <HorizonColumn key={column.key} {...props} column={column} columns={columns} desk={desk} />}
+    <div className="relative flex h-full min-h-0 flex-col">
+      {dragging ? <DropRail lens={lens} /> : null}
+      <div className="min-h-0 flex-1 overflow-y-auto pb-6" data-plan-board>
+        <ReadySection lens={lens} column={columns[0]!} />
+        {columns.slice(1).map((column) => (
+          <HorizonSection key={column.key} lens={lens} column={column} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A section as a drop target. It is one only for a drag its idea's state offers and that changes
+ * where the idea is: otherwise it is not marked and the pointer says no drop. A drop writes what
+ * the board's drop has always written.
+ */
+export function useDropTarget(lens: Pick<LensContext, "plan" | "write" | "dragging" | "onDrag">, column: BoardColumn) {
+  const [over, setOver] = useState(false);
+  const { dragging } = lens;
+  const allowed = dragging !== null && dropChanges(dragging, column.drop) && moveOffered(dragging, column.drop);
+  const mark: DropMark = !allowed ? null : over ? "over" : "allowed";
+  const handlers = {
+    onDragOver: (event: DragEvent) => {
+      if (!allowed) {
+        event.dataTransfer.dropEffect = "none";
+        return;
+      }
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      setOver(true);
+    },
+    onDragLeave: (event: DragEvent) => {
+      if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOver(false);
+    },
+    onDrop: (event: DragEvent) => {
+      event.preventDefault();
+      setOver(false);
+      lens.onDrag(null);
+      const id = event.dataTransfer.getData("text/plain");
+      const idea = lens.plan.ideas.find((candidate) => candidate.id === id);
+      // Only a move the idea's lifecycle state offers is sent (plain-actions, from the core table).
+      if (idea && dropChanges(idea, column.drop) && moveOffered(idea, column.drop)) void lens.write("update", { ref: idea.id, ...dropBody(column.drop) });
+    },
+  };
+  return { mark, handlers, state: dragging === null ? undefined : allowed ? "allowed" : "refused" };
+}
+
+/** A section's rows, each with its move menu, dragging where the tree allows. */
+function SectionTree({ lens, column, rows, label }: { lens: LensContext; column: BoardColumn; rows: TreeRow[]; label: string }) {
+  return (
+    <PlanTree
+      rows={rows}
+      opener={{ onOpen: lens.onOpen }}
+      drag
+      unfold={lens.filtering}
+      selected={lens.selected}
+      onDrag={lens.onDrag}
+      label={label}
+      menu={(row, tabIndex) => <MoveMenu idea={row.idea} column={column} columns={lens.columns} write={lens.write} tabIndex={tabIndex} />}
     />
   );
 }
 
-function HorizonColumn({ plan, column, columns, write, desk, onOpen, selected, filtering = false }: BoardProps & { column: BoardColumn; columns: BoardColumn[]; desk: boolean }) {
-  const tree = planTree({ horizonId: column.horizon?.id ?? null, ideas: plan.ideas, horizons: plan.horizons });
-  const done = column.horizon ? horizonDone(column.horizon) : false;
-  const [showDone, setShowDone] = useState(false);
-  // A done horizon starts folded, unless a filter is on: then every match shows.
-  const folded = done && !showDone && !filtering;
+/** Shaped records no horizon carries yet: a section like any horizon's, or one quiet line when there are none. */
+export function ReadySection({ lens, column }: { lens: LensContext; column: BoardColumn }) {
+  const rows = planTree({ horizonId: null, ideas: lens.plan.ideas, horizons: lens.plan.horizons });
+  const { mark, handlers, state } = useDropTarget(lens, column);
+  const title = "Ready, not scheduled";
+  // A filter that leaves nothing here says nothing about what is waiting: the line is left out.
+  if (rows.length === 0 && lens.filtering) return null;
+  if (rows.length === 0) {
+    return (
+      <section
+        aria-label={title}
+        data-plan-column={column.key}
+        data-plan-drop={state}
+        {...handlers}
+        className={cn(
+          "flex flex-wrap items-baseline gap-x-3 gap-y-0.5 border-b bg-surface-sunken py-2.5 pr-4 pl-[42px] @max-[760px]/plan:px-3",
+          mark !== null && "shadow-[inset_0_0_0_2px_var(--color-ring)]",
+          mark === "over" && "bg-surface-hover",
+        )}
+      >
+        <span className="text-body font-semibold text-text-secondary">{title}</span>
+        <span className="text-label text-text-tertiary">Nothing is waiting for a horizon. A shaped idea lands here until you schedule it.</span>
+      </section>
+    );
+  }
+  const waiting = column.ideas.length;
   return (
-    <ColumnFrame plan={plan} column={column} write={write} desk={desk}>
-      {column.horizon ? (
-        <HorizonHeader column={column} today={plan.today} write={write} onOpen={onOpen} done={done} />
-      ) : (
-        <header className="border-b px-3 py-2">
-          <div className="flex items-baseline gap-2 text-body font-semibold">
-            {column.title}
-            <span className="text-label font-normal text-text-tertiary">{column.ideas.length}</span>
-          </div>
-          <div className="text-caption text-text-tertiary">{column.hint}</div>
-        </header>
-      )}
+    <section aria-label={title} data-plan-column={column.key} data-plan-drop={state} {...handlers} className="border-b">
+      <header
+        className={cn(
+          "sticky top-0 z-10 flex flex-wrap items-baseline gap-x-2.5 border-b bg-card py-3 pr-4 pl-[42px] @max-[760px]/plan:px-3",
+          mark !== null && "shadow-[inset_0_0_0_2px_var(--color-ring)]",
+          mark === "over" && "bg-surface-hover",
+        )}
+        data-plan-ready
+      >
+        <h2 className="m-0 text-title font-semibold">{title}</h2>
+        <span className="text-label text-text-secondary">
+          {waiting} idea{waiting === 1 ? "" : "s"} waiting for a horizon
+        </span>
+      </header>
+      <SectionTree lens={lens} column={column} rows={rows} label={title} />
+    </section>
+  );
+}
+
+/** A horizon's section: its sticky header and its tree. A horizon the server reads as done starts folded. */
+function HorizonSection({ lens, column }: { lens: LensContext; column: BoardColumn }) {
+  const horizon = column.horizon!;
+  const rows = planTree({ horizonId: horizon.id, ideas: lens.plan.ideas, horizons: lens.plan.horizons });
+  const done = horizonDone(horizon);
+  const [chosen, setChosen] = useState<boolean | null>(null);
+  // Folded as the person left it, else when done; never while a filter is on, so every match shows.
+  const folded = !lens.filtering && (chosen ?? done);
+  const { mark, handlers, state } = useDropTarget(lens, column);
+  return (
+    <section aria-label={horizon.name} data-plan-column={column.key} data-plan-drop={state} {...handlers} className="border-b">
+      <HorizonHeader horizon={horizon} today={lens.plan.today} write={lens.write} onOpen={lens.onOpen} done={done} folded={folded} onFold={() => setChosen(!folded)} drop={mark} />
       {done ? (
         <button
           type="button"
-          className="mx-2 mt-2 flex min-h-9 items-center gap-1.5 rounded-md px-1.5 text-left text-label text-text-secondary hover:bg-surface-hover"
+          className="focus-ring-inset flex min-h-9 w-full items-center border-b py-1.5 pr-4 pl-[42px] text-left text-label text-text-secondary hover:bg-surface-hover @max-[760px]/plan:px-3"
           aria-expanded={!folded}
-          data-plan-done-toggle={column.horizon!.identifier}
-          onClick={() => setShowDone(!showDone)}
+          data-plan-done-toggle={horizon.identifier}
+          onClick={() => setChosen(!folded)}
         >
-          {folded ? <ChevronRight className="size-3.5 shrink-0" aria-hidden /> : <ChevronDown className="size-3.5 shrink-0" aria-hidden />}
-          <span>
-            {column.horizon!.memberCount === 1 ? "The member landed" : `All ${column.horizon!.memberCount} members landed`} · {folded ? "show" : "hide"}
-          </span>
+          {horizon.memberCount === 1 ? "The member landed" : `All ${horizon.memberCount} members landed`} · {folded ? "show" : "hide"}
         </button>
       ) : null}
-      <div data-plan-scroll-key={column.key} className={cn("flex flex-col gap-2 p-2", desk && "min-h-0 overflow-y-auto", folded && "hidden")}>
-        <PlanTree
-          rows={tree}
-          opener={{ onOpen }}
-          drag
-          unfold={filtering}
-          selected={selected}
-          wrap={(row, node) => (row.reserved ? node : <DeliveryCard row={row} column={column} columns={columns} write={write} onOpen={onOpen} selected={selected}>{node}</DeliveryCard>)}
-        />
-        {tree.length === 0 ? <div className="rounded-md border border-dashed px-3 py-4 text-center text-caption text-text-tertiary">Drop an idea here</div> : null}
-      </div>
-    </ColumnFrame>
+      {folded ? null : rows.length > 0 ? (
+        <SectionTree lens={lens} column={column} rows={rows} label={horizon.name} />
+      ) : (
+        <p className="m-0 py-3 pr-4 pl-[42px] text-label text-text-tertiary @max-[760px]/plan:px-3">
+          {lens.filtering ? "Nothing here matches." : "Nothing scheduled here yet. Drag a ready idea in, or use its menu."}
+        </p>
+      )}
+    </section>
   );
 }
 
 /**
- * A top row of a Horizons column framed as its delivery card: dragged by its row (on the desk),
- * opened by a click, moved by its menu, marked when selected, late or shipped.
+ * Pinned at the top of the lens while a row is dragged: one target per section, Ready first, so a
+ * section far down the page is reachable without scrolling. Marked the same way as the sections.
  */
-function DeliveryCard({ row, column, columns, write, onOpen, selected, children }: { row: TreeRow; column: BoardColumn; columns: BoardColumn[]; write: Write; onOpen: (id: string) => void; selected: string | null; children: ReactNode }) {
-  const { idea } = row;
-  const shipped = isShipped(idea);
+export function DropRail({ lens }: { lens: Pick<LensContext, "plan" | "columns" | "write" | "dragging" | "onDrag"> }) {
   return (
-    <article
-      tabIndex={0}
-      role="button"
-      aria-label={`Open ${idea.title}`}
-      onClick={() => onOpen(idea.id)}
-      onKeyDown={(event) => openOnKey(event, () => onOpen(idea.id))}
-      data-plan-card={idea.id}
-      data-plan-card-shipped={shipped ? "" : undefined}
+    <div role="group" aria-label="Move to" className="absolute inset-x-0 top-0 z-20 flex items-center gap-1.5 overflow-x-auto border-b bg-card px-4 py-1.5 shadow-sm" data-plan-drop-rail>
+      <span className="shrink-0 text-caption text-text-tertiary">Move to</span>
+      {lens.columns.map((column) => (
+        <RailTarget key={column.key} lens={lens} column={column} />
+      ))}
+    </div>
+  );
+}
+
+function RailTarget({ lens, column }: { lens: Pick<LensContext, "plan" | "write" | "dragging" | "onDrag">; column: BoardColumn }) {
+  const { mark, handlers, state } = useDropTarget(lens, column);
+  return (
+    <div
+      {...handlers}
+      data-plan-drop-target={column.key}
+      data-plan-drop={state}
       className={cn(
-        "flex cursor-pointer items-start gap-2 rounded-md border px-3 py-2 text-left shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        shipped ? "bg-surface-sunken shadow-none" : "bg-card",
-        selected === idea.id && "border-ring",
-        idea.late && !shipped && "border-l-2 border-l-destructive",
+        "inline-flex h-7 shrink-0 items-center rounded-full border px-3 text-label",
+        mark === null ? "border-dashed text-text-tertiary" : "border-ring text-foreground",
+        mark === "over" && "bg-surface-selected",
       )}
     >
-      <div className="min-w-0 flex-1">{children}</div>
-      <MoveMenu idea={idea} column={column} columns={columns} write={write} />
-    </article>
-  );
-}
-
-// ---------------------------------------------------------------- horizons
-
-function HorizonHeader({ column, today, write, onOpen, done }: { column: BoardColumn; today: string; write: Write; onOpen: (id: string) => void; done: boolean }) {
-  const horizon = column.horizon!;
-  const [running, setRunning] = useState(false);
-  const [renaming, setRenaming] = useState(false);
-  const [dating, setDating] = useState(false);
-  const [name, setName] = useState(horizon.name);
-  const dateRef = useRef<HTMLInputElement>(null);
-  useEffect(() => setName(horizon.name), [horizon.name]);
-  useEffect(() => {
-    if (dating) dateRef.current?.focus();
-  }, [dating]);
-  const rename = async (event: FormEvent) => {
-    event.preventDefault();
-    if (name.trim() && name.trim() !== horizon.name) await write("horizon-update", { ref: horizon.id, name: name.trim() });
-    setRenaming(false);
-  };
-  const items = horizonActionItems("", horizon);
-  const queue = items.find((item) => item.id === "queue");
-  const run = items.find((item) => item.id === "run");
-  return (
-    <header className="border-b px-3 py-2" data-plan-horizon={horizon.identifier} data-plan-horizon-done={done ? "" : undefined}>
-      <div className="flex items-start gap-2">
-        <HorizonSummary
-          horizon={horizon}
-          today={today}
-          className="flex-1"
-          heading={
-            <>
-              {renaming ? (
-                <form onSubmit={rename} className="min-w-0 flex-1">
-                  <Input value={name} autoFocus onChange={(event) => setName(event.target.value)} onBlur={rename} aria-label="Horizon name" className="h-8" />
-                </form>
-              ) : (
-                <button type="button" className="min-w-0 truncate text-left text-title font-semibold" onClick={() => (offers(horizon, "rename") ? setRenaming(true) : undefined)} title={offers(horizon, "rename") ? "Rename" : horizon.name}>
-                  {horizon.name}
-                </button>
-              )}
-              <span className="flex items-center gap-2 text-caption text-text-tertiary">
-                {dating ? (
-                  <input
-                    ref={dateRef}
-                    type="date"
-                    defaultValue={horizon.date ?? ""}
-                    aria-label={`${horizon.name} date`}
-                    className="h-8 rounded-md border bg-field px-2 text-label text-foreground"
-                    onChange={(event) => {
-                      if (event.target.value) {
-                        setDating(false);
-                        void write("horizon-update", { ref: horizon.id, date: event.target.value });
-                      }
-                    }}
-                    onBlur={() => setDating(false)}
-                  />
-                ) : horizon.date ? (
-                  <>
-                    <HorizonWhen date={horizon.date} today={today} />
-                    <button type="button" className="flex min-h-6 items-center gap-0.5 underline-offset-2 hover:underline" onClick={() => void write("horizon-update", { ref: horizon.id, date: null })} aria-label={`Clear ${horizon.name} date`}>
-                      <X className="size-3" aria-hidden /> clear
-                    </button>
-                  </>
-                ) : (
-                  <button type="button" className="flex min-h-6 items-center gap-1 underline-offset-2 hover:underline" onClick={() => setDating(true)} data-plan-horizon-date={horizon.identifier}>
-                    <CalendarPlus className="size-3" aria-hidden /> add a date
-                  </button>
-                )}
-              </span>
-            </>
-          }
-        />
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="-mr-1.5 size-8 shrink-0 text-text-tertiary" aria-label={`${horizon.name} options`} data-plan-horizon-menu={horizon.identifier}>
-              <MoreHorizontal aria-hidden />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem onSelect={() => onOpen(horizon.id)} data-plan-horizon-open={horizon.identifier}>
-              Open the horizon
-            </DropdownMenuItem>
-            {/* From the horizon's offered actions: an active one is not removed, a held-back one says why. */}
-            {offers(horizon, "rename") ? <DropdownMenuItem onSelect={() => setRenaming(true)}>Rename</DropdownMenuItem> : null}
-            {offers(horizon, "date") ? <DropdownMenuItem onSelect={() => setDating(true)}>{horizon.date ? "Change date" : "Add a date"}</DropdownMenuItem> : null}
-            {items.map((item) => (
-              <HorizonMenuItem key={item.id} item={item} identifier={horizon.identifier} onChoose={(call) => void write(call.verb, call.body)} onOpen={() => setRunning(true)} />
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-      {queue || run ? (
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {queue ? (
-            <Button
-              variant="outline"
-              size="sm"
-              className="min-h-8"
-              disabled={Boolean(queue.disabledReason)}
-              title={queue.disabledReason}
-              data-plan-horizon-queue={horizon.identifier}
-              onClick={() => queue.call?.route === "plan" && void write(queue.call.verb, queue.call.body)}
-            >
-              <ListPlus aria-hidden />
-              {queue.disabledReason ? "Queued" : "Queue"}
-            </Button>
-          ) : null}
-          {run ? (
-            <Button
-              variant="outline"
-              size="sm"
-              className="min-h-8"
-              disabled={Boolean(run.disabledReason)}
-              title={run.disabledReason ?? "How far agents take this horizon when they pick its work up"}
-              data-plan-horizon-run={horizon.identifier}
-              onClick={() => setRunning(true)}
-            >
-              <SlidersHorizontal aria-hidden />
-              {runSettingLabel(horizon.runMode)}
-            </Button>
-          ) : null}
-        </div>
-      ) : null}
-      {running ? <RunSettingDialog horizon={horizon} write={write} onClose={() => setRunning(false)} /> : null}
-    </header>
-  );
-}
-
-/**
- * One of the horizon's one-click actions in its column menu. An action its state offers but
- * cannot run yet (Remove while it is queued) is shown disabled, with the reason under its label.
- */
-export function HorizonMenuItem({ item, identifier, onChoose, onOpen }: { item: PlanItem; identifier: string; onChoose: (call: { verb: string; body: Record<string, unknown> }) => void; onOpen?: () => void }) {
-  const call = item.call?.route === "plan" ? item.call : null;
-  return (
-    <DropdownMenuItem
-      disabled={Boolean(item.disabledReason)}
-      onSelect={() => (call ? onChoose(call) : item.opens === "run" ? onOpen?.() : undefined)}
-      data-plan-horizon-remove={item.id === "remove" ? identifier : undefined}
-      data-plan-horizon-action={item.id}
-      className={item.disabledReason ? "flex-col items-start" : undefined}
-    >
-      <span className="inline-flex items-center gap-2">
-        {item.id === "remove" ? <Trash2 aria-hidden /> : null}
-        {item.label}
-      </span>
-      {item.disabledReason ? (
-        <span className="text-caption text-text-tertiary" data-plan-horizon-held={item.id}>
-          {item.disabledReason}
-        </span>
-      ) : null}
-    </DropdownMenuItem>
+      {column.horizon ? column.horizon.name : "Ready"}
+    </div>
   );
 }
 
