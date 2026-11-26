@@ -24,7 +24,7 @@ import { openSettings } from "@/lib/shell-events";
 import type { QueueView, WorkspaceRef } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
-import { MilestoneListPane, useMilestonesDesk } from "./MilestonesView";
+import { MilestoneListPane, useMilestonesDesk } from "./MilestoneListPane";
 import { groupAllMilestones, type WorkspaceMilestonesResult } from "./milestones-model";
 
 /**
@@ -165,7 +165,9 @@ export function MilestonesOff({ workspace }: { workspace: string }) {
         >
           <Button
             variant="outline"
-            className="min-h-11 self-start"
+            size="sm"
+            // 28px at every width; on a phone a 32px tap through an invisible inset.
+            className="relative h-7 self-start max-md:before:absolute max-md:before:-inset-y-0.5 max-md:before:inset-x-0 max-md:before:content-['']"
             data-milestones-turn-on={workspace}
             onClick={() => turnOnMilestones(workspace)}
           >

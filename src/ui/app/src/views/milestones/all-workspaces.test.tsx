@@ -16,7 +16,7 @@ import { assertMilestoneKindConfigured } from "../../../../../core/milestones";
 import { errorEnvelope, StapleError } from "../../../../../core/types";
 import { ApiError, AuthError } from "@/lib/api";
 import type { MilestoneListRow } from "@/lib/types";
-import { MilestoneListPane } from "./MilestonesView";
+import { MilestoneListPane } from "./MilestoneListPane";
 import { MilestonesOff, openMilestoneIn, readAllMilestones, turnOnMilestones } from "./AllWorkspacesMilestones";
 import { listRow } from "./fixtures";
 import { groupAllMilestones, isMissingMilestoneKind } from "./milestones-model";

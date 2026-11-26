@@ -1,16 +1,18 @@
 /**
- * The milestone's due control and the Milestones page's list states, as markup: what the due
- * date says and what its calendar offers, a finished milestone as a read-only record, and the
- * two empty lists (all finished, and none at all).
+ * The milestone's due control and the Milestones outline's finished milestones, as markup: what
+ * the due date says and what its calendar offers, a finished milestone as a read-only record on
+ * the Finished shelf whatever the Done toggle says, and the two empty pages (nothing open, and
+ * nothing at all).
  */
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { SessionContext } from "@/lib/session";
 import { fakeSession } from "@/views/fake-session";
-import { listRow, member, progress, view } from "./fixtures";
-import { memberListRows } from "./milestones-model";
+import { emptyFilters } from "@/lib/filters";
+import { listRow, member, progress, view, work } from "./fixtures";
 import { MilestoneDueControl } from "./MilestoneDue";
-import { MilestoneDetailPane, MilestoneListPane, visibleMilestones } from "./MilestonesView";
+import { MilestonesOutline } from "./MilestonesOutline";
+import { SectionBody } from "./MilestoneSection";
 import { projectedDue } from "./milestone-plain";
 
 const NOW = new Date(2026, 8, 27, 15, 30);
@@ -49,70 +51,56 @@ describe("the due control", () => {
 });
 
 describe("finished milestones on the Milestones page", () => {
-  const open = listRow({ milestone: { identifier: "STA-1", state: "active" } });
-  const done = listRow({ milestone: { identifier: "STA-2", state: "done", status: "done" }, progress: progress({ counts: { done: 3 } }) });
-  const cancelled = listRow({ milestone: { identifier: "STA-3", state: "cancelled", status: "cancelled" } });
+  const open = listRow({ milestone: { id: "m1", identifier: "STA-1", state: "active" } });
+  const done = listRow({ milestone: { id: "m2", identifier: "STA-2", state: "done", status: "done", targetDate: null }, progress: progress({ counts: { done: 3 } }) });
+  const cancelled = listRow({ milestone: { id: "m3", identifier: "STA-3", state: "cancelled", status: "cancelled" } });
+  const hidden = { ...emptyFilters(), showDone: false };
+  const outline = (rows: ReturnType<typeof listRow>[]) =>
+    renderToStaticMarkup(
+      <SessionContext.Provider value={fakeSession({ filters: hidden })}>
+        <MilestonesOutline workspace="staple" rows={rows} effective={[]} queueRevision={1} onAuthError={noop} />
+      </SessionContext.Provider>,
+    );
 
-  it("follows the Done toggle: finished ones listed when Done is shown, counted when hidden", () => {
-    expect(visibleMilestones([open, done, cancelled], false)).toMatchObject({ rows: [open], hiddenFinished: 2 });
-    expect(visibleMilestones([open, done, cancelled], true)).toMatchObject({ rows: [open, done, cancelled], hiddenFinished: 0 });
+  it("keeps finished milestones on the Finished shelf whatever the Done toggle says", () => {
+    const html = outline([open, done, cancelled]);
+    expect(html).toContain('data-milestone-section="STA-1"');
+    expect(html).toContain("data-milestones-shelf");
+    expect(html.replace(/<[^>]*>/g, " ")).toMatch(/Finished\s+2\s+· show/);
+    // On the shelf, not as open sections.
+    expect(html).not.toContain('data-milestone-section="STA-2"');
   });
 
-  it("marks a finished milestone in the list with its Done status", () => {
-    const html = renderToStaticMarkup(<MilestoneListPane rows={[done]} selectedRef={null} onSelect={noop} desk />);
-    expect(html).toMatch(/data-milestone-row="STA-2" data-milestone-finished=""/);
-    expect(html).toMatch(/data-milestone-status="done"[^>]*>.*?Done<\/span>/);
-    expect(html).toContain("All 3 tasks are finished.");
-  });
-
-  it("says so, and offers them, when every milestone is finished and Done is hidden", () => {
-    for (const desk of [true, false]) {
-      const html = renderToStaticMarkup(<MilestoneListPane rows={[]} hiddenFinished={2} onShowFinished={noop} selectedRef={null} onSelect={noop} desk={desk} />);
-      expect(html).toContain('data-milestone-empty="finished-hidden"');
-      expect(html).toContain("All 2 milestones are finished and hidden while Done is hidden.");
-      expect(html).toContain("Show finished milestones");
-    }
+  it("says nothing is open, and keeps the shelf, when every milestone is finished", () => {
+    const html = outline([done, cancelled]);
+    expect(html).toContain("data-milestones-none-open");
+    expect(html).toContain("No open milestones");
+    expect(html).toContain("data-milestones-shelf");
   });
 
   it("points to how to make one when there are none at all", () => {
-    const html = renderToStaticMarkup(<MilestoneListPane rows={[]} selectedRef={null} onSelect={noop} desk />);
-    expect(html).toContain('data-milestone-empty="none"');
-    expect(html).toContain("Create one with New task and the Milestone kind");
+    const html = outline([]);
+    expect(html).toContain('data-milestones-empty="none"');
+    expect(html).toContain("A milestone gathers tasks that should be finished by a date.");
     expect(html).toContain("data-create-milestone");
   });
 
-  it("shows a finished milestone's page read-only: its members, and no add, move or remove", () => {
+  it("shows a finished milestone's work read-only: its members, and no add, move or remove", () => {
     const finished = view({
       milestone: { identifier: "STA-2", state: "done", status: "done", targetDate: null },
       progress: progress({ counts: { done: 3 } }),
       members: [member({ identifier: "STA-10", status: "done" })],
     });
     const html = renderToStaticMarkup(
-      <MilestoneDetailPane
-        view={finished}
-        members={memberListRows(finished, [], "staple")}
-        now={NOW}
-        busy={false}
-        failure={null}
-        fullScreen={false}
-        onToggleFullScreen={noop}
-        onOpen={noop}
-        onMove={noop}
-        onRemove={noop}
-        onAdd={noop}
-        onReload={noop}
-        onDismissFailure={noop}
-        due={{ busy: false, error: null, onSetTarget: async () => true }}
-        desk
-      />,
+      <SessionContext.Provider value={fakeSession()}>
+        <SectionBody work={work(finished, { now: NOW })} workspace="staple" row={done} />
+      </SessionContext.Provider>,
     );
-    expect(html).toContain("All 3 tasks are finished.");
     expect(html).toContain('data-milestone-member="STA-10"');
-    expect(html).toContain('aria-label="Open STA-10"');
+    expect(html).toContain('aria-label="Actions for STA-10"');
     expect(html).not.toContain("Move STA-10 up");
     expect(html).not.toContain("Remove STA-10 from this milestone");
     expect(html).not.toContain("data-milestone-add");
     expect(html).not.toContain("data-milestone-due-button");
-    expect(html).toMatch(/data-milestone-target=""[^>]*>Finished</);
   });
 });

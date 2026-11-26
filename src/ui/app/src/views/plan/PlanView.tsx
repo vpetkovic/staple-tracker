@@ -24,6 +24,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { DetailTabStrip } from "@/detail/tabs/DetailTabStrip";
 import { useIsDesk } from "@/lib/use-media";
+import { usePhoneHeaderSlot } from "@/lib/phone-header-slot";
 import { afterHistorySettles, replaceUrl } from "@/lib/back-to-close";
 import { personActor } from "@/detail/parts/person";
 import { getPlan, planWrite, type AuthError } from "@/lib/api";
@@ -283,17 +284,6 @@ const PILLS: ReadonlyArray<{ id: Exclude<PlanFocus, "all">; label: string; dot: 
   { id: "late", label: "Late", dot: "bg-destructive" },
   { id: "notStarted", label: "Not started", dot: "bg-[color:var(--status-task-todo)]" },
 ];
-
-/**
- * The phone shell's slot beside the page name (AppShell), or null: on the desk, and wherever the
- * shell drew none, the lens tabs stay in the toolbar.
- */
-function usePhoneHeaderSlot(): HTMLElement | null {
-  const desk = useIsDesk();
-  const [slot, setSlot] = useState<HTMLElement | null>(null);
-  useLayoutEffect(() => setSlot(desk ? null : document.querySelector<HTMLElement>("[data-phone-header-slot]")), [desk]);
-  return slot;
-}
 
 /**
  * The one toolbar: lens tabs with their counts, the "Show only" pills, the lens's own tools, the

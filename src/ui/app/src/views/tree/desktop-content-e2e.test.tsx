@@ -24,8 +24,12 @@ import { ApiError } from "@/lib/api";
 import { describeRefusal } from "@/lib/refusal";
 import type { WorkspaceSettingsEnvelope } from "@/lib/settings";
 import { applyRowStatus, plainRowRefusal, rowStatusChoices, type StatusChoice } from "@/components/task-list/row-status";
-import { MilestoneDetailPane, MilestoneListPane } from "../milestones/MilestonesView";
-import { memberListRows, sortMilestones } from "../milestones/milestones-model";
+import { SessionContext } from "@/lib/session";
+import { fakeSession } from "../fake-session";
+import { listRow, work } from "../milestones/fixtures";
+import { sortMilestones } from "../milestones/milestones-model";
+import { SectionView } from "../milestones/MilestoneSection";
+import { MilestonesOutline } from "../milestones/MilestonesOutline";
 import { Standing } from "../queue/QueueParts";
 import { queueSummary } from "../queue/queue-summary";
 import { TreeGrid } from "./TreeGrid";
@@ -329,39 +333,38 @@ describe("the queue in plain words", () => {
 describe("milestones in plain words", () => {
   it("states the due date as a day and a distance, from the store's target", () => {
     const html = renderToStaticMarkup(
-      <MilestoneDetailPane
-        view={october}
-        effective={queue.effective}
-        members={memberListRows(october, issues, SCENARIO_WS)}
-        now={NOW}
-        busy={false}
-        failure={null}
-        fullScreen={false}
-        onToggleFullScreen={noop}
-        onOpen={noop}
-        onMove={noop}
-        onRemove={noop}
-        onAdd={noop}
-        onReload={noop}
-        onDismissFailure={noop}
-        desk
-      />,
+      <SessionContext.Provider value={fakeSession({ ws: SCENARIO_WS })}>
+        <SectionView
+          row={listRow({ milestone: october.milestone, progress: october.progress, next: october.next })}
+          work={work(october, { issues, workspace: SCENARIO_WS, now: NOW })}
+          workspace={SCENARIO_WS}
+          effective={queue.effective}
+          folded={false}
+          onFold={noop}
+          narrow={false}
+          queue={{ busy: false, refusal: null, onDismiss: noop }}
+        />
+      </SessionContext.Provider>,
     );
     expect(october.milestone.targetDate).toBe("2026-10-31");
     expect(html).toContain("Due 31 Oct, in 57 days");
-    // The store's numbers: five leaves, one cancelled, one done.
-    expect(html).toContain(`${october.progress.counts.done} of ${october.progress.countable} tasks finished (${october.progress.percent}%).`);
-    expect(html).toContain('data-testid="milestone-progress"');
-    // The raw figures stay, behind the disclosure.
-    expect(html).toMatch(/<details[^>]*data-technical-details[\s\S]*data-milestone-rollups/);
+    // The store's numbers: five leaves, one cancelled, one done; the server's percent beside the bar.
+    expect(html).toContain(`${october.progress.counts.done} of ${october.progress.countable} tasks finished.`);
+    expect(html).toContain(`${october.progress.percent}%`);
+    expect(html).toContain("1 cancelled task is not counted.");
+    expect(html).toContain('class="staple-progress"');
   });
 
-  it("gives each card a progress bar and the queue's blocked count in words", () => {
+  it("gives each open milestone's section a progress bar and the queue's blocked count in words", () => {
+    const sorted = sortMilestones(milestones);
+    const open = sorted.filter((row) => row.milestone.state !== "done" && row.milestone.state !== "cancelled");
     const html = renderToStaticMarkup(
-      <MilestoneListPane rows={sortMilestones(milestones)} effective={queue.effective} selectedRef={null} onSelect={noop} desk />,
+      <SessionContext.Provider value={fakeSession({ ws: SCENARIO_WS })}>
+        <MilestonesOutline workspace={SCENARIO_WS} rows={sorted} effective={queue.effective} queueRevision={queue.revision} onAuthError={noop} />
+      </SessionContext.Provider>,
     );
-    expect(count(html, "data-milestone-row=")).toBe(milestones.length);
-    expect(count(html, 'class="staple-progress"')).toBe(milestones.length);
+    expect(count(html, "data-milestone-section=")).toBe(open.length);
+    expect(count(html, 'class="staple-progress"')).toBe(open.length);
     expect(html).toMatch(/\d+ (is|are) blocked[.,:]/);
   });
 });

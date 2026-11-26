@@ -32,7 +32,7 @@ import { endedStateText, isLiveRun, liveStateText, tickets } from "@/lib/run-tex
 import { useRuns } from "@/lib/runs";
 import { useOptionalSession, useSession } from "@/lib/session";
 import { statusLabel } from "@/lib/settings";
-import type { CriterionVerdict, EvidenceItem, GoalCriterion, IssueGate, MilestoneView, RunEntry } from "@/lib/types";
+import type { ClearedCriterionMark, CriterionVerdict, EvidenceItem, GoalCriterion, IssueGate, MilestoneView, RunEntry } from "@/lib/types";
 import { DetailCard, SectionHeading, cn, useNow } from "./parts";
 import { openDetailTab, openTabOnArrival } from "./tabs/registry";
 
@@ -122,6 +122,30 @@ export function CriterionRow({ criterion, workspace, openRef, now }: { criterion
         ) : null}
       </div>
     </li>
+  );
+}
+
+/**
+ * A mark that counts for nothing, in a sentence: judged while another device removed its
+ * criterion, or the earlier of two judgements of one criterion made at once.
+ */
+export function clearedMarkText(mark: Pick<ClearedCriterionMark, "criterion" | "verdict" | "markedBy" | "reason">): string {
+  return mark.reason === "removed"
+    ? `${mark.markedBy}'s ${mark.verdict} mark on “${mark.criterion}” was cleared: its criterion was removed.`
+    : `${mark.markedBy}'s earlier ${mark.verdict} mark on “${mark.criterion}” was replaced by a later one.`;
+}
+
+/** The goal's cleared marks as quiet lines under its criteria, on the Milestones page and in the drawer. Nothing when there are none. */
+export function ClearedMarks({ cleared, className }: { cleared?: readonly ClearedCriterionMark[]; className?: string }) {
+  if (!cleared || cleared.length === 0) return null;
+  return (
+    <ul aria-label="Cleared marks" className={cn("m-0 flex list-none flex-col gap-0.5 p-0", className)} data-goal-cleared="">
+      {cleared.map((mark, i) => (
+        <li key={i} data-goal-cleared-reason={mark.reason} className="text-label text-text-tertiary wrap-anywhere">
+          {clearedMarkText(mark)}
+        </li>
+      ))}
+    </ul>
   );
 }
 

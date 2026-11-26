@@ -4,7 +4,9 @@
  * for the reason `components/task-list/fixtures.ts` gives: typed against the browser app's
  * `lib/types.ts`, which the Node-side suite cannot see.
  */
-import type { GoalCriterion, GoalPace, MilestoneGoal, MilestoneListRow, MilestoneMemberRow, MilestoneProgress, MilestoneView } from "@/lib/types";
+import type { GoalCriterion, GoalPace, IssueRow, MilestoneGoal, MilestoneListRow, MilestoneMemberRow, MilestoneProgress, MilestoneView } from "@/lib/types";
+import { memberListRows } from "./milestones-model";
+import type { MilestoneWork } from "./useMilestoneWork";
 
 type ProgressOver = Omit<Partial<MilestoneProgress>, "counts"> & { counts?: Partial<MilestoneProgress["counts"]> };
 type ViewOver = Omit<Partial<MilestoneView>, "milestone"> & { milestone?: Partial<MilestoneView["milestone"]> };
@@ -118,4 +120,36 @@ export function goal(over: { criteria?: GoalCriterion[]; pace?: Partial<GoalPace
 export function listRow(over: ListRowOver = {}): MilestoneListRow {
   const { members: _members, goal: _goal, ...rest } = view(over);
   return { ...rest, memberCount: over.memberCount ?? 0 };
+}
+
+const noop = () => {};
+
+/**
+ * One section's reads and writes as `useMilestoneWork` hands them over, for a view read from a
+ * fixture or the wire: its members laid out by `memberListRows`, every action a no-op.
+ */
+export function work(data: MilestoneView | null, over: Partial<MilestoneWork> & { issues?: IssueRow[]; workspace?: string; now?: Date } = {}): MilestoneWork {
+  const { issues = [], workspace = "staple", ...rest } = over;
+  return {
+    view: data,
+    error: undefined,
+    now: new Date("2026-09-04T12:00:00.000Z"),
+    members: data ? memberListRows(data, issues, workspace) : [],
+    hiddenDone: 0,
+    onShowDone: noop,
+    busy: false,
+    failure: null,
+    onMove: noop,
+    onRemove: noop,
+    onAdd: noop,
+    onReload: noop,
+    onDismissFailure: noop,
+    onToggle: noop,
+    onOpen: noop,
+    projection: null,
+    due: { busy: false, error: null, onSetTarget: async () => true, onOpen: noop },
+    decision: null,
+    exampleRef: null,
+    ...rest,
+  };
 }

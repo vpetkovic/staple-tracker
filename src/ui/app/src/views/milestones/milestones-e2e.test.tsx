@@ -1,5 +1,5 @@
 /**
- * STA-175 (R3e) — the Milestones view against a REAL server payload.
+ * STA-175 (R3e) — the Milestones outline against a REAL server payload.
  *
  * WHAT "BROWSER TEST" MEANS HERE. There is no jsdom in this repo, no screenshot harness,
  * and no new dependency was added for this file. A browser test is the real HTTP server
@@ -7,29 +7,20 @@
  * (`test/fixtures/milestones-scenario.ts`), and the real view components rendered to
  * markup with `react-dom/server` — the same technique `milestones-render.test.tsx` and
  * `components/task-list/row-render.test.tsx` use. Nothing here is a hand-written fixture:
- * every number, identifier, order and date in the assertions came off the wire.
+ * every number, identifier, order and date in the assertions came off the wire. The presses
+ * themselves are `test/ui-milestones-page.test.ts`'s, in Chromium.
  *
- * WHY THE PANES AND NOT `<MilestonesView/>` ITSELF. The exported top-level component
- * reads `window.innerWidth` and the app-wide session, neither of which exists without a
- * DOM. So this file composes the SAME three exported pieces that `MilestonesView`
- * composes — `MilestonesLayout` around `MilestoneListPane` and `MilestoneDetailPane`,
- * with `memberListRows` and `sortMilestones` deriving their props exactly as it does —
- * and drives the layout through `layoutFor(width)`, which is the function
- * `MilestonesView`'s own `useLayout` calls. Everything the component owns above that is
- * fetch plumbing, and this file does that plumbing against the real routes.
+ * WHY THE SECTIONS AND NOT `<MilestonesView/>` ITSELF. The view reads the app-wide session and
+ * fetches; this file does that fetching against the real routes and hands the answers to the
+ * same pieces the page composes: `MilestonesOutline` over the sorted list, and each section
+ * (`SectionView`) over its milestone's view, with `memberListRows` laying out the members as
+ * `useMilestoneWork` does.
  *
- * WHY THE NODE-SIDE IMPORTS ARE STATIC. The server and the fixture builder are compiled
- * by the ROOT tsconfig, so importing them here typechecks `src/core/**` under the app's
- * stricter options too. R3e had to reach them through a dynamic absolute-URL `import()`
- * because one such option — `noUnusedLocals` — failed on an unused import in
- * `src/core/store.ts`; that import is gone (R3g), so the plain static import works and
- * the test gets its types back.
- *
- * WHAT IT PINS: the list and the detail drawn from the wire at narrow, split and
- * full-screen; the accessible row order matching the server's member order; a name on
- * every reorder control; status legible as glyph AND word with the glyph hidden from a
- * screen reader; the keyboard move and the button move being one computation, accepted
- * verbatim by the real store; and the conflict banner after a genuinely stale reorder.
+ * WHAT IT PINS: the outline and its sections drawn from the wire; the accessible row order
+ * matching the server's member order; a name on every reorder control; the state said in words
+ * with the glyph hidden from a screen reader; the keyboard move and the button move being one
+ * computation, accepted verbatim by the real store; and the conflict banner after a genuinely
+ * stale reorder.
  */
 import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -40,48 +31,29 @@ import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { describeRefusal } from "@/lib/refusal";
-import { plainDue } from "./milestone-plain";
-import type {
-  EffectiveQueueRow,
-  IssueRow,
-  MilestoneListRow,
-  MilestoneState,
-  MilestoneView,
-  QueueView,
-} from "@/lib/types";
+import type { EffectiveQueueRow, IssueRow, MilestoneListRow, MilestoneView, QueueView } from "@/lib/types";
 import { useIssueActions } from "@/detail/IssueActions";
 import { gateCalls, toRequest } from "@/detail/plain-actions";
+import { DropdownMenu as Menu } from "radix-ui";
 import { SessionContext } from "@/lib/session";
 import { statusLabel } from "@/lib/settings";
 import type { IssueDetail } from "@/lib/types";
 import { fakeSession } from "@/views/fake-session";
-import { projectedDue } from "./milestone-plain";
-import {
-  MilestoneDetailPane,
-  MilestoneListPane,
-  MilestonesLayout,
-  StateBadge,
-  type MemberWriteFailure,
-} from "./MilestonesView";
+import { plainDue, projectedDue } from "./milestone-plain";
+import { work } from "./fixtures";
+import { StatusSubmenu } from "./milestone-parts";
+import { MilestonesOutline } from "./MilestonesOutline";
+import { SectionView } from "./MilestoneSection";
+import type { MemberWriteFailure, MilestoneWork } from "./useMilestoneWork";
 import { OCTOBER_TARGET, NOVEMBER_TARGET, SCENARIO, SCENARIO_WS, seedScenarioWorkspace } from "../../../../../../test/fixtures/milestones-scenario.ts";
 import { startUiServer } from "../../../../server.ts";
-import {
-  layoutFor,
-  memberListRows,
-  movedOrder,
-  sortMilestones,
-  SPLIT_MIN_WIDTH_PX,
-  STATE_PRESENTATION,
-} from "./milestones-model";
+import { movedOrder, sortMilestones } from "./milestones-model";
 
 /** The store's own code for a stale base; `lib/api.ts` names it REVISION_CONFLICT_CODE. */
 const REVISION_CONFLICT = "revision_conflict";
 
 const NOW = new Date("2026-09-04T12:00:00.000Z");
 const noop = () => {};
-/** Below Tailwind's `md`, and comfortably above it — the two ends of `layoutFor`. */
-const NARROW_PX = 420;
-const WIDE_PX = 1280;
 
 let home: string;
 let ui: { server: Server; token: string; close(): void };
@@ -116,61 +88,28 @@ async function reload(): Promise<void> {
   november = await get<MilestoneView>(`/api/milestone?ws=${ws}&ref=${refs.november}`);
 }
 
-/** The detail pane exactly as `MilestonesView` builds it: view + memberListRows + now. */
-function renderDetail(view: MilestoneView, over: Partial<Parameters<typeof MilestoneDetailPane>[0]> = {}): string {
-  return renderToStaticMarkup(
-    <MilestoneDetailPane
-      view={view}
-      members={memberListRows(view, issues, ws)}
-      now={NOW}
-      busy={false}
-      failure={null}
-      fullScreen={false}
-      onToggleFullScreen={noop}
-      onOpen={noop}
-      onMove={noop}
-      onRemove={noop}
-      onAdd={noop}
-      onReload={noop}
-      onDismissFailure={noop}
-      {...over}
+const inSession = (node: React.ReactNode) => renderToStaticMarkup(<SessionContext.Provider value={fakeSession({ ws })}>{node}</SessionContext.Provider>);
+
+/** A milestone's section, unfolded, exactly as the outline builds it: its list row, and its view laid out by `memberListRows`. */
+function renderSection(view: MilestoneView, over: Partial<MilestoneWork> = {}, effective: EffectiveQueueRow[] = []): string {
+  const row = list.find((r) => r.milestone.identifier === view.milestone.identifier)!;
+  return inSession(
+    <SectionView
+      row={row}
+      work={work(view, { issues, workspace: ws, now: NOW, ...over })}
+      workspace={ws}
+      effective={effective}
+      folded={false}
+      onFold={noop}
+      narrow={false}
+      queue={{ busy: false, refusal: null, onQueue: noop, onDequeue: noop, onDismiss: noop }}
     />,
   );
 }
 
-function renderList(selected: string | null, effective: EffectiveQueueRow[] = []): string {
-  return renderToStaticMarkup(
-    <MilestoneListPane rows={sortMilestones(list)} effective={effective} selectedRef={selected} onSelect={noop} />,
-  );
-}
-
-/** The whole page at a viewport width, the way `MilestonesView` assembles it. */
-function renderPage(widthPx: number, selected: MilestoneView | null, fullScreen = false): string {
-  const layout = layoutFor(widthPx);
-  return renderToStaticMarkup(
-    <MilestonesLayout
-      layout={layout}
-      fullScreen={fullScreen}
-      hasSelection={selected !== null}
-      list={<MilestoneListPane rows={sortMilestones(list)} selectedRef={selected?.milestone.identifier ?? null} onSelect={noop} />}
-      detail={selected ? <MilestoneDetailPane
-        view={selected}
-        members={memberListRows(selected, issues, ws)}
-        now={NOW}
-        busy={false}
-        failure={null}
-        fullScreen={fullScreen}
-        onToggleFullScreen={noop}
-        onOpen={noop}
-        onMove={noop}
-        onRemove={noop}
-        onAdd={noop}
-        onReload={noop}
-        onDismissFailure={noop}
-      /> : null}
-      onBack={noop}
-    />,
-  );
+/** The outline over the whole list, every section folded (nothing read), with the queue's rows. */
+function renderOutline(effective: EffectiveQueueRow[] = []): string {
+  return inSession(<MilestonesOutline workspace={ws} rows={sortMilestones(list)} effective={effective} queueRevision={1} onAuthError={noop} />);
 }
 
 /** Every member/child row in the order the markup puts it — the accessible tree's order. */
@@ -201,85 +140,38 @@ afterAll(() => {
 // ------------------------------------------------------------- the payload
 
 describe("the page draws what the server sent", () => {
-  it("lists both plans in plan order, with the server's own dates, progress and next work", () => {
-    const html = renderList(refs.october!);
-
+  it("draws one section per plan in plan order, with the server's own dates, progress and next work", () => {
+    const html = renderOutline();
     // Plan position beats the target date, and `sortMilestones` is what orders it.
-    expect(rowsInOrder(html)).toEqual([refs.november, refs.october]);
+    expect(sectionsInOrder(html)).toEqual([refs.november, refs.october]);
     expect(html).toContain("November cut");
     expect(html).toContain("October cut");
     // Every number below is the store's, not a fixture's: October counts five leaves,
     // one cancelled, one done — 1/4 at 25% — and its queue answer is MSC-3 at #4.
     expect(october.progress).toMatchObject({ total: 5, countable: 4, percent: 25 });
-    expect(html).toContain("1/4 done · 25%");
-    expect(html).toContain(`next: ${october.next!.identifier} (#${october.next!.position})`);
-    expect(html).toContain(`target ${october.milestone.targetDate}`);
-    expect(html).toContain(`plan #${october.milestone.planPosition}`);
-    // The four members October reported, said as a count.
-    expect(html).toContain(`${list.find((row) => row.milestone.identifier === refs.october)!.memberCount} members`);
-    // Selection is announced, not merely coloured.
-    expect(html).toContain(`data-milestone-row="${refs.october}"`);
-    expect(html).toMatch(new RegExp(`data-milestone-row="${refs.october}"[^>]*aria-current="true"`));
+    const section = sectionOf(html, refs.october!);
+    expect(section).toContain("25%");
+    expect(section).toContain("1 of 4 tasks finished.");
+    expect(section).toContain(`Next up: ${october.next!.identifier}, number ${october.next!.position} in the pickup order.`);
+    expect(section).toContain(plainDue(october.milestone.targetDate, october.milestone.state, new Date()));
+    // October has its own queue row; the header names its place.
+    expect(section).toContain(`Queued #${october.milestone.planPosition}`);
   });
 
-  it("draws the detail's members and their epic's children from the same payload", () => {
-    const html = renderDetail(october);
-    expect(html).toContain(`data-milestone-detail="${refs.october}"`);
-    expect(html).toContain(`start ${october.milestone.startDate}`);
-    expect(html).toContain(`data-due-source="target"`);
+  it("draws a section's members and their epic's children from the same payload", () => {
+    const html = renderSection(october);
+    expect(html).toContain(`data-milestone-section="${refs.october}"`);
+    expect(html).toContain('data-due-source="target"');
     expect(html).toContain(plainDue(october.milestone.targetDate, october.milestone.state, NOW));
     // The note the member was added with, verbatim from the store.
     expect(html).toContain("pull the surfaces forward");
-    // The rollups are the store's counts, and the blocked/gated cells are the ones
-    // `design/milestones.md` records as under-reporting (see the `it.todo` below).
-    expect(html).toContain("data-milestone-rollups");
-    expect(html).toContain("1 of 4 tasks finished (25%).");
-    // The store counted five leaves and left the cancelled one out; the page says so, in the
-    // sentence and in the grid, rather than leaving a reader to wonder where it went.
+    // The store counted five leaves and left the cancelled one out; the page says so.
     expect(html).toContain("1 cancelled task is not counted.");
-    expect(html).toMatch(/Tasks counted<\/dt><dd[^>]*>4 \(1 cancelled not counted\)<\/dd>/);
-
     // Four direct members, and the member epic's own remaining child indented under it.
     expect(html.match(/data-member-role="member"/g)).toHaveLength(october.members.length);
     expect(html).toContain(`data-milestone-member="${refs.q1}"`);
     expect(html).toContain('data-member-role="child"');
-  });
-
-  it("stacks below the md breakpoint, splits above it, and gives the detail the box in full screen", () => {
-    expect(layoutFor(NARROW_PX)).toBe("stacked");
-    expect(layoutFor(SPLIT_MIN_WIDTH_PX)).toBe("split");
-    expect(layoutFor(WIDE_PX)).toBe("split");
-
-    // Narrow, nothing selected: the list alone.
-    const narrowList = renderPage(NARROW_PX, null);
-    expect(narrowList).toContain('data-milestones-layout="stacked"');
-    expect(narrowList).toContain('data-milestones-pane="list"');
-    expect(narrowList).not.toContain('data-milestones-pane="detail"');
-    expect(narrowList).toContain("November cut");
-
-    // Narrow, a plan selected: the detail alone, with the way back.
-    const narrowDetail = renderPage(NARROW_PX, october);
-    expect(narrowDetail).toContain('data-milestones-pane="detail"');
-    expect(narrowDetail).not.toContain('data-milestones-pane="list"');
-    expect(narrowDetail).toContain("Back to milestones");
-    expect(rowOrder(narrowDetail)).toEqual(rowOrder(renderDetail(october)));
-
-    // Split: both panes, no Back — the list is still on screen to go back to.
-    const split = renderPage(WIDE_PX, october);
-    expect(split).toContain('data-milestones-layout="split"');
-    expect(split).toContain('data-milestones-pane="list"');
-    expect(split).toContain('data-milestones-pane="detail"');
-    expect(split).not.toContain("Back to milestones");
-
-    // Full screen: the detail owns the box at EITHER width, and says it is expanded.
-    for (const width of [NARROW_PX, WIDE_PX]) {
-      const full = renderPage(width, october, true);
-      expect(full).toContain('data-full-screen="true"');
-      expect(full).not.toContain('data-milestones-pane="list"');
-      expect(full).toContain('aria-label="Collapse from full screen"');
-      expect(full).toContain('aria-pressed="true"');
-    }
-    expect(renderPage(WIDE_PX, october)).toContain('aria-label="Expand to full screen"');
+    expect(html).toContain(`${october.members.length} items`);
   });
 });
 
@@ -287,13 +179,13 @@ describe("the page draws what the server sent", () => {
 
 describe("the accessible tree", () => {
   it("puts the member rows in the server's order, with the epic's children under it", () => {
-    const order = rowOrder(renderDetail(october));
+    const order = rowOrder(renderSection(october));
     // The direct members, in the order the store returned them…
     expect(order.filter((identifier) => october.members.some((member) => member.identifier === identifier))).toEqual(
       october.members.map((member) => member.identifier),
     );
-    // …and the member epic's own open child immediately after it, indented rather
-    // than folded, so a screen reader walks the plan in the order it will be worked.
+    // …and the member epic's own open child immediately after it, indented, so a screen
+    // reader walks the plan in the order it will be worked.
     const epicAt = order.indexOf(refs.queueEpic!);
     expect(order[epicAt + 1]).toBe(refs.q1);
     // Nothing is drawn twice: MSC-4 is a member AND a child of member 1, and appears once.
@@ -301,13 +193,12 @@ describe("the accessible tree", () => {
   });
 
   it("names every control after the member it acts on, and disables only the true edges", () => {
-    const html = renderDetail(october);
+    const html = renderSection(october);
     const members = october.members.map((member) => member.identifier);
     for (const identifier of members) {
-      expect(html, identifier).toContain(`aria-label="Open ${identifier}"`);
+      expect(html, identifier).toContain(`aria-label="Actions for ${identifier}"`);
       expect(html, identifier).toContain(`aria-label="Move ${identifier} up"`);
       expect(html, identifier).toContain(`aria-label="Move ${identifier} down"`);
-      expect(html, identifier).toContain(`aria-label="Remove ${identifier} from this milestone"`);
     }
     // The first member cannot move up and the last cannot move down; nothing else
     // is disabled, which is the same edge `movedOrder` refuses to compute.
@@ -315,47 +206,28 @@ describe("the accessible tree", () => {
     expect(html).toMatch(new RegExp(`aria-label="Move ${members.at(-1)} down"[^>]*disabled=""`));
     expect(html).not.toMatch(new RegExp(`aria-label="Move ${members[0]} down"[^>]*disabled=""`));
 
-    // A child is context, not plan: it gets Open and nothing that would rewrite an order.
-    expect(html).toContain(`aria-label="Open ${refs.q1}"`);
+    // A child is context, not plan: its `⋯` opens it, and nothing would rewrite an order.
+    expect(html).toContain(`aria-label="Actions for ${refs.q1}"`);
     expect(html).not.toContain(`aria-label="Move ${refs.q1} up"`);
-    expect(html).not.toContain(`aria-label="Remove ${refs.q1} from this milestone"`);
 
-    // The add form and the progress bar are named too — a screen reader gets a label
-    // for every interactive thing on the pane, not just the buttons.
-    expect(html).toContain('aria-label="Identifier to add"');
-    expect(html).toContain('aria-label="Note for the new member"');
-    expect(renderList(refs.october!)).toContain('aria-label="Progress"');
-    expect(renderList(refs.october!)).toContain('aria-label="Milestones"');
+    // The fold, the name, the menu and the progress bar are named too.
+    expect(html).toContain('aria-label="Hide October cut"');
+    expect(html).toContain('aria-label="October cut options"');
+    expect(html).toContain('aria-label="Work in October cut"');
+    // The bar is a picture named by its sentence.
+    expect(html).toMatch(/class="staple-progress"[^>]*role="img" aria-label="1 of 4 tasks finished \(25%\)\."/);
   });
 
-  it("announces a milestone's status as a word, with the glyph present but hidden", () => {
+  it("says a milestone's state in words, with the glyph present but hidden", () => {
     // The two real states in the payload, off the wire.
     expect([october.milestone.state, november.milestone.state]).toEqual([new Date().toISOString().slice(0, 10) > OCTOBER_TARGET ? "overdue" : "active", new Date().toISOString().slice(0, 10) > NOVEMBER_TARGET ? "overdue" : "planned"]);
-    const html = renderList(refs.october!);
-    for (const state of [october.milestone.state, november.milestone.state]) {
-      expect(html).toContain(`data-milestone-state="${state}"`);
-      expect(html).toContain(STATE_PRESENTATION[state].label);
+    const html = renderOutline();
+    for (const milestone of [october.milestone, november.milestone]) {
+      const section = sectionOf(html, milestone.identifier);
+      expect(section).toMatch(new RegExp(`aria-hidden="true" data-milestone-glyph="${milestone.state}"`));
+      // The due date in words carries what the colour does: due, or overdue and by how much.
+      expect(section).toContain(plainDue(milestone.targetDate, milestone.state, new Date()));
     }
-
-    // Every state, in isolation: a glyph AND a word, the glyph aria-hidden so the
-    // screen reader hears the word, and no two states sharing either one. Colour is
-    // therefore never the only carrier of the status (WCAG 1.4.1).
-    const glyphs = new Set<string>();
-    const words = new Set<string>();
-    for (const state of Object.keys(STATE_PRESENTATION) as MilestoneState[]) {
-      const { glyph, label } = STATE_PRESENTATION[state];
-      const badge = renderToStaticMarkup(<StateBadge state={state} />);
-      expect(badge).toContain(`data-milestone-state="${state}"`);
-      expect(badge, state).toContain(`<span aria-hidden="true" class="font-mono">${glyph}</span>`);
-      expect(badge, state).toContain(label);
-      glyphs.add(glyph);
-      words.add(label);
-    }
-    expect(glyphs.size).toBe(Object.keys(STATE_PRESENTATION).length);
-    expect(words.size).toBe(Object.keys(STATE_PRESENTATION).length);
-
-    // "Every member landed but nobody closed the plan" is said in words too.
-    expect(renderToStaticMarkup(<StateBadge state="active" complete />)).toContain("all members done");
   });
 });
 
@@ -387,7 +259,7 @@ describe("reordering members", () => {
     expect(after.members.map((member) => member.identifier)).toEqual(order);
     expect(after.revision).toBe(october.revision + 1);
     // And the accessible order followed the store, without a re-read.
-    const html = renderDetail(after);
+    const html = renderSection(after);
     expect(rowOrder(html).filter((identifier) => order.includes(identifier))).toEqual(order);
     // The edge that moved is the edge that is disabled now.
     expect(html).toMatch(new RegExp(`aria-label="Move ${order[0]} up"[^>]*disabled=""`));
@@ -429,7 +301,7 @@ describe("reordering members", () => {
     };
     expect(failure.refusal.fromServer).toBe(true);
 
-    const html = renderDetail(october, { failure });
+    const html = renderSection(october, { failure });
     expect(html).toContain("data-milestone-conflict");
     expect(html).toContain('role="alert"');
     expect(html).toContain("Member order changed elsewhere.");
@@ -470,60 +342,62 @@ describe("reordering members", () => {
     expect(under(refs.october!, "blocked")).toEqual([refs.q2]);
     expect(under(refs.november!, "gated")).toEqual([refs.m1, refs.m2]);
 
-    // And that is what the page draws — on the list rows and in the detail's rollups.
-    const html = renderList(refs.october!, effective);
-    expect(html).toContain("⊘ 1 is blocked, waiting on other tasks.");
-
-    const detail = renderDetail(november, { effective });
-    expect(detail).toMatch(/Blocked, waiting on a person<\/dt><dd[^>]*>2<\/dd>/);
-    // November's blocked cell reads zero: MSC-4 is October's, not November's.
-    expect(detail).toMatch(/Blocked, waiting on other tasks<\/dt><dd[^>]*>0<\/dd>/);
-    const octoberDetail = renderDetail(october, { effective });
-    expect(octoberDetail).toMatch(/Blocked, waiting on other tasks<\/dt><dd[^>]*>1<\/dd>/);
-    // MSC-4 has not started, so the bar files it as blocked and the sentence agrees.
-    expect(octoberDetail).toContain("1 is blocked, waiting on other tasks.");
+    // And that is what the page draws — in each header's flags and facts.
+    const html = renderOutline(effective);
+    expect(sectionOf(html, refs.october!)).toContain("1 is blocked, waiting on other tasks.");
+    expect(sectionOf(html, refs.october!)).toMatch(/data-milestone-flag="blocked"[^>]*>1 blocked</);
+    // November's two wait on a person (VP's gate); MSC-4 is October's, not November's.
+    expect(sectionOf(html, refs.november!)).toMatch(/data-milestone-flag="blocked"[^>]*>2 blocked</);
+    expect(sectionOf(html, refs.november!)).toContain("2 are blocked, waiting on a person.");
   });
 });
 
-/** The list rows in the order the markup puts them. */
-function rowsInOrder(html: string): string[] {
-  return [...html.matchAll(/data-milestone-row="([^"]+)"/g)].map((match) => match[1]!);
+/** The sections in the order the markup puts them. */
+function sectionsInOrder(html: string): string[] {
+  return [...html.matchAll(/data-milestone-section="([^"]+)"/g)].map((match) => match[1]!);
+}
+
+/** One section's markup out of the outline's. */
+function sectionOf(html: string, identifier: string): string {
+  const start = html.indexOf(`data-milestone-section="${identifier}"`);
+  expect(start, identifier).toBeGreaterThan(-1);
+  const next = html.indexOf("data-milestone-section=", start + 1);
+  return html.slice(start, next === -1 ? undefined : next);
 }
 
 // -------------------------------------------------------------- the due date and the gate, on the page
 
-/** The desk page for a milestone, with the detail's own action controller, as the page wires it. */
-function DeskPage({ view, detail }: { view: MilestoneView; detail: IssueDetail | null }) {
+/** A section with the milestone's detail read, and the detail's own action controller, as the page wires it. */
+function Section({ view, detail }: { view: MilestoneView; detail: IssueDetail | null }) {
   const controller = useIssueActions(noop);
+  const row = list.find((r) => r.milestone.identifier === view.milestone.identifier)!;
   return (
-    <MilestoneDetailPane
-      view={view}
-      members={memberListRows(view, issues, ws)}
-      now={NOW}
-      busy={false}
-      failure={null}
-      fullScreen={false}
-      onToggleFullScreen={noop}
-      onOpen={noop}
-      onMove={noop}
-      onRemove={noop}
-      onAdd={noop}
-      onReload={noop}
-      onDismissFailure={noop}
-      projection={projectedDue(view.remaining, NOW)}
-      due={{ busy: false, error: null, onSetTarget: async () => true }}
-      decision={detail ? { detail, controller } : null}
-      desk
+    <SectionView
+      row={row}
+      work={work(view, { issues, workspace: ws, now: NOW, projection: projectedDue(view.remaining, NOW), decision: detail ? { detail, controller } : null })}
+      workspace={ws}
+      effective={[]}
+      folded={false}
+      onFold={noop}
+      narrow={false}
+      queue={{ busy: false, refusal: null, onDismiss: noop }}
     />
   );
 }
 
-const renderDesk = (view: MilestoneView, detail: IssueDetail | null) =>
-  renderToStaticMarkup(
-    <SessionContext.Provider value={fakeSession({ ws })}>
-      <DeskPage view={view} detail={detail} />
-    </SessionContext.Provider>,
+const renderWith = (view: MilestoneView, detail: IssueDetail | null) => inSession(<Section view={view} detail={detail} />);
+
+/** The `⋯` menu's Status item for this detail, as the section's menu draws it. */
+function StatusItem({ detail }: { detail: IssueDetail }) {
+  const controller = useIssueActions(noop);
+  return (
+    <Menu.Root open>
+      <Menu.Content forceMount>
+        <StatusSubmenu decision={{ detail, controller }} status={detail.issue.status} onRequestApproval={noop} />
+      </Menu.Content>
+    </Menu.Root>
   );
+}
 
 describe("the due date the calendar sets", () => {
   it("sets the milestone's own target through the store's update route, and clearing it falls back", async () => {
@@ -533,16 +407,16 @@ describe("the due date the calendar sets", () => {
     // The read agrees: the value persisted, and the page says it as the due date.
     const read = await get<MilestoneView>(`/api/milestone?ws=${ws}&ref=${refs.november}`);
     expect(read.milestone.targetDate).toBe("2026-12-01");
-    expect(renderDesk(read, null)).toMatch(/data-due-source="target"[^>]*>Due 1 Dec, in 88 days</);
+    expect(renderWith(read, null)).toMatch(/data-due-source="target"[^>]*>Due 1 Dec, in 88 days</);
     // And the calendar is there to change it, on an open milestone.
-    expect(renderDesk(read, null)).toContain('aria-label="Change the due date"');
+    expect(renderWith(read, null)).toContain('aria-label="Change the due date"');
 
     const cleared = await post("/api/milestone/update", { ref: november.milestone.id, targetDate: null });
     expect(cleared.status).toBe(200);
     const after = await get<MilestoneView>(`/api/milestone?ws=${ws}&ref=${refs.november}`);
     expect(after.milestone.targetDate).toBeNull();
     // With no target, the page reads the goal check's own remaining work, or says there is none.
-    const html = renderDesk(after, null);
+    const html = renderWith(after, null);
     expect(html).toContain(after.remaining.forecastSeconds ? 'data-due-source="estimate"' : "No due date");
   });
 });
@@ -555,17 +429,21 @@ describe("the milestone's status and approval, on the Milestones page", () => {
     expect(detail.issue.status).toBe("awaiting_approval");
     const view = await get<MilestoneView>(`/api/milestone?ws=${ws}&ref=${refs.november}`);
 
-    const before = renderDesk(view, detail);
-    // The detail's status control, reading the stored status, not a guess from progress.
-    expect(before).toMatch(/data-status-menu=""[^>]*data-status-category="gated"/);
-    expect(before).toContain("Awaiting Approval");
+    const before = renderWith(view, detail);
+    // The `⋯` menu's status item is the detail's, reading the stored status, not a guess from progress.
+    const status = inSession(<StatusItem detail={detail} />);
+    expect(status).toMatch(/data-status-menu=""[^>]*data-status-category="gated"/);
+    expect(status).toContain("Awaiting Approval");
+    // The header flags it, from the list row alone.
+    expect(before).toContain('data-milestone-flag="approval"');
     // The detail's own approval block, with its two decisions.
     // November's members are not finished, so approving continues it rather than closing it.
     expect(before).toMatch(/data-milestone-gate=""[\s\S]*>Approve and continue</);
     expect(before).toMatch(/\d+ tasks? (is|are) still open\. Approving lifts the hold; the milestone closes on its own when/);
     expect(before).toContain("Send back");
-    // Without the detail read the page shows the stored status alone, still not a guess.
-    expect(renderDesk(view, null)).toMatch(/data-milestone-status="awaiting_approval"/);
+    // Without the detail read there is no gate block to act on, and still the flag from the row.
+    expect(renderWith(view, null)).not.toContain("data-milestone-gate");
+    expect(renderWith(view, null)).toContain('data-milestone-flag="approval"');
 
     // Approve exactly as the button does: the detail's call, signed by the person.
     const request = toRequest(gateCalls.approveAll({ ws, issue: detail.issue }), "VP");
@@ -576,13 +454,13 @@ describe("the milestone's status and approval, on the Milestones page", () => {
     const after = await get<IssueDetail>(`/api/issue?ws=${ws}&ref=${refs.november}`);
     expect(after.gate).toMatchObject({ state: "approved", resolvedBy: "VP" });
     expect(after.issue.status).not.toBe("awaiting_approval");
-    // The page's pill, the list's pill and the Tasks list's row all read the one stored status.
+    // The page's status item, the list's row and the Tasks list's row all read the one stored status.
     const listed = (await get<MilestoneListRow[]>(`/api/milestones?ws=${ws}&all=1`)).find((row) => row.milestone.identifier === refs.november)!;
     const row = (await get<IssueRow[]>(`/api/issues?ws=${ws}`)).find((r) => r.issue.identifier === refs.november)!;
     expect(listed.milestone.status).toBe(after.issue.status);
     expect(row.issue.status).toBe(after.issue.status);
-    const page = renderDesk(await get<MilestoneView>(`/api/milestone?ws=${ws}&ref=${refs.november}`), after);
+    const page = renderWith(await get<MilestoneView>(`/api/milestone?ws=${ws}&ref=${refs.november}`), after);
     expect(page).not.toContain("Approve and continue");
-    expect(page).toContain(`aria-label="Status: ${statusLabel(after.issue.status)}. Change status"`);
+    expect(inSession(<StatusItem detail={after} />)).toContain(`aria-label="Status: ${statusLabel(after.issue.status)}. Change status"`);
   });
 });

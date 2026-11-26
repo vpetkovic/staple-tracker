@@ -13,9 +13,8 @@ import type { HorizonData, IdeaData, PlanData, PlanStepData } from "@/lib/plan-t
 import { SessionContext } from "@/lib/session";
 import type { IssueDetail } from "@/lib/types";
 import { fakeSession } from "@/views/fake-session";
-import { progress, view } from "@/views/milestones/fixtures";
-import { memberListRows } from "@/views/milestones/milestones-model";
-import { MilestoneDetailPane } from "@/views/milestones/MilestonesView";
+import { listRow, progress, view, work } from "@/views/milestones/fixtures";
+import { SectionBody } from "@/views/milestones/MilestoneSection";
 import { HorizonsBoard, IdeasBoard } from "./PlanBoards";
 
 const ZERO = { done: 0, open: 0, planned: 0, total: 0 };
@@ -147,27 +146,17 @@ function Drawer({ horizonView }: { horizonView: HorizonData }) {
   return <HorizonSection detail={detail()} horizon={horizonView} ideas={DETAIL_IDEAS} horizons={NAMES} controller={controller} />;
 }
 
-function Milestones({ horizonView, desk = true }: { horizonView: HorizonData; desk?: boolean }) {
+/** A horizon's section in the Milestones outline, its Plan line unfolded. */
+function Milestones({ horizonView }: { horizonView: HorizonData }) {
   const controller = useIssueActions(noop);
   const data = view({ milestone: { id: "now", identifier: "LAR-now", title: "Now" }, progress: progress({ counts: { done: 3, ready: 1 } }) });
   const withPlan: IssueDetail = detail({ issue: issue({ id: "now", identifier: "LAR-now", kind: "milestone", title: "Now" }), horizonPlan: { horizon: horizonView, ideas: DETAIL_IDEAS, horizons: NAMES } });
   return (
-    <MilestoneDetailPane
-      view={data}
-      members={memberListRows(data, [], "staple")}
-      now={new Date("2026-11-13T12:00:00.000Z")}
-      busy={false}
-      failure={null}
-      fullScreen={false}
-      onToggleFullScreen={noop}
-      onOpen={noop}
-      onMove={noop}
-      onRemove={noop}
-      onAdd={noop}
-      onReload={noop}
-      onDismissFailure={noop}
-      decision={{ detail: withPlan, controller }}
-      desk={desk}
+    <SectionBody
+      work={work(data, { now: new Date("2026-11-13T12:00:00.000Z"), decision: { detail: withPlan, controller } })}
+      workspace="staple"
+      row={listRow({ milestone: data.milestone, progress: data.progress })}
+      defaultPlanOpen
     />
   );
 }
