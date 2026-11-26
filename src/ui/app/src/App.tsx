@@ -453,7 +453,12 @@ export function App() {
   const runs = useResource(loadRuns, [ws, version], onAuthError);
   const runEntries = runs.data?.runs;
   const runsNow = runs.data?.now ?? null;
-  const runsState = useMemo(() => buildRunsState(runEntries ?? [], bump, runsNow), [runEntries, bump, runsNow]);
+  const runsLoading = runs.loading;
+  const runsError = runs.error;
+  const runsState = useMemo(
+    () => buildRunsState(runEntries ?? [], bump, runsNow, { loading: runsLoading, error: runsError }),
+    [runEntries, bump, runsNow, runsLoading, runsError],
+  );
 
   /**
    * THE INBOX'S ROWS — one read of every workspace's (`/api/attention` without `ws`), held here

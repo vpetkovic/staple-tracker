@@ -1,0 +1,35 @@
+/*
+ * The Autopilot page's one animation: the dot of a live run that is working breathes out a
+ * ring. Nothing else on the page moves, and under reduced motion this does not either.
+ */
+@keyframes autopilot-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--plain-ok-fg) 55%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+.autopilot-pulse {
+  animation: autopilot-pulse 2s infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .autopilot-pulse {
+    animation: none;
+  }
+}
+
+/*
+ * The selected run's quiet text sits on the selected surface, where the tertiary grey falls
+ * under 4.5:1 in the dark theme. The workspace pill's colour is set by task-list.css, so it
+ * is raised here, beside the utilities that raise the rest of the item.
+ */
+[data-run-item][aria-current="true"] .staple-row-workspace {
+  color: var(--text-secondary);
+}
+

@@ -34,9 +34,11 @@ machine only and stops on Ctrl-C.
 
 ## 2. Find your way around
 
-On a wide screen the **rail** on the left lists the views: *Tasks*, *Queue*,
-*Attention*, *Graph*, *Milestones* and *Estimates*, then *Usage* under *This computer*, and
-*Settings* with the dark-mode switch at the foot. The **top bar** names where you
+On a wide screen the **rail** on the left starts with *Inbox* (what waits on you,
+with a count) and *Autopilot* (agent runs, with a line per live run). Under them are
+the workspaces and the views: *Tasks*, *Queue*, *Graph*, *Milestones* and
+*Estimates*, then *Usage* under *This computer*, and *Settings* with the dark-mode
+switch at the foot. The **top bar** names where you
 are, shows the sync state if the workspace uses [cloud sync](cloud-sync.md), and
 holds the search field and **New task**.
 
@@ -48,7 +50,8 @@ holds the search field and **New task**.
 | `j` / `k` | next or previous task while one is open |
 | Escape | close what is open |
 
-Below 768 px the UI becomes a phone app with a tab bar for the views. The address
+Below 768 px the UI becomes a phone app with a tab bar: *Inbox*, *Autopilot*,
+*Tasks*, *Queue* and *More*, which holds the other views. The address
 always describes the page, filters included, so you can bookmark or share a view.
 
 ## 3. Tasks: the whole tree
@@ -72,18 +75,35 @@ asking now would get; below it, your plan in order, each queued epic or mileston
 expanded into its tickets. Drag rows (or Alt-↑ and Alt-↓) to reorder; *Queue a
 task, epic or milestone…* adds work, and a row's `⋯` menu removes it.
 
-### Attention: what waits on you
+### Inbox: what waits on you
 
-The work only a person can move, one card per thing: gates waiting on approval
+The work only a person can move, one row per thing: gates waiting on approval
 (resubmitted ones apart), blockers a person owns, tickets in review, tickets made
 ready again because their blockers in other workspaces closed, stopped autopilot
 runs, live runs whose driver stopped (they take nothing until a driver attaches or
-you stop them), claims silent past `queue.silentClaimMinutes`, and sync conflicts. Each card
-names its workspace, how long it has waited and one action: a gate, a review or a
-blocker opens the ticket, a stopped or stalled run opens its history, and a conflict asks which
-value to keep. A silent claim only opens the ticket; taking work over stays
-explicit. Under *All workspaces* every workspace's cards are listed. `staple
-attention` prints the same rows.
+you stop them), claims silent past `queue.silentClaimMinutes`, and sync conflicts.
+
+A row says what it is, why it waits and for how long. A blocker you own prints what
+you have to do. Click a row to act on it: a gate, a review or a blocker opens the
+ticket, a stopped or stalled run opens the run, and a sync conflict opens in place
+with both values and asks which to keep. A silent claim only opens the ticket;
+taking work over stays explicit. Rows you can clear without acting (a stopped run,
+a ticket made ready again) have a dismiss button.
+
+Sections fold. Rows that are new since you last looked carry a dot, and so does
+the *Inbox* row in the rail. The count beside *Inbox* is every workspace's total;
+a page narrowed to one workspace says how many more wait elsewhere. With a ticket
+open from the Inbox, the drawer's previous and next walk the list, and it moves to
+the next row when the one you were on leaves.
+
+| Keys | Does |
+| --- | --- |
+| `↑` `↓` or `k` `j` | move between rows |
+| Enter | act on the row |
+| `e` | dismiss a row that can be dismissed |
+| `→` `←` | open or close a sync conflict |
+
+`staple attention` prints the same rows.
 
 ## 5. Graph: how work depends on work
 
@@ -143,10 +163,18 @@ stays open through a reload, Back closes it, and a ref that does not exist shows
 
 ## 8. Watch autopilot runs
 
-Once the workspace has had an [autopilot run](runs.md), the rail gains an
-*Autopilot* section: a card per live run with its progress, next ticket and
-**Stop**, and *Run history* with how each run ended. Agents start runs; the web UI
-watches, pauses and stops them.
+*Autopilot* lists every [autopilot run](runs.md): the ones running now, then the
+earlier ones. Pick one to see it in full: its name, what it is working on now and
+whether a driver is attached, its limits (tickets, time, usage) and how far along
+it is, each ticket it took with how that went, and what it will take next. A run
+over a milestone also shows its goal's criteria. An ended run opens with why it
+ended and the one thing to do about it. **Pause**, **Resume** and **Stop** are on
+the run. Every run has its own address (`?view=autopilot&run=<run id>`), and every
+ticket it names opens from there.
+
+The rail shows a line per live run, and a phone's *Autopilot* tab a dot while one
+is live. When a run stops, open pages say why and link to what needs you and to
+the run. Agents start runs; the web UI watches, pauses and stops them.
 
 ## 9. Estimates and Usage
 

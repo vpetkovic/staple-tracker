@@ -88,7 +88,9 @@ describe("focus returns to the row of the task that was showing", () => {
   });
 
   it("never picks the dimmed parent-for-context copy of the row", () => {
-    expect(rowSelector("STA-1")).toBe('[data-testid="task-row"][data-identifier="STA-1"]:not([data-ghost])');
+    expect(rowSelector("STA-1").split(", ")[0]).toBe('[data-testid="task-row"][data-identifier="STA-1"]:not([data-ghost])');
+    // The Inbox's rows are not task rows: the detail opened from one returns to it too.
+    expect(rowSelector("STA-1").split(", ")).toContain('[data-attention-row][data-identifier="STA-1"]');
   });
 
   it("leaves the dialog's default when the row is not on screen or cannot take focus", () => {

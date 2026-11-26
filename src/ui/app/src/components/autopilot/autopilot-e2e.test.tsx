@@ -1,6 +1,6 @@
 /**
- * The autopilot surfaces against a REAL server payload: the rail banner, the phone strip, the
- * row badge, the detail's notice and the run history.
+ * The autopilot surfaces against a REAL server payload: the rail's live-run rows, the phone's
+ * Autopilot tab, the row badge, the detail's notice and the run history.
  *
  * No jsdom, as everywhere in this repo: the real HTTP server (`src/ui/server.ts`) serves a
  * real workspace whose runs were made by the real store through the real `run continue`
@@ -28,15 +28,15 @@ import { buildFilterContext } from "@/lib/filter-dimensions";
 import { emptyFilters } from "@/lib/filters";
 import { AutopilotTreeContext, autopilotAncestors, buildRunsState, RunsContext } from "@/lib/runs";
 import { placeUnderMilestones } from "@/views/tree/milestone-placement";
+import { AttentionContext } from "@/lib/attention";
 import { SessionContext, type StapleSession } from "@/lib/session";
 import { DEFAULT_SORT } from "@/lib/sort-modes";
 import type { IssueRow, RunEntry } from "@/lib/types";
+import { AutopilotLayout } from "@/views/autopilot/AutopilotPage";
 import { buildGroups, flattenFlat } from "@/views/tree/tree-model";
 import { initWorkspace, openWorkspace } from "../../../../../core/workspace.ts";
 import { startUiServer } from "../../../../server.ts";
 import { AutopilotBadge, AutopilotNotice } from "./AutopilotBadge";
-import { RunCard, RunStrip } from "./RunBanner";
-import { RunHistoryList } from "./RunHistoryDialog";
 import { RunStopNoticeCard } from "./RunStopNotices";
 import { stopNotice } from "@/lib/run-stops";
 
@@ -107,10 +107,15 @@ afterEach(() => {
   globals.window = previousWindow;
 });
 
-/** Render inside the page's two contexts, at a viewport width when one is given. */
+/** The root's Inbox read (App.tsx provides it): nothing waiting. */
+const NO_ATTENTION = { data: { rows: [], workspaces: [], failed: [], now: NOW.toISOString() }, error: undefined, loading: false, reload: noop };
+const PAGE = "http://127.0.0.1:4400/?view=tasks";
+
+/** Render inside the page's contexts, at a viewport width when one is given. */
 function render(node: ReactElement, width?: number): string {
   if (width !== undefined) {
     globals.window = {
+      location: { href: PAGE },
       matchMedia: (query: string) => {
         const min = /min-width:\s*(\d+)px/.exec(query);
         const max = /max-width:\s*(\d+)px/.exec(query);
@@ -120,10 +125,15 @@ function render(node: ReactElement, width?: number): string {
   }
   return renderToStaticMarkup(
     <SessionContext.Provider value={session()}>
-      <RunsContext value={buildRunsState(entries)}>{node}</RunsContext>
+      <AttentionContext value={NO_ATTENTION}>
+        <RunsContext value={buildRunsState(entries)}>{node}</RunsContext>
+      </AttentionContext>
     </SessionContext.Provider>,
   );
 }
+
+/** The opening tag of a live run's row under Autopilot in the rail, or "" when the rail has none. */
+const runRow = (markup: string, id: string) => new RegExp(`<a [^>]*data-nav-run="${id}"[^>]*>`).exec(markup)?.[0] ?? "";
 
 /**
  * One task row through the real model, the desk's or the phone's: built from the whole list
@@ -251,64 +261,67 @@ afterAll(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
-describe("the rail banner", () => {
-  it("says the run in one line: scope, done this run and left, what it is on, what would stop it", () => {
-    const markup = render(<RunCard entry={entryOf("live")} />);
+describe("a live run in the rail", () => {
+  it("is a row under Autopilot that says what it is on, with the whole run in its title", () => {
+    const markup = render(<NavRail onHide={noop} />, 1440);
+    const row = runRow(markup, runIds.live!);
     const line = `Autopilot · ${refs.liveEpic} · 0 done this run · 3 left · working ${refs.working} · stops after 5 tickets (1 taken)`;
-    expect(markup).toContain(`aria-label="${line}"`);
-    expect(markup).toContain(`Autopilot · ${refs.liveEpic}`);
-    expect(markup).toContain(`0 done this run · 3 left · working ${refs.working}`);
-    expect(markup).toContain("stops after 5 tickets (1 taken)");
-    expect(markup).toContain('data-run-state="ok"');
-    expect(markup).toContain(">Working<");
-    expect(markup).toContain("No driver attached");
-    expect(markup).toContain(`data-run-stop="${runIds.live}"`);
+    expect(row).toContain(`title="${line}"`);
+    expect(row).toContain(`aria-label="Live epic, Working, ${refs.working}"`);
+    const body = markup.slice(markup.indexOf(row), markup.indexOf("</a>", markup.indexOf(row)));
+    expect(body).toContain('data-run-dot="ok"');
+    expect(body).toContain(`>${refs.working}</span>`);
   });
 
-  it("sits in the rail's Autopilot section, with the way to the history, only while there are runs", () => {
+  it("is listed for every live run and no ended one, under Autopilot, which counts them", () => {
     const markup = render(<NavRail onHide={noop} />, 1440);
-    const section = markup.indexOf('data-nav-group="autopilot"');
-    expect(section).toBeGreaterThan(markup.indexOf('data-nav-group="views"'));
-    expect(section).toBeLessThan(markup.indexOf('data-nav-group="machine"'));
-    // One banner per live run; the ended ones are in the history.
-    expect(markup.match(/data-run-banner=/g)).toHaveLength(buildRunsState(entries).live.length);
-    expect(markup).toContain("data-nav-run-history");
+    const live = buildRunsState(entries).live;
+    expect(markup.match(/data-nav-run="/g)).toHaveLength(live.length);
+    for (const name of ["failed", "done", "stopped"]) expect(runRow(markup, runIds[name]!)).toBe("");
+    expect(markup).toMatch(new RegExp(`data-nav-autopilot-live="true"[^>]*>${live.length} live<`));
+    const autopilot = markup.indexOf('data-nav-item="view:autopilot"');
+    expect(markup.indexOf(`data-nav-run="${runIds.live}"`)).toBeGreaterThan(autopilot);
+    expect(markup.indexOf(`data-nav-run="${runIds.live}"`)).toBeLessThan(markup.indexOf('data-nav-group="views"'));
+    // No runs at all: the Autopilot row stays, with nothing beside or under it.
     const bare = renderToStaticMarkup(
       <SessionContext.Provider value={session()}>
-        <NavRail onHide={noop} />
+        <AttentionContext value={NO_ATTENTION}>
+          <NavRail onHide={noop} />
+        </AttentionContext>
       </SessionContext.Provider>,
     );
-    expect(bare).not.toContain('data-nav-group="autopilot"');
+    expect(bare).toContain('data-nav-item="view:autopilot"');
+    expect(bare).not.toContain("data-nav-autopilot-live");
+    expect(bare).not.toContain("data-nav-run=");
   });
 
-  it("on a phone is a strip above the tab bar with a 44px Stop; a desk has none", () => {
+  it("leads to its run: the address of the run on the Autopilot page, from the page it is on", () => {
+    const href = /href="([^"]+)"/.exec(runRow(render(<NavRail onHide={noop} />, 1440), runIds.live!))?.[1]?.replaceAll("&amp;", "&") ?? "";
+    const url = new URL(href);
+    expect(url.searchParams.get("view")).toBe("autopilot");
+    expect(url.searchParams.get("run")).toBe(runIds.live);
+  });
+
+  it("on a phone dots the Autopilot tab while a run works, and the stop notices sit above the tab bar", () => {
     const phone = render(
       <AppShell>
         <div data-the-view />
       </AppShell>,
       390,
     );
-    // The strip is the newest live run.
-    const newest = buildRunsState(entries).live[0]!;
-    const strip = phone.indexOf(`data-run-strip="${newest.run.id}"`);
-    expect(strip).toBeGreaterThan(phone.indexOf("data-the-view"));
-    expect(strip).toBeLessThan(phone.indexOf("data-view-tabs"));
-    const stop = /<button[^>]*data-run-stop="[^"]+"[^>]*>/.exec(phone.slice(strip))?.[0] ?? "";
-    // 44px under any pointer, not only a coarse one (`pointer-coarse:h-11` is every Stop's).
-    expect(stop).toMatch(/(^|\s|")h-11 min-w-11/);
+    expect(phone).toMatch(/data-view-tab-live="ok"/);
+    expect(phone).toMatch(new RegExp(`data-view-tab="autopilot"[^>]*aria-label="Autopilot, ${buildRunsState(entries).live.length} runs live"`));
+    // The run-stopped notices: in the flow above the tab bar on a phone, a corner stack on a desk.
+    const notices = phone.indexOf('data-run-stop-notices="strip"');
+    expect(notices).toBeGreaterThan(phone.indexOf("data-the-view"));
+    expect(notices).toBeLessThan(phone.indexOf("data-view-tabs"));
     const desk = render(
       <AppShell>
         <div data-the-view />
       </AppShell>,
       1440,
     );
-    expect(desk).not.toContain("data-run-strip");
-    // The run-stopped notices: in the flow above the strip on a phone, a corner stack on a desk.
-    const notices = phone.indexOf('data-run-stop-notices="strip"');
-    expect(notices).toBeGreaterThan(phone.indexOf("data-the-view"));
-    expect(notices).toBeLessThan(strip);
     expect(desk).toContain('data-run-stop-notices="corner"');
-    expect(render(<RunStrip />)).toContain(`working ${newest.run.tickets.at(-1)!.identifier}`);
   });
 });
 
@@ -390,39 +403,57 @@ describe("a folded parent", () => {
   });
 });
 
-describe("the run history", () => {
-  it("lists live runs first, then every ended one with its stop reason in plain words", () => {
-    const markup = render(<RunHistoryList entries={entries} showWorkspace={false} now={NOW} />);
-    const liveAt = markup.indexOf(`data-run-history="${runIds.live}"`);
-    expect(liveAt).toBeGreaterThan(markup.indexOf(">Running now<"));
-    expect(liveAt).toBeLessThan(markup.indexOf(">Earlier<"));
+describe("the Autopilot page", () => {
+  const page = (selectedRunId: string | null, runs: readonly RunEntry[] = entries) =>
+    render(
+      <AutopilotLayout entries={runs} selectedRunId={selectedRunId} onSelectRun={noop} onOpenTicket={noop} showWorkspace={false} loading={false} error={null} now={NOW} wide />,
+    );
+  /** One run's pane: the markup from its detail on. */
+  const run = (name: string) => {
+    const markup = page(runIds[name]!);
+    return markup.slice(markup.indexOf(`data-run-detail="${runIds[name]}"`));
+  };
 
-    const item = (name: string) => {
-      const start = markup.indexOf(`data-run-history="${runIds[name]}"`);
-      const end = markup.indexOf("data-run-history=", start + 20);
-      return markup.slice(start, end === -1 ? undefined : end);
-    };
-    expect(item("stopped")).toContain('data-run-stop-reason="stopped_by_human"');
-    expect(item("stopped")).toContain("Stopped by vp.");
-    expect(item("stopped")).toContain("wrong thing");
-    expect(item("failed")).toContain('data-run-stop-reason="failure_streak"');
+  it("lists live runs first, then every ended one, and says how each ended in plain words", () => {
+    const list = page(null);
+    const liveAt = list.indexOf(`data-run-item="${runIds.live}"`);
+    expect(liveAt).toBeGreaterThan(list.indexOf("Running now"));
+    expect(liveAt).toBeLessThan(list.indexOf("Earlier"));
+    for (const name of ["stopped", "failed", "done"]) expect(list.indexOf(`data-run-item="${runIds[name]}"`)).toBeGreaterThan(list.indexOf("Earlier"));
+
+    expect(run("stopped")).toContain('data-run-stop-reason="stopped_by_human"');
+    // The person is named once, in the reason itself.
+    expect(run("stopped")).toContain("Stopped by vp");
+    expect(run("stopped").match(/Stopped by vp/g)).toHaveLength(1);
+    expect(run("stopped")).toContain("wrong thing");
+    expect(run("failed")).toContain('data-run-stop-reason="failure_streak"');
     // The retried ticket failed twice: named once.
-    expect(item("failed")).toMatch(/[A-Z]+-\d+ failed twice in a row/);
-    expect(item("failed")).toContain("A stop rule ended it.");
-    expect(item("failed")).toContain("Failed: the agent session ended with an error (exit 1)");
-    expect(item("failed")).toContain("Failed: the agent session ran out of time");
-    expect(item("done")).toContain('data-run-stop-reason="scope_empty"');
-    expect(item("done")).toContain("Finished: nothing left to do");
-    expect(item("done")).toContain("It finished on its own.");
-    expect(item("done")).toContain('data-outcome="done"');
+    expect(run("failed").replace(/<[^>]+>/g, "")).toMatch(/[A-Z]+-\d+ failed twice in a row/);
+    expect(run("failed")).toContain("A stop rule ended it.");
+    expect(run("failed")).toContain("The agent session ended with an error (exit 1).");
+    expect(run("failed")).toContain("The agent session ran out of time.");
+    expect(run("done")).toContain('data-run-stop-reason="scope_empty"');
+    expect(run("done")).toContain("Finished: nothing left to do");
+    expect(run("done")).toContain("It finished on its own.");
+    expect(run("done")).toContain('data-outcome="done"');
     // Live runs carry Stop and Pause; ended ones carry neither.
-    expect(item("live")).toContain("data-run-stop=");
-    expect(item("live")).toContain('data-run-pause="pause"');
-    expect(item("done")).not.toContain("data-run-stop=");
+    expect(run("live")).toContain("data-run-stop=");
+    expect(run("live")).toContain('data-run-pause="pause"');
+    expect(run("done")).not.toContain("data-run-stop=");
+  });
+
+  it("names every ticket a run took by its current status and title, not its bare id", () => {
+    const done = entryOf("done");
+    const take = done.run.tickets[0]!;
+    const issue = done.issues.find((candidate) => candidate.issueId === take.issueId)!;
+    const row = run("done");
+    expect(row).toContain(`data-run-ticket="${take.identifier}"`);
+    expect(row).toContain(issue.title);
+    expect(row).toContain(`${issue.identifier}: ${issue.title}`);
   });
 
   it("says so when there are none", () => {
-    expect(render(<RunHistoryList entries={[]} showWorkspace={false} />)).toContain("data-run-history-empty");
+    expect(page(null, [])).toContain("data-run-history-empty");
   });
 });
 
@@ -445,8 +476,8 @@ describe("the run-stopped notice", () => {
   });
 });
 
-describe("Stop from the page", () => {
-  it("ends the run, and the next read of the page shows it ended by the person who pressed it", async () => {
+describe("a run started, paused or stopped elsewhere", () => {
+  it("shows in the rail within one read, and leaves it when it ends, into the page's earlier runs, ended by the person who stopped it", async () => {
     const database = openWorkspace(dbPath);
     const runs = database.store.runs();
     const epic = database.store.createIssue({ title: "Stop me" });
@@ -455,13 +486,20 @@ describe("Stop from the page", () => {
     runs.continue({ actor: "opus-press" });
     database.store.db.close();
     await reload();
-    expect(render(<NavRail onHide={noop} />, 1440)).toContain(`data-run-banner="${id}"`);
+    expect(runRow(render(<NavRail onHide={noop} />, 1440), id)).not.toBe("");
+
+    expect((await post("/api/run/pause", { id, actor: "vp" })).status).toBe(200);
+    await reload();
+    const paused = render(<NavRail onHide={noop} />, 1440);
+    expect(runRow(paused, id)).toContain('aria-label="Stop me, Paused"');
 
     expect((await post("/api/run/stop", { id, actor: "vp" })).status).toBe(200);
     await reload();
-    expect(render(<NavRail onHide={noop} />, 1440)).not.toContain(`data-run-banner="${id}"`);
-    const markup = render(<RunHistoryList entries={entries} showWorkspace={false} now={NOW} />);
-    expect(markup).toContain(`data-run-history="${id}"`);
+    expect(runRow(render(<NavRail onHide={noop} />, 1440), id)).toBe("");
+    const markup = render(
+      <AutopilotLayout entries={entries} selectedRunId={null} onSelectRun={noop} onOpenTicket={noop} showWorkspace={false} loading={false} error={null} now={NOW} wide={false} />,
+    );
+    expect(markup.indexOf(`data-run-item="${id}"`)).toBeGreaterThan(markup.indexOf("Earlier"));
     expect(entries.find((entry) => entry.run.id === id)!.run.stop).toMatchObject({ reason: "stopped_by_human", by: "vp" });
   });
 });

@@ -5,7 +5,8 @@ import { expect, it } from "vitest";
 import { SessionContext } from "../src/ui/app/src/lib/session.js";
 import { fakeSession } from "../src/ui/app/src/views/fake-session.js";
 import { NavRail } from "../src/ui/app/src/components/nav/NavRail.js";
-import { ViewTabBar } from "../src/ui/app/src/components/nav/ViewTabBar.js";
+import { MoreSheetRows, ViewTabBar } from "../src/ui/app/src/components/nav/ViewTabBar.js";
+import { AttentionContext } from "../src/ui/app/src/lib/attention.js";
 import { FilterMenuBody } from "../src/ui/app/src/components/filters/FilterMenu.js";
 import { buildCommands } from "../src/ui/app/src/components/command-palette/commands.js";
 import { PlanView } from "../src/ui/app/src/views/plan/PlanView.js";
@@ -15,8 +16,11 @@ import { SETTING_CATEGORIES, SETTING_DEFINITIONS } from "../src/core/settings-re
 
 it("OFF removes Plan navigation and its lenses; ON restores navigation", () => {
   for (const planningEnabled of [false, true]) {
-    const markup = renderToStaticMarkup(<SessionContext.Provider value={fakeSession({ planningEnabled })}><ViewTabBar /><NavRail onHide={() => {}} /></SessionContext.Provider>);
-    expect(markup.includes('data-view-tab="plan"')).toBe(planningEnabled);
+    const attention = { data: { rows: [], workspaces: [], failed: [], now: "2026-11-26T12:00:00.000Z" }, error: undefined, loading: false, reload: () => {} };
+    const markup = renderToStaticMarkup(<SessionContext.Provider value={fakeSession({ planningEnabled })}><AttentionContext value={attention}><ViewTabBar /><NavRail onHide={() => {}} /><MoreSheetRows view="tree" planningEnabled={planningEnabled} onChoose={() => {}} /></AttentionContext></SessionContext.Provider>);
+    // The phone reaches Plan through the tab bar's More sheet; the bar itself holds four views and More.
+    expect(markup.includes('data-view-tab="plan"')).toBe(false);
+    expect(markup.includes('data-more-view="plan"')).toBe(planningEnabled);
     expect(markup.includes('data-nav-item="view:plan"')).toBe(planningEnabled);
   }
   const off = renderToStaticMarkup(<SessionContext.Provider value={fakeSession({ planningEnabled: false, mode: "hub", ws: "", workspaces: [{ slug: "larkspur", prefix: "LAR" }, { slug: "larkspur-sandbox", prefix: "SAN" }] })}><PlanView onAuthError={() => {}} /></SessionContext.Provider>);

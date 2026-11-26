@@ -15,6 +15,7 @@ import type { ReactElement } from "react";
 import { AppShell, TopBar } from "@/components/AppShell";
 import { buildFilterContext } from "@/lib/filter-dimensions";
 import { emptyFilters } from "@/lib/filters";
+import { AttentionContext } from "@/lib/attention";
 import { SessionContext, type StapleSession } from "@/lib/session";
 import { DEFAULT_SORT } from "@/lib/sort-modes";
 import type { HubCloudReport, IssueRow, IssueStatus, Project, ProjectRow } from "@/lib/types";
@@ -73,8 +74,15 @@ function session(over: Partial<StapleSession> = {}): StapleSession {
   };
 }
 
+/** The root's Inbox read (App.tsx provides it): nothing waiting. */
+const NO_ATTENTION = { data: { rows: [], workspaces: [], failed: [], now: "2026-11-26T12:00:00.000Z" }, error: undefined, loading: false, reload: () => {} };
+
 const inSession = (node: ReactElement, over: Partial<StapleSession> = {}) =>
-  renderToStaticMarkup(<SessionContext.Provider value={session(over)}>{node}</SessionContext.Provider>);
+  renderToStaticMarkup(
+    <SessionContext.Provider value={session(over)}>
+      <AttentionContext value={NO_ATTENTION}>{node}</AttentionContext>
+    </SessionContext.Provider>,
+  );
 
 const shell = (over: Partial<StapleSession> = {}) =>
   inSession(
@@ -217,12 +225,15 @@ describe("the rail", () => {
     ],
   };
 
-  it("reads top to bottom: the mark, the workspaces, the views, This computer, settings, theme", () => {
+  it("reads top to bottom: the mark, Inbox and Autopilot, the workspaces, the views, This computer, settings, theme", () => {
     const markup = rail(hub);
     expect(
       ascending(
         positions(markup, [
           "data-nav-brand",
+          'data-nav-group="top"',
+          'data-nav-item="view:attention"',
+          'data-nav-item="view:autopilot"',
           'data-nav-group="workspaces"',
           'data-nav-workspace=""',
           'data-nav-workspace="aardvark"',
@@ -312,16 +323,21 @@ describe("the rail", () => {
     expect(markup).toMatch(/<button[^>]*role="switch"[^>]*aria-checked="false"[^>]*aria-label="Dark mode"[^>]*data-nav-theme/);
   });
 
-  it("draws every group in the model with its label as a disclosure, and every item as a button", () => {
+  it("draws every labelled group in the model as a disclosure, the top rows as a plain list, and every item as a button", () => {
     const markup = rail();
     for (const group of NAV_GROUPS) {
       expect(markup).toContain(`data-nav-group="${group.id}"`);
-      expect(markup).toMatch(new RegExp(`aria-expanded="true"[^>]*><span[^>]*>${group.label}`));
+      if (group.label) expect(markup).toMatch(new RegExp(`aria-expanded="true"[^>]*><span[^>]*>${group.label}`));
       for (const entry of group.items) {
         expect(markup).toMatch(new RegExp(`<button type="button" data-nav-item="${entry.id}"`));
         expect(markup).toContain(`>${entry.label}</span>`);
       }
     }
+    // Inbox and Autopilot: no heading, no fold.
+    const top = /<ul[^>]*data-nav-group="top"[\s\S]*?<\/ul>/.exec(markup)?.[0] ?? "";
+    expect(top).toContain('aria-label="Inbox and Autopilot"');
+    expect(top).not.toContain("aria-expanded");
+    expect(top).not.toContain("data-nav-group-label");
   });
 
   it("marks exactly the active view with aria-current, and moves it with the view", () => {
