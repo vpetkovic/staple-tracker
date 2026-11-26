@@ -16,7 +16,8 @@
  * the drawer and open Settings in one tap, and Settings' entry would be pushed on top of the
  * drawer's and then popped by the drawer's own Back. So every traversal this module starts
  * is counted, and every history write the app makes (`afterHistorySettles`) waits until
- * the traversals it started have arrived. `traversalKind()` lets a `popstate` listener
+ * the traversals it started have arrived and the writes queued before it have run, in the
+ * order they were asked for. `traversalKind()` lets a `popstate` listener
  * tell those arrivals — and a Back that only closed an overlay — from a real navigation.
  *
  * ── NAVIGATING WITH AN OVERLAY OPEN ───────────────────────────────────────────────────
@@ -79,7 +80,15 @@ let installed = false;
 
 function flush(): void {
   // One at a time: a queued write may itself start a traversal, and the rest wait for it.
-  while (pending.length === 0 && queue.length > 0) queue.shift()!();
+  while (pending.length === 0 && queue.length > 0) {
+    try {
+      queue.shift()!();
+    } catch (error) {
+      // The writes behind a failed one still run: the queue must not stall on it.
+      setTimeout(flush, 0);
+      throw error;
+    }
+  }
 }
 
 const isPrefix = (short: readonly string[], long: readonly string[]) =>
@@ -125,10 +134,15 @@ function traverse(delta: number, kind: "navigation" | "close"): void {
   }, 1000);
 }
 
-/** Run `fn` now, or once the traversals this module started have landed. */
+/**
+ * Run `fn` now, or once the traversals this module started have landed and the writes
+ * queued before it have run. A traversal can land before the timer that runs the queue: in
+ * that gap nothing is pending but the queue is not empty, and `fn` waits its turn (the
+ * timer, or the run already under way, gets to it).
+ */
 export function afterHistorySettles(fn: () => void): void {
   install();
-  if (pending.length === 0) fn();
+  if (pending.length === 0 && queue.length === 0) fn();
   else queue.push(fn);
 }
 

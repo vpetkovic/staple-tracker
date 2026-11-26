@@ -9,7 +9,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 type Entry = { url: string; state: unknown };
 type Listener = () => void;
 
-function fakeWindow(start: string) {
+/** How long a traversal takes to land: a timer's delay, or before the next timer runs at all. */
+type Lag = number | "before-next-timer";
+
+function fakeWindow(start: string, lag: Lag = 20) {
   const origin = "http://localhost";
   const entries: Entry[] = [{ url: origin + start, state: null }];
   let index = 0;
@@ -33,12 +36,14 @@ function fakeWindow(start: string) {
     },
     go(delta = 0) {
       // A traversal is asynchronous: the entry stays current until the browser gets to it.
-      setTimeout(() => {
+      const land = () => {
         const target = index + delta;
         if (target < 0 || target >= entries.length) return;
         index = target;
         for (const fn of [...capture, ...bubble]) fn();
-      }, 20);
+      };
+      if (lag === "before-next-timer") queueMicrotask(land);
+      else setTimeout(land, lag);
     },
     back() {
       history.go(-1);
@@ -71,12 +76,17 @@ function fakeWindow(start: string) {
 let fake: ReturnType<typeof fakeWindow>;
 let lib: typeof import("./back-to-close");
 
-beforeEach(async () => {
-  vi.useFakeTimers();
+/** A fresh module (its queue is module state) over a fresh history at Tasks. */
+async function setup(lag?: Lag) {
   vi.resetModules();
-  fake = fakeWindow("/?view=tasks");
+  fake = fakeWindow("/?view=tasks", lag);
   vi.stubGlobal("window", fake.win);
   lib = await import("./back-to-close");
+}
+
+beforeEach(async () => {
+  vi.useFakeTimers();
+  await setup();
 });
 
 afterEach(() => {
@@ -111,6 +121,50 @@ describe("going to another page with overlays open", () => {
     // Tasks is still there to go Back to, and nothing of the drawer or the palette is left.
     expect(fake.pages()).toEqual(["/?view=tasks", "/?view=graph"]);
     expect(fake.current()).toBe(1);
+  });
+
+  it("pushes the new page before a write asked for after the step back landed but before the queue ran", async () => {
+    // The browser lands the navigation's step back before the next timer: the write the
+    // page schedules for an overlay closing (App.tsx keeps its address on a "close")
+    // arrives while the push is still queued, and must wait behind it.
+    await setup("before-next-timer");
+    const order: string[] = [];
+    window.addEventListener("popstate", () => {
+      if (lib.traversalKind() !== "close") return;
+      lib.whenHistoryIsFree(() => {
+        order.push("keep the page's address");
+        lib.replaceUrl("/?view=graph");
+      });
+    });
+    lib.pushOverlayEntry(`${window.location.href}&issue=STA-1`);
+    const palette = lib.pushOverlayEntry();
+
+    lib.popOverlay(palette);
+    lib.leaveOverlays(() => {
+      order.push("push graph");
+      lib.pushPage("/?view=graph");
+    });
+
+    await vi.runAllTimersAsync();
+
+    expect(order).toEqual(["push graph", "keep the page's address"]);
+    expect(fake.pages()).toEqual(["/?view=tasks", "/?view=graph"]);
+    expect(fake.current()).toBe(1);
+  });
+
+  it("keeps running the queue after a write in it throws", async () => {
+    const drawer = lib.pushOverlayEntry();
+    const order: string[] = [];
+    lib.popOverlay(drawer);
+    lib.afterHistorySettles(() => {
+      throw new Error("a write failed");
+    });
+    lib.afterHistorySettles(() => order.push("next write"));
+    await expect(vi.runAllTimersAsync()).rejects.toThrow("a write failed");
+    await vi.runAllTimersAsync();
+    expect(order).toEqual(["next write"]);
+    lib.afterHistorySettles(() => order.push("a later write runs at once"));
+    expect(order).toEqual(["next write", "a later write runs at once"]);
   });
 
   it("pushes at once when no overlay is open", async () => {
