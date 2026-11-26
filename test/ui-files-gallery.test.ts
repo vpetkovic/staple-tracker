@@ -203,17 +203,20 @@ describe.skipIf(Boolean(reason))("the files gallery", () => {
     expect(download.suggestedFilename()).toBe("notes.pdf");
     expect(await p.locator("[data-file-panel]").count()).toBe(0);
 
-    const image = p.locator('[data-file-kind="image"]').first();
-    const opened = p.waitForEvent("popup");
-    await image.getByRole("button", { name: "Open before.png" }).click();
-    const popup = await opened;
+    // Pick the tile by its file, not its place: both images are attached in the
+    // same millisecond often enough that the id breaks the tie, so either can come first.
+    const openBefore = p.getByRole("button", { name: "Open before.png" });
+    const image = p.locator('li[data-file-kind="image"]', { has: openBefore });
+    await image.locator("img").waitFor();
+    const [popup] = await Promise.all([p.waitForEvent("popup"), openBefore.click()]);
     expect(await p.locator("[data-file-lightbox]").count()).toBe(0);
     expect(await p.locator("[data-file-panel]").count()).toBe(0);
     await popup.close();
 
-    const htmlOpen = p.waitForEvent("popup");
-    await p.getByRole("button", { name: "Open page.html" }).click();
-    const htmlPopup = await htmlOpen;
+    const [htmlPopup] = await Promise.all([
+      p.waitForEvent("popup"),
+      p.getByRole("button", { name: "Open page.html" }).click(),
+    ]);
     expect(await p.locator("[data-file-panel]").count()).toBe(0);
     await htmlPopup.close();
     expect(await p.getByRole("button", { name: "Download walk.mp4" }).count()).toBe(1);
