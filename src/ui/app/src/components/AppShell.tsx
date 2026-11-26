@@ -344,9 +344,6 @@ export function AppShell({ children }: { children: ReactNode }) {
 
       <div
         data-content-frame
-        // While the phone's drawer is open the page behind its scrim is out of reach: no Tab
-        // stop, no screen-reader cursor, no click.
-        inert={!wide && overlayOpen}
         className={cn(
           "flex min-w-0 flex-1 flex-col overflow-hidden bg-card md:my-gutter md:mr-gutter md:rounded-xl md:border md:shadow-xs",
           wide && !railVisible && "md:ml-gutter",
