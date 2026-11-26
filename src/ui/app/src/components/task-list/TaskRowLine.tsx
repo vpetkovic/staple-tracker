@@ -248,9 +248,10 @@ export interface TaskRowLineProps {
   /**
    * R4c (STA-188). Open the Milestones view with this milestone focused. Absent on every
    * surface that has no view to route to — the marker still renders and still names the
-   * milestone in its tooltip; only the navigation is missing, which is honest.
+   * milestone in its tooltip; only the navigation is missing, which is honest. The row's
+   * workspace rides along, because on All workspaces the milestone is that workspace's.
    */
-  onOpenMilestone?: (identifier: string) => void;
+  onOpenMilestone?: (identifier: string, workspace: string) => void;
   onToggleExpand?: () => void;
   /**
    * THE `⋯` AS A MENU — the slot V5 promised and left empty.
@@ -309,6 +310,7 @@ export function TaskRowLine({
    */
   const cues = row.cues ?? null;
   const milestoneCue = rowMilestoneCue(row);
+  const openMilestone = onOpenMilestone ? (identifier: string) => onOpenMilestone(identifier, row.workspace) : undefined;
   const { columns, labelMax } = config;
   /**
    * What this width keeps — row-layout.ts. Every element below that the ladder can drop is
@@ -549,7 +551,7 @@ export function TaskRowLine({
         {/* The desktop row says where a task stands in the plan with the phone's plain pill
             ("Next", "Queued"), after the title, never with the marks before it. */}
         {cues?.pickup && plan.cues === "marks" && !desk ? <PickupCue cue={cues.pickup} compact={!plan.cueWords} /> : null}
-        {milestoneCue && plan.milestoneMark && !desk ? <MilestoneCue cue={milestoneCue} onOpen={onOpenMilestone} /> : null}
+        {milestoneCue && plan.milestoneMark && !desk ? <MilestoneCue cue={milestoneCue} onOpen={openMilestone} /> : null}
         {columns.workspace ? (
           <span className="staple-row-workspace" data-testid="workspace-pill" title={`Workspace: ${row.workspace}`}>
             {row.workspace}
@@ -642,7 +644,7 @@ export function TaskRowLine({
             {/* A live autopilot run holds this row, works through it, or (folded) works inside it (lib/runs.ts); a ghost row shows no claim. */}
             {columns.claim && !ghost ? <AutopilotBadge workspace={row.workspace} issueId={issue.id} folded={collapsedParent} /> : null}
             {columns.deps ? <DependencyBadges row={row} merged={plan.deps === "merged"} words /> : null}
-            {milestoneCue && plan.milestoneMark ? <MilestoneCue cue={milestoneCue} onOpen={onOpenMilestone} chip /> : null}
+            {milestoneCue && plan.milestoneMark ? <MilestoneCue cue={milestoneCue} onOpen={openMilestone} chip /> : null}
             {columns.labels && plan.labels !== "none" ? (
               <LabelPills labels={deskLabels(issue.labels, columns.priority)} max={labelMax} />
             ) : null}
@@ -729,7 +731,7 @@ export function TaskRowLine({
         </span>
       ) : (
       <span className="staple-row-meta">
-        {milestoneCue?.horizon && plan.horizonChip === "compact" && !desk ? <HorizonCompactChip cue={milestoneCue} onOpen={onOpenMilestone} /> : null}
+        {milestoneCue?.horizon && plan.horizonChip === "compact" && !desk ? <HorizonCompactChip cue={milestoneCue} onOpen={openMilestone} /> : null}
         {/*
           FIRST in the meta cluster — O6 (STA-138), and therefore the element nearest the
           title. VP's reference puts the warning triangle immediately beside the priority
