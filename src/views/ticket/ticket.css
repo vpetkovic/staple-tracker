@@ -11,6 +11,8 @@
   --ticket-warning-border: var(--color-border-warning, light-dark(#fde68a, #5c4d16));
   --ticket-inverse-bg: var(--color-background-inverse, var(--view-text));
   --ticket-inverse-text: var(--color-text-inverse, var(--view-bg-raised));
+  /* A merged pull request; the MCP Apps style variables have no purple to defer to. */
+  --ticket-merged: light-dark(#7c3aed, #a78bfa);
 }
 
 .ticket {
@@ -292,4 +294,165 @@
 .ticket-foot {
   display: flex;
   justify-content: flex-end;
+}
+
+/*
+ * Pull requests: a tally in the heading, then one row per pull request: glyph, number, title,
+ * checks, and on a parent the tickets it is on, pushed to the end. The title gives way first.
+ * On a narrow card the row becomes a grid, so the tickets drop under the title, aligned with it.
+ */
+.ticket-prs {
+  padding-top: 10px;
+  border-top: 1px solid var(--view-border);
+}
+
+.ticket-pr-tally {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 10px;
+}
+
+.ticket-pr-segment {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ticket-pr-icon {
+  flex: none;
+  width: 12px;
+  height: 12px;
+}
+
+.ticket-pr-list {
+  margin: 0 -6px;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.ticket-pr {
+  display: flex;
+  align-items: baseline;
+  width: 100%;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: var(--view-radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ticket-pr:hover {
+  background: var(--view-bg-muted);
+}
+
+.ticket-pr:focus-visible {
+  outline: 2px solid var(--view-ring);
+  outline-offset: 1px;
+}
+
+.ticket-pr:disabled {
+  cursor: default;
+}
+
+.ticket-pr:disabled:hover {
+  background: transparent;
+}
+
+.ticket-pr-glyph {
+  flex: none;
+  align-self: center;
+  width: 14px;
+  height: 14px;
+}
+
+.ticket-pr-ref {
+  flex: none;
+  margin-left: 6px;
+  color: var(--view-text-muted);
+  white-space: nowrap;
+}
+
+.ticket-pr-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: 8px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ticket-pr-checks {
+  flex: none;
+  align-self: center;
+  display: inline-flex;
+  margin-left: 6px;
+}
+
+.ticket-pr-checks .ticket-pr-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.ticket-pr-tickets {
+  flex: none;
+  max-width: 15em;
+  margin-left: auto;
+  padding-left: 12px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 11px;
+}
+
+/* The card is the frame: below about 360px the tickets go under the title. */
+@media (max-width: 360px) {
+  .ticket-pr {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, max-content) auto;
+    justify-content: start;
+  }
+
+  .ticket-pr-tickets {
+    grid-column: 3 / -1;
+    grid-row: 2;
+    max-width: none;
+    margin-left: 8px;
+    padding-left: 0;
+    white-space: normal;
+  }
+}
+
+[data-tone="open"] {
+  color: var(--ticket-success);
+}
+
+[data-tone="merged"] {
+  color: var(--ticket-merged);
+}
+
+[data-tone="draft"],
+[data-tone="closed"],
+[data-tone="unknown"] {
+  color: var(--view-text-muted);
+}
+
+[data-tone="failing"] {
+  color: var(--view-danger);
+}
+
+[data-tone="pending"] {
+  color: var(--ticket-warning);
+}
+
+.ticket-pr-more {
+  margin: 0;
+  font-size: 12px;
 }

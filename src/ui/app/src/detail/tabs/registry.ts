@@ -68,6 +68,10 @@ import { isIdeaDetail, planRecordOf } from "../plan-record";
  */
 const task = (detail: Parameters<NonNullable<TabDefinition["available"]>>[0]) => !isIdeaDetail(detail);
 
+/** What the External links tab lists: the ticket's own links and, on a parent, the pull requests only its descendants carry. */
+const externalLinkCount = (detail: IssueDetail) =>
+  (detail.externalLinks?.length ?? 0) + (detail.subtreePullRequests ?? []).filter((pr) => !pr.own).length || null;
+
 export const TABS: readonly TabDefinition[] = [
   { id: "overview", label: "Details", component: OverviewTab, available: task },
   { id: "plan", label: "Plan", component: PlanTab, available: (detail) => planRecordOf(detail) !== null },
@@ -84,7 +88,7 @@ export const TABS: readonly TabDefinition[] = [
    * that vanishes teaches nobody that the feature exists. The tab renders "no relations"
    * rather than an empty canvas, which is the honest version of the same answer.
    */
-  { id: "external-links", label: "External links", component: ExternalLinksTab, available: task, count: (detail) => detail.externalLinks?.length || null },
+  { id: "external-links", label: "External links", component: ExternalLinksTab, available: task, count: externalLinkCount },
   { id: "relations", label: "Connections", component: RelationsTab, available: task },
   { id: "idea-connections", label: "Connections", component: IdeaConnectionsTab, available: isIdeaDetail },
   /**

@@ -857,13 +857,19 @@ export interface PullRequestRef {
   state: "draft" | "open" | "merged" | "closed" | "unknown";
   /** Optional; tooltip only. */
   title?: string | null;
-  /** On a parent's row, the tickets of its subtree this pull request is linked on (tooltip only); absent on a leaf's. */
-  tickets?: string[];
-  /** The checks on the head commit at the last read; absent when none were read (merged, closed, no checks). */
+  /** How the head commit's checks stand; absent when none were read, and for a merged or closed pull request. */
   checks?: "passing" | "failing" | "pending";
+  /** On a parent's row, the tickets of its subtree this pull request is linked on; absent on a leaf's. */
+  tickets?: string[];
   /** ISO-8601. Optional; tooltip only. */
   updatedAt?: string | null;
 }
+
+/**
+ * A parent row's whole subtree set, counted (core/integrations/pr-discovery.ts). The row
+ * carries only the first of its pull requests; these say how many there are in all.
+ */
+export type PullRequestCounts = RowPullRequestCounts;
 
 /** GET /api/issues */
 /**
@@ -961,7 +967,7 @@ export interface IssueRow {
    * `pullRequests` lists the first eight (failing checks first). `inside` counts the ones
    * only its descendants carry. Absent on a leaf's row and on a row with none.
    */
-  pullRequestCounts?: RowPullRequestCounts;
+  pullRequestCounts?: PullRequestCounts;
   externalLinks?: ExternalRowSummary;
   /**
    * The review gate ON this row, and the gate this row is QUEUED BEHIND

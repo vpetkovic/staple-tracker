@@ -34,7 +34,6 @@ import { ideaPlanHref } from "./PlannedIdeaLinks";
  */
 import { AutopilotNotice } from "@/components/autopilot/AutopilotBadge";
 import { MergedPullRequestNotice } from "@/integrations/MergedPullRequestNotice";
-import { descendantPullRequests } from "@/integrations/SubtreePullRequests";
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Maximize2, Minimize2, SearchX, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { flushSync } from "react-dom";
@@ -765,12 +764,6 @@ function Properties({
               {detail.branch.base ? <span className="text-text-tertiary">{` · base ${detail.branch.base}`}</span> : null}
               {detail.branch.source === "comment" ? <span className="text-text-tertiary"> · from a comment</span> : null}
             </span>
-          </PropertyRow>
-        ) : null}
-        {/* The phone's pills count this ticket's own links; a parent's whole set is listed here. */}
-        {phone && descendantPullRequests(detail).length > 0 ? (
-          <PropertyRow label="Pull requests" span>
-            <ExternalPropertySummary detail={detail} kind="pull_request" refresh={refresh} />
           </PropertyRow>
         ) : null}
         {!phone ? (

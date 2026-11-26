@@ -205,12 +205,137 @@ describe("PR badge slot", () => {
     const four = renderRow({}, null, prs);
     expect(four).toContain("#9");
     expect(four).not.toContain(">#8<");
-    expect(four).toContain('aria-label="4 pull requests: #9 open, #8 draft, #7 merged, #6 closed"');
+    // Several of its own: the badge is a button that opens their list, named by its tally.
+    expect(four).toContain('aria-label="4 pull requests: 1 open, 1 draft, 1 merged, 1 closed"');
+    expect(four).toContain('data-pr-set="own"');
     for (const tone of ["open", "draft", "merged", "closed"]) expect(four).toContain(`data-link-tone="${tone}"`);
     expect(four).not.toContain("staple-pr-more");
 
     const six = renderRow({}, null, [...prs, { provider: "github", number: 5, url: "https://example.test/5", state: "closed" }, { provider: "github", number: 4, url: "https://example.test/4", state: "closed" }]);
     expect(six).toContain("+2");
+  });
+});
+
+describe("PR badge shapes", () => {
+  const pr = (number: number, state: PullRequestRef["state"], extra: Partial<PullRequestRef> = {}): PullRequestRef => ({
+    provider: "github",
+    number,
+    url: `https://example.test/${number}`,
+    state,
+    title: `Change ${number}`,
+    ...extra,
+  });
+  const linkSummary = (count: number) => ({
+    issues: { count: 0, items: [] },
+    pullRequests: { count, items: [] },
+  });
+
+  /** One row at a viewport width, through the real model and the real ladder. */
+  function renderAt(width: number | undefined, pullRequests: PullRequestRef[], externalLinks?: ReturnType<typeof linkSummary>): string {
+    const source = row({ identifier: "ACME-P" });
+    const built = buildGroups([{ ...source, pullRequests, externalLinks }], { isExpanded: () => true, showResolved: true })[0]!.rows[0]!;
+    return renderToStaticMarkup(
+      <TaskRowLine
+        row={built}
+        config={resolveTaskListConfig("tree", { labelMax: 2, ...(width === undefined ? {} : { plan: rowPlan(width) }) })}
+        semantics="grid"
+        isExpanded
+        now={NOW}
+        onOpen={() => {}}
+        onOpenParent={() => {}}
+        onToggleExpand={() => {}}
+        registerRef={() => {}}
+      />,
+    );
+  }
+  const badge = (markup: string) => /<(?:a|button)[^>]*data-testid="pr-badge".*?<\/(?:a|button)>/.exec(markup)?.[0] ?? "";
+
+  // A parent's subtree set: what its own children carry, beside one of its own.
+  const subtree = [
+    pr(41, "open", { checks: "failing", tickets: ["ACME-A"] }),
+    pr(40, "open", { tickets: ["ACME-P"] }),
+    pr(42, "draft", { tickets: ["ACME-B"] }),
+    pr(43, "merged", { tickets: ["ACME-A", "ACME-B"] }),
+  ];
+
+  it("draws one pull request as a link with its checks mark, and says the checks in its name", () => {
+    const markup = badge(renderAt(undefined, [pr(12, "open", { checks: "failing" })]));
+    expect(markup).toMatch(/^<a /);
+    expect(markup).toContain('aria-label="Pull request #12, open, checks failing"');
+    expect(markup).toContain('data-checks="failing"');
+    expect(markup).toContain(">#12<");
+    const passing = badge(renderAt(undefined, [pr(12, "open", { checks: "passing" })]));
+    expect(passing).toContain('aria-label="Pull request #12, open"');
+    expect(passing).not.toContain("data-checks");
+  });
+
+  it("draws several of its own as a button with one mark for the worst checks", () => {
+    const markup = badge(renderAt(undefined, [pr(9, "open"), pr(8, "open", { checks: "pending" }), pr(7, "merged")]));
+    expect(markup).toMatch(/^<button /);
+    expect(markup).toContain('data-pr-set="own"');
+    expect(markup).toContain(">#9<");
+    expect(markup.match(/data-checks=/g)).toEqual(['data-checks=']);
+    expect(markup).toContain('data-checks="pending"');
+    expect(markup).toContain('aria-haspopup="dialog"');
+  });
+
+  it("says the pending checks it marks on several of its own", () => {
+    const markup = badge(renderAt(undefined, [pr(9, "open"), pr(8, "open", { checks: "pending" }), pr(7, "merged")]));
+    expect(markup).toContain('data-checks="pending"');
+    expect(/aria-label="([^"]*)"/.exec(markup)![1]).toMatch(/pending/);
+  });
+
+  it("draws a parent's subtree set as a tally by state, never one child's number", () => {
+    const markup = badge(renderAt(undefined, subtree));
+    expect(markup).toMatch(/^<button /);
+    expect(markup).toContain('data-pr-set="subtree"');
+    expect(markup).toContain('data-pr-tally=""');
+    expect([...markup.matchAll(/data-pr-segment="(\w+)"/g)].map((m) => m[1])).toEqual(["failing", "open", "draft", "merged"]);
+    expect(markup).not.toMatch(/#4\d/);
+    expect(markup).not.toContain("staple-pr-number");
+    expect(markup).toContain('aria-label="4 pull requests: 1 with failing checks, 2 open, 1 draft, 1 merged"');
+  });
+
+  it("reads a parent whose pull requests are all its own as a leaf does", () => {
+    const markup = badge(renderAt(undefined, [pr(40, "open", { tickets: ["ACME-P"] })]));
+    expect(markup).toMatch(/^<a /);
+    expect(markup).not.toContain("data-pr-set");
+  });
+
+  it("folds the tally to a glyph and the total once the ladder drops the number", () => {
+    const folded = badge(renderAt(900, subtree));
+    expect(folded).toContain('data-pr-tally="folded"');
+    expect(folded).not.toContain("data-pr-segment");
+    expect(folded).toContain("<span>4</span>");
+    expect(folded).toContain('aria-label="4 pull requests: 1 with failing checks, 2 open, 1 draft, 1 merged"');
+    expect(badge(renderAt(1100, subtree))).toContain('data-pr-tally=""');
+    expect(badge(renderAt(900, [pr(12, "open")]))).not.toContain(">#12<");
+  });
+
+  describe("on a phone held upright", () => {
+    it("keeps a parent's subtree set as a counted badge and leaves its pull requests out of the link badge", () => {
+      const markup = renderAt(390, subtree, linkSummary(1));
+      const b = badge(markup);
+      expect(b).toContain('data-pr-set="subtree"');
+      expect(b).toContain('data-pr-tally="folded"');
+      expect(b).toContain("rounded-md px-1.5 text-label tabular-nums");
+      expect(b).not.toContain("staple-pr-badge");
+      expect(markup).not.toContain('data-link-badge="pull_request"');
+    });
+
+    it("gives a leaf's counted link badge the failing mark in its pull request badge's place", () => {
+      const markup = renderAt(390, [pr(12, "open", { checks: "failing" }), pr(13, "open")], linkSummary(2));
+      expect(markup).not.toContain('data-testid="pr-badge"');
+      const link = /<button[^>]*data-link-badge="pull_request".*?<\/button>/.exec(markup)![0];
+      expect(link).toContain('aria-label="2 linked pull requests, checks failing"');
+      expect(link).toContain('data-checks="failing"');
+      const quiet = renderAt(390, [pr(12, "open", { checks: "passing" })], linkSummary(1));
+      expect(/<button[^>]*data-link-badge="pull_request".*?<\/button>/.exec(quiet)![0]).not.toContain("data-checks");
+    });
+  });
+
+  it("shows the pull request column on the detail's Tasks inside rows", () => {
+    expect(resolveTaskListConfig("panel").columns.pr).toBe(true);
   });
 });
 
