@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 import type { AttentionRow } from "@/lib/types";
 import { attentionSections } from "./attention-model";
-import { actionWord, conflictValue, drawnRows, inboxKey, oldestAge, subjectCell, unblockTodo } from "./inbox-model";
+import { actionWord, conflictValue, drawnRows, inboxKey, oldestAge, subjectCell, takesPlaceOf, unblockTodo } from "./inbox-model";
 
 function row(over: Partial<AttentionRow> & Pick<AttentionRow, "key" | "kind">): AttentionRow {
   return {
@@ -127,5 +127,15 @@ describe("the keyboard on a focused row", () => {
   it("ignores a row it does not know and every other key", () => {
     expect(inboxKey(keys, "z", "ArrowDown", plain)).toBeNull();
     expect(inboxKey(keys, "a", "x", plain)).toBeNull();
+  });
+});
+
+describe("the row that takes a departed row's place", () => {
+  it("is the one now at its position, else the last, and none while the row is still listed", () => {
+    expect(takesPlaceOf(["a", "b", "c"], ["a", "c"], "b")).toBe("c");
+    expect(takesPlaceOf(["a", "b", "c"], ["a", "b"], "c")).toBe("b");
+    // A refused write leaves the row where it was.
+    expect(takesPlaceOf(["a", "b", "c"], ["a", "b", "c"], "b")).toBeNull();
+    expect(takesPlaceOf(["a"], [], "a")).toBeNull();
   });
 });

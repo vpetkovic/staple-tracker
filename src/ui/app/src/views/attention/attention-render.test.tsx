@@ -136,12 +136,22 @@ describe("the Inbox", () => {
     expect(html).toContain('aria-label="Review APP-9 Title"');
   });
 
-  it("dims the busy row and disables its buttons", () => {
+  it("dims the busy row and marks its buttons disabled without taking them out of the focus order", () => {
     const html = lists({ busy: "app/unblocked/WEB-2" });
     const busy = rowHtml(html, "app/unblocked/WEB-2");
     expect(busy).toContain("opacity-60");
-    for (const button of buttons(busy)) expect(button).toMatch(/disabled=""/);
+    // `aria-disabled`, not `disabled`: disabling the focused button would drop the focus to the page.
+    for (const button of buttons(busy)) {
+      expect(button).toContain('aria-disabled="true"');
+      expect(button).not.toMatch(/ disabled=""/);
+    }
     expect(rowHtml(html, "app/gate_pending/APP-1")).not.toContain("opacity-60");
+  });
+
+  it("disables the action of a row that names nothing to open", () => {
+    const html = lists({ list: list([row({ kind: "odd", label: "Odd", ref: null, runId: null, conflictId: null, action: { verb: "open", label: "Open", command: "" } })]) });
+    const action = buttons(html).find((button) => button.includes("data-attention-action"))!;
+    expect(action).toMatch(/ disabled=""/);
   });
 
   it("marks the row whose ticket is open in the drawer", () => {
@@ -217,10 +227,12 @@ describe("a conflict", () => {
     expect(html).toContain('aria-expanded="true"');
   });
 
-  it("falls back to the menu when the payload carries no conflict", () => {
+  it("still opens in place with both takes when the row carries no values", () => {
     const html = draw({ ...conflictRow, conflict: null }, true);
-    expect(html).not.toContain("data-attention-conflict");
-    expect(html).toContain('aria-haspopup="menu"');
+    expect(html).toContain("data-attention-conflict");
+    expect(html).toContain('data-attention-take="local"');
+    expect(html).toContain('data-attention-take="remote"');
+    expect(html).not.toContain('aria-haspopup="menu"');
   });
 });
 

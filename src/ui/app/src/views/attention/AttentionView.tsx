@@ -24,7 +24,7 @@
  * and close a conflict. The focused row's buttons follow it in the tab order.
  */
 import { Inbox } from "lucide-react";
-import { useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { GuardRefusal } from "@/components/GuardRefusal";
 import { EmptyState } from "@/components/plain/States";
 import { useRovingFocus } from "@/components/task-list/roving";
@@ -34,7 +34,7 @@ import { type Selection, useSession } from "@/lib/session";
 import type { AttentionList, AttentionRow } from "@/lib/types";
 import { ErrorState } from "@/views/ViewChrome";
 import { attentionSections } from "./attention-model";
-import { drawnRows, inboxKey } from "./inbox-model";
+import { drawnRows, inboxKey, takesPlaceOf } from "./inbox-model";
 import { ElsewhereLine, FailedBanner, InboxRow, InboxSection, InboxSkeleton, actOnRow } from "./InboxParts";
 import { type AttentionHandlers, useAttention } from "./use-attention";
 import "@/components/task-list/task-list.css";
@@ -44,10 +44,12 @@ export function AttentionView(_props: { onAuthError: (error: AuthError) => void 
   // The rows, what each action does and the writes: use-attention.ts. This component renders.
   const { resource, elsewhere, fresh, busy, refusal, clearRefusal, handlers } = useAttention();
   const session = useSession();
+  const scroller = useRef<HTMLDivElement>(null);
 
   return (
     // The scroll padding keeps a row the keyboard focuses clear of the sticky section header.
-    <div className="@container/inbox h-full scroll-pt-9 overflow-y-auto" data-attention-view="">
+    // Focusable from code only: a workspace switch made from inside the list lands here, not on the page.
+    <div ref={scroller} tabIndex={-1} role="region" aria-label="Inbox" className="@container/inbox h-full scroll-pt-9 overflow-y-auto outline-none focus-ring-inset" data-attention-view="">
       {refusal ? <GuardRefusal refusal={refusal} onDismiss={clearRefusal} className="m-3" /> : null}
       {resource.error ? (
         <div className="px-4">
@@ -67,7 +69,11 @@ export function AttentionView(_props: { onAuthError: (error: AuthError) => void 
           selected={session.selection}
           isNew={(row) => fresh.has(row.key)}
           elsewhere={elsewhere}
-          onShowAll={() => session.setWs("")}
+          onShowAll={() => {
+            // The list is rebuilt for the new scope, so the button that was pressed is gone.
+            scroller.current?.focus();
+            session.setWs("");
+          }}
         />
       )}
     </div>
@@ -101,23 +107,50 @@ export function AttentionLists({
 }) {
   const sections = attentionSections(list.rows);
   const [folded, setFolded] = useState<Record<string, boolean>>({});
-  // One conflict is open at most; on an older payload, one conflict's menu.
+  // One conflict is open at most.
   const [expanded, setExpanded] = useState<string | null>(null);
   const drawn = drawnRows(sections, folded);
-  const roving = useRovingFocus(drawn.map((row) => row.key));
+  const keys = drawn.map((row) => row.key);
+  const roving = useRovingFocus(keys);
+
+  // A row dismissed or resolved from one of its own buttons takes that button, and the focus
+  // on it, with it when it leaves: the row that takes its place gets the focus instead.
+  const leaving = useRef<string | null>(null);
+  const shown = useRef(keys);
+  const order = keys.join("\n");
+  useEffect(() => {
+    const next = leaving.current === null ? null : takesPlaceOf(shown.current, keys, leaving.current);
+    shown.current = keys;
+    if (next === null) return;
+    leaving.current = null;
+    // Only when the focus fell to the page: a reader who moved on keeps where they went.
+    if (document.activeElement === null || document.activeElement === document.body) roving.go(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [order]);
+  const rowHandlers: AttentionHandlers = {
+    act: handlers.act,
+    resolve: (row, take) => {
+      leaving.current = row.key;
+      handlers.resolve(row, take);
+    },
+    dismiss: (row) => {
+      leaving.current = row.key;
+      handlers.dismiss(row);
+    },
+  };
 
 
   const expand = (key: string) => (open: boolean) => setExpanded(open ? key : null);
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    // Keys belong to the focused row itself; its buttons and an open menu keep their own.
+    // Keys belong to the focused row itself; its buttons keep their own.
     const key = (event.target as HTMLElement).dataset.attentionRow;
     if (key === undefined || event.altKey || event.ctrlKey || event.metaKey) return;
     const row = drawn.find((candidate) => candidate.key === key);
     if (!row) return;
     const isBusy = busy === row.key;
     const move = inboxKey(
-      drawn.map((candidate) => candidate.key),
+      keys,
       key,
       event.key,
       { dismissible: row.dismissible && !isBusy, resolve: row.action.verb === "resolve" && !isBusy, expanded: expanded === key },
@@ -180,7 +213,7 @@ export function AttentionLists({
                   busy={busy === row.key}
                   expanded={expanded === row.key}
                   active={roving.activeKey === row.key}
-                  handlers={handlers}
+                  handlers={rowHandlers}
                   onExpand={expand(row.key)}
                   rowRef={roving.register(row.key)}
                 />

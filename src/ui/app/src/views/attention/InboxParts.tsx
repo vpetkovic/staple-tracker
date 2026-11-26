@@ -25,12 +25,6 @@ import {
 } from "lucide-react";
 import { type ReactNode, useId } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { formatAgo } from "@/lib/claim";
 import type { AttentionRow } from "@/lib/types";
@@ -83,7 +77,7 @@ export function InboxSection({
 
 /**
  * What acting on a row does, from a click anywhere on it or from Enter: a conflict opens or
- * closes in place (or its menu, on an older payload); everything else goes where it names.
+ * closes in place; everything else goes where it names.
  */
 export function actOnRow(
   row: AttentionRow,
@@ -119,7 +113,7 @@ export function InboxRow({
   selected: boolean;
   /** A write is running for it. */
   busy: boolean;
-  /** A conflict open in place (or its menu, on an older payload). */
+  /** A conflict open in place. */
   expanded: boolean;
   /** It holds the list's one tab stop: it and its buttons are in the tab order. */
   active: boolean;
@@ -134,7 +128,9 @@ export function InboxRow({
   const resolves = verb === "resolve";
   const todo = unblockTodo(row);
   const tabIndex = active ? 0 : -1;
-  const disabled = busy || attentionGo(row) === null;
+  // A row that names nothing to open is not actionable at all. A busy row keeps its buttons
+  // focusable (`aria-disabled`, not `disabled`): disabling the focused button would drop focus to the page.
+  const inert = attentionGo(row) === null;
   const age = formatAgo(row.ageSeconds);
 
   return (
@@ -146,9 +142,11 @@ export function InboxRow({
       aria-busy={busy || undefined}
       data-attention-row={row.key}
       data-attention-kind={row.kind}
+      // Where the drawer returns focus when it closes (detail/focus-return.ts).
+      data-identifier={row.ref ?? undefined}
       onClick={(event) => {
-        // The buttons, an open menu and the conflict's own buttons do their own thing.
-        if ((event.target as HTMLElement).closest("button, [role=menu], [data-attention-conflict]")) return;
+        // The buttons and the conflict's own buttons do their own thing.
+        if ((event.target as HTMLElement).closest("button, [data-attention-conflict]")) return;
         actOnRow(row, { busy, expanded }, handlers, onExpand);
       }}
       className={cn(
@@ -232,7 +230,8 @@ export function InboxRow({
       <RowAction
         row={row}
         label={`${actionWord(verb)} ${named}`}
-        disabled={disabled}
+        inert={inert}
+        busy={busy}
         expanded={expanded}
         conflictId={conflictId}
         tabIndex={tabIndex}
@@ -243,17 +242,19 @@ export function InboxRow({
         <button
           type="button"
           tabIndex={tabIndex}
-          disabled={busy}
+          aria-disabled={busy || undefined}
           data-attention-dismiss={row.key}
           aria-label={`Dismiss ${named}`}
           title="Dismiss"
-          onClick={() => handlers.dismiss(row)}
-          className="col-start-4 row-[1/span_3] inline-flex size-10 cursor-pointer items-center justify-center self-center rounded-md text-text-tertiary outline-none hover:bg-surface-selected hover:text-foreground focus-ring disabled:pointer-events-none disabled:opacity-50 pointer-coarse:size-11 @min-[860px]/inbox:col-auto @min-[860px]/inbox:row-auto @min-[860px]/inbox:size-7"
+          onClick={() => {
+            if (!busy) handlers.dismiss(row);
+          }}
+          className="col-start-4 row-[1/span_3] inline-flex size-10 cursor-pointer items-center justify-center self-center rounded-md text-text-tertiary outline-none hover:bg-surface-selected hover:text-foreground focus-ring aria-disabled:cursor-default aria-disabled:opacity-50 pointer-coarse:size-11 @min-[860px]/inbox:col-auto @min-[860px]/inbox:row-auto @min-[860px]/inbox:size-7"
         >
           <X aria-hidden className="size-3.5" />
         </button>
       ) : null}
-      {resolves && expanded && row.conflict ? (
+      {resolves && expanded ? (
         <ConflictInPlace
           id={conflictId}
           row={row}
@@ -268,7 +269,7 @@ export function InboxRow({
 }
 
 const ACTION_CLASS =
-  "col-start-3 row-[1/span_3] inline-flex h-9 cursor-pointer items-center justify-center gap-[3px] self-center rounded-md text-label font-medium whitespace-nowrap text-text-tertiary outline-none hover:bg-surface-selected group-hover/row:text-foreground group-focus-visible/row:text-foreground focus-visible:text-foreground focus-ring disabled:pointer-events-none disabled:opacity-50 pointer-coarse:h-11 @min-[860px]/inbox:col-auto @min-[860px]/inbox:row-auto @min-[860px]/inbox:h-[26px] @min-[860px]/inbox:w-auto @min-[860px]/inbox:justify-self-end @min-[860px]/inbox:px-2";
+  "col-start-3 row-[1/span_3] inline-flex h-9 cursor-pointer items-center justify-center gap-[3px] self-center rounded-md text-label font-medium whitespace-nowrap text-text-tertiary outline-none hover:bg-surface-selected group-hover/row:text-foreground group-focus-visible/row:text-foreground focus-visible:text-foreground focus-ring disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-default aria-disabled:opacity-50 pointer-coarse:h-11 @min-[860px]/inbox:col-auto @min-[860px]/inbox:row-auto @min-[860px]/inbox:h-[26px] @min-[860px]/inbox:w-auto @min-[860px]/inbox:justify-self-end @min-[860px]/inbox:px-2";
 
 /**
  * The row's one action, a real button named after the row. Compact, it is a square chevron
@@ -277,7 +278,8 @@ const ACTION_CLASS =
 function RowAction({
   row,
   label,
-  disabled,
+  inert,
+  busy,
   expanded,
   conflictId,
   tabIndex,
@@ -286,7 +288,9 @@ function RowAction({
 }: {
   row: AttentionRow;
   label: string;
-  disabled: boolean;
+  /** Nothing to open: the row has no ticket, run or conflict. */
+  inert: boolean;
+  busy: boolean;
   expanded: boolean;
   conflictId: string;
   tabIndex: number;
@@ -304,36 +308,21 @@ function RowAction({
     </>
   );
 
-  // An older payload names no field or values: keep the two-item menu.
-  if (resolves && row.conflict === null) {
-    return (
-      <DropdownMenu open={expanded} onOpenChange={onExpand}>
-        <DropdownMenuTrigger asChild>
-          <button type="button" tabIndex={tabIndex} disabled={disabled} aria-label={label} data-attention-action={verb} className={className}>
-            {content}
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="pointer-coarse:[&_[role=menuitem]]:min-h-11">
-          <DropdownMenuItem data-attention-take="local" onSelect={() => handlers.resolve(row, "local")}>
-            Keep this device's value
-          </DropdownMenuItem>
-          <DropdownMenuItem data-attention-take="remote" onSelect={() => handlers.resolve(row, "remote")}>
-            Take the other device's value
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    );
-  }
   return (
     <button
       type="button"
       tabIndex={tabIndex}
-      disabled={disabled}
+      disabled={inert}
+      aria-disabled={busy || undefined}
       aria-label={label}
       aria-expanded={resolves ? expanded : undefined}
       aria-controls={resolves && expanded ? conflictId : undefined}
       data-attention-action={verb}
-      onClick={() => (resolves ? onExpand(!expanded) : handlers.act(row))}
+      onClick={() => {
+        if (busy) return;
+        if (resolves) onExpand(!expanded);
+        else handlers.act(row);
+      }}
       className={className}
     >
       {content}
@@ -341,7 +330,7 @@ function RowAction({
   );
 }
 
-/** A sync conflict opened under its row: both values and which to keep. */
+/** A sync conflict opened under its row: both values, when the row carries them, and which to keep. */
 function ConflictInPlace({
   id,
   row,
@@ -352,14 +341,14 @@ function ConflictInPlace({
 }: {
   id: string;
   row: AttentionRow;
-  conflict: NonNullable<AttentionRow["conflict"]>;
+  conflict: AttentionRow["conflict"];
   busy: boolean;
   tabIndex: number;
   handlers: AttentionHandlers;
 }) {
   const sides = [
-    { take: "local" as const, label: "This device", value: conflictValue(conflict.localValue), button: "Keep this device's" },
-    { take: "remote" as const, label: "Other device", value: conflictValue(conflict.remoteValue), button: "Take the other's" },
+    { take: "local" as const, label: "This device", value: conflict ? conflictValue(conflict.localValue) : null, button: "Keep this device's" },
+    { take: "remote" as const, label: "Other device", value: conflict ? conflictValue(conflict.remoteValue) : null, button: "Take the other's" },
   ];
   return (
     <div
@@ -370,16 +359,18 @@ function ConflictInPlace({
       {sides.map((side) => (
         <div key={side.take} className="contents">
           <span className="col-span-full -mb-1 text-text-tertiary @min-[860px]/inbox:col-auto @min-[860px]/inbox:mb-0">{side.label}</span>
-          <span className="min-w-0 truncate font-mono text-text-secondary" title={side.value}>
+          <span className="min-w-0 truncate font-mono text-text-secondary" title={side.value ?? undefined}>
             {side.value}
           </span>
           <Button
             variant="outline"
             size="sm"
             tabIndex={tabIndex}
-            disabled={busy}
+            aria-disabled={busy || undefined}
             data-attention-take={side.take}
-            onClick={() => handlers.resolve(row, side.take)}
+            onClick={() => {
+              if (!busy) handlers.resolve(row, side.take);
+            }}
             className="pointer-coarse:min-h-11"
           >
             {side.button}

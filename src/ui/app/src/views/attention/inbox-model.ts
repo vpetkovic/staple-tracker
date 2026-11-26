@@ -90,3 +90,14 @@ export function inboxKey(
       return null;
   }
 }
+
+/**
+ * The row that takes a departed row's place: the one now at its old position, else the last.
+ * Null when the row is still listed (a refused write) or nothing is left.
+ */
+export function takesPlaceOf(before: readonly string[], after: readonly string[], key: string): string | null {
+  if (after.includes(key)) return null;
+  const index = before.indexOf(key);
+  if (index === -1 || after.length === 0) return null;
+  return after[Math.min(index, after.length - 1)]!;
+}
