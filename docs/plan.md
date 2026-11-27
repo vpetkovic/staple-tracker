@@ -267,6 +267,11 @@ with its estimate, blockers from depends-on and its done-when. Confirm, and it c
 that preview. Each task also gets a context page, so an agent can work it from the ticket alone.
 If the plan changed after the preview, the confirm is refused and you preview again.
 
+Each task remembers where it came from. Its detail shows a **from I-STA-4 · row R2** chip that
+opens the idea in Plan, `staple show` prints the same line, and its context page opens with
+"Scaffolded from idea I-STA-4, breakdown row R2". The chip reads the row's key as the breakdown
+holds it now, and says "a removed row" once the row is gone from the plan.
+
 ```bash
 staple idea scaffold <id>                    # preview, prints the fingerprint
 staple idea scaffold <id> --confirm <fingerprint>
@@ -289,6 +294,23 @@ Two alternatives:
   exploring idea can adopt too, when tickets already exist for something still being worked out.
   It then reads started, but its maturity stays exploring: you can still mark it shaped, and its
   questions are still asked, answered and deferred.
+
+### An idea found while working a ticket
+
+When work on a ticket turns up a new capability nobody planned, capture it as an idea and name
+the ticket that sparked it:
+
+```bash
+staple idea new "Bulk export of reports" --sparked-by STA-42
+```
+
+Over MCP, `capture_idea` takes `sparked_by`. The idea shows **sparked by STA-42**, and the
+ticket lists it under **Sparked ideas**, each opening in Plan. A ticket can spark any number of
+ideas; an idea names one ticket, and an idea or a milestone is refused as its spark (an idea that
+is part of another is its sub-idea). The link stays when the idea is later scaffolded into an epic.
+
+With planning off, the chips and the Sparked ideas list are hidden; the links are kept and come
+back when planning is turned on again.
 
 ## 7. From started to shipped
 

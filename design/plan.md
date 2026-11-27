@@ -389,6 +389,25 @@ Scaffold of it builds only its sub-ideas. Both read facts every device holds aft
 marker is stored. A record started by linked work alone, or a promoted record with rows and no
 task of theirs, offers no Scaffold.
 
+*Provenance.* Each task Scaffold makes keeps the idea and row it came from on its origin columns:
+`origin_kind` `plan-row`, `origin_id` `<idea id>/<row id>` (`core/plan-provenance.ts`), written in
+its own create. Its id follows from the same pair, so two devices scaffolding offline send one
+identical value and no origin claim contends with another record's. Its `context` document opens
+with "Scaffolded from idea I-STA-n, breakdown row K." A detail read (`WorkspaceStore.context`,
+so `staple show`, `get_task` and the drawer) answers `scaffoldedFrom`: the idea's id, its idea
+number and ticket number as they stand now, and the row's key as the breakdown holds it now (null
+once the row is removed). A task an earlier build scaffolded has no such origin; the read matches
+its id against `scaffoldTaskId` of its parent's rows instead, while the row is still there.
+
+*Sparked ideas.* An idea captured with `sparkedBy` (`staple idea new --sparked-by`, `capture_idea`
+`sparked_by`) keeps that ticket the way a finding keeps where it was found: `origin_kind`
+`sparked`, `origin_id` `<ticket id>/<idea id>`, unique by construction, in the idea's own create.
+An idea or a milestone is refused as the spark before anything is written. The idea's detail and
+context answer `sparkedBy`; the ticket's context answers `sparked`, the ideas it sparked, oldest
+first. Both stay when the idea is promoted or scaffolded. All three reads are on one record's
+detail, a constant number of queries, and no list reads them; with planning off they answer null
+and `[]`, and the columns are kept.
+
 *Sub-ideas shaped later.* A retry on the parent builds what is missing below it: a sub-idea shaped
 after the parent's scaffold is in the parent's next preview and its confirm builds it as a child
 epic, once, as its own Scaffold would. Scaffolding the sub-idea on its own does the same.
@@ -1164,7 +1183,9 @@ What converges, under both folds, on a tail device and a freshly hydrated one:
 - **One idea promoted on two devices** writes one record's identifier twice. The last write in the
   log is its value, as the fold keeps; the number the record gave up is freed. Every device ends
   with one number per record, no number naming two records and no open conflict.
-- **One idea scaffolded on two devices** creates the same task ids, merged into one set.
+- **One idea scaffolded on two devices** creates the same task ids, merged into one set, each with
+  the same origin (its idea and row), so a tail device and a fresh one read the same provenance and
+  no conflict is raised. An idea sparked by a ticket carries the ticket in its create the same way.
 - **A horizon whose only work is cancelled** stays listed on every device and derives again when
   another device reopens the work.
 - **A horizon held by a scheduled idea** stays open on every device when its last ticket lands,
