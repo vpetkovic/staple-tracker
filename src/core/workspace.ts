@@ -448,8 +448,24 @@ export function initWorkspace(options: {
       hub.recordRepositoryId(storedSlug, repository.repositoryId);
     }
 
+    const store = new WorkspaceStore(db, storedSlug, prefix);
+    /**
+     * A NEW workspace starts with planning on: its database and its identity were both made by
+     * this call. After the identity, so the default horizons take the repository's stable ids.
+     *
+     * Not a clone, whose manifest came out of git, and not a join target, whose manifest the
+     * share link wrote first (`cloud/share.ts`): both are an existing workspace arriving on this
+     * machine, and its setting arrives with it by sync. Writing `true` there would overrule the
+     * owner's choice on every device. Nor a workspace an older build made, which never stored
+     * the key: the registry default stays off, so upgrading turns nothing on.
+     *
+     * Stored and journaled as the person's own choice would be, so a device that hydrates the
+     * workspace reads planning on as this one does, and turning it off keeps working as before.
+     */
+    if (created && repository.manifestWritten) store.setSetting("features.planning", true, null, { via: "init" });
+
     return {
-      store: new WorkspaceStore(db, storedSlug, prefix),
+      store,
       dbPath,
       created,
       guidePath: guide?.path ?? null,

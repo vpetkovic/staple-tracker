@@ -1263,7 +1263,7 @@ Milestones
               refused (exit 7) and the order stands. Membership never changes an
               issue's parent, blockers, status or claim
 
-The plan (experimental; features.planning defaults off)
+The plan (features.planning, on for a new workspace)
   plan enable --person                 turn planning on: adds the "idea" and "milestone"
               kinds and the horizons Now and Next, which are milestones
   plan show                            the horizons in order with their late and

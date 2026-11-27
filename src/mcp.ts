@@ -221,7 +221,7 @@ const featureInstructions = (() => {
   catch { return "Resolve the workspace and read get_setting features.planning first."; }
 })();
 const server = new McpServer({ name: "staple", version: STAPLE_VERSION }, {
-  instructions: `${featureInstructions} Planning is experimental, defaults off, and only a person changes it in Settings → Experimental or with staple settings set features.planning true --person. Read get_setting or show_about for the current workspace state; explicit ws may differ from this handshake. When off, use ordinary tasks and milestones; plan tools refuse. Ideas have their own numbers, I-<PREFIX>-<n>, and are never pickup work. With planning on, a brainstorm or a new, unplanned capability found while working a ticket is an idea (capture_idea), a defect is a ticket (create_task), and what the ticket you hold needs is fixed in that ticket.`,
+  instructions: `${featureInstructions} Planning is on for a new workspace, and only a person changes it in Settings → Features or with staple settings set features.planning true|false --person. Read get_setting or show_about for the current workspace state; explicit ws may differ from this handshake. When off, use ordinary tasks and milestones; plan tools refuse. Ideas have their own numbers, I-<PREFIX>-<n>, and are never pickup work. With planning on, a brainstorm or a new, unplanned capability found while working a ticket is an idea (capture_idea), a defect is a ticket (create_task), and what the ticket you hold needs is fixed in that ticket.`,
 });
 const PLANNING_TOOLS = new Set(["list_ideas", "get_idea", "list_horizons", "capture_idea", "import_idea", "update_idea", "scaffold_idea", "start_idea", "unlink_idea", "convert_to_idea", "reset_idea_baseline"]);
 
@@ -415,7 +415,7 @@ const MACHINE_LOCAL_WRITES = new Set(["configure_integration","record_budget_sam
   ) => {
     assertAnnotated(name, rawConfig);
     if (PLANNING_TOOLS.has(name)) {
-      rawConfig = { ...rawConfig, description: `Experimental, only when features.planning is on. ${rawConfig.description ?? ""}` };
+      rawConfig = { ...rawConfig, description: `Only when features.planning is on. ${rawConfig.description ?? ""}` };
       const planCallback = rawCb;
       rawCb = (...args: unknown[]) => {
         const ws = (args[0] as { ws?: string } | undefined)?.ws;
@@ -4690,7 +4690,7 @@ server.registerTool(
                 .filter((status) => status.count > 0)
                 .map((status) => `${status.count} ${status.label.toLowerCase()}`)
                 .join(", ")}.`),
-      `Experimental features: planning ${features?.planning ? "on" : "off"}. Only a person changes features.planning.`,
+      `Features: planning ${features?.planning ? "on" : "off"}. Only a person changes features.planning.`,
       `Views: ${views.map((view) => `${view.name} (${view.uri})`).join(", ")}.`,
     ];
     return { content: [{ type: "text" as const, text: lines.join("\n") }], structuredContent: payload };
