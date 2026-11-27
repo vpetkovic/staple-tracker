@@ -43,7 +43,7 @@ export function FeatureTable({ rows, limit = 8, onOpen, hideTitles = false, clas
             <li key={row.ref} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 border-b py-2 last:border-b-0 @min-[560px]/features:grid-cols-[minmax(0,1fr)_7.5rem_4rem_4.5rem]">
               <div className="min-w-0">
                 <div className="flex min-w-0 items-center gap-1.5">
-                  {row.shipped ? <CircleCheck aria-label="Shipped in this period" className="size-3.5 shrink-0 text-[var(--plain-ok-fg)]" /> : null}
+                  {row.shipped ? <CircleCheck role="img" aria-label="Shipped in this period" className="size-3.5 shrink-0 text-[var(--plain-ok-fg)]" /> : null}
                   {onOpen ? (
                     <button type="button" onClick={() => onOpen(row.ref)} className="focus-ring relative min-h-0 min-w-0 truncate rounded-sm text-left text-body font-medium before:absolute before:-inset-y-1.5 before:inset-x-0 before:content-[''] hover:underline">
                       {title}
@@ -55,7 +55,7 @@ export function FeatureTable({ rows, limit = 8, onOpen, hideTitles = false, clas
                 <p className="mt-0.5 flex min-w-0 items-center gap-1.5 text-label text-muted-foreground">
                   {row.workspace ? (
                     <>
-                      <span aria-hidden className="size-2 shrink-0 rounded-full" style={{ background: row.workspace.color }} />
+                      <span aria-hidden data-mark className="size-2 shrink-0 rounded-full" style={{ background: row.workspace.color }} />
                       <span className="truncate">{row.workspace.label}</span>
                       <span aria-hidden>·</span>
                     </>
@@ -72,8 +72,8 @@ export function FeatureTable({ rows, limit = 8, onOpen, hideTitles = false, clas
                   {row.closed}
                   <span className="text-muted-foreground"> / {row.children}</span>
                 </span>
-                <span className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-[var(--viz-track)]" role="img" aria-label={`${row.closed} of ${row.children} tickets closed`}>
-                  <span className="block h-full rounded-full bg-[var(--viz-accent)]" style={{ width: `${share * 100}%` }} />
+                <span data-track className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-[var(--viz-track)]" role="img" aria-label={`${row.closed} of ${row.children} tickets closed`}>
+                  <span data-mark className="block h-full rounded-full bg-[var(--viz-accent)]" style={{ width: `${share * 100}%` }} />
                 </span>
               </div>
               <span className="hidden text-right text-body tabular-nums @min-[560px]/features:block">{formatEffortHours(row.agentHours)}</span>

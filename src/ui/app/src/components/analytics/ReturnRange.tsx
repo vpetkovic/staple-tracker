@@ -32,9 +32,9 @@ export function ReturnRange({ low, high, breakEven = 1, className, compact = fal
     <>
       <div className="absolute inset-x-0 h-3 rounded-full border border-[var(--viz-track-edge)] bg-[var(--viz-track)]" />
       <div className="absolute left-0 h-3 rounded-l-full border border-r-0 border-[var(--plain-risk-border)] bg-[var(--plain-risk-bg)]" style={{ width: at(breakEven) }} data-zone="below-break-even" />
-      {ends.length === 2 ? <div className="absolute h-3 rounded-full bg-[var(--viz-likely)]" style={{ left: at(first.value), width: `calc(${at(last.value)} - ${at(first.value)})`, minWidth: 6 }} /> : null}
+      {ends.length === 2 ? <div data-mark className="absolute h-3 rounded-full bg-[var(--viz-likely)]" style={{ left: at(first.value), width: `calc(${at(last.value)} - ${at(first.value)})`, minWidth: 6 }} /> : null}
       {ends.map((end) => (
-        <div key={end.label} className="absolute size-3 -translate-x-1/2 rounded-full bg-[var(--viz-marker)] ring-2 ring-[var(--card)]" style={{ left: at(end.value) }} />
+        <div key={end.label} data-mark className="absolute size-3 -translate-x-1/2 rounded-full bg-[var(--viz-marker)] ring-2 ring-[var(--card)]" style={{ left: at(end.value) }} />
       ))}
       <div className="absolute -top-1 h-5 w-0 -translate-x-1/2 border-l-2 border-[var(--viz-marker)] shadow-[0_0_0_1.5px_var(--card)]" style={{ left: at(breakEven) }} />
     </>
@@ -80,7 +80,7 @@ export function ReturnRange({ low, high, breakEven = 1, className, compact = fal
         </li>
         {ends.map((end) => (
           <li key={end.label} className="inline-flex items-center gap-1.5">
-            <span className="size-2.5 shrink-0 rounded-full bg-[var(--viz-marker)]" />
+            <span data-mark className="size-2.5 shrink-0 rounded-full bg-[var(--viz-marker)]" />
             <span className="font-medium text-foreground tabular-nums">{formatMultiple(end.value)}</span>
             {end.label}
           </li>

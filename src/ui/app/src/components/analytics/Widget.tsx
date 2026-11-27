@@ -99,8 +99,8 @@ export function Widget({
         {state.kind === "loading" ? (
           <div role="status" aria-live="polite" className="flex h-full flex-col justify-end gap-2" style={{ minHeight: minBodyHeight }}>
             <span className="sr-only">Loading {title}</span>
-            <Skeleton className="h-3 w-2/5 rounded-full" />
-            <Skeleton className="w-full flex-1 rounded-md" />
+            <Skeleton className="h-3 w-2/5 rounded-full motion-reduce:animate-none" />
+            <Skeleton className="w-full flex-1 rounded-md motion-reduce:animate-none" />
           </div>
         ) : state.kind === "empty" ? (
           <div className="flex h-full flex-col items-center justify-center gap-1 px-4 py-6 text-center" style={{ minHeight: minBodyHeight }}>
@@ -113,7 +113,7 @@ export function Widget({
             <p className="text-body font-medium">This could not be loaded</p>
             <p className="max-w-[28rem] text-label break-words text-muted-foreground">{state.message}</p>
             {state.onRetry ? (
-              <button type="button" onClick={state.onRetry} className="focus-ring mt-1 min-h-0 rounded-md border px-2.5 py-1 text-label font-medium hover:bg-surface-hover">
+              <button type="button" onClick={state.onRetry} className="focus-ring relative mt-1 min-h-0 rounded-md border px-2.5 py-1 text-label font-medium before:absolute before:-inset-y-1 before:inset-x-0 before:content-[''] hover:bg-surface-hover">
                 Try again
               </button>
             ) : null}

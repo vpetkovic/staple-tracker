@@ -63,3 +63,26 @@
     min-width: 1ch;
   }
 }
+
+/*
+ * Forced colours (Windows contrast themes). The UA repaints every background as the system
+ * Canvas, which would erase the marks: they are background fills, and their colour is the data.
+ * So a mark (`data-mark`) keeps its own colour, a track or gridline is drawn in a system colour,
+ * and the active slot or cell gets a Highlight outline (the box-shadow ring is dropped there).
+ */
+@media (forced-colors: active) {
+  [data-mark] {
+    forced-color-adjust: none;
+  }
+  [data-track] {
+    outline: 1px solid CanvasText;
+  }
+  [data-gridline] {
+    forced-color-adjust: none;
+    background: GrayText !important;
+  }
+  [data-active] {
+    outline: 2px solid Highlight;
+    outline-offset: 1px;
+  }
+}
