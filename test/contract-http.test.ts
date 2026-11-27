@@ -413,6 +413,11 @@ describe("KNOWN: logical errors this surface cannot project", () => {
     expect(routes.sort()).toEqual([
       "/api/action",
       "/api/agent-context",
+      /**
+       * The Analytics page (`src/core/analytics/contract.ts`): the metrics read, GET-only.
+       * `test/analytics-http.test.ts` pins it against the core read.
+       */
+      "/api/analytics",
       // The attention list (core/attention.ts): the read, and the one dismissal write.
       "/api/attention",
       "/api/attention/dismiss",

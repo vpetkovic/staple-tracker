@@ -23,10 +23,12 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileS
 import { dirname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Hub, describeAbsentRow, notifyHubResolvedSafe } from "../core/hub.js";
+import { readAnalytics, type AnalyticsScope } from "../core/analytics/service.js";
 import { openWorkspace, resolveWorkspace } from "../core/workspace.js";
 import {
   StapleError,
   errorEnvelope,
+  nowIso,
   type IssuePriority,
   type IssueStatus,
   type ProjectKind,
@@ -827,6 +829,36 @@ export function startUiServer(options: UiOptions): UiHandle {
     if (!options.hub) return [handleFor()];
     handleFor(); // populate cache
     return [...stores.values()];
+  }
+
+  /**
+   * The workspaces an Analytics read covers (`scope` on `/api/analytics*`): one named
+   * workspace, or `hub` (the default in hub mode) for every workspace this machine's hub
+   * registers. A registered workspace that cannot be opened is still named, `available:
+   * false`, so the page can say its figures are missing rather than silently smaller.
+   */
+  function analyticsScope(wanted: string | null): AnalyticsScope {
+    const one = (handle: StoreHandle): AnalyticsScope => ({
+      kind: "workspace",
+      sources: [{ slug: handle.slug, prefix: handle.prefix, db: handle.store.db }],
+      refs: [{ slug: handle.slug, prefix: handle.prefix, available: true }],
+    });
+    if (!options.hub) return one(handleFor());
+    if (wanted !== null && wanted !== "" && wanted !== "hub") return one(handleFor(wanted));
+    const hub = Hub.open();
+    let entries: Array<{ slug: string; prefix: string; available: boolean }>;
+    try {
+      entries = hub.list();
+    } finally {
+      hub.close();
+    }
+    handleFor(); // opens every available workspace into the cache
+    const opened = entries.map((entry) => ({ entry, handle: entry.available ? stores.get(entry.slug) : undefined }));
+    return {
+      kind: "hub",
+      sources: opened.flatMap(({ handle }) => (handle ? [{ slug: handle.slug, prefix: handle.prefix, db: handle.store.db }] : [])),
+      refs: opened.map(({ entry, handle }) => ({ slug: entry.slug, prefix: entry.prefix, available: handle !== undefined })),
+    };
   }
 
   function json(res: ServerResponse, status: number, payload: unknown, headers: Record<string, string> = {}): void {
@@ -4389,6 +4421,27 @@ export function startUiServer(options: UiOptions): UiHandle {
             cursor: url.searchParams.get("cursor") ?? undefined,
             for: listOf("for"),
             model: url.searchParams.get("model") ?? undefined,
+          }),
+        );
+        return;
+      }
+
+      /**
+       * The Analytics page's metrics (`src/core/analytics/contract.ts`, `AnalyticsReport`): one
+       * workspace or the hub, over `from`..`to` in `tz`. Read-only, replicated data only, so
+       * two devices holding the same workspaces answer the same.
+       */
+      if (url.pathname === "/api/analytics") {
+        const query = url.searchParams;
+        json(
+          res,
+          200,
+          readAnalytics(analyticsScope(query.get("scope")), {
+            from: query.get("from") ?? undefined,
+            to: query.get("to") ?? undefined,
+            tz: query.get("tz") ?? undefined,
+            bucket: query.get("bucket") ?? undefined,
+            now: nowIso(),
           }),
         );
         return;
