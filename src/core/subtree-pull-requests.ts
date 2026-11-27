@@ -60,8 +60,7 @@ export function subtreePullRequestsFor(
   const result = new Map<string, SubtreePullRequest[]>();
   if (rootIds.length === 0) return result;
   const hideIdeas = store.planningOn() ? 0 : 1;
-  // Pre-order by the path of creation times from the root, two made in the same millisecond in
-  // the order they were made (rowid; an id is random); the depth cap stops a corrupt cycle.
+  // Pre-order by the path of creation times from the root; the depth cap stops a corrupt cycle.
   const rows = store.db
     .prepare(
       `WITH RECURSIVE sub(root, top, id, identifier, title, path, depth) AS (
@@ -69,7 +68,7 @@ export function subtreePullRequestsFor(
           WHERE i.id IN (SELECT value FROM json_each(?))
             AND EXISTS (SELECT 1 FROM issues c WHERE c.parent_id = i.id AND (? = 0 OR c.kind <> '${IDEA_KIND}'))
          UNION ALL
-         SELECT sub.root, COALESCE(sub.top, c.id), c.id, c.identifier, c.title, sub.path || '/' || c.created_at || printf('%020d', c.rowid), sub.depth + 1
+         SELECT sub.root, COALESCE(sub.top, c.id), c.id, c.identifier, c.title, sub.path || '/' || c.created_at || c.id, sub.depth + 1
            FROM sub JOIN issues c ON c.parent_id = sub.id
           WHERE sub.depth < ${MAX_TREE_DEPTH} AND (? = 0 OR c.kind <> '${IDEA_KIND}')
        )
