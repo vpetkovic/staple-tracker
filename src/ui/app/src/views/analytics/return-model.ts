@@ -15,8 +15,10 @@
  * AI spend is assigned, never split by a formula: each subscription (a price × how many) and each
  * API bill belongs to the role whose agents use it, or to the whole team. A role's AI cost is the
  * sum of its own lines for the period.
- * Spend and directing time belong to the person, not to a workspace: a single-workspace view
- * takes the share of both that matches its share of agent time.
+ * Roles come from the work: a role that caught no ticket in scope is not part of this team, so it
+ * is left out and its AI lines cost nothing here. On a single workspace a role's lines count for
+ * that workspace's share of the role's agent time; shared lines and directing time count for the
+ * workspace's share of all agent time.
  */
 import type { CostModel, CostProfile, ReturnReport, SpendLine } from "./proto-api";
 
@@ -44,6 +46,10 @@ export interface RoleLine {
   aiCost: number;
   tickets: number;
   estimatedTickets: number;
+  /** Did any of this role's work happen in scope? A role with none is left out of the page and of the cost. */
+  present: boolean;
+  /** The part of the role's AI lines this scope carries: 1 for every workspace, else this workspace's share of the role's agent time. */
+  share: number;
 }
 export interface ValueSide {
   hours: number;
@@ -96,18 +102,23 @@ export function computeReturn(report: ReturnReport, model: CostModel): ReturnRes
   const months = report.period.months;
   const profile = profileOf(model);
   const known = new Set(model.roles.map((role) => role.id));
-  const ai = (line: SpendLine): AiLine => ({ id: line.id, label: line.label, kind: line.kind, perMonth: line.perMonth, quantity: line.quantity, monthly: lineCost(line), cost: lineCost(line) * months * share });
+  const all = report.scope.kind === "all";
+  const ai = (line: SpendLine, part: number): AiLine => ({ id: line.id, label: line.label, kind: line.kind, perMonth: line.perMonth, quantity: line.quantity, monthly: lineCost(line), cost: lineCost(line) * months * part });
   const total = (lines: readonly AiLine[]) => lines.reduce((sum, line) => sum + line.cost, 0);
   const roles: RoleLine[] = model.roles.map((role) => {
     const hours = report.roles.find((row) => row.roleId === role.id);
     const rate = rateOf(model, role.id);
     const measuredHours = hours?.measuredHours ?? 0;
     const plannedHours = hours?.plannedHours ?? 0;
-    const aiLines = profile.spend.filter((line) => line.roleId === role.id).map(ai);
-    return { roleId: role.id, title: role.title, rate, measuredHours, plannedHours, measuredValue: measuredHours * rate, plannedValue: plannedHours * rate, aiLines, aiCost: total(aiLines), tickets: hours?.tickets ?? 0, estimatedTickets: hours?.estimatedTickets ?? 0 };
+    // Roles come from the work: one that caught nothing in scope is not part of this team and costs nothing here.
+    const present = (hours?.tickets ?? 0) > 0 || measuredHours > 0;
+    const hubHours = hours?.hubMeasuredHours ?? 0;
+    const part = !present ? 0 : all ? 1 : hubHours > 0 ? Math.min(1, measuredHours / hubHours) : 0;
+    const aiLines = present ? profile.spend.filter((line) => line.roleId === role.id).map((line) => ai(line, part)) : [];
+    return { roleId: role.id, title: role.title, rate, measuredHours, plannedHours, measuredValue: measuredHours * rate, plannedValue: plannedHours * rate, aiLines, aiCost: total(aiLines), tickets: hours?.tickets ?? 0, estimatedTickets: hours?.estimatedTickets ?? 0, present, share: part };
   });
   // A line with no role, or for a role that no longer exists, is the whole team's.
-  const sharedLines = profile.spend.filter((line) => line.roleId === null || !known.has(line.roleId)).map(ai);
+  const sharedLines = profile.spend.filter((line) => line.roleId === null || !known.has(line.roleId)).map((line) => ai(line, share));
   const sharedAiCost = total(sharedLines);
   const aiSpend = sharedAiCost + roles.reduce((sum, role) => sum + role.aiCost, 0);
   const directingHours = report.directing.activeDays * profile.person.hoursPerActiveDay * share;

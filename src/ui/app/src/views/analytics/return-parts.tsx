@@ -5,7 +5,7 @@
  * The cost model is the person's. A figure nobody has changed yet is marked as an assumption
  * rather than passed off as a fact.
  */
-import { CircleDashed, Plus } from "lucide-react";
+import { CircleDashed, Plus, X } from "lucide-react";
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import type { Billing, CostModel, CostProfile, CostRole, ReturnReport, RoleMatch, Scenario, SpendLine } from "./proto-api";
@@ -160,14 +160,14 @@ export function AddButton({ onClick, children }: { onClick: () => void; children
   );
 }
 
-// ---------------------------------------------------------------- a role, opened
+// ---------------------------------------------------------------- how a role is recognized
 
-const MATCH_FIELDS: { key: keyof RoleMatch; label: string; lead: string; placeholder: string }[] = [
-  { key: "labels", label: "Labels", lead: "labelled", placeholder: "design, ux" },
-  { key: "title", label: "Words in the title", lead: "titled with", placeholder: "redesign, layout" },
-  { key: "agent", label: "Agent name contains", lead: "done by agents named", placeholder: "design" },
-  { key: "kinds", label: "Ticket kinds", lead: "of kind", placeholder: "spike" },
-  { key: "workspaces", label: "Whole workspaces", lead: "in workspace", placeholder: "FDS" },
+export const MATCH_FIELDS: { key: keyof RoleMatch; label: string; lead: string; placeholder: string }[] = [
+  { key: "labels", label: "Ticket labels", lead: "labelled", placeholder: "Add a label" },
+  { key: "title", label: "Words in the title", lead: "titled with", placeholder: "Add a word" },
+  { key: "agent", label: "Agent name contains", lead: "done by agents named", placeholder: "Add a name" },
+  { key: "kinds", label: "Ticket kinds", lead: "of kind", placeholder: "Add a kind" },
+  { key: "workspaces", label: "Whole workspaces", lead: "in workspace", placeholder: "Add a prefix" },
 ];
 
 /** "labelled docs or documentation; titled with readme, guide…" */
@@ -179,60 +179,51 @@ export function coversWords(match: RoleMatch): string {
   return parts.join("; ");
 }
 
-/**
- * A role, opened: the rule that sends work to it (editable) beside every ticket the rule caught in
- * this period, each with why. Roles are tried top to bottom and the last takes everything else,
- * so a ticket lands on exactly one; this is where a wrong guess gets noticed and fixed.
- */
-export function RoleDetail({ model, role, last, hours, onChange, className, explain }: { model: CostModel; role: CostRole; last: boolean; hours: ReturnReport["roles"][number] | undefined; onChange: ReturnProps["onChange"]; className?: string; /** How this role's figures were worked out, in sentences. */ explain?: ReactNode }) {
+/** A small tag: a label, a word, a name. With `onRemove` it carries its own remove button. */
+export function Chip({ children, tone = "plain", onRemove, removeLabel }: { children: ReactNode; tone?: "plain" | "quiet"; onRemove?: () => void; removeLabel?: string }) {
   return (
-    <div className={cn("grid gap-4 rounded-lg bg-surface-sunken p-3 @min-[640px]/roles:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]", className)} data-role-detail>
-      {explain ? <div className="min-w-0 @min-[640px]/roles:col-span-2">{explain}</div> : null}
-      {last ? null : (
-        <div className="flex min-w-0 flex-col gap-2">
-          <p className="text-label font-medium">A ticket counts as {role.title} when it has any of</p>
-          {MATCH_FIELDS.map((field) => (
-            <ListField key={field.key} label={field.label} placeholder={field.placeholder} values={role.match[field.key]} onCommit={(values) => onChange(edits.roleMatch(model, role.id, { ...role.match, [field.key]: values }), { rematch: true })} />
-          ))}
-        </div>
-      )}
-      <div className={cn("min-w-0", last && "@min-[640px]/roles:col-span-2")}>
-        <p className="text-label font-medium">
-          {last ? "Everything no other role matched" : "Tickets it caught"} in this period
-          {hours ? <span className="ml-1.5 font-normal text-muted-foreground tabular-nums">{hours.tickets.toLocaleString("en-US")}</span> : null}
-        </p>
-        {hours && hours.examples.length > 0 ? (
-          <ul className="mt-1.5 max-h-60 space-y-1 overflow-y-auto pr-1 text-label">
-            {hours.examples.map((ticket) => (
-              <li key={ticket.ref} className="flex min-w-0 items-baseline gap-2">
-                <span className="w-16 shrink-0 text-muted-foreground tabular-nums">{ticket.ref}</span>
-                <span className="min-w-0 flex-1 truncate">{ticket.title}</span>
-                {ticket.by === "rest" ? null : <span className="shrink-0 rounded-full border bg-card px-1.5 text-caption text-muted-foreground">{ticket.by}</span>}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="mt-1.5 text-label text-muted-foreground">No finished ticket matched in this period.</p>
-        )}
-        {hours && hours.tickets > hours.examples.length ? <p className="mt-1.5 text-caption text-text-tertiary">Showing the first {hours.examples.length}.</p> : null}
+    <span className={cn("inline-flex h-[22px] max-w-full items-center gap-1 rounded-full border px-2 text-label", tone === "quiet" ? "border-transparent bg-surface-sunken text-muted-foreground" : "bg-card text-foreground")} data-chip>
+      <span className="truncate">{children}</span>
+      {onRemove ? (
+        <button type="button" aria-label={removeLabel} onClick={onRemove} className="focus-ring relative -mr-1 inline-flex size-4 min-h-0 shrink-0 items-center justify-center rounded-full text-text-tertiary before:absolute before:-inset-2 before:content-[''] hover:bg-surface-hover hover:text-foreground">
+          <X aria-hidden className="size-3" />
+        </button>
+      ) : null}
+    </span>
+  );
+}
+
+/** One part of a role's rule as chips: remove one with its ×, add one by typing and pressing Enter or a comma. */
+export function ChipField({ label, placeholder, values, onCommit }: { label: string; placeholder: string; values: readonly string[]; onCommit: (values: string[]) => void }) {
+  const id = useId();
+  const [text, setText] = useState("");
+  const add = (source: string = text) => {
+    const next = source.split(",").map((value) => value.trim()).filter((value) => value !== "" && !values.includes(value));
+    setText("");
+    if (next.length > 0) onCommit([...values, ...next]);
+  };
+  return (
+    <div className="min-w-0" data-chip-field>
+      <label htmlFor={id} className="mb-1 block text-label text-muted-foreground">{label}</label>
+      <div className="flex min-h-control-md flex-wrap items-center gap-1 rounded-md border bg-card px-1.5 py-1 focus-within:outline-2 focus-within:outline-offset-1 focus-within:outline-ring">
+        {values.map((value) => (
+          <Chip key={value} tone="quiet" onRemove={() => onCommit(values.filter((item) => item !== value))} removeLabel={`Remove ${value}`}>
+            {value}
+          </Chip>
+        ))}
+        <input
+          id={id}
+          value={text}
+          placeholder={values.length === 0 ? placeholder : ""}
+          onChange={(event) => (event.target.value.includes(",") ? add(event.target.value) : setText(event.target.value))}
+          onBlur={() => add()}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") { event.preventDefault(); add(); }
+            if (event.key === "Backspace" && text === "" && values.length > 0) onCommit(values.slice(0, -1));
+          }}
+          className="h-[22px] min-h-0 min-w-[5rem] flex-1 bg-transparent px-1 text-label outline-none placeholder:text-text-tertiary"
+        />
       </div>
     </div>
   );
 }
-
-function ListField({ label, placeholder, values, onCommit }: { label: string; placeholder: string; values: string[]; onCommit: (values: string[]) => void }) {
-  const id = useId();
-  const [text, setText] = useState(values.join(", "));
-  useEffect(() => setText(values.join(", ")), [values]);
-  const commit = () => {
-    const next = text.split(",").map((value) => value.trim()).filter(Boolean);
-    if (next.join("|") !== values.join("|")) onCommit(next);
-  };
-  return (
-    <div className="grid grid-cols-[8.5rem_1fr] items-center gap-2 @max-[420px]/roles:grid-cols-1 @max-[420px]/roles:gap-1">
-      <label htmlFor={id} className="text-label text-muted-foreground">{label}</label>
-      <input id={id} value={text} placeholder={placeholder} onChange={(event) => setText(event.target.value)} onBlur={commit} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} className="focus-ring h-7 min-h-0 min-w-0 rounded-md border bg-card px-2 text-label placeholder:text-text-tertiary" />
-    </div>
-  );
-}
-

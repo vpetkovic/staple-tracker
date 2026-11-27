@@ -184,7 +184,7 @@ export function AnalyticsView({ onAuthError }: { onAuthError: (error: AuthError)
   } else if (lens === "overview") {
     body = <OverviewBoard report={data} returns={returnData} model={model} against={against} onOpenReturn={() => chooseLens("return")} onOpenTicket={(workspace, ref) => session.open(workspace, ref)} />;
   } else {
-    body = <ReturnPage returns={returnData} model={model} error={returns.error} onRetry={returns.reload} onChange={changeModel} saving={saving} />;
+    body = <ReturnPage returns={returnData} model={model} error={returns.error} onRetry={returns.reload} onChange={changeModel} saving={saving} onOpenTicket={(workspace, ref) => session.open(workspace, ref)} />;
   }
 
   return (

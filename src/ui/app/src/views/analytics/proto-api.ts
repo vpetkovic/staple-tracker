@@ -169,6 +169,19 @@ export interface CostModel {
   profiles: Record<Scenario, CostProfile>;
   updatedAt: string | null;
 }
+export interface RoleTicket {
+  ref: string;
+  title: string;
+  /** Which part of the rule caught it: label, title, agent, kind, workspace, or rest (the catch-all). */
+  by: string;
+  plannedHours: number | null;
+  agentHours: number;
+  /** The workspace's prefix and slug. */
+  workspace: string;
+  slug: string;
+  labels: string[];
+  kind: string;
+}
 export interface RoleHours {
   roleId: string;
   measuredHours: number;
@@ -176,8 +189,11 @@ export interface RoleHours {
   tickets: number;
   estimatedTickets: number;
   attempts: number;
+  /** The same role's agent time on every workspace of this computer, for a single workspace's share of the role's AI cost. */
+  hubMeasuredHours: number;
   by: Record<"label" | "title" | "agent" | "kind" | "workspace" | "rest", number>;
-  examples: { ref: string; title: string; by: string; plannedHours: number | null }[];
+  /** The finished tickets the role caught in scope, each with why. */
+  examples: RoleTicket[];
 }
 export interface ReturnReport {
   scope: AnalyticsReport["scope"];
