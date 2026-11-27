@@ -146,7 +146,8 @@ describe("version detection", () => {
     // Then workspace 19 -> 20 (020-plan-fields, the plan columns on issues), hub still 8.
     // Then workspace 20 -> 21 (021-plan-delivered, the delivered-outside-the-tracker day), hub still 8.
     // ... and on to 29 (029-plan-explored, an idea made more complete while raw), hub still 8.
-    expect(latestVersion(WORKSPACE_TARGET)).toBe(29);
+    // ... and 30 (030-plan-blockers, edges between plan records), hub still 8.
+    expect(latestVersion(WORKSPACE_TARGET)).toBe(30);
     expect(latestVersion(HUB_TARGET)).toBe(8);
   });
 });

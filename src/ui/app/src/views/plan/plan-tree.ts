@@ -80,6 +80,7 @@ export function stepLabel(step: PlanStepData | null): StepLabel | null {
   switch (step.need) {
     case "wait": {
       const parts = [
+        step.waitingOn?.parents?.length ? (step.waitingOn.parents.length === 1 ? "waiting on parent" : "waiting on parents") : null,
         step.waitingOn?.start ? `starts ${dayLabel(step.waitingOn.start, false)}` : null,
         step.waitingOn?.records?.length ? `waits on ${step.waitingOn.records.map((record) => record.title).join(", ")}` : null,
       ].filter((part): part is string => part !== null);

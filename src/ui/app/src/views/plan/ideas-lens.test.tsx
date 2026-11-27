@@ -49,7 +49,7 @@ function idea(id: string, extra: Partial<IdeaData> = {}): IdeaData {
     openQuestions: 0,
     planIncomplete: [],
     completeness: { starred: 0, starredTotal: 3, filled: 0, total: 10 },
-    dependsOn: [],
+    dependsOn: [], blockedBy: [], heldBy: null,
     state: "raw",
     actions: [],
     createdAt: "2026-11-17T09:30:00.000Z",

@@ -5,7 +5,7 @@
  */
 import { useLayoutEffect, useRef, useState, type FormEvent, type ReactNode, type RefObject } from "react";
 import { Input } from "@/components/ui/input";
-import type { HorizonData, IdeaData, IdeaState, PlanUnits } from "@/lib/plan-types";
+import { holdChip, holdNames, type HorizonData, type IdeaData, type IdeaState, type PlanUnits } from "@/lib/plan-types";
 import { cn } from "@/lib/utils";
 import { STATE_WORDS } from "@/detail/plan-record";
 import { ShippedCheck, ShippedMark } from "@/detail/ShippedMark";
@@ -275,6 +275,12 @@ export function DeliveryChips({ idea, children }: { idea: IdeaData; children?: R
   const chips: ReactNode[] = [<StateGlyph key="s" state={idea.state} percent={idea.percent} word />];
   // Shaped, but its plan no longer passes the gate: shown here, flagged, and held back from Scaffold.
   if (planIncomplete(idea)) chips.push(<Amber key="pi" data-plan-card-incomplete="">plan incomplete</Amber>);
+  const held = holdChip(idea);
+  if (held && idea.heldBy) chips.push(
+      <span key="held" title={holdNames(idea.heldBy)}>
+        <Amber data-plan-card-held={held}>{held}</Amber>
+      </span>,
+    );
   if (idea.linkCount > 0) chips.push(<span key="l" className="text-text-tertiary">{idea.linkCount} linked</span>);
   if (idea.late) chips.push(<Flag key="late" tone="late" />);
   if (idea.notStarted) chips.push(<Flag key="ns" tone="notStarted" />);

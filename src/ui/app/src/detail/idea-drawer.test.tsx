@@ -58,7 +58,7 @@ function idea(patch: Partial<IdeaData> = {}): IdeaData {
     openQuestions: 0,
     planIncomplete: [],
     completeness: { starred: 3, starredTotal: 3, filled: 7, total: 10 },
-    dependsOn: [],
+    dependsOn: [], blockedBy: [], heldBy: null,
     state: "exploring",
     actions: [...EDITS, act("shape", { disabledReason: "It needs 1 open question answered or deferred before it is shaped." })],
     createdAt: "2026-11-01T00:00:00.000Z",

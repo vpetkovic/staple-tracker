@@ -93,7 +93,7 @@ import { sharedLine, sharedStatus } from "./core/cloud/shared-status.js";
 import { readConnection } from "./core/cloud/connection.js";
 import { format } from "node:util";
 import { hideDraftIdentifiers, publicOutput } from "./core/plan.js";
-import { scaffoldedFromWords, sparkedIdeaWords } from "./core/plan-provenance-words.js";
+import { parentUnsettledWords, scaffoldedFromWords, sparkedIdeaWords } from "./core/plan-provenance-words.js";
 import { assertHandoffStatus, assertHandoffWorklog, worklogNudge } from "./core/worklog-standing.js";
 
 /**
@@ -1312,7 +1312,12 @@ The plan (experimental; features.planning defaults off)
               would make (estimate, blockers, acceptance, a context document each), what
               holds it back, and its fingerprint; --confirm FP makes exactly that preview
               and is refused when the plan changed since; a retry makes only what is missing.
-              Each task keeps the idea and row it came from: show prints "from I-STA-n · row K"
+              Each task keeps the idea and row it came from: show prints "from I-STA-n · row K".
+              A sub-idea is scaffolded (or promoted) only once every idea above it is shaped
+              and what it is blocked by has shipped; until then it reads "shaped · waiting on
+              parent" and may still be scheduled on any horizon. A parent going back to
+              exploring or dropped flags the tickets already scaffolded beneath it, never
+              cancels them
   idea convert <ref>                    a ticket that should have been an idea becomes a raw idea
               on the same record: its comments, documents, files and history stay, and its
               ticket number still names it. Its children become its sub-ideas. Refused,
@@ -1325,6 +1330,11 @@ The plan (experimental; features.planning defaults off)
               start the idea or count toward its progress or horizon; a raw idea takes
               research too, which moves it to exploring
   idea unlink <ref> <issue>             remove a link, work or research
+  idea block <ref> <idea>               the idea waits on another plan record: until that one has
+              shipped (or is dropped) its Scaffold and Promote are refused and its plan
+              step waits. Refused for itself, an idea above or beneath it, or a loop
+  idea unblock <ref> <idea>             remove that edge. Text in the Dependencies section keeps
+              naming records it waits on; only these edges hold Scaffold back
   idea ask <ref> <question>             add an open question
   idea resolve <ref> <n> [--reopen]     resolve question n (1-based)
   idea defer <ref> <n> [--reopen]       leave question n open on purpose: it no longer holds
@@ -1908,6 +1918,7 @@ function main() {
       }
       if (ctx.scaffoldedFrom) {
         console.log(`${scaffoldedFromWords(ctx.scaffoldedFrom)}: ${ctx.scaffoldedFrom.title}`);
+        if (ctx.scaffoldedFrom.parentUnsettled) console.log(`flagged:    ${parentUnsettledWords(ctx.scaffoldedFrom.parentUnsettled)} since this was scaffolded; nothing was cancelled`);
       }
       if (ctx.sparkedBy) {
         console.log(`sparked by: ${ctx.sparkedBy.identifier}(${ctx.sparkedBy.status}) ${ctx.sparkedBy.title}`);

@@ -30,6 +30,7 @@ import { migration as m026 } from "./026-idea-numbers.js";
 import { migration as m027 } from "./027-plan-link-purpose.js";
 import { migration as m028 } from "./028-plan-ticket-number.js";
 import { migration as m029 } from "./029-plan-explored.js";
+import { migration as m030 } from "./030-plan-blockers.js";
 
 /**
  * The workspace database — the per-repo (or global) task store.
@@ -81,13 +82,14 @@ import { migration as m029 } from "./029-plan-explored.js";
  * number) follows: one nullable `issues` column, the number a ticket converted into an idea keeps, that rides the `issue` entity as a field, like 026's.
  * `plan_links` column, delivery or exploration, that rides the link's own field of the idea's `milestone` entity. 028 (the kept ticket
  * number) follows: one nullable `issues` column, the number a ticket converted into an idea keeps, that rides the `issue` entity as a field, like 026's. 029 (explored) follows: one nullable
- * `issues` column, set once an idea is made more complete while raw, that rides the `issue` entity as a field, like 021's.
+ * `issues` column, set once an idea is made more complete while raw, that rides the `issue` entity as a field, like 021's. 030 (idea blockers)
+ * follows: `plan_blockers`, one row per edge between plan records, each a field of the blocked record's `milestone` entity, like 020's links.
  */
 export const WORKSPACE_TARGET: MigrationTarget = {
   label: "workspace database",
   // `issues` has existed since version 1, so its absence means an empty file.
   sentinelTable: "issues",
-  migrations: [m001, m002, m003, m004, m005, m006, m007, m008, m009, m010, m011, m012, m013, m014, m015, m016, m017, m018, m019, m020, m021, m022, m023, m024, m025, m026, m027, m028, m029],
+  migrations: [m001, m002, m003, m004, m005, m006, m007, m008, m009, m010, m011, m012, m013, m014, m015, m016, m017, m018, m019, m020, m021, m022, m023, m024, m025, m026, m027, m028, m029, m030],
   consolidated: CONSOLIDATED_DDL,
 };
 
