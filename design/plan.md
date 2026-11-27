@@ -486,7 +486,38 @@ converted before its create reached the log keeps the number it had here; if an 
 the log gave that number to another ticket, the live identifier names that ticket and the kept
 number only says what the idea was called on this device.
 
-**Import** (`staple idea import <plan.md>`, `PlanStore.importPlan`) reads a plan file into one
+**Ideas from files.** A person uploads a file in the Plan view (**Import** on the toolbar, any
+lens: `/api/plan/import`, the file's name and its bytes base64, and the stage they picked), an
+agent calls `import_idea` (`path`, `content` or `bytes_base64`, and a `filename`), or anyone runs
+`staple idea import <file>`; all three are `PlanStore.importPlan` (`plan-import.ts` reads the
+file). It takes a `.md` (or `.markdown`), `.html` (or `.htm`) or `.jsx` file, and refuses any
+other name, a file that is not UTF-8 text, an empty one and one over the file cap, writing
+nothing. The original is attached to the idea under **Files**, byte for byte (an attachment, never
+a document), and listed as a source. Markdown maps to sections as below; an HTML page gives only
+its title (its `<title>`, else its first `<h1>`, else the file name) and a JSX file its name: the
+rest stays in the file. A maturity is the person's (the page's stage picker, the CLI's
+`--maturity` with `--person`; `import_idea` takes none).
+
+**Classify.** An import with no maturity chosen is captured raw and **waits to be classified**:
+it writes the synced document `classify`, whose body is the file's name. While that document
+holds a name and the record reads raw, its plan step is `classify` (who: agent): read the file,
+fill the plan from it (which moves it to exploring by enrichment), and propose it shaped once it
+passes the gate, or leave it raw on purpose with `classified` (`update_idea classified: true`,
+`staple idea set --classified`, anyone's, refused when no classify step stands). Unlike other
+steps it is the record's `nextStep` whether or not a horizon carries it, with `horizonId` null
+when none does; where a horizon carries it, it is the horizon's step in place of `brainstorm`.
+Proposing it shaped and `classified` empty the document; enrichment and the person's maturity
+moves settle it with no write, since the step reads raw state (a dropped import the person restores
+into raw was never classified, so its step returns). A converted ticket's own `classify` document
+is emptied by the conversion: it is not an import's request. Only a horizon that carries the record
+lists the step in its `planSteps` and pickups; an uncarried import's step is on the record alone
+(`list_ideas`, `get_idea`, `idea show`, and *(to classify)* in `idea ls`). A file over the inline
+limit keeps its bytes on the importing device, and the step says to classify it there. A raw write of the key is refused.
+Every view reads the waiting imports in one statement. Two devices that settle one import offline
+write the same empty body or touch different fields (an enrichment writes `plan_explored`), so
+every device, a fresh one included, reads the same step with no conflict.
+
+**Import** of Markdown reads a plan file into one
 idea, in one transaction: the first heading outside a code fence is the title, the text before the
 first section is the brief, and each `##` heading is mapped by its words (Goal, Task or Step
 breakdown, Acceptance criteria, Out of scope, Risk, Open questions, Dependencies, Decisions or
@@ -908,6 +939,7 @@ its nearest scheduled ancestor's; [Accounting](#accounting)) that is not shipped
 | record | `need` | `who` | its instruction says, and it lists |
 |---|---|---|---|
 | raw or exploring, proposed shaped, no open question and the gate met | `mark_shaped` | person | the person accepts the proposal with Mark shaped, or dismisses it |
+| raw, imported from a file with no maturity chosen and not classified yet (any record, carried or not; [Ideas from files](#converting-a-ticket-into-an-idea), "Ideas from files") | `classify` | agent | read the attached file, fill the plan from it (which moves it to exploring) and propose it shaped once it passes the gate, or leave it raw with `classified`; scheduling and marking it shaped stay the person's |
 | raw, or exploring and scheduled on no horizon itself (a descendant the horizon carries) | `brainstorm` | agent | develop it and capture the result on the idea (which moves a raw one to exploring); scheduling and marking it shaped stay the person's, who may be sent a proposal |
 | exploring, with questions neither resolved nor deferred | `answer_questions` | person | bring these questions to the person and record each answer with resolve; never mark it shaped yourself. Lists `questions` |
 | exploring, no open question, the shaped gate not met | `write_plan` | agent | write what the gate names, then tell the person. Lists `missing` |
@@ -1148,7 +1180,7 @@ Records group parent to children in plan order, and a parent folds its sub-ideas
   plan step in a few words (`nextStep`), in the foreground weight when it waits on the person:
   `wait` reads *starts <date>* or *waits on <record>*, `scaffold` *ready to scaffold*,
   `answer_questions` *needs you: n questions*, `write_plan` and `fix_plan` *plan needed*,
-  `mark_shaped` *ready to mark shaped*, `brainstorm` *to develop*. Started work with no step
+  `mark_shaped` *ready to mark shaped*, `brainstorm` *to develop*, `classify` *to classify*. Started work with no step
   reads `linkCount` and `units.open`.
 - *Planned*: the `planned` window, empty once shipped.
 
@@ -1421,6 +1453,8 @@ What converges, under both folds, on a tail device and a freshly hydrated one:
 | `test/plan-delivered.test.ts`, `test/cloud-plan-delivered-sync.test.ts` | a record delivered outside the tracker: shipped with no ticket and no number, never a member, queued, checked out or listed; late only when delivered after its line, never not started; offered in exploring and shaped only; its day required and not in the future; the person's alone, an agent told what to do instead; its edits and the clear; the note kept to the mark; reopened by open work linked since; refused with planning off and back when it is on; the same on a tail device and a fresh one under both folds |
 | `test/plan-surfaces.test.ts` | CLI, MCP and HTTP read one plan with no idea numbers and no draft shown on any surface, consume no number at capture, refuse the same agent writes, promote into the horizon's milestone, and let the person steer |
 | `test/plan-lifecycle.test.ts` | the table itself, pinned: every state's actions, who takes each, the promoted record's epic edits, Mark shaped on a record started while exploring, adopt from exploring on and never raw, back to raw offered nowhere, how a maturity change is named, the delivered mark in exploring and shaped and the marked record's edits and clear |
+| `test/plan-import-file.test.ts` | ideas from files: Markdown mapped to sections, HTML and JSX titled, each original attached byte for byte; other types, binary, empty and nameless files refused writing nothing; the classify step with no maturity chosen, none when one is, settled by enrichment, a proposal, `classified` or the person's move, never by a raw document; a carried sub-idea's step in place of brainstorm; one read for every waiting import; the same on a received and a fresh device, and two devices settling it converge with no conflict under both folds |
+| `test/plan-import-file-surfaces.test.ts` | the page, the CLI and `import_idea` answer the same import and file; the stage the person's on the page and the CLI, never an agent's; `classified` on each surface; refusals on each |
 | `test/plan-maturity-enrichment.test.ts` | maturity moves by enrichment: each plan write on a raw idea (section, row, question asked, answered or deferred, decision, research, a raw section document) explores it for an agent and the person alike; capture, import and title or brief edits do not; the shaped proposal is held to the gate, waits under Needs you, is accepted or dismissed only by the person; migration 029; and two devices converge with no conflict, the person's shape or drop standing over an agent's enrichment, on a tail and a fresh device under both folds |
 | `test/plan-lifecycle-surfaces.test.ts` | every idea (state, write) cell and every horizon (state, action) cell agrees with the table on HTTP, MCP and the CLI with and without `--person`; every payload carries exactly the table's row; a record started while exploring carries the started row and Mark shaped, and only the person shapes it; a record delivered outside the tracker carries the shipped row with its edits and the clear, the mark and the clear are the person's on every surface, and a mark without a day is refused before anything is written; every document and file write in every state |
 | `test/plan-own-state.test.ts` | with hand-written expectations: a parent's own state against its rollup; a sub-idea promoted on its own and re-parented by its parent's promotion; a promoted record edited as an epic once shipped; an exploring idea that adopts work reads started, keeps its maturity, offers Mark shaped, joins its horizon, keeps its baseline and stays out of the tracker; every document key, restore and file on a shipped, dropped or raw idea |

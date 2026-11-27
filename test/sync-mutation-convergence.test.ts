@@ -486,7 +486,7 @@ const SCENARIOS: readonly Scenario[] = [
     name: "import a plan file",
     run: (w) =>
       void (w.ids["Imported"] = w.a.store.plan().importPlan(
-        { name: "plan.md", markdown: "# Imported plan\n\n## Goal\n\nShip it.\n\n## Task breakdown\n\n| # | Task | Est. |\n|---|---|---|\n| 1 | Build | 2h |\n\n## Acceptance criteria\n\n- Works\n" },
+        { name: "plan.md", content: "# Imported plan\n\n## Goal\n\nShip it.\n\n## Task breakdown\n\n| # | Task | Est. |\n|---|---|---|\n| 1 | Build | 2h |\n\n## Acceptance criteria\n\n- Works\n" },
         {},
         "alice",
       ).idea.idea.id),

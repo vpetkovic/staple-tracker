@@ -294,7 +294,7 @@ describe("Scaffold", () => {
 describe("import", () => {
   it("captures one idea from a plan file: its sections, questions, decisions, and the file attached", () => {
     const markdown = `# PLAN-7 — Checkout API\n\n## 1. Goal\n\nShip it.\n\n## 2. Decisions\n\n### 2.1 Dated versions\n\nYes.\n\n## 3. Task breakdown\n\n| # | Task | Est. | Depends on |\n|---|---|---|---|\n| 7.1 | Spike | 3h | — |\n| 7.2 | Build | 5h | 7.1 |\n\n## 4. Acceptance criteria\n\n- [ ] Works\n\n## 5. Open questions\n\n- [ ] Webhooks?\n`;
-    const result = plan.importPlan({ name: "PLAN-7-checkout.md", markdown }, {}, "agent");
+    const result = plan.importPlan({ name: "PLAN-7-checkout.md", content: markdown }, {}, "agent");
     expect(result.rows).toBe(2);
     expect(result.warnings).toEqual([]);
     expect(result.idea.idea).toMatchObject({ title: "PLAN-7 — Checkout API", state: "raw", identifier: null });

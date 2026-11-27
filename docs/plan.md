@@ -217,14 +217,32 @@ A shaped idea moves from the Ideas lens to **Not scheduled** at the top of the
 **Horizons** lens. If someone later edits it so it no longer passes, it stays shaped and reads
 **shaped · plan incomplete**, with Scaffold held back until the plan passes again.
 
-A plan you already have as a file comes in whole:
+A plan you already have as a file comes in whole. In the Plan view, **Import** on the toolbar
+(any lens) takes a `.md`, `.html` or `.jsx` file: a plan written in Markdown, or a chat export or a
+design you kept from ChatGPT or claude.ai. Pick the file and the stage it starts at, then press
+**Import**. Nothing is imported until you do. From a terminal:
 
 ```bash
-staple idea import plans/gift-cards.md --horizon Now --maturity exploring --person
+staple idea import plans/gift-cards.md --maturity exploring --person
+staple idea import exports/passkeys-chat.html
 ```
 
-The import reads the headings and task tables, attaches the file, and lists anything it kept
-under Context because it did not fit the section it was in. An imported idea has no sub-ideas
+The original is attached to the idea under **Files**, unchanged. A Markdown file maps to the
+idea's sections: the first `#` heading is its title, the text before the first `##` its brief, and
+the headings and task tables fill Goal, Task breakdown, Acceptance criteria and the rest; the
+import lists anything it kept under Context because it did not fit the section it was in. An HTML
+page gives the idea its title (the page's `<title>` or first heading), a JSX file its file name,
+and the rest stays in the file. Any other kind of file is refused and nothing is written.
+
+**Let an agent classify it** is the default stage. The idea starts raw, and its next step,
+*to classify*, asks an agent to read the file, fill the plan from it (which moves the idea to
+exploring) and propose it shaped once it passes the gate, or leave it raw when it is only a raw
+thought (`staple idea set I-STA-12 --classified`). Agents find the step on the idea
+(`nextStep` in `get_idea` and `list_ideas`, `step` in `staple idea show`, *(to classify)* in
+`staple idea ls`), whether or not it is on a horizon; a pickup's plan steps list it only while a
+horizon carries it (a sub-idea of a scheduled idea). A file over 256 KiB keeps its bytes on the
+device that imported it, so classify it there. Pick **Raw**, **Exploring** or **Shaped** instead and no agent is asked; shaped is held
+to the shaped gate. An imported idea has no sub-ideas
 yet, so importing straight into shaped needs breakdown rows; import a parent as exploring, add
 its sub-ideas, then mark it shaped.
 
@@ -544,6 +562,7 @@ and stop for you on the rest.
 | Shaped, no tickets, its planned start ahead, an idea it depends on not shipped, or an idea above it not shaped | Wait | Nobody yet |
 | Shaped, no tickets, its turn has come | Re-check the breakdown, then Scaffold (or Adopt) | Agent |
 | Raw, or exploring but not scheduled itself, under a scheduled idea | Brainstorm it | Agent |
+| Raw, imported from a file with no stage chosen (on a horizon or not) | Classify it: read the file, fill the plan, propose it shaped or leave it raw | Agent |
 
 A shaped idea with no tickets is not a to-do: it **waits** until its planned start (or its
 parent's, when it has none), until the ideas it depends on ship, and until every idea above it is
@@ -577,7 +596,7 @@ come back as they were.
 > [!IMPORTANT]
 > **Agents capture and write. The person steers.**
 >
-> Agents can capture raw ideas, edit titles and briefs, write plan sections and breakdown rows,
+> Agents can capture raw ideas, import them from files (always raw, to classify), edit titles and briefs, write plan sections and breakdown rows,
 > add, answer and defer questions, record decisions, adopt or unlink work, link research and POCs,
 > say which ideas an idea waits on (Blocked by), and scaffold or
 > promote an idea **you** marked shaped (preview first, then confirm). Their plan writes move a raw
@@ -619,7 +638,8 @@ what it offers.
 | `staple idea set --maturity shaped --person`, `--dismiss-proposal --person` | | Accept or dismiss a proposal |
 | `staple idea set --delivered D [--note T] --person`, `--undelivered` | | Mark an idea delivered outside the tracker, or clear the mark |
 | `staple idea plan`, `task` | `update_idea` (`plan`) | Write plan sections and breakdown rows |
-| `staple idea import <plan.md>` | | Capture an idea from a plan file |
+| `staple idea import <file>` | `import_idea` | Create an idea from a `.md`, `.html` or `.jsx` file, the original under Files |
+| `staple idea set --classified` | `update_idea` (`classified`) | Settle an import's classify step: it stays raw on purpose |
 | `staple idea scaffold [--confirm FP]` | `scaffold_idea` | Preview, then create the epic and its tasks |
 | `staple idea promote`, `adopt` | `start_idea` | Promote the idea in place, or adopt a ticket |
 | `staple idea adopt --research` | `start_idea` (`research`) | Link a research or POC ticket; it does not start the idea |

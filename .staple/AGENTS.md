@@ -57,7 +57,7 @@ and an instruction. The `horizon-plan` instruction on its tickets says the same:
 
 1. Tickets first. While `next` names a ticket, take it.
 2. With no ticket left, take the first step whose `who` is `agent`
-   (`brainstorm`, `write_plan`, `fix_plan` or `scaffold`) and do what it says.
+   (`brainstorm`, `classify`, `write_plan`, `fix_plan` or `scaffold`) and do what it says.
 3. Stop for the person on the rest: carry an `answer_questions` step's questions
    to them and record each answer; tell them when a `mark_shaped` idea is ready,
    or propose it shaped (`staple idea propose`) so it waits under Needs you.
@@ -66,6 +66,12 @@ and an instruction. The `horizon-plan` instruction on its tickets says the same:
 4. A `wait` step is nobody's yet. Never scaffold a waiting idea, and never
    scaffold every shaped idea you see: scaffold only a `scaffold` step, after
    re-checking its breakdown against what has landed.
+
+An idea imported from a file with no stage chosen waits for an agent: its
+`nextStep` is `classify` wherever it is (`list_ideas`, `get_idea`, `staple idea show`;
+`staple idea ls` marks it *(to classify)*), and pickups list it only while a
+horizon carries it. Read the file under Files, fill the plan from it and propose it
+shaped once it passes the gate, or leave it raw with `staple idea set <ref> --classified`.
 
 A step is never claimed, and an idea is never checked out or queued. A run with
 nothing left to take but steps pending stops with `planning_needed` and lists

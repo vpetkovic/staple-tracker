@@ -1287,16 +1287,22 @@ The plan (experimental; features.planning defaults off)
   idea task <ref> add|set|rm <key> [title] [--estimate E] [--depends K,K] [--acceptance T]
               [--owner O] [--notes T]
               one task breakdown row (key, title, estimate, depends-on, acceptance)
-  idea import <plan.md> [--parent REF] [--horizon H] [--maturity M]
-              capture an idea from a plan file: its sections and task table, with the
-              file attached; prints what it kept in Context instead of its section
+  idea import <file> [--parent REF] [--horizon H] [--maturity M]
+              create an idea from a .md, .html or .jsx file, the original attached under
+              Files; Markdown maps to its sections and task table (prints what it kept in
+              Context instead of its section), HTML gives its title, JSX its file name.
+              --maturity and --horizon are the person's (--person; a horizon takes a
+              maturity past raw, and is named by its identifier); with no --maturity it
+              waits to be classified: its step asks an agent to read the file, fill the
+              plan and propose it shaped, or leave it raw with idea set --classified
   idea set <ref> [--title T] [--brief T]
               the agent's edits; with --person also --maturity raw|exploring|shaped|dropped,
               --horizon H|none, --parent REF|none, --start D|none, --target D|none,
               --before REF|end, and --delivered D [--note T] (it was delivered outside the
               tracker on day D: it reads shipped with no ticket) or --undelivered;
               --maturity shaped --person accepts a proposal, --dismiss-proposal --person
-              sets it aside
+              sets it aside; --classified (anyone's) settles an import's classify step:
+              the file was read and it stays raw on purpose
   idea propose <ref> [--note T]         propose a raw or exploring idea shaped (anyone's, held
               to the shaped gate): shown under Needs you until the person accepts or
               dismisses it; it never shapes the idea

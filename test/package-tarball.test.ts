@@ -381,8 +381,8 @@ describe("the installed binary, run from outside this repository", () => {
     // The plan layer then added list_ideas, get_idea, list_horizons, capture_idea, update_idea,
     // start_idea, unlink_idea and the app-only reset_idea_baseline (83), and scaffold_idea (84).
     // The attention list added attention (88). The ticket branch added set_branch (89).
-    // The one-call handoff added checkpoint (90). Converting a misfiled ticket added convert_to_idea (91).
-      expect(tools).toHaveLength(91);
+    // The one-call handoff added checkpoint (90). Converting a misfiled ticket added convert_to_idea (91). Importing an idea from a file added import_idea (92).
+      expect(tools).toHaveLength(92);
       expect(tools.map((tool) => tool.name)).toContain("list_tasks");
 
       // A real call, so this proves the workspace path too, not just the handshake.

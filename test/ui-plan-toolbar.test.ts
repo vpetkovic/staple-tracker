@@ -295,6 +295,29 @@ it("keeps the phone toolbar to one row of 44px with every pill, the filter and +
   }
 }, 20_000);
 
+it("offers Import in the phone toolbar on Ideas, and through + Idea on Horizons, where the bar has no room for both", async () => {
+  const ideas = await phone(375, "ideas");
+  try {
+    const open = ideas.page.locator("[data-plan-import-open]");
+    expect(await open.isVisible()).toBe(true);
+    const box = await open.evaluate((control) => control.getBoundingClientRect().toJSON() as DOMRect);
+    expect(box.right).toBeLessThanOrEqual(375);
+    expect(Math.round(await ideas.page.locator("[data-plan-bar]").evaluate((element) => element.getBoundingClientRect().height))).toBeLessThanOrEqual(44);
+    expect(await ideas.page.getByRole("group", { name: "Show only" }).evaluate((group) => group.scrollWidth - group.clientWidth)).toBeLessThanOrEqual(0);
+  } finally {
+    await ideas.close();
+  }
+  const horizons = await phone(375);
+  try {
+    expect(await horizons.page.locator("[data-plan-import-open]").isVisible()).toBe(false);
+    await horizons.page.locator("[data-plan-capture-open]").click();
+    await horizons.page.locator("[data-plan-capture-import]").click();
+    expect(await horizons.page.locator("[data-plan-import] [data-plan-import-choose]").isVisible()).toBe(true);
+  } finally {
+    await horizons.close();
+  }
+}, 20_000);
+
 it("keeps the lens tabs in the toolbar at 1280px, and on their own compact row in a narrow desk container", async () => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 844 } });
   const page = await context.newPage();

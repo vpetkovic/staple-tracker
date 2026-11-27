@@ -39,9 +39,10 @@ export interface PlanStepData {
   title: string;
   parentId: string | null;
   parentTitle: string | null;
-  horizonId: string;
+  /** Null only on a `classify` step of a record no horizon carries. */
+  horizonId: string | null;
   state: IdeaState;
-  need: "answer_questions" | "write_plan" | "mark_shaped" | "fix_plan" | "wait" | "scaffold" | "brainstorm";
+  need: "answer_questions" | "write_plan" | "mark_shaped" | "fix_plan" | "wait" | "scaffold" | "brainstorm" | "classify";
   who: "person" | "agent" | "nobody";
   instruction: string;
   questions?: string[];
