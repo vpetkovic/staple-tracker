@@ -7,7 +7,7 @@
  * the widgets and the server read one definition and cannot drift. The agreed text of the
  * contract is the `api-contract` document on the Analytics epic.
  */
-import { apiRequest } from "./api";
+import { apiRequest, queryString } from "./api";
 import type {
   AnalyticsReport,
   Bucket,
@@ -15,6 +15,7 @@ import type {
   CostModelWrite,
   DateKey,
   RoiResponse,
+  RoiTicketsResponse,
 } from "../../../../core/analytics/contract";
 
 export type * from "../../../../core/analytics/contract";
@@ -39,15 +40,11 @@ export function browserTimeZone(): string {
   }
 }
 
-export function analyticsSearch(query: AnalyticsQuery): string {
-  const search = new URLSearchParams();
-  const tz = query.tz ?? browserTimeZone();
-  for (const [key, value] of Object.entries({ scope: query.scope, from: query.from, to: query.to, tz, bucket: query.bucket })) {
-    if (value !== undefined && value !== "") search.set(key, value);
-  }
-  const out = search.toString();
-  return out ? `?${out}` : "";
+export function analyticsSearch(query: AnalyticsQuery, extra: Record<string, string> = {}): string {
+  return queryString({ scope: query.scope, from: query.from, to: query.to, tz: query.tz ?? browserTimeZone(), bucket: query.bucket, ...extra });
 }
+
+const costModelPath = (scope?: string): string => `/api/analytics/cost-model${queryString({ scope })}`;
 
 export const fetchAnalytics = (query: AnalyticsQuery = {}): Promise<AnalyticsReport> =>
   apiRequest<AnalyticsReport>(`/api/analytics${analyticsSearch(query)}`);
@@ -55,12 +52,15 @@ export const fetchAnalytics = (query: AnalyticsQuery = {}): Promise<AnalyticsRep
 export const fetchRoi = (query: AnalyticsQuery = {}): Promise<RoiResponse> =>
   apiRequest<RoiResponse>(`/api/analytics/roi${analyticsSearch(query)}`);
 
-export const fetchCostModel = (scope?: string): Promise<CostModelResponse> =>
-  apiRequest<CostModelResponse>(`/api/analytics/cost-model${scope ? `?scope=${encodeURIComponent(scope)}` : ""}`);
+/** The done tickets behind one ROI role row (at most 200), loaded when the row is opened. */
+export const fetchRoiTickets = (roleId: string, query: AnalyticsQuery = {}): Promise<RoiTicketsResponse> =>
+  apiRequest<RoiTicketsResponse>(`/api/analytics/roi/tickets${analyticsSearch(query, { roleId })}`);
+
+export const fetchCostModel = (scope?: string): Promise<CostModelResponse> => apiRequest<CostModelResponse>(costModelPath(scope));
 
 /** Save parts of the cost model (or reset them). Answers the model as it now stands. */
 export const saveCostModel = (write: CostModelWrite, scope?: string): Promise<CostModelResponse> =>
-  apiRequest<CostModelResponse>(`/api/analytics/cost-model${scope ? `?scope=${encodeURIComponent(scope)}` : ""}`, {
+  apiRequest<CostModelResponse>(costModelPath(scope), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ actor: "ui", ...write }),

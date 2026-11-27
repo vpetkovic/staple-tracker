@@ -736,6 +736,17 @@ function resolveAsset(pathname: string): string | null {
  */
 export const KEEP_ALIVE_MS = 65_000;
 
+/**
+ * The workspaces a write route asks the post-write sync trigger to sync, recorded once the
+ * route knows where it wrote. Keyed by the response, so it lives exactly as long as the
+ * request; `undefined` in the list means the default workspace.
+ */
+const SYNC_TARGETS = new WeakMap<ServerResponse, readonly (string | undefined)[]>();
+
+function syncTargets(res: ServerResponse, targets: readonly (string | undefined)[]): void {
+  SYNC_TARGETS.set(res, targets);
+}
+
 export function startUiServer(options: UiOptions): UiHandle {
   const stores = new Map<string, StoreHandle>();
 
@@ -871,6 +882,11 @@ export function startUiServer(options: UiOptions): UiHandle {
   /** The workspace an Analytics scope is about, for the cost model's suggested home; null for the hub. */
   function scopeSlugOf(scope: AnalyticsScope): string | null {
     return scope.kind === "workspace" ? (scope.refs[0]?.slug ?? null) : null;
+  }
+
+  /** The one cost model, as a read about `scope` sees it. */
+  function costModelFor(scope: AnalyticsScope) {
+    return readCostModel(costModelCandidates(), scopeSlugOf(scope));
   }
 
   /** The period part of an Analytics query string. */
@@ -1900,13 +1916,17 @@ export function startUiServer(options: UiOptions): UiHandle {
          * sync to carry, and firing one on `disconnect` in particular would be a
          * request made in the act of stopping.
          *
-         * KNOWN LIMIT, stated rather than hidden: the workspace is read from the
-         * query string because the body has not been parsed yet and cannot be read
-         * twice. In single-workspace mode — every connected repository today —
-         * that is exact. In hub mode a write that named its workspace only in the
-         * body triggers the default workspace instead; the named one still syncs
-         * on its session tick. Fixing it properly means threading the resolved
-         * handle out of the route, which is not a thin registration.
+         * Which workspace: the ones the route recorded with `syncTargets` once it
+         * knew where it wrote (the Analytics cost model, written to its home), else
+         * the `ws` query parameter.
+         *
+         * KNOWN LIMIT, stated rather than hidden: a route that records nothing has
+         * its workspace read from the query string, because the body has not been
+         * parsed yet when this is registered. In single-workspace mode, every
+         * connected repository today, that is exact. In hub mode a write that named
+         * its workspace only in the body triggers the default workspace instead; the
+         * named one still syncs on its session tick. Such a route fixes it for itself
+         * by calling `syncTargets`.
          */
         if (
           req.method === "POST" &&
@@ -1918,13 +1938,13 @@ export function startUiServer(options: UiOptions): UiHandle {
           // A run is machine-local and never synchronized (core/run-store.ts): nothing to send.
           !url.pathname.startsWith("/api/run/") &&
           // A dismissal is a local event, like the cross_blockers_resolved event it answers.
-          url.pathname !== "/api/attention/dismiss" &&
-          // The cost model is written to its home workspace, which the route names to the trigger itself.
-          url.pathname !== "/api/analytics/cost-model"
+          url.pathname !== "/api/attention/dismiss"
         ) {
           const ws = url.searchParams.get("ws") ?? undefined;
           res.once("finish", () => {
-            if (res.statusCode >= 200 && res.statusCode < 300) autoSync.postWrite(ws);
+            if (res.statusCode < 200 || res.statusCode >= 300) return;
+            const recorded = SYNC_TARGETS.get(res);
+            for (const target of recorded ?? [ws]) autoSync.postWrite(target);
           });
         }
       }
@@ -4459,7 +4479,7 @@ export function startUiServer(options: UiOptions): UiHandle {
       if (url.pathname === "/api/analytics") {
         const scope = analyticsScope(url.searchParams.get("scope"));
         // The person's agent-type rules come from the one cost model, wherever it is saved.
-        const rules = readCostModel(costModelCandidates(), scopeSlugOf(scope)).model.roleMapping.rules;
+        const rules = costModelFor(scope).model.roleMapping.rules;
         json(res, 200, readAnalytics(scope, analyticsQuery(url.searchParams), rules));
         return;
       }
@@ -4479,13 +4499,11 @@ export function startUiServer(options: UiOptions): UiHandle {
             actor: bodyActor(body),
             now: nowIso(),
           });
-          res.once("finish", () => {
-            if (res.statusCode >= 200 && res.statusCode < 300) for (const slug of written) autoSync.postWrite(options.hub ? slug : undefined);
-          });
+          syncTargets(res, options.hub ? written : [undefined]);
           json(res, 200, response);
           return;
         }
-        json(res, 200, readCostModel(costModelCandidates(), scopeSlugOf(scope)));
+        json(res, 200, costModelFor(scope));
         return;
       }
 
@@ -4496,8 +4514,7 @@ export function startUiServer(options: UiOptions): UiHandle {
       if (url.pathname === "/api/analytics/roi") {
         const scope = analyticsScope(url.searchParams.get("scope"));
         const hub = scope.kind === "hub" || !options.hub ? scope : analyticsScope("hub");
-        const model = readCostModel(costModelCandidates(), scopeSlugOf(scope));
-        json(res, 200, readRoi({ scope, hub, query: analyticsQuery(url.searchParams), model }));
+        json(res, 200, readRoi({ scope, hub, query: analyticsQuery(url.searchParams), model: costModelFor(scope) }));
         return;
       }
 
@@ -4513,7 +4530,7 @@ export function startUiServer(options: UiOptions): UiHandle {
           readRoiTickets({
             scope,
             query: analyticsQuery(url.searchParams),
-            model: readCostModel(costModelCandidates(), scopeSlugOf(scope)),
+            model: costModelFor(scope),
             roleId,
             limit: limit === null ? undefined : Number(limit),
           }),
@@ -4861,8 +4878,10 @@ export function startUiServer(options: UiOptions): UiHandle {
             },
             /**
              * THE REGISTRY (R6a, STA-176): every category and every typed setting
-             * definition, so the shell enumerates its navigation from this and a
-             * new setting reaches the page without a client change. `values` are
+             * definition the Settings screen edits, so the shell enumerates its
+             * navigation from this and a new setting reaches the page without a
+             * client change. A `page` category (the Analytics cost model) is edited on
+             * its own page and left out, though its values are in `values`. `values` are
              * this workspace's effective values with provenance; `unknownKeys`
              * are stored keys this build has no definition for — preserved,
              * reported, never rewritten. `global` is the machine's config.json,

@@ -7,7 +7,8 @@ import type { DatabaseSync } from "node:sqlite";
 import type { AgentTypeRule } from "./agent-type.js";
 import type { AnalyticsReport, AnalyticsWorkspaceRef, Caveat, CostModelResponse, RoiResponse, RoiTicketsResponse } from "./contract.js";
 import { COST_MODEL_PARTS, aiSpendFor, resolveRoles, roi, type CostModel } from "./cost-model.js";
-import { analyticsReport, resolvePeriod, roleTallies, type AnalyticsQuery } from "./metrics.js";
+import type { AgentType } from "./agent-type.js";
+import { analyticsReport, resolvePeriod, roleTallies, round2, type AnalyticsQuery } from "./metrics.js";
 import { readWorkspaceRows, type WorkspaceRows } from "./rows.js";
 
 /** One workspace the scope covers, opened. */
@@ -26,7 +27,7 @@ export interface AnalyticsScope {
 }
 
 /** The rows of every source, in scope order. */
-export function rowsOf(scope: AnalyticsScope): WorkspaceRows[] {
+function rowsOf(scope: AnalyticsScope): WorkspaceRows[] {
   return scope.sources.map((source) => readWorkspaceRows(source.db, { slug: source.slug, prefix: source.prefix }));
 }
 
@@ -53,15 +54,18 @@ export function readRoi(input: {
 }): RoiResponse {
   const costModel = input.model.model as CostModel;
   const rules = costModel.roleMapping.rules;
-  const scopeRows = rowsOf(input.scope);
-  const hubRows = input.scope === input.hub ? scopeRows : rowsOf(input.hub);
+  const hubRows = rowsOf(input.hub);
+  // The scope's workspaces are read once, as part of the hub, whenever the hub holds them all.
+  const wanted = new Set(input.scope.sources.map((source) => source.slug));
+  const fromHub = hubRows.filter((rows) => wanted.has(rows.slug));
+  const scopeRows = input.scope === input.hub ? hubRows : fromHub.length === wanted.size ? fromHub : rowsOf(input.scope);
   const report = analyticsReport(scopeRows, { kind: input.scope.kind, workspaces: input.scope.refs }, { ...input.query, rules });
   const resolved = resolvePeriod(scopeRows, input.query);
   const roles = resolveRoles(costModel);
-  const roleOf = (type: Parameters<typeof roles.roleOf>[0]) => costModel.roleMapping.types[type];
+  const roleOf = (type: AgentType): string => costModel.roleMapping.types[type];
   const scoped = roleTallies(scopeRows, resolved, rules, roleOf);
   const hub = hubRows === scopeRows ? scoped : roleTallies(hubRows, resolved, rules, roleOf);
-  const share = input.scope.kind === "hub" || hubRows === scopeRows ? 1 : hub.agentHours > 0 ? scoped.agentHours / hub.agentHours : 0;
+  const share = hubRows === scopeRows ? 1 : hub.agentHours > 0 ? scoped.agentHours / hub.agentHours : 0;
   const aiSpendHub = aiSpendFor(costModel.aiSpend, resolved.window.days);
   const hoursPerActiveDay = costModel.scenario.director.hoursPerActiveDay;
   const directorHoursHub = hub.activeDays * hoursPerActiveDay;
@@ -87,8 +91,8 @@ export function readRoi(input: {
       activeDaysHub: hub.activeDays,
       hoursPerActiveDay,
       share,
-      scopeAgentHours: scoped.agentHours,
-      hubAgentHours: hub.agentHours,
+      scopeAgentHours: round2(scoped.agentHours),
+      hubAgentHours: round2(hub.agentHours),
     },
     agentTypes: report.agentTypes,
     fallbacks,
@@ -110,14 +114,13 @@ export function readRoiTickets(input: {
   const roles = resolveRoles(costModel);
   // Price unknown role ids the way the ROI does, so the list behind a row is the row's.
   const priced = (id: string): string => roles.role(id).id;
-  const tallies = roleTallies(rows, resolved, costModel.roleMapping.rules, (type) => costModel.roleMapping.types[type]);
+  const tallies = roleTallies(rows, resolved, costModel.roleMapping.rules, (type: AgentType) => costModel.roleMapping.types[type]);
   const limit = Math.max(1, Math.min(input.limit ?? 200, 200));
   const tickets = [...tallies.tickets.entries()]
     .filter(([id]) => priced(id) === input.roleId)
     .flatMap(([, list]) => list)
     .sort((a, b) => b.agentSeconds - a.agentSeconds || a.identifier.localeCompare(b.identifier));
   const other = [...tallies.otherHours.entries()].filter(([id]) => priced(id) === input.roleId).reduce((sum, [, value]) => sum + value, 0);
-  const round2 = (value: number): number => Math.round(value * 100) / 100;
   return {
     roleId: input.roleId,
     period: resolved.period,

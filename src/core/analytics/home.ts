@@ -30,7 +30,7 @@ import { listConflicts } from "../cloud/conflicts.js";
 import { readStoredRepositoryId } from "../repo-identity.js";
 import type { WorkspaceStore } from "../store.js";
 import { StapleError } from "../types.js";
-import type { CostModelHome, CostModelPartId, CostModelResponse, CostModelValue, CostModelWrite } from "./contract.js";
+import type { CostModelHome, CostModelResponse, CostModelValue, CostModelWrite } from "./contract.js";
 import { AGENT_TYPES } from "./agent-type.js";
 import { COST_MODEL_KEYS, COST_MODEL_PARTS, DEFAULT_COST_MODEL, costModelSavedAt, type CostModel, type CostModelPart } from "./cost-model.js";
 
@@ -48,7 +48,7 @@ interface HeldModel {
 }
 
 /** The model one workspace holds: each part saved there, or its default. `assumed` is always present. */
-export function readHeldModel(store: WorkspaceStore): HeldModel {
+function readHeldModel(store: WorkspaceStore): HeldModel {
   const source = {} as Record<CostModelPart, "saved" | "default">;
   const parts = {} as Record<CostModelPart, unknown>;
   for (const part of COST_MODEL_PARTS) {
@@ -63,7 +63,7 @@ export function readHeldModel(store: WorkspaceStore): HeldModel {
 }
 
 /** True when this machine holds a live cloud connection for the workspace: its saves reach other devices. */
-export function isSynced(store: WorkspaceStore, home: string = stapleHome()): boolean {
+function isSynced(store: WorkspaceStore, home: string): boolean {
   const repositoryId = readStoredRepositoryId(store.db);
   if (repositoryId === null) return false;
   const connection = readConnection(home, repositoryId);
@@ -79,7 +79,7 @@ interface Resolved {
  * The home among `candidates`, and the rest that also hold a save. `scopeSlug` is the workspace
  * the page is about (null for the hub): where a first save is suggested to go.
  */
-export function resolveHome(candidates: readonly HomeCandidate[], scopeSlug: string | null, home: string = stapleHome()): Resolved {
+function resolveHome(candidates: readonly HomeCandidate[], scopeSlug: string | null, home: string): Resolved {
   const held = candidates.map((candidate) => ({ ...candidate, ...readHeldModel(candidate.store) }));
   const saved = held
     .filter((candidate) => candidate.savedAt !== null)
@@ -101,13 +101,8 @@ export function resolveHome(candidates: readonly HomeCandidate[], scopeSlug: str
 
 function responseOf(resolved: Resolved): CostModelResponse {
   const held = resolved.home ?? { model: DEFAULT_COST_MODEL, source: Object.fromEntries(COST_MODEL_PARTS.map((part) => [part, "default"])) as Record<CostModelPart, "saved" | "default"> };
-  const model = Object.fromEntries(
-    COST_MODEL_PARTS.map((part) => {
-      const value = held.model[part] as { assumed?: readonly string[] };
-      return [part, { ...value, assumed: value.assumed ?? [] }];
-    }),
-  ) as unknown as CostModelValue;
-  return { model, source: held.source, home: resolved.view, agentTypes: [...AGENT_TYPES] };
+  // Every default carries `assumed`, and `readHeldModel` filled it for a save without one.
+  return { model: held.model as unknown as CostModelValue, source: held.source, home: resolved.view, agentTypes: [...AGENT_TYPES] };
 }
 
 /** `GET /api/analytics/cost-model`. */
@@ -168,16 +163,17 @@ export function writeCostModel(
   const moving = before.home !== null && before.home.slug !== target.slug;
 
   const ops: Array<{ op: "set"; key: string; value: unknown } | { op: "reset"; key: string }> = [];
+  const touched: CostModelPart[] = [];
   for (const part of COST_MODEL_PARTS) {
     const key = COST_MODEL_KEYS[part];
     if (reset.includes(part)) ops.push({ op: "reset", key });
     else if (parts[part] !== undefined) ops.push({ op: "set", key, value: parts[part] });
-    else if (moving) {
-      // Carry the old home's value over; a default stays a default (nothing to write).
-      if (before.home!.source[part] === "saved") ops.push({ op: "set", key, value: before.home!.model[part] });
-    }
+    // Moving carries the old home's value over; a default stays a default (nothing to write).
+    else if (moving && before.home!.source[part] === "saved") ops.push({ op: "set", key, value: before.home!.model[part] });
+    else continue;
+    touched.push(part);
   }
-  assertNoConflict(target.store, ops.map((op) => COST_MODEL_PARTS.find((part) => COST_MODEL_KEYS[part] === op.key)!));
+  assertNoConflict(target.store, touched);
   if (ops.length > 0) target.store.applySettingOps(ops, options.actor);
   const written = [target.slug];
   if (moving) {
@@ -189,4 +185,3 @@ export function writeCostModel(
   return { response: readCostModel(candidates, options.scopeSlug, stapleHomeDir), written };
 }
 
-export type { CostModelPartId };

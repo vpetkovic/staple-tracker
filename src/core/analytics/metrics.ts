@@ -54,7 +54,8 @@ import type {
   SprintRow,
   WorkspaceRow,
 } from "./contract.js";
-import { daysBetween, eachDate, isDateKey, nextDate, Zone } from "./local-time.js";
+import { lowerQuantile } from "../telemetry/calibration.js";
+import { daysInclusive, eachDate, isDateKey, nextDate, Zone } from "./local-time.js";
 import type { AnalyticsAttempt, AnalyticsIssue, RecordRows, WorkspaceRows } from "./rows.js";
 
 export const ANALYTICS_DEFINITIONS: AnalyticsDefinitions = Object.freeze({
@@ -94,15 +95,24 @@ export interface AnalyticsQuery {
   readonly rules?: readonly AgentTypeRule[];
 }
 
-const round2 = (value: number): number => Math.round(value * 100) / 100;
+/** Hours and other figures leave the read rounded to 0.01 (`contract.ts`, "Conventions"). */
+export const round2 = (value: number): number => Math.round(value * 100) / 100;
 const hours = (seconds: number): number => seconds / 3600;
 const ms = (iso: string): number => Date.parse(iso);
 
-/** The lower quantile: `sorted[floor(p × (n − 1))]`. */
-export function lowerQuantile(values: readonly number[], p: number): number | null {
-  if (values.length === 0) return null;
-  const sorted = [...values].sort((a, b) => a - b);
-  return sorted[Math.floor(p * (sorted.length - 1))]!;
+/** The lower quantile at `pct` percent of unsorted `values` (calibration's method), or null for none. */
+export function quantileOf(values: readonly number[], pct: number): number | null {
+  return values.length === 0 ? null : lowerQuantile([...values].sort((a, b) => a - b), pct);
+}
+
+/** The entry under `key`, created by `init` when absent. */
+function upsert<K, V>(map: Map<K, V>, key: K, init: () => V): V {
+  let held = map.get(key);
+  if (held === undefined) {
+    held = init();
+    map.set(key, held);
+  }
+  return held;
 }
 
 function increment(record: Record<string, number>, key: string, by = 1): void {
@@ -187,20 +197,9 @@ function indexScope(workspaces: readonly WorkspaceRows[], rules: readonly AgentT
     }
   }
   const children = new Map<string, ScopedIssue[]>();
-  for (const issue of issues) {
-    if (issue.parentId === null) continue;
-    const key = keyOf(issue.workspace, issue.parentId);
-    const list = children.get(key) ?? [];
-    list.push(issue);
-    children.set(key, list);
-  }
+  for (const issue of issues) if (issue.parentId !== null) upsert(children, keyOf(issue.workspace, issue.parentId), () => []).push(issue);
   const attemptsOf = new Map<string, ScopedAttempt[]>();
-  for (const attempt of attempts) {
-    const key = keyOf(attempt.workspace, attempt.issueId);
-    const list = attemptsOf.get(key) ?? [];
-    list.push(attempt);
-    attemptsOf.set(key, list);
-  }
+  for (const attempt of attempts) upsert(attemptsOf, keyOf(attempt.workspace, attempt.issueId), () => []).push(attempt);
   const hasEstimatedDescendant = new Set<string>();
   for (const issue of issues) {
     if (issue.estimatedSeconds === null || issue.estimatedSeconds <= 0 || !isWork(issue)) continue;
@@ -213,10 +212,33 @@ function indexScope(workspaces: readonly WorkspaceRows[], rules: readonly AgentT
       parent = byKey.get(key)?.parentId ?? null;
     }
   }
-  return { issues, attempts, byKey, children, attemptsOf, hasEstimatedDescendant, slugs: workspaces.map((w) => w.slug), prefixes: new Map(workspaces.map((w) => [w.slug, w.prefix])),
+  return {
+    issues,
+    attempts,
+    byKey,
+    children,
+    attemptsOf,
+    hasEstimatedDescendant,
+    slugs: workspaces.map((w) => w.slug),
+    prefixes: new Map(workspaces.map((w) => [w.slug, w.prefix])),
     rules,
     record: workspaces.map((w) => ({ workspace: w.slug, ...(w.record ?? { comments: [], documents: [], files: [] }) })),
   };
+}
+
+/** An issue's own attempts. */
+function attemptsFor(scope: Pick<Scope, "attemptsOf">, issue: ScopedIssue): readonly ScopedAttempt[] {
+  return scope.attemptsOf.get(keyOf(issue.workspace, issue.id)) ?? [];
+}
+
+/** Agent-hours (seconds) of an issue's own attempts, all time, each capped. */
+function cappedSecondsOf(scope: Pick<Scope, "attemptsOf">, issue: ScopedIssue): number {
+  return attemptsFor(scope, issue).reduce((sum, attempt) => sum + attempt.cappedSeconds, 0);
+}
+
+/** A done ticket's own estimate counts as planned effort unless a descendant carries the plan. */
+function countsAsPlanned(scope: Pick<Scope, "hasEstimatedDescendant">, issue: ScopedIssue): boolean {
+  return issue.estimatedSeconds !== null && issue.estimatedSeconds > 0 && !scope.hasEstimatedDescendant.has(keyOf(issue.workspace, issue.id));
 }
 
 function descendantsOf(scope: Scope, issue: ScopedIssue): ScopedIssue[] {
@@ -252,7 +274,11 @@ function windowOf(zone: Zone, from: DateKey, to: DateKey): Window {
   return { from, to, days, edges, startMs: edges[0]!, endMs: edges[edges.length - 1]! };
 }
 
-function activitySpan(scope: Scope, zone: Zone): { first: DateKey | null; last: DateKey | null } {
+function activitySpan(
+  issues: readonly AnalyticsIssue[],
+  attempts: readonly AnalyticsAttempt[],
+  zone: Zone,
+): { first: DateKey | null; last: DateKey | null } {
   let first: number | null = null;
   let last: number | null = null;
   const see = (iso: string | null): void => {
@@ -262,11 +288,11 @@ function activitySpan(scope: Scope, zone: Zone): { first: DateKey | null; last: 
     if (first === null || at < first) first = at;
     if (last === null || at > last) last = at;
   };
-  for (const issue of scope.issues) {
+  for (const issue of issues) {
     see(issue.createdAt);
     see(issue.completedAt);
   }
-  for (const attempt of scope.attempts) {
+  for (const attempt of attempts) {
     see(attempt.startedAt);
     see(attempt.endAt);
   }
@@ -286,25 +312,23 @@ function requireDay(raw: string, name: string): DateKey {
 
 // ------------------------------------------------------------------ one window's figures
 
-/** Capped effort of `attempt` that falls inside `[from, to)`, spread evenly over its span. */
-function cappedWithin(attempt: ScopedAttempt, from: number, to: number): number {
-  const span = attempt.endMs - attempt.startMs;
-  if (span <= 0) return attempt.startMs >= from && attempt.startMs < to ? attempt.cappedSeconds : 0;
-  const overlap = Math.min(attempt.endMs, to) - Math.max(attempt.startMs, from);
-  return overlap <= 0 ? 0 : (attempt.cappedSeconds * overlap) / span;
-}
-
-function uncappedWithin(attempt: ScopedAttempt, from: number, to: number): number {
-  const span = attempt.endMs - attempt.startMs;
-  if (span <= 0) return attempt.startMs >= from && attempt.startMs < to ? attempt.effortSeconds : 0;
-  const overlap = Math.min(attempt.endMs, to) - Math.max(attempt.startMs, from);
-  return overlap <= 0 ? 0 : (attempt.effortSeconds * overlap) / span;
-}
-
 /** An attempt runs in `[from, to)` when its span meets the window; an instant attempt when it starts inside. */
 function runsWithin(attempt: ScopedAttempt, from: number, to: number): boolean {
   if (attempt.endMs === attempt.startMs) return attempt.startMs >= from && attempt.startMs < to;
   return attempt.startMs < to && attempt.endMs > from;
+}
+
+/** The share of `attempt`'s span inside `[from, to)`: its effort is spread evenly over the span. */
+function fractionWithin(attempt: ScopedAttempt, from: number, to: number): number {
+  const span = attempt.endMs - attempt.startMs;
+  if (span <= 0) return runsWithin(attempt, from, to) ? 1 : 0;
+  const overlap = Math.min(attempt.endMs, to) - Math.max(attempt.startMs, from);
+  return overlap <= 0 ? 0 : overlap / span;
+}
+
+/** Capped effort of `attempt` that falls inside `[from, to)`. */
+function cappedWithin(attempt: ScopedAttempt, from: number, to: number): number {
+  return attempt.cappedSeconds * fractionWithin(attempt, from, to);
 }
 
 function within(iso: string | null, window: Window): boolean {
@@ -332,6 +356,8 @@ interface DayFigures {
   seconds: number;
   peak: number;
   byWorkspace: Map<string, { done: number; seconds: number }>;
+  /** Workspaces with an attempt running on this day. */
+  ranBy: Set<string>;
 }
 
 interface WindowFigures {
@@ -343,17 +369,13 @@ interface WindowFigures {
 
 function isImported(scope: Scope, issue: ScopedIssue): boolean {
   if (issue.completedAt === null) return false;
-  if ((scope.attemptsOf.get(keyOf(issue.workspace, issue.id))?.length ?? 0) > 0) return false;
+  if (attemptsFor(scope, issue).length > 0) return false;
   return ms(issue.completedAt) - ms(issue.createdAt) <= ANALYTICS_DEFINITIONS.importWindowSeconds * 1000;
 }
 
 function computeWindow(scope: Scope, window: Window, zone: Zone): WindowFigures {
-  const daily: DayFigures[] = window.days.map(() => ({ done: 0, created: 0, seconds: 0, peak: 0, byWorkspace: new Map() }));
-  const dayWorkspace = (day: DayFigures, slug: string): { done: number; seconds: number } => {
-    const held = day.byWorkspace.get(slug) ?? { done: 0, seconds: 0 };
-    day.byWorkspace.set(slug, held);
-    return held;
-  };
+  const daily: DayFigures[] = window.days.map(() => ({ done: 0, created: 0, seconds: 0, peak: 0, byWorkspace: new Map(), ranBy: new Set() }));
+  const dayWorkspace = (day: DayFigures, slug: string): { done: number; seconds: number } => upsert(day.byWorkspace, slug, () => ({ done: 0, seconds: 0 }));
 
   // ---- tickets
   const work = scope.issues.filter(isWork);
@@ -397,7 +419,7 @@ function computeWindow(scope: Scope, window: Window, zone: Zone): WindowFigures 
   for (const attempt of running) {
     const inside = cappedWithin(attempt, window.startMs, window.endMs);
     agentSeconds += inside;
-    uncappedSeconds += uncappedWithin(attempt, window.startMs, window.endMs);
+    uncappedSeconds += attempt.effortSeconds * fractionWithin(attempt, window.startMs, window.endMs);
     if (attempt.role === "orchestrator") orchestrationSeconds += inside;
     const first = Math.max(0, dayIndex(window, Math.max(attempt.startMs, window.startMs)));
     for (let index = first; index < window.days.length; index += 1) {
@@ -408,13 +430,12 @@ function computeWindow(scope: Scope, window: Window, zone: Zone): WindowFigures 
       if (seconds > 0 || runsWithin(attempt, from, to)) {
         daily[index]!.seconds += seconds;
         dayWorkspace(daily[index]!, attempt.workspace).seconds += seconds;
+        daily[index]!.ranBy.add(attempt.workspace);
       }
       if (attempt.endMs === attempt.startMs) break;
     }
   }
-  const activeDays = window.days.filter((_, index) =>
-    running.some((attempt) => runsWithin(attempt, window.edges[index]!, window.edges[index + 1]!)),
-  ).length;
+  const activeDays = daily.filter((day) => day.ranBy.size > 0).length;
 
   // Concurrency: half-open spans, so an end and a start at one instant do not overlap.
   const events: Array<[number, number]> = [];
@@ -444,11 +465,10 @@ function computeWindow(scope: Scope, window: Window, zone: Zone): WindowFigures 
   const models = new Map<string, { model: string | null; harness: string | null; attempts: number; completed: number; seconds: number }>();
   for (const attempt of running) {
     const key = `${attempt.model ?? ""}\u0000${attempt.harness ?? ""}`;
-    const held = models.get(key) ?? { model: attempt.model, harness: attempt.harness, attempts: 0, completed: 0, seconds: 0 };
+    const held = upsert(models, key, () => ({ model: attempt.model, harness: attempt.harness, attempts: 0, completed: 0, seconds: 0 }));
     held.attempts += 1;
     if (attempt.standing === "completed") held.completed += 1;
     held.seconds += cappedWithin(attempt, window.startMs, window.endMs);
-    models.set(key, held);
   }
   const byModel: ModelRow[] = [...models.values()]
     .map(({ seconds, ...row }) => ({ ...row, agentHours: round2(hours(seconds)) }))
@@ -469,9 +489,7 @@ function computeWindow(scope: Scope, window: Window, zone: Zone): WindowFigures 
     if (span < 0) continue;
     const value = hours(span / 1000);
     cycle.push(value);
-    const list = cycleByKindValues.get(issue.kind) ?? [];
-    list.push(value);
-    cycleByKindValues.set(issue.kind, list);
+    upsert(cycleByKindValues, issue.kind, () => []).push(value);
   }
   const lead = settled.map((issue) => hours((ms(issue.completedAt!) - ms(issue.createdAt)) / 1000)).filter((value) => value >= 0);
   const histogram: HistogramBin[] = HISTOGRAM.map(([label, min, max]) => ({
@@ -482,10 +500,10 @@ function computeWindow(scope: Scope, window: Window, zone: Zone): WindowFigures 
   }));
   const cycleByKind: Record<string, { n: number; medianHours: number | null }> = {};
   for (const [kind, values] of [...cycleByKindValues.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-    cycleByKind[kind] = { n: values.length, medianHours: round2OrNull(lowerQuantile(values, 0.5)) };
+    cycleByKind[kind] = { n: values.length, medianHours: round2OrNull(quantileOf(values, 50)) };
   }
   const effortPerTicket = done
-    .map((issue) => (scope.attemptsOf.get(keyOf(issue.workspace, issue.id)) ?? []).reduce((sum, attempt) => sum + attempt.cappedSeconds, 0))
+    .map((issue) => cappedSecondsOf(scope, issue))
     .filter((seconds) => seconds > 0)
     .map(hours);
 
@@ -497,16 +515,14 @@ function computeWindow(scope: Scope, window: Window, zone: Zone): WindowFigures 
   const successRate = ended > 0 ? outcomes.completed / ended : null;
 
   // ---- estimates
-  const planned = done.filter(
-    (issue) => issue.estimatedSeconds !== null && issue.estimatedSeconds > 0 && !scope.hasEstimatedDescendant.has(keyOf(issue.workspace, issue.id)),
-  );
+  const planned = done.filter((issue) => countsAsPlanned(scope, issue));
   const plannedSeconds = planned.reduce((sum, issue) => sum + issue.estimatedSeconds!, 0);
   const ratios: number[] = [];
   let pairEstimate = 0;
   let pairWork = 0;
   for (const issue of done) {
     if (issue.estimatedSeconds === null || issue.estimatedSeconds <= 0) continue;
-    const work = (scope.attemptsOf.get(keyOf(issue.workspace, issue.id)) ?? []).reduce((sum, attempt) => sum + attempt.effortSeconds, 0);
+    const work = attemptsFor(scope, issue).reduce((sum, attempt) => sum + attempt.effortSeconds, 0);
     if (work <= 0) continue;
     ratios.push(work / issue.estimatedSeconds);
     pairEstimate += issue.estimatedSeconds;
@@ -534,10 +550,7 @@ function computeWindow(scope: Scope, window: Window, zone: Zone): WindowFigures 
     const epicDoneHere = doneKeys.has(keyOf(epic.workspace, epic.id));
     if (doneInPeriod === 0 && !epicDoneHere) continue;
     const subtree = [epic, ...descendants];
-    const seconds = subtree.reduce(
-      (sum, issue) => sum + (scope.attemptsOf.get(keyOf(issue.workspace, issue.id)) ?? []).reduce((inner, attempt) => inner + attempt.cappedSeconds, 0),
-      0,
-    );
+    const seconds = subtree.reduce((sum, issue) => sum + cappedSecondsOf(scope, issue), 0);
     const createdTimes = descendants.map((issue) => ms(issue.createdAt));
     const doneTimes = doneDescendants.map((issue) => ms(issue.completedAt!));
     epics.push({
@@ -557,25 +570,30 @@ function computeWindow(scope: Scope, window: Window, zone: Zone): WindowFigures 
   }
   epics.sort((a, b) => b.doneInPeriod - a.doneInPeriod || b.descendantsDone - a.descendantsDone || a.identifier.localeCompare(b.identifier));
 
+  const bySlug = new Map(scope.slugs.map((slug) => [slug, { created: 0, done: 0, bugsFixed: 0, epicsDone: 0, issues: [] as ScopedIssue[], attempts: [] as ScopedAttempt[] }]));
+  for (const issue of work) bySlug.get(issue.workspace)?.issues.push(issue);
+  for (const attempt of scope.attempts) bySlug.get(attempt.workspace)?.attempts.push(attempt);
+  for (const issue of created) bySlug.get(issue.workspace)!.created += 1;
+  for (const issue of done) {
+    const held = bySlug.get(issue.workspace)!;
+    held.done += 1;
+    if (issue.kind === "bug") held.bugsFixed += 1;
+    if (issue.kind === "epic") held.epicsDone += 1;
+  }
   const workspaces: WorkspaceRow[] = scope.slugs.map((slug) => {
-    const mine = work.filter((issue) => issue.workspace === slug);
-    const myDone = done.filter((issue) => issue.workspace === slug);
-    const mySpan = activitySpan(
-      { ...scope, issues: mine, attempts: scope.attempts.filter((attempt) => attempt.workspace === slug) },
-      zone,
-    );
-    const myRunning = running.filter((attempt) => attempt.workspace === slug);
+    const held = bySlug.get(slug)!;
+    const span = activitySpan(held.issues, held.attempts, zone);
     return {
       slug,
       prefix: scope.prefixes.get(slug) ?? slug,
-      done: myDone.length,
-      created: created.filter((issue) => issue.workspace === slug).length,
-      bugsFixed: myDone.filter((issue) => issue.kind === "bug").length,
-      epicsDone: myDone.filter((issue) => issue.kind === "epic").length,
-      agentHours: round2(hours(myRunning.reduce((sum, attempt) => sum + cappedWithin(attempt, window.startMs, window.endMs), 0))),
-      activeDays: window.days.filter((_, index) => myRunning.some((attempt) => runsWithin(attempt, window.edges[index]!, window.edges[index + 1]!))).length,
-      firstActivity: mySpan.first,
-      lastActivity: mySpan.last,
+      done: held.done,
+      created: held.created,
+      bugsFixed: held.bugsFixed,
+      epicsDone: held.epicsDone,
+      agentHours: round2(hours(daily.reduce((sum, day) => sum + (day.byWorkspace.get(slug)?.seconds ?? 0), 0))),
+      activeDays: daily.filter((day) => day.ranBy.has(slug)).length,
+      firstActivity: span.first,
+      lastActivity: span.last,
       features: epics
         .filter((epic) => epic.workspace === slug && epicsDoneHere.has(keyOf(slug, epic.identifier)))
         .sort((a, b) => b.descendantsDone - a.descendantsDone || a.identifier.localeCompare(b.identifier))
@@ -604,7 +622,7 @@ function computeWindow(scope: Scope, window: Window, zone: Zone): WindowFigures 
       sprints.push({
         start: first.day,
         end: last.day,
-        days: daysBetween(first.day, last.day),
+        days: daysInclusive(first.day, last.day),
         done: doneCount,
         agentHours: round2(hours(seconds)),
         bestDay: { date: best.day, done: daily[best.index]!.done },
@@ -622,18 +640,14 @@ function computeWindow(scope: Scope, window: Window, zone: Zone): WindowFigures 
   };
   for (const entry of completionDays) {
     const previous = run[run.length - 1];
-    if (previous !== undefined && daysBetween(previous.day, entry.day) - 1 > ANALYTICS_DEFINITIONS.sprintGapDays) closeRun();
+    if (previous !== undefined && daysInclusive(previous.day, entry.day) - 1 > ANALYTICS_DEFINITIONS.sprintGapDays) closeRun();
     run.push(entry);
   }
   closeRun();
 
   // ---- agent types and agents
   const typeRows = new Map<AgentType, { attempts: number; seconds: number; plannedSeconds: number; plannedTickets: number; reasons: Record<string, number>; agents: Record<string, number> }>();
-  const typeRow = (type: AgentType) => {
-    const held = typeRows.get(type) ?? { attempts: 0, seconds: 0, plannedSeconds: 0, plannedTickets: 0, reasons: {}, agents: {} };
-    typeRows.set(type, held);
-    return held;
-  };
+  const typeRow = (type: AgentType) => upsert(typeRows, type, () => ({ attempts: 0, seconds: 0, plannedSeconds: 0, plannedTickets: 0, reasons: {}, agents: {} }));
   for (const attempt of running) {
     const row = typeRow(attempt.type);
     row.attempts += 1;
@@ -664,11 +678,7 @@ function computeWindow(scope: Scope, window: Window, zone: Zone): WindowFigures 
   });
 
   const agentGroups = new Map<string, ScopedAttempt[]>();
-  for (const attempt of running) {
-    const list = agentGroups.get(attempt.agent) ?? [];
-    list.push(attempt);
-    agentGroups.set(attempt.agent, list);
-  }
+  for (const attempt of running) upsert(agentGroups, attempt.agent, () => []).push(attempt);
   const agents: AgentRow[] = [...agentGroups.entries()]
     .map(([name, list]) => {
       const counts: Partial<Record<AgentType, number>> = {};
@@ -728,7 +738,7 @@ function computeWindow(scope: Scope, window: Window, zone: Zone): WindowFigures 
   caveat("closed_on_import", done.length - settled.length, done.length);
   caveat("estimates_partial", done.length - planned.length > 0 && planned.length > 0 ? done.length - planned.length : 0, done.length);
 
-  const medianCycle = lowerQuantile(cycle, 0.5);
+  const medianCycle = quantileOf(cycle, 50);
   const headline: AnalyticsHeadline = {
     done: done.length,
     epicsDone,
@@ -777,15 +787,15 @@ function computeWindow(scope: Scope, window: Window, zone: Zone): WindowFigures 
         cycle: {
           n: cycle.length,
           medianHours: round2OrNull(medianCycle),
-          p25Hours: round2OrNull(lowerQuantile(cycle, 0.25)),
-          p75Hours: round2OrNull(lowerQuantile(cycle, 0.75)),
+          p25Hours: round2OrNull(quantileOf(cycle, 25)),
+          p75Hours: round2OrNull(quantileOf(cycle, 75)),
           under1h: cycle.filter((value) => value < 1).length,
           under4h: cycle.filter((value) => value < 4).length,
         },
-        lead: { n: lead.length, medianHours: round2OrNull(lowerQuantile(lead, 0.5)), within24h: lead.filter((value) => value < 24).length },
+        lead: { n: lead.length, medianHours: round2OrNull(quantileOf(lead, 50)), within24h: lead.filter((value) => value < 24).length },
         histogram,
         cycleByKind,
-        effortPerTicket: { n: effortPerTicket.length, medianHours: round2OrNull(lowerQuantile(effortPerTicket, 0.5)) },
+        effortPerTicket: { n: effortPerTicket.length, medianHours: round2OrNull(quantileOf(effortPerTicket, 50)) },
       },
       reliability: { started: started.length, outcomes, successRate },
       estimates: {
@@ -794,7 +804,7 @@ function computeWindow(scope: Scope, window: Window, zone: Zone): WindowFigures 
           n: ratios.length,
           estimateHours: round2(hours(pairEstimate)),
           workHours: round2(hours(pairWork)),
-          medianRatio: lowerQuantile(ratios, 0.5),
+          medianRatio: quantileOf(ratios, 50),
           underEstimate: ratios.filter((ratio) => ratio < 1).length,
         },
       },
@@ -888,14 +898,17 @@ export interface ResolvedPeriod {
 
 export function resolvePeriod(workspaces: readonly WorkspaceRows[], query: AnalyticsQuery): ResolvedPeriod {
   const zone = Zone.of(query.tz);
-  const scope = indexScope(workspaces, []);
-  const span = activitySpan(scope, zone);
+  const span = activitySpan(
+    workspaces.flatMap((w) => w.issues),
+    workspaces.flatMap((w) => w.attempts),
+    zone,
+  );
   const today = zone.dateOf(query.now);
   const explicit = query.from !== undefined && query.from !== "";
   const from = explicit ? requireDay(query.from!, "from") : (span.first ?? today);
   const to = query.to !== undefined && query.to !== "" ? requireDay(query.to, "to") : today < from ? from : today;
   if (to < from) throw new StapleError("validation", `to (${to}) is before from (${from}).`);
-  const days = daysBetween(from, to);
+  const days = daysInclusive(from, to);
   if (days > MAX_PERIOD_DAYS) throw new StapleError("validation", `A period covers at most ${MAX_PERIOD_DAYS} days; ${from} to ${to} is ${days}.`);
   const bucket = bucketOf(query.bucket, days);
   const window = windowOf(zone, from, to);
@@ -956,7 +969,9 @@ export interface RoleTallies {
   readonly tickets: Map<string, PricedTicket[]>;
   /** Measured hours priced at each role on tickets not done in the window. */
   readonly otherHours: Map<string, number>;
+  /** Capped agent-hours in the window, unrounded. */
   readonly agentHours: number;
+  /** Days of the window on which any attempt ran. */
   readonly activeDays: number;
 }
 
@@ -974,16 +989,10 @@ export function roleTallies(workspaces: readonly WorkspaceRows[], resolved: Reso
   const planned: RoleTallies["planned"] = new Map();
   const tickets: RoleTallies["tickets"] = new Map();
   const otherHours: RoleTallies["otherHours"] = new Map();
-  const measuredOf = (id: string) => {
-    const held = measured.get(id) ?? { hours: 0, types: new Set<AgentType>(), tickets: 0, plannedTickets: null };
-    measured.set(id, held);
-    return held;
-  };
-  const plannedOf = (id: string) => {
-    const held = planned.get(id) ?? { hours: 0, types: new Set<AgentType>(), tickets: 0, plannedTickets: 0 };
-    planned.set(id, held);
-    return held;
-  };
+  const measuredOf = (id: string) => upsert(measured, id, () => ({ hours: 0, types: new Set<AgentType>(), tickets: 0, plannedTickets: null }));
+  const plannedOf = (id: string) => upsert(planned, id, () => ({ hours: 0, types: new Set<AgentType>(), tickets: 0, plannedTickets: 0 }));
+  let agentHours = 0;
+  const activeDays = new Set<number>();
   const done = scope.issues.filter((issue) => isWork(issue) && issue.category === "done" && within(issue.completedAt, window));
   const doneKeys = new Set(done.map((issue) => keyOf(issue.workspace, issue.id)));
   for (const attempt of scope.attempts) {
@@ -993,12 +1002,16 @@ export function roleTallies(workspaces: readonly WorkspaceRows[], resolved: Reso
     const held = measuredOf(id);
     held.hours += hours(seconds);
     held.types.add(attempt.type);
+    agentHours += hours(seconds);
+    const first = Math.max(0, dayIndex(window, Math.max(attempt.startMs, window.startMs)));
+    const last = attempt.endMs === attempt.startMs ? first : dayIndex(window, Math.min(attempt.endMs, window.endMs) - 1);
+    for (let index = first; index <= (last < 0 ? first : last); index += 1) activeDays.add(index);
     if (!doneKeys.has(keyOf(attempt.workspace, attempt.issueId))) otherHours.set(id, (otherHours.get(id) ?? 0) + hours(seconds));
   }
   for (const issue of done) {
     const pricing = ticketPricing(scope, issue);
     const id = pricing.roleId ?? roleOf(pricing.type);
-    const counted = issue.estimatedSeconds !== null && issue.estimatedSeconds > 0 && !scope.hasEstimatedDescendant.has(keyOf(issue.workspace, issue.id));
+    const counted = countsAsPlanned(scope, issue);
     measuredOf(id).tickets += 1;
     const plan = plannedOf(id);
     plan.tickets += 1;
@@ -1007,19 +1020,16 @@ export function roleTallies(workspaces: readonly WorkspaceRows[], resolved: Reso
       plan.hours += hours(issue.estimatedSeconds!);
       plan.plannedTickets += 1;
     }
-    const list = tickets.get(id) ?? [];
-    list.push({
+    upsert(tickets, id, () => []).push({
       workspace: issue.workspace,
       identifier: issue.identifier,
       title: issue.title,
       type: pricing.type,
       reason: pricing.reason,
       plannedSeconds: counted ? issue.estimatedSeconds : null,
-      agentSeconds: (scope.attemptsOf.get(keyOf(issue.workspace, issue.id)) ?? []).reduce((sum, attempt) => sum + attempt.cappedSeconds, 0),
+      agentSeconds: cappedSecondsOf(scope, issue),
     });
-    tickets.set(id, list);
   }
   for (const list of tickets.values()) list.sort((a, b) => b.agentSeconds - a.agentSeconds || a.identifier.localeCompare(b.identifier));
-  const figures = computeWindow(scope, window, resolved.zone);
-  return { measured, planned, tickets, otherHours, agentHours: figures.headline.agentHours, activeDays: figures.report.capacity.activeDays };
+  return { measured, planned, tickets, otherHours, agentHours, activeDays: activeDays.size };
 }

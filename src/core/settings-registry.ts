@@ -48,6 +48,7 @@ import { kindAppearanceMapProblem, type KindAppearanceMap } from "./kind-appeara
 import { mappingProblem } from "./integrations/mapping-format.js";
 import { COST_MODEL_KEYS, DEFAULT_COST_MODEL, costModelPartProblem, type CostModelPart } from "./analytics/cost-model.js";
 
+
 export type SettingScope = "workspace" | "global";
 
 /** Where a setting's effective value came from. `default` means nothing is stored. */
@@ -72,8 +73,11 @@ export type SettingSchema =
   | { type: "string"; pattern?: RegExp; patternHint?: string; /** A structured string: why the value is unacceptable, or null. */ validate?: (value: string) => string | null }
   | { type: "enum"; values: readonly string[] }
   | { type: "kindAppearance" }
-  /** One part of the Analytics cost model (`core/analytics/cost-model.ts`), validated there. */
-  | { type: "costModel"; part: CostModelPart };
+  /**
+   * A structured JSON value its owner validates: why the value is unacceptable, or null. The
+   * CLI parses the word it is given as JSON. The Analytics cost model's parts use it.
+   */
+  | { type: "json"; validate: (value: unknown) => string | null; hint: string };
 
 /** How the shell renders the setting. Metadata only — the shell decides the widget. */
 export type SettingControl = "toggle" | "number" | "text" | "select" | "glyph";
@@ -302,7 +306,7 @@ const definitions: SettingDefinition[] = [
       key,
       category: "analytics",
       scope: "workspace",
-      schema: { type: "costModel", part },
+      schema: { type: "json", validate: (value: unknown) => costModelPartProblem(part, value), hint: `the cost model's ${part}, as JSON` },
       default: DEFAULT_COST_MODEL[part],
       version: 1,
       sensitivity: "normal",
@@ -536,8 +540,8 @@ export function validateSettingValue<T>(
       if (problem) refuse(problem);
       return value as T;
     }
-    case "costModel": {
-      const problem = costModelPartProblem(schema.part, value);
+    case "json": {
+      const problem = schema.validate(value);
       if (problem) refuse(problem);
       return value as T;
     }
@@ -566,7 +570,7 @@ export function coerceSettingInput<T>(definition: SettingDefinition<T>, raw: str
     if (!Number.isInteger(candidate)) {
       throw new StapleError("validation", `${field} must be an integer, got "${raw}"`);
     }
-  } else if (schema.type === "costModel") {
+  } else if (schema.type === "json") {
     try {
       candidate = JSON.parse(raw);
     } catch {
@@ -652,7 +656,7 @@ export type SettingSchemaView =
   | { type: "string"; pattern?: string; patternHint?: string }
   | { type: "enum"; values: string[] }
   | { type: "kindAppearance" }
-  | { type: "costModel"; part: CostModelPart };
+  | { type: "json"; hint: string };
 
 export function settingDefinitionView(definition: SettingDefinition): SettingDefinitionView {
   const schema = definition.schema;
@@ -669,8 +673,8 @@ export function settingDefinitionView(definition: SettingDefinition): SettingDef
           ? { type: "integer", ...(schema.min !== undefined ? { min: schema.min } : {}), ...(schema.max !== undefined ? { max: schema.max } : {}) }
           : schema.type === "kindAppearance"
             ? { type: "kindAppearance" }
-            : schema.type === "costModel"
-              ? { type: "costModel", part: schema.part }
+            : schema.type === "json"
+              ? { type: "json", hint: schema.hint }
               : { type: "boolean" };
   return {
     key: definition.key,

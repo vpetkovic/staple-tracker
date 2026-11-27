@@ -9,6 +9,7 @@
  * crosses a daylight-saving change still cuts each day at its own local midnight (a 23- or
  * 25-hour day), which is what a person counting "days" means.
  */
+import { addDays, daysBetween } from "../plan.js";
 import { StapleError } from "../types.js";
 
 /** A calendar day, `YYYY-MM-DD`. */
@@ -112,15 +113,12 @@ export class Zone {
 
 /** The day after `date`, as a calendar (not 24-hour) step. */
 export function nextDate(date: DateKey): DateKey {
-  const match = DATE_KEY.exec(date);
-  if (!match) throw new StapleError("validation", `Expected a calendar day YYYY-MM-DD; got "${date}".`);
-  const next = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]) + 1));
-  return next.toISOString().slice(0, 10);
+  return addDays(date, 1);
 }
 
 /** Whole calendar days from `from` to `to`, both included. */
-export function daysBetween(from: DateKey, to: DateKey): number {
-  return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000) + 1;
+export function daysInclusive(from: DateKey, to: DateKey): number {
+  return daysBetween(from, to) + 1;
 }
 
 /** Every day from `from` to `to`, both included. */

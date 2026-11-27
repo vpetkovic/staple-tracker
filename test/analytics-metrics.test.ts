@@ -12,7 +12,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { analyticsReport, lowerQuantile, resolvePeriod, roleTallies, type AnalyticsQuery } from "../src/core/analytics/metrics.js";
+import { analyticsReport, quantileOf, resolvePeriod, roleTallies, type AnalyticsQuery } from "../src/core/analytics/metrics.js";
 import { readWorkspaceRows, type AnalyticsAttempt, type AnalyticsIssue, type WorkspaceRows } from "../src/core/analytics/rows.js";
 import type { AnalyticsReport } from "../src/core/analytics/contract.js";
 import { openDb } from "../src/core/db.js";
@@ -138,7 +138,7 @@ describe("delivery, capacity and speed over one period", () => {
     expect(report.speed.lead).toMatchObject({ n: 2, medianHours: 1, within24h: 1 });
     expect(report.speed.histogram.find((bin) => bin.label === "1–2h")!.count).toBe(1);
     expect(report.speed.histogram.find((bin) => bin.label === "4–8h")!.count).toBe(1);
-    expect(lowerQuantile([1, 2, 3, 4], 0.5)).toBe(2);
+    expect(quantileOf([4, 3, 2, 1], 50)).toBe(2);
   });
 
   it("divides attempt success by the attempts that have ended", () => {

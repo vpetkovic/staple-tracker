@@ -19,12 +19,14 @@ import {
   fetchAnalytics,
   fetchCostModel,
   fetchRoi,
+  fetchRoiTickets,
   saveCostModel as postCostModel,
   type AnalyticsQuery,
   type AnalyticsReport,
   type CostModelResponse,
   type CostModelWrite,
   type RoiResponse,
+  type RoiTicketsResponse,
 } from "./analytics-api";
 
 export const LIVE_INTERVAL_MS = 30_000;
@@ -68,29 +70,31 @@ function useSavedTick(): number {
 
 const keyOf = (query: AnalyticsQuery): string => JSON.stringify([query.scope ?? "", query.from ?? "", query.to ?? "", query.tz ?? "", query.bucket ?? ""]);
 
-export function useAnalytics(query: AnalyticsQuery, onAuthError: (error: AuthError) => void): Resource<AnalyticsReport> {
+/** One Analytics read: refetched on its own key at once, on live data at most every `LIVE_INTERVAL_MS`, and after a save. */
+function useLiveRead<T>(fetcher: () => Promise<T>, key: string, onAuthError: (error: AuthError) => void): Resource<T> {
   const version = useThrottled(useSession().version);
   const tick = useSavedTick();
-  const key = keyOf(query);
+  // `key` names everything `fetcher` reads.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const load = useCallback(() => fetchAnalytics(query), [key]);
+  const load = useCallback(fetcher, [key]);
   return useResource(load, [key, version, tick], onAuthError);
+}
+
+export function useAnalytics(query: AnalyticsQuery, onAuthError: (error: AuthError) => void): Resource<AnalyticsReport> {
+  return useLiveRead(() => fetchAnalytics(query), keyOf(query), onAuthError);
 }
 
 export function useRoi(query: AnalyticsQuery, onAuthError: (error: AuthError) => void): Resource<RoiResponse> {
-  const version = useThrottled(useSession().version);
-  const tick = useSavedTick();
-  const key = keyOf(query);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const load = useCallback(() => fetchRoi(query), [key]);
-  return useResource(load, [key, version, tick], onAuthError);
+  return useLiveRead(() => fetchRoi(query), keyOf(query), onAuthError);
+}
+
+/** The tickets behind one role row; pass `roleId: null` while no row is open, and nothing is fetched. */
+export function useRoiTickets(roleId: string | null, query: AnalyticsQuery, onAuthError: (error: AuthError) => void): Resource<RoiTicketsResponse | null> {
+  return useLiveRead(() => (roleId === null ? Promise.resolve(null) : fetchRoiTickets(roleId, query)), `${roleId ?? ""}|${keyOf(query)}`, onAuthError);
 }
 
 export function useCostModel(scope: string | undefined, onAuthError: (error: AuthError) => void): Resource<CostModelResponse> {
-  const version = useThrottled(useSession().version);
-  const tick = useSavedTick();
-  const load = useCallback(() => fetchCostModel(scope), [scope]);
-  return useResource(load, [scope, version, tick], onAuthError);
+  return useLiveRead(() => fetchCostModel(scope), scope ?? "", onAuthError);
 }
 
 /**
