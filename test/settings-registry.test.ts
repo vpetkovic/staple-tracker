@@ -75,6 +75,11 @@ describe("the registered set", () => {
       "queue.policy",
       "queue.silentClaimMinutes",
       "features.planning",
+      // The Analytics cost model (STA-575): four parts, edited on the ROI page.
+      "analytics.roles",
+      "analytics.roleMapping",
+      "analytics.scenario",
+      "analytics.aiSpend",
     ]);
   });
 
@@ -85,6 +90,8 @@ describe("the registered set", () => {
       "kinds:workspace:kinds",
       "queue:workspace:fields",
       "features:workspace:fields",
+      // Edited on its own page; `settingRegistryView` leaves it out of the Settings screen.
+      "analytics:workspace:page",
       "machine:global:fields",
     ]);
     expect(settingCategoriesFor("global").map((c) => c.id)).toEqual(["machine"]);

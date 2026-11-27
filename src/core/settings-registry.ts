@@ -46,6 +46,7 @@
 import { StapleError, VOCABULARY_ID_PATTERN, DEFAULT_ISSUE_KIND } from "./types.js";
 import { kindAppearanceMapProblem, type KindAppearanceMap } from "./kind-appearance.js";
 import { mappingProblem } from "./integrations/mapping-format.js";
+import { COST_MODEL_KEYS, DEFAULT_COST_MODEL, costModelPartProblem, type CostModelPart } from "./analytics/cost-model.js";
 
 export type SettingScope = "workspace" | "global";
 
@@ -70,7 +71,9 @@ export type SettingSchema =
   | { type: "integer"; min?: number; max?: number }
   | { type: "string"; pattern?: RegExp; patternHint?: string; /** A structured string: why the value is unacceptable, or null. */ validate?: (value: string) => string | null }
   | { type: "enum"; values: readonly string[] }
-  | { type: "kindAppearance" };
+  | { type: "kindAppearance" }
+  /** One part of the Analytics cost model (`core/analytics/cost-model.ts`), validated there. */
+  | { type: "costModel"; part: CostModelPart };
 
 /** How the shell renders the setting. Metadata only — the shell decides the widget. */
 export type SettingControl = "toggle" | "number" | "text" | "select" | "glyph";
@@ -89,8 +92,14 @@ export interface SettingUiMetadata {
  * registry, and the registry lists them so the shell can enumerate every
  * category from one place rather than hard-coding the tabs.
  */
-export type SettingCategoryEditor = "fields" | "statuses" | "kinds";
+export type SettingCategoryEditor = "fields" | "statuses" | "kinds" | "page";
 
+/**
+ * `page`: the category's settings are edited on their own page (the Analytics cost model, on
+ * the ROI page), not in the Settings screen. They are ordinary workspace settings in every
+ * other respect: stored, journaled and synced the same way, and listed by `staple settings`.
+ * `settingRegistryView`, which is what the Settings screen draws from, leaves them out.
+ */
 export interface SettingCategory {
   id: string;
   label: string;
@@ -157,6 +166,14 @@ const categories: SettingCategory[] = [
     order: 30,
   },
   { id: "features", label: "Experimental", description: "Experimental workspace features may change.", scope: "workspace", editor: "fields", order: 40 },
+  {
+    id: "analytics",
+    label: "Analytics cost model",
+    description: "Roles and rates, the agent-type mapping, the who-pays scenario and AI spend the ROI page prices work with. Edited on that page.",
+    scope: "workspace",
+    editor: "page",
+    order: 50,
+  },
   {
     id: "machine",
     label: "This machine",
@@ -280,6 +297,23 @@ const definitions: SettingDefinition[] = [
     schema: { type: "boolean" }, default: false, version: 1, sensitivity: "normal",
     ui: { label: "Planning (experimental)", description: "Ideas, horizons and the Plan view. Only a person can change this; turning it off keeps all planning data.", control: "toggle", order: 10 },
   },
+  ...(Object.entries(COST_MODEL_KEYS) as Array<[CostModelPart, string]>).map(
+    ([part, key], index): SettingDefinition => ({
+      key,
+      category: "analytics",
+      scope: "workspace",
+      schema: { type: "costModel", part },
+      default: DEFAULT_COST_MODEL[part],
+      version: 1,
+      sensitivity: "normal",
+      ui: {
+        label: { roles: "Roles and rates", roleMapping: "Agent types to roles", scenario: "Who pays", aiSpend: "AI spend" }[part],
+        description: "Part of the Analytics cost model. A JSON value; edit it on the ROI page.",
+        control: "text",
+        order: 10 + index,
+      },
+    }),
+  ),
   {
     key: "machine.browser",
     category: "machine",
@@ -502,6 +536,11 @@ export function validateSettingValue<T>(
       if (problem) refuse(problem);
       return value as T;
     }
+    case "costModel": {
+      const problem = costModelPartProblem(schema.part, value);
+      if (problem) refuse(problem);
+      return value as T;
+    }
     default:
       throw new StapleError("validation", `Unknown setting schema for "${definition.key}"`);
   }
@@ -526,6 +565,12 @@ export function coerceSettingInput<T>(definition: SettingDefinition<T>, raw: str
     candidate = Number(raw);
     if (!Number.isInteger(candidate)) {
       throw new StapleError("validation", `${field} must be an integer, got "${raw}"`);
+    }
+  } else if (schema.type === "costModel") {
+    try {
+      candidate = JSON.parse(raw);
+    } catch {
+      throw new StapleError("validation", `${field} takes a JSON value, got "${raw}"`);
     }
   }
   return validateSettingValue(definition, candidate, where, field);
@@ -606,7 +651,8 @@ export type SettingSchemaView =
   | { type: "integer"; min?: number; max?: number }
   | { type: "string"; pattern?: string; patternHint?: string }
   | { type: "enum"; values: string[] }
-  | { type: "kindAppearance" };
+  | { type: "kindAppearance" }
+  | { type: "costModel"; part: CostModelPart };
 
 export function settingDefinitionView(definition: SettingDefinition): SettingDefinitionView {
   const schema = definition.schema;
@@ -623,7 +669,9 @@ export function settingDefinitionView(definition: SettingDefinition): SettingDef
           ? { type: "integer", ...(schema.min !== undefined ? { min: schema.min } : {}), ...(schema.max !== undefined ? { max: schema.max } : {}) }
           : schema.type === "kindAppearance"
             ? { type: "kindAppearance" }
-            : { type: "boolean" };
+            : schema.type === "costModel"
+              ? { type: "costModel", part: schema.part }
+              : { type: "boolean" };
   return {
     key: definition.key,
     category: definition.category,
@@ -656,11 +704,16 @@ export function settingValueView(
   return definition.sensitivity === "sensitive" ? { ...base, redacted: true } : { ...base, value };
 }
 
-/** The registry as served: categories and definitions, in shell order. */
+/**
+ * The registry as the Settings screen draws it: categories and definitions, in shell order.
+ * A `page` category, and its definitions, are left out: they are edited on their own page.
+ */
 export function settingRegistryView(): { categories: SettingCategory[]; definitions: SettingDefinitionView[] } {
+  const onPages = new Set(SETTING_CATEGORIES.filter((category) => category.editor === "page").map((category) => category.id));
   return {
-    categories: [...SETTING_CATEGORIES].sort((a, b) => a.order - b.order || a.id.localeCompare(b.id)),
+    categories: [...SETTING_CATEGORIES].filter((category) => !onPages.has(category.id)).sort((a, b) => a.order - b.order || a.id.localeCompare(b.id)),
     definitions: [...SETTING_DEFINITIONS]
+      .filter((definition) => !onPages.has(definition.category))
       .sort((a, b) => a.ui.order - b.ui.order || a.key.localeCompare(b.key))
       .map(settingDefinitionView),
   };

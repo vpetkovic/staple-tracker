@@ -32,6 +32,7 @@ import {
   type McpHarness,
 } from "./fixtures/contract-support.js";
 import { CLI_EXIT_CODES } from "./fixtures/error-contract.js";
+import { DEFAULT_COST_MODEL } from "../src/core/analytics/cost-model.js";
 
 const WS = "settingsx";
 const KEY = "queue.policy";
@@ -179,6 +180,8 @@ describe("the queue policy is the same object on every surface", () => {
       "queue.policy = strict  (workspace)",
       "queue.silentClaimMinutes = 30  (default)",
       "features.planning = false  (default)",
+      // The Analytics cost model (STA-575) is structured, so each part prints as JSON.
+      ...(["roles", "roleMapping", "scenario", "aiSpend"] as const).map((part) => `analytics.${part} = ${JSON.stringify(DEFAULT_COST_MODEL[part])}  (default)`),
     ]);
   });
 });

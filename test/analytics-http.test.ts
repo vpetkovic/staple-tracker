@@ -130,3 +130,67 @@ describe("GET /api/analytics", () => {
     expect((await http(`/api/analytics`, {})).status).toBe(405);
   });
 });
+
+describe("the cost model over HTTP", () => {
+  it("reads defaults, saves to the suggested home, and refuses a write from a foreign page", async () => {
+    const before = await http(`/api/analytics/cost-model?scope=beta`);
+    expect(before.status).toBe(200);
+    expect(before.body.home).toMatchObject({ slug: null, suggested: "beta" });
+    expect(before.body.model.roles.assumed).toEqual(["roles.software-engineer.hourlyRate", "roles.design-engineer.hourlyRate", "roles.technical-writer.hourlyRate"]);
+
+    const foreign = await fetch(`${origin}/api/analytics/cost-model`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "https://elsewhere.example" },
+      body: JSON.stringify({ home: "beta", roles: { roles: [{ id: "engineer", title: "Engineer", hourlyRate: 1 }] } }),
+    });
+    expect([401, 403]).toContain(foreign.status);
+
+    const saved = await http(`/api/analytics/cost-model?scope=beta`, {
+      home: "beta",
+      roles: { roles: [{ id: "engineer", title: "Engineer", hourlyRate: 70 }, { id: "writer", title: "Writer", hourlyRate: 50 }] },
+      roleMapping: { types: { engineering: "engineer", design: "engineer", documentation: "writer", research: "engineer", orchestration: "engineer" }, rules: [{ title: "build", roleId: "writer" }] },
+      scenario: { mode: "solo", currency: "USD", director: { title: "You", hourlyRate: 100, hoursPerActiveDay: 8 }, assumed: ["director.hoursPerActiveDay"] },
+      aiSpend: { entries: [{ id: "plan", label: "Plan", monthlyAmount: 300, from: "2026-09", to: null }] },
+    });
+    expect(saved.status).toBe(200);
+    expect(saved.body.home).toMatchObject({ slug: "beta", synced: false });
+    expect(saved.body.source).toEqual({ roles: "saved", roleMapping: "saved", scenario: "saved", aiSpend: "saved" });
+    expect((await http(`/api/analytics/cost-model?scope=alpha`)).body.home.slug).toBe("beta");
+
+    const bad = await http(`/api/analytics/cost-model`, { roles: { roles: [] } });
+    expect(bad.status).toBe(409);
+    expect(bad.body).toMatchObject({ code: "validation", message: expect.stringMatching(/1 to 30/) });
+  });
+
+  it("applies the saved rules to the metrics, prices the ROI against the hub's costs, and lists the tickets behind a role", async () => {
+    // The rule `title: build → writer` now prices alpha's two "Build n" tickets at the writer role.
+    const roi = await http(`/api/analytics/roi?scope=alpha&${QUERY}`);
+    expect(roi.status).toBe(200);
+    expect(roi.body.measured.byRole).toEqual([
+      expect.objectContaining({ roleId: "writer", hours: 2, value: 100, tickets: 2, plannedTickets: null }),
+    ]);
+    expect(roi.body.planned.byRole).toEqual([expect.objectContaining({ roleId: "writer", hours: 4, tickets: 2, plannedTickets: 2 })]);
+    // Alpha ran 2 of the hub's 3 agent-hours: it carries two thirds of a week of $300/month and of 2 active days × 8 h.
+    expect(roi.body.basis).toMatchObject({ share: 2 / 3, scopeAgentHours: 2, hubAgentHours: 3, activeDaysHub: 1, hoursPerActiveDay: 8, directorHoursHub: 8 });
+    expect(roi.body.basis.aiSpendHub).toBeCloseTo(70);
+    expect(roi.body.measured.aiCost).toBeCloseTo(70 * (2 / 3));
+    expect(roi.body.measured.director).toMatchObject({ hours: 8 * (2 / 3), hourlyRate: 100 });
+    expect(roi.body.caveats.map((caveat: { code: string }) => caveat.code)).toContain("home_not_synced");
+
+    const hub = await http(`/api/analytics/roi?${QUERY}`);
+    expect(hub.body.basis.share).toBe(1);
+    expect(hub.body.measured.aiCost).toBeCloseTo(70);
+
+    const tickets = await http(`/api/analytics/roi/tickets?scope=alpha&roleId=writer&${QUERY}`);
+    expect(tickets.status).toBe(200);
+    expect(tickets.body).toMatchObject({ roleId: "writer", total: 2, limit: 200, otherAgentHours: 0 });
+    expect(tickets.body.tickets.map((t: { title: string; reason: { code: string } }) => [t.title, t.reason.code])).toEqual([
+      ["Build 0", "rule"],
+      ["Build 1", "rule"],
+    ]);
+    expect((await http(`/api/analytics/roi/tickets?scope=alpha&${QUERY}`)).status).toBe(409);
+
+    const metrics = await http(`/api/analytics?scope=alpha&${QUERY}`);
+    expect(metrics.body.agents[0].reason).toEqual({ code: "rule", detail: "0" });
+  });
+});

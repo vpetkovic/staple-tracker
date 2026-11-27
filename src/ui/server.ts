@@ -23,7 +23,9 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileS
 import { dirname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Hub, describeAbsentRow, notifyHubResolvedSafe } from "../core/hub.js";
-import { readAnalytics, type AnalyticsScope } from "../core/analytics/service.js";
+import { readAnalytics, readRoi, readRoiTickets, type AnalyticsScope } from "../core/analytics/service.js";
+import { readCostModel, writeCostModel, type HomeCandidate } from "../core/analytics/home.js";
+import type { CostModelWrite } from "../core/analytics/contract.js";
 import { openWorkspace, resolveWorkspace } from "../core/workspace.js";
 import {
   StapleError,
@@ -858,6 +860,27 @@ export function startUiServer(options: UiOptions): UiHandle {
       kind: "hub",
       sources: opened.flatMap(({ handle }) => (handle ? [{ slug: handle.slug, prefix: handle.prefix, db: handle.store.db }] : [])),
       refs: opened.map(({ entry, handle }) => ({ slug: entry.slug, prefix: entry.prefix, available: handle !== undefined })),
+    };
+  }
+
+  /** Every open workspace that could hold the cost model: the hub's available ones, or the one. */
+  function costModelCandidates(): HomeCandidate[] {
+    return allHandles().map((handle) => ({ slug: handle.slug, prefix: handle.prefix, store: handle.store }));
+  }
+
+  /** The workspace an Analytics scope is about, for the cost model's suggested home; null for the hub. */
+  function scopeSlugOf(scope: AnalyticsScope): string | null {
+    return scope.kind === "workspace" ? (scope.refs[0]?.slug ?? null) : null;
+  }
+
+  /** The period part of an Analytics query string. */
+  function analyticsQuery(query: URLSearchParams) {
+    return {
+      from: query.get("from") ?? undefined,
+      to: query.get("to") ?? undefined,
+      tz: query.get("tz") ?? undefined,
+      bucket: query.get("bucket") ?? undefined,
+      now: nowIso(),
     };
   }
 
@@ -1832,7 +1855,7 @@ export function startUiServer(options: UiOptions): UiHandle {
           url.pathname === BUDGET_REFRESH_ROUTE ||
           url.pathname === "/api/budget/forget"
             ? ["POST"]
-            : url.pathname === "/api/settings"
+            : url.pathname === "/api/settings" || url.pathname === "/api/analytics/cost-model"
               ? ["GET", "POST"]
               : ["GET"];
         const allow = expected.join(", ");
@@ -1895,7 +1918,9 @@ export function startUiServer(options: UiOptions): UiHandle {
           // A run is machine-local and never synchronized (core/run-store.ts): nothing to send.
           !url.pathname.startsWith("/api/run/") &&
           // A dismissal is a local event, like the cross_blockers_resolved event it answers.
-          url.pathname !== "/api/attention/dismiss"
+          url.pathname !== "/api/attention/dismiss" &&
+          // The cost model is written to its home workspace, which the route names to the trigger itself.
+          url.pathname !== "/api/analytics/cost-model"
         ) {
           const ws = url.searchParams.get("ws") ?? undefined;
           res.once("finish", () => {
@@ -4432,16 +4457,65 @@ export function startUiServer(options: UiOptions): UiHandle {
        * two devices holding the same workspaces answer the same.
        */
       if (url.pathname === "/api/analytics") {
-        const query = url.searchParams;
+        const scope = analyticsScope(url.searchParams.get("scope"));
+        // The person's agent-type rules come from the one cost model, wherever it is saved.
+        const rules = readCostModel(costModelCandidates(), scopeSlugOf(scope)).model.roleMapping.rules;
+        json(res, 200, readAnalytics(scope, analyticsQuery(url.searchParams), rules));
+        return;
+      }
+
+      /**
+       * The cost model (`src/core/analytics/home.ts`): one model, saved as four workspace
+       * settings in its home workspace, read by every Analytics view. GET reads it, with each
+       * part's provenance and where it is saved; POST saves parts, resets them or moves the
+       * model, then triggers the sync of each workspace it wrote.
+       */
+      if (url.pathname === "/api/analytics/cost-model") {
+        const scope = analyticsScope(url.searchParams.get("scope"));
+        if (req.method === "POST") {
+          const body = await readBody(req);
+          const { response, written } = writeCostModel(costModelCandidates(), body as unknown as CostModelWrite, {
+            scopeSlug: scopeSlugOf(scope),
+            actor: bodyActor(body),
+            now: nowIso(),
+          });
+          res.once("finish", () => {
+            if (res.statusCode >= 200 && res.statusCode < 300) for (const slug of written) autoSync.postWrite(options.hub ? slug : undefined);
+          });
+          json(res, 200, response);
+          return;
+        }
+        json(res, 200, readCostModel(costModelCandidates(), scopeSlugOf(scope)));
+        return;
+      }
+
+      /**
+       * The ROI (`RoiResponse`): the scope's value under both lenses against its share of the
+       * hub's AI spend and directing time, priced with the one cost model.
+       */
+      if (url.pathname === "/api/analytics/roi") {
+        const scope = analyticsScope(url.searchParams.get("scope"));
+        const hub = scope.kind === "hub" || !options.hub ? scope : analyticsScope("hub");
+        const model = readCostModel(costModelCandidates(), scopeSlugOf(scope));
+        json(res, 200, readRoi({ scope, hub, query: analyticsQuery(url.searchParams), model }));
+        return;
+      }
+
+      /** The done tickets behind one ROI role row, so a wrong guess can be seen and corrected. */
+      if (url.pathname === "/api/analytics/roi/tickets") {
+        const scope = analyticsScope(url.searchParams.get("scope"));
+        const roleId = url.searchParams.get("roleId") ?? "";
+        if (roleId === "") throw new StapleError("validation", "roleId names the role whose tickets to list.");
+        const limit = url.searchParams.get("limit");
         json(
           res,
           200,
-          readAnalytics(analyticsScope(query.get("scope")), {
-            from: query.get("from") ?? undefined,
-            to: query.get("to") ?? undefined,
-            tz: query.get("tz") ?? undefined,
-            bucket: query.get("bucket") ?? undefined,
-            now: nowIso(),
+          readRoiTickets({
+            scope,
+            query: analyticsQuery(url.searchParams),
+            model: readCostModel(costModelCandidates(), scopeSlugOf(scope)),
+            roleId,
+            limit: limit === null ? undefined : Number(limit),
           }),
         );
         return;
