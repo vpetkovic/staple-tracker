@@ -1238,6 +1238,8 @@ try {
         "conflict_resolve",
         // Autopilot runs: continue records an outcome and claims as the run's actor.
         "continue_run",
+        // Converting a ticket into an idea names who converted it.
+        "convert_to_idea",
         "create_milestone",
         "create_task",
         // STA-168: a queue mutation is an actor-attributed event, which is what
