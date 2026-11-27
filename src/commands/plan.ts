@@ -60,7 +60,8 @@ function planFor(values: { db?: string; ws?: string }, enabling = false) {
 function ideaLine(idea: IdeaView, plan: PlanView): string {
   const horizon = horizonWords(idea, plan);
   // A shaped record held reads `shaped · waiting on parent`; a promoted one under a parent that went back is flagged.
-  const held = idea.heldBy === null ? null : idea.state === "started" ? (idea.heldBy.parents.length > 0 ? "parent not shaped" : null) : holdLabel(idea.heldBy);
+  const held =
+    idea.heldBy === null ? null : idea.state === "started" ? (idea.heldBy.parents.length > 0 ? "parent not shaped" : null) : idea.state === "shaped" ? holdLabel(idea.heldBy) : null;
   const flags = [held, idea.late ? "late" : null, idea.notStarted ? "not started" : null].filter(Boolean).join(", ");
   const depth = (() => {
     let level = 0;
@@ -136,7 +137,7 @@ function printDetail(detail: IdeaDetail): void {
   }
   for (const id of idea.blockedBy) {
     const blocker = detail.blockedBy.find((entry) => entry.id === id);
-    console.log(blocker ? `  blocked by ${blocker.number ?? blocker.identifier ?? blocker.id} ${blocker.title} (${blocker.state})` : `  blocked by ${id} · missing on this device`);
+    console.log(blocker && !blocker.missing ? `  blocked by ${blocker.number ?? blocker.identifier ?? blocker.id} ${blocker.title} (${blocker.state})` : `  blocked by ${id} · missing on this device`);
   }
   if (detail.plan.goal) console.log(`goal     ${detail.plan.goal.split("\n")[0]}`);
   const inherits = detail.plan.acceptance.length > 0;

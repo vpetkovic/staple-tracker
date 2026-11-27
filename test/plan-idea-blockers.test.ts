@@ -223,18 +223,63 @@ describe("plan steps wait accordingly", () => {
     expect(view(id).nextStep).toMatchObject({ need: "wait", waitingOn: { records: [{ id: audit, title: "Audit log", state: "exploring" }] } });
   });
 
-  it("a parent's Scaffold leaves a held sub-idea for its own turn, and its step does not wait on it", () => {
+  it("a parent's Scaffold leaves a held sub-idea for its own turn, says so in its preview, and its step waits for it", () => {
     const audit = capture("Audit log", { maturity: "exploring" });
     const parent = capture("SSO", { maturity: "shaped", horizon: now, plan: READY_PLAN });
     const held = capture("Passkeys", { maturity: "shaped", parent, plan: READY_PLAN });
     const ready = capture("SAML", { maturity: "shaped", parent, plan: READY_PLAN });
     plan.block(held, audit, "agent");
-    expect(plan.scaffoldPreview(parent).children.map((child) => child.idea.title)).toEqual(["SAML"]);
-    expect(view(parent).nextStep?.need).toBe("scaffold");
+    const preview = plan.scaffoldPreview(parent);
+    expect(preview.children.map((child) => child.idea.title)).toEqual(["SAML"]);
+    expect(preview.warnings).toEqual(['sub-idea "Passkeys" is left out until its turn: waiting on blocker, blocker "Audit log" (exploring)']);
+    // Its step waits for the held sub-idea, as for any sub-idea that waits.
+    expect(view(parent).nextStep).toMatchObject({ need: "wait", waitingOn: { records: [{ id: held, title: "Passkeys", state: "shaped" }] } });
+    expect(view(parent).nextStep?.instruction).toBe(
+      'Nothing to do yet: "SSO" has sub-ideas that still wait, "Passkeys"; Scaffold on it would build them early, or leave out the ones held back. Never scaffold it before then; scaffold each of its sub-ideas on its own when its turn comes.',
+    );
+    // The person may still scaffold it: the held one is left for its own turn.
     scaffold(parent);
     expect(store.getIssue(ready).kind).not.toBe("idea");
     expect(store.getIssue(held).kind).toBe("idea");
     expect(view(held).heldBy?.blockers.map((b) => b.id)).toEqual([audit]);
+  });
+
+  it("a blocked record's step says Scaffold is refused, not that a date releases it", () => {
+    const audit = capture("Audit log", { maturity: "exploring" });
+    const id = capture("Export", { maturity: "shaped", horizon: now, plan: READY_PLAN });
+    plan.block(id, audit, "agent");
+    expect(view(id).nextStep?.instruction).toBe(
+      'Nothing to do yet: "Export" waits for "Audit log" (exploring). Never scaffold it before then; Scaffold is refused until every idea above it is shaped and what it is blocked by has shipped.',
+    );
+    // A text dependency alone keeps the date wording: nothing refuses its Scaffold.
+    plan.unblock(id, audit, "agent");
+    capture("C9 Search", { maturity: "exploring" });
+    plan.update(id, { plan: { dependencies: ["C9 first"] } }, "agent");
+    expect(view(id).nextStep?.instruction).toContain("the person releases it early by moving its planned start");
+  });
+
+  it("a sub-idea under a dropped parent is told to restore it or move out, never to wait for it to be shaped", () => {
+    const parent = capture("SSO", { maturity: "exploring" });
+    const child = capture("Passkeys", { maturity: "shaped", parent, horizon: now, plan: READY_PLAN });
+    setMaturity(parent, "dropped");
+    expect(view(child).nextStep?.instruction).toContain('its parent "SSO", which was dropped (restore it, or move this idea out from under it)');
+  });
+});
+
+describe("loops through the tree", () => {
+  it("refuses an edge whose blocker waits on the record through an idea above or beneath it", () => {
+    const parent = capture("Pa", { maturity: "shaped", plan: READY_PLAN });
+    const child = capture("Ch", { maturity: "shaped", parent, plan: READY_PLAN });
+    const other = capture("Xb", { maturity: "exploring" });
+    plan.block(child, other, "agent");
+    // Xb on Pa: Pa's work holds Ch's, and Ch waits on Xb.
+    expect(() => plan.block(other, parent, "agent")).toThrow(/already waits on it, or on an idea above or beneath it/);
+    // Ch inherits what Pa waits on: Pa on Y, then Y on Ch, loops too.
+    const y = capture("Y", { maturity: "exploring" });
+    plan.block(parent, y, "agent");
+    expect(() => plan.block(y, child, "agent")).toThrow(/already waits on it/);
+    expect(view(other).blockedBy).toEqual([]);
+    expect(view(y).blockedBy).toEqual([]);
   });
 });
 

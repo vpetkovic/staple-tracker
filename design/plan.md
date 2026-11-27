@@ -792,8 +792,10 @@ nothing. The timeline draws no arrow between a record and its ancestor.
 edge (`plan-blockers.ts`, migration 029): `staple idea block|unblock`, `update_idea`'s
 `add_blockers` and `remove_blockers`, the Plan tab's *Blocked by*, `/api/plan/blocker`. An edge is
 an edit (the state must offer one); it is refused for the record itself, an ancestor or descendant
-(the same cycle as above), a record outside the plan, and an edge that closes a loop over the
-edges. On the wire each edge is one field of the blocked record's `milestone` entity,
+(the same cycle as above), a record outside the plan, and an edge that closes a loop, where a
+record waits on its own blockers, those of the ideas above it and those of the records beneath it.
+Two devices can still close a loop offline, each adding one half: both records then read held by
+each other, on every device, until either edge is removed. On the wire each edge is one field of the blocked record's `milestone` entity,
 `planBlocker.<blocker id>`, whose value is the constant `true` and whose null removes it: two
 devices adding different edges keep both, two adding the same edge agree, and adding on one while
 removing on the other is a field conflict. Seed, apply, conflict screening, restore and
@@ -875,7 +877,7 @@ waits on its nearest ancestor's, so a parent whose start lies ahead keeps its su
 with it; a dropped or shipped ancestor is skipped on that walk, since its dates hold nothing. A record whose Scaffold would also build a sub-idea that waits (Scaffold builds every
 shaped sub-idea beneath it) waits too, `waitingOn.records` naming those sub-ideas: scaffolding the
 parent would scaffold them early. Its sub-ideas whose turn has come keep their own `scaffold`
-steps and are scaffolded one by one; a held sub-idea is not built by its parent's Scaffold, so it holds the parent back no more. `waitingOn` is `{ start?, records?: [{ id, title, state }], parents?: [{ id, title, maturity }] }`. The person releases an idea
+steps and are scaffolded one by one; a held sub-idea is left out of its parent's Scaffold (its preview warns of it by name) and still holds the parent's step back like any waiting sub-idea. `waitingOn` is `{ start?, records?: [{ id, title, state }], parents?: [{ id, title, maturity }] }`. The person releases an idea
 early by moving its planned start (or its parent's), which is already theirs; nothing new is
 stored. A `fix_plan` step comes before waiting: a plan that fails the gate is worth fixing whenever.
 

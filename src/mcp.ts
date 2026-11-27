@@ -3595,7 +3595,7 @@ server.registerTool(
       add_decision: z.string().optional(),
       defer_question: z.number().int().min(1).optional().describe("The 1-based question to defer; with resolved: false it is reopened instead"),
       add_blockers: z.array(ideaRefSchema).optional().describe("Plan records this idea waits on, each added as a structured edge (get_idea's blockedBy)"),
-      remove_blockers: z.array(ideaRefSchema).optional().describe("Plan records it no longer waits on, each edge removed"),
+      remove_blockers: z.array(ideaRefSchema).optional().describe("Plan records it no longer waits on, each edge removed; removals run before additions, and the whole call is one write, refused whole"),
       plan: z
         .object({
           goal: z.string().nullable().optional(),
@@ -3641,28 +3641,32 @@ server.registerTool(
   },
   (input) =>
     run(() => {
-      const plan = storeFor(input.ws).plan();
+      const store = storeFor(input.ws);
+      const plan = store.plan();
       const actor = requireActor(input.actor);
-      const fields = {
-        title: input.title,
-        brief: input.brief,
-        maturity: input.maturity,
-        horizon: input.horizon,
-        parent: input.parent,
-        plannedStart: input.planned_start,
-        plannedTarget: input.planned_target,
-        plan: input.plan as PlanPatch | undefined,
-        breakdownBase: input.breakdown_base,
-        // The person's mark, taken only so its refusal can say whose it is and what to do instead.
-        delivered: input.undelivered === true ? null : input.delivered_on !== undefined || input.delivered_note !== undefined ? { on: input.delivered_on ?? "", note: input.delivered_note ?? null } : undefined,
-      };
-      if (Object.values(fields).some((value) => value !== undefined)) plan.update(input.ref, fields, actor);
-      if (input.add_question !== undefined) plan.addQuestion(input.ref, input.add_question, actor);
-      if (input.resolve_question !== undefined) plan.resolveQuestion(input.ref, input.resolve_question, actor, input.resolved !== false);
-      if (input.defer_question !== undefined) plan.deferQuestion(input.ref, input.defer_question, actor, input.resolved !== false);
-      if (input.add_decision !== undefined) plan.addDecision(input.ref, input.add_decision, actor);
-      for (const blocker of input.remove_blockers ?? []) plan.unblock(input.ref, blocker, actor);
-      for (const blocker of input.add_blockers ?? []) plan.block(input.ref, blocker, actor);
+      // One write: a refusal anywhere (a blocker that would close a loop, say) leaves the idea as it was.
+      store.journaled(() => {
+        const fields = {
+          title: input.title,
+          brief: input.brief,
+          maturity: input.maturity,
+          horizon: input.horizon,
+          parent: input.parent,
+          plannedStart: input.planned_start,
+          plannedTarget: input.planned_target,
+          plan: input.plan as PlanPatch | undefined,
+          breakdownBase: input.breakdown_base,
+          // The person's mark, taken only so its refusal can say whose it is and what to do instead.
+          delivered: input.undelivered === true ? null : input.delivered_on !== undefined || input.delivered_note !== undefined ? { on: input.delivered_on ?? "", note: input.delivered_note ?? null } : undefined,
+        };
+        if (Object.values(fields).some((value) => value !== undefined)) plan.update(input.ref, fields, actor);
+        if (input.add_question !== undefined) plan.addQuestion(input.ref, input.add_question, actor);
+        if (input.resolve_question !== undefined) plan.resolveQuestion(input.ref, input.resolve_question, actor, input.resolved !== false);
+        if (input.defer_question !== undefined) plan.deferQuestion(input.ref, input.defer_question, actor, input.resolved !== false);
+        if (input.add_decision !== undefined) plan.addDecision(input.ref, input.add_decision, actor);
+        for (const blocker of input.remove_blockers ?? []) plan.unblock(input.ref, blocker, actor);
+        for (const blocker of input.add_blockers ?? []) plan.block(input.ref, blocker, actor);
+      });
       return plan.detail(input.ref);
     }),
 );

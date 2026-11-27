@@ -211,7 +211,7 @@ function horizonPlanOf(db: DatabaseSync, issueId: string): string | null {
     "1. Tickets first: while one is eligible, take it.",
     "2. With no ticket left, take the first step whose who is agent and do what its instruction says.",
     "3. The rest are the person's (who is person) or nobody's yet (who is nobody): stop on them. Before you stop, carry an answer_questions step's questions to the person and record each answer, and tell the person when a mark_shaped idea is ready. Never mark an idea shaped, schedule it or move its dates yourself.",
-    "4. A wait step is nobody's yet. Never scaffold a waiting idea; the person releases it by moving its planned start.",
+    "4. A wait step is nobody's yet. Never scaffold a waiting idea. The person releases one waiting on a date by moving its planned start; one waiting on an idea above it or on what it is blocked by waits until that idea is shaped or that blocker has shipped (or been dropped).",
     "",
     "An idea is never claimed, queued or checked out, and neither is a step.",
   ].join("\n");

@@ -598,7 +598,7 @@ function heldEntities(db: DatabaseSync): Array<readonly [SyncEntity, string]> {
   for (const id of ids("SELECT id FROM issues")) out.push(["issue", id]);
   for (const id of ids("SELECT id FROM comments")) out.push(["comment", id]);
   for (const id of ids("SELECT DISTINCT blocked_id AS id FROM relations WHERE type = 'blocks'")) out.push(["relation", id]);
-  for (const id of ids("SELECT issue_id AS id FROM milestone_meta UNION SELECT milestone_id AS id FROM milestone_members UNION SELECT milestone_id AS id FROM milestone_criterion_marks UNION SELECT idea_id AS id FROM plan_links UNION SELECT idea_id AS id FROM plan_rows")) {
+  for (const id of ids("SELECT issue_id AS id FROM milestone_meta UNION SELECT milestone_id AS id FROM milestone_members UNION SELECT milestone_id AS id FROM milestone_criterion_marks UNION SELECT idea_id AS id FROM plan_links UNION SELECT idea_id AS id FROM plan_rows UNION SELECT idea_id AS id FROM plan_blockers")) {
     out.push(["milestone", id]);
   }
   if (ids("SELECT issue_id AS id FROM queue_entries LIMIT 1").length > 0) out.push(["queue", QUEUE_PLAN_ID]);
@@ -632,7 +632,8 @@ function holds(db: DatabaseSync, entity: string, id: string): boolean {
       return hit("SELECT 1 FROM relations WHERE blocked_id = ? AND type = 'blocks'", id);
     case "milestone":
       return hit(
-        "SELECT 1 FROM milestone_meta WHERE issue_id = ? UNION SELECT 1 FROM milestone_members WHERE milestone_id = ? UNION SELECT 1 FROM milestone_criterion_marks WHERE milestone_id = ? UNION SELECT 1 FROM plan_links WHERE idea_id = ? UNION SELECT 1 FROM plan_rows WHERE idea_id = ?",
+        "SELECT 1 FROM milestone_meta WHERE issue_id = ? UNION SELECT 1 FROM milestone_members WHERE milestone_id = ? UNION SELECT 1 FROM milestone_criterion_marks WHERE milestone_id = ? UNION SELECT 1 FROM plan_links WHERE idea_id = ? UNION SELECT 1 FROM plan_rows WHERE idea_id = ? UNION SELECT 1 FROM plan_blockers WHERE idea_id = ?",
+        id,
         id,
         id,
         id,
@@ -745,7 +746,8 @@ function remove(db: DatabaseSync, entity: SyncEntity, id: string): number {
       const marks = db.prepare("DELETE FROM milestone_criterion_marks WHERE milestone_id = ?").run(id).changes;
       const links = db.prepare("DELETE FROM plan_links WHERE idea_id = ?").run(id).changes;
       const rows = db.prepare("DELETE FROM plan_rows WHERE idea_id = ?").run(id).changes;
-      return gone(Number(members) + Number(meta) + Number(marks) + Number(links) + Number(rows));
+      const blockers = db.prepare("DELETE FROM plan_blockers WHERE idea_id = ?").run(id).changes;
+      return gone(Number(members) + Number(meta) + Number(marks) + Number(links) + Number(rows) + Number(blockers));
     }
     case "queue":
       return gone(db.prepare("DELETE FROM queue_entries").run().changes);

@@ -235,7 +235,8 @@ worked out, its passkeys sub-idea shaped and parked on Next). It is not built ye
 reads **shaped · waiting on parent** (or **waiting on blockers**), and Scaffold and Promote are
 held back with the reason. An idea above it that is dropped holds it too, until the sub-idea is
 moved out or the parent restored. A sub-idea also waits on what its parent waits on. A parent's own
-Scaffold leaves a held sub-idea for its own turn.
+Scaffold leaves a held sub-idea for its own turn and its preview names it; the parent's plan step
+waits for it as for any sub-idea that waits.
 
 If a parent goes back to exploring, or is dropped, after its sub-ideas were scaffolded, nothing is
 cancelled. Their epics read **parent not shaped**, and each of their open tickets is flagged in its

@@ -71,6 +71,8 @@ export interface PlanStepInput {
   dependsOn: ReadonlyArray<{ id: string; title: string; state: IdeaState }>;
   /** The ideas above it that are not shaped and have not shipped (`IdeaView.heldBy`), nearest first. */
   parents: ReadonlyArray<{ id: string; title: string; maturity: Maturity }>;
+  /** Which of `dependsOn` it (or an idea above it) is blocked by with an edge: those hold Scaffold back, a date does not release them. */
+  blockerIds: ReadonlyArray<string>;
   today: string;
 }
 
@@ -133,12 +135,14 @@ export function planStepOf(input: PlanStepInput): PlanStep | null {
   if (input.parents.length > 0) waitingOn.parents = input.parents.map(({ id, title, maturity }) => ({ id, title, maturity }));
   if (waitingOn.start !== undefined || waitingOn.records !== undefined || waitingOn.parents !== undefined) {
     const why = [
-      ...(waitingOn.parents ?? []).map((parent) => `its parent "${parent.title}" to be shaped (it is ${parent.maturity})`),
+      ...(waitingOn.parents ?? []).map((parent) =>
+        parent.maturity === "dropped" ? `its parent "${parent.title}", which was dropped (restore it, or move this idea out from under it)` : `its parent "${parent.title}" to be shaped (it is ${parent.maturity})`,
+      ),
       ...(waitingOn.start !== undefined ? [`its planned start, ${waitingOn.start}`] : []),
       ...(waitingOn.records ?? []).map((dep) => `"${dep.title}" (${dep.state})`),
     ].join(" and ");
     const release =
-      waitingOn.parents !== undefined
+      waitingOn.parents !== undefined || unshipped.some((dep) => input.blockerIds.includes(dep.id))
         ? "Scaffold is refused until every idea above it is shaped and what it is blocked by has shipped."
         : "the person releases it early by moving its planned start.";
     return step("wait", "nobody", `Nothing to do yet: "${input.title}" waits for ${why}. Never scaffold it before then; ${release}`, { waitingOn });
@@ -161,7 +165,7 @@ export function heldBySubIdeas(step: PlanStep, waiting: readonly PlanStep[]): Pl
     ...step,
     need: "wait",
     who: "nobody",
-    instruction: `Nothing to do yet: Scaffold on "${step.title}" would also build ${names}, which still wait${waiting.length === 1 ? "s" : ""}. Never scaffold it before then; scaffold each of its sub-ideas on its own when its turn comes.`,
+    instruction: `Nothing to do yet: "${step.title}" has sub-ideas that still wait, ${names}; Scaffold on it would build them early, or leave out the ones held back. Never scaffold it before then; scaffold each of its sub-ideas on its own when its turn comes.`,
     waitingOn: { records: waiting.map((sub) => ({ id: sub.ideaId, title: sub.title, state: sub.state })) },
   };
 }

@@ -1454,6 +1454,7 @@ export class PlanStore {
           }),
         ].filter((dep, index, all) => all.findIndex((other) => other.id === dep.id) === index),
         parents: held.get(id)?.parents ?? [],
+        blockerIds: (held.get(id)?.blockers ?? []).map((blocker) => blocker.id),
       });
     }
     return out;
@@ -1469,11 +1470,12 @@ export class PlanStore {
     }
     /**
      * The waiting records beneath one, which its Scaffold would build too. A sub-idea that is held
-     * (`heldBy`) is not built by its parent's Scaffold, nor is anything beneath it.
+     * (`heldBy`) is left out of its parent's Scaffold, which would then make the parent without it:
+     * the parent waits for it all the same.
      */
     const waitingBeneath = (id: string, seen = new Set<string>()): PlanStep[] =>
       (facts.childIds.get(id) ?? []).flatMap((child) => {
-        if (seen.has(child) || facts.held.has(child)) return [];
+        if (seen.has(child)) return [];
         seen.add(child);
         const step = byRecord.get(child);
         return [...(step?.need === "wait" ? [step] : []), ...waitingBeneath(child, seen)];
@@ -2334,7 +2336,12 @@ export class PlanStore {
       ...this.gateOf(row.id),
       ...children.flatMap((child) => child.problems.map((problem) => `sub-idea "${child.idea.title}": ${problem}`)),
     ];
-    const warnings = [...planWarnings(sections), ...children.flatMap((child) => child.warnings.map((warning) => `sub-idea "${child.idea.title}": ${warning}`))];
+    // A held sub-idea is left out, and the preview says so: its parent's epic is made without it.
+    const left = (this.db.prepare(`SELECT id FROM issues WHERE parent_id = ? AND plan_maturity IS NOT NULL ORDER BY plan_rank`).all(row.id) as Array<{ id: string }>)
+      .map((child) => this.ideaView(child.id))
+      .filter((child) => child.heldBy !== null && child.state === "shaped")
+      .map((child) => `sub-idea "${child.title}" is left out until its turn: ${holdLabel(child.heldBy!)}, ${holdWords(child.heldBy!)}`);
+    const warnings = [...planWarnings(sections), ...left, ...children.flatMap((child) => child.warnings.map((warning) => `sub-idea "${child.idea.title}": ${warning}`))];
     const preview: Omit<ScaffoldPreview, "fingerprint"> = {
       idea: { id: row.id, title: row.title },
       epic: {
@@ -2533,15 +2540,41 @@ export class PlanStore {
       );
     }
     if ((facts.blockers.get(row.id) ?? []).includes(blocker.id)) return this.ideaView(row.id);
-    // A loop: the blocker already waits, through its own edges, on this record.
+    /**
+     * A loop: the blocker already waits on this record, or on one above or beneath it. A record
+     * waits on what it is blocked by, on what the ideas above it are blocked by (it is held with
+     * them), and on what the records beneath it are blocked by (its work holds theirs).
+     */
+    const above = (id: string): string[] => {
+      const out: string[] = [];
+      const seenUp = new Set<string>([id]);
+      for (let at = facts.byId.get(id)?.parent_id ?? null; at !== null && facts.byId.has(at) && !seenUp.has(at); at = facts.byId.get(at)!.parent_id) {
+        seenUp.add(at);
+        out.push(at);
+      }
+      return out;
+    };
+    const beneath = (id: string): string[] => {
+      const out: string[] = [];
+      const queue = [...(facts.childIds.get(id) ?? [])];
+      while (queue.length > 0) {
+        const at = queue.shift()!;
+        if (out.includes(at)) continue;
+        out.push(at);
+        queue.push(...(facts.childIds.get(at) ?? []));
+      }
+      return out;
+    };
     const seen = new Set<string>();
     const stack = [blocker.id];
     while (stack.length > 0) {
       const at = stack.pop()!;
-      if (at === row.id) throw new StapleError("cycle", `${displayRef(row)} cannot be blocked by ${displayRef(blocker)}: ${displayRef(blocker)} already waits on it.`);
+      if (relatedRecords(facts.byId, at, row.id)) {
+        throw new StapleError("cycle", `${displayRef(row)} cannot be blocked by ${displayRef(blocker)}: ${displayRef(blocker)} already waits on it, or on an idea above or beneath it.`);
+      }
       if (seen.has(at)) continue;
       seen.add(at);
-      stack.push(...(facts.blockers.get(at) ?? []));
+      for (const holder of [at, ...above(at), ...beneath(at)]) stack.push(...(facts.blockers.get(holder) ?? []));
     }
     this.store.journaled(() => {
       writePlanBlocker(this.db, row.id, blocker.id, true);

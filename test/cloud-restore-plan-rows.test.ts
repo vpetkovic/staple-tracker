@@ -116,3 +116,32 @@ describe("a restore of an idea's blockers", () => {
     }, 60_000);
   }
 });
+
+describe("a restore of a blocker on an idea with no rows or links", () => {
+  it("rewinds an edge added after the backup on every device, as a fresh device reads it", async () => {
+    const server = new FakeSyncServer({ repositoryId: REPO });
+    fleet = new Fleet(server, REPO);
+    const a = fleet.machine("a");
+    const plan = a.store.plan();
+    plan.enable("vp", { person: { via: "settings" } });
+    const idea = plan.capture({ title: "Bare idea", maturity: "exploring" }, "vp", PERSON).id;
+    const other = plan.capture({ title: "Other", maturity: "exploring" }, "vp", PERSON).id;
+    await a.sync();
+    const b = fleet.machine("b");
+    await sync(b);
+    a.use();
+    await setBackupConsent(a.home, REPO, true, { fetchImpl: server.fetch });
+    const backup = await createBackup(a.home, REPO, null, { fetchImpl: server.fetch });
+    a.store.plan().block(idea, other, "a");
+    await sync(a, b);
+    a.use();
+    await restoreFromBackup(a.db, a.home, REPO, backup.backupId, { fetchImpl: server.fetch });
+    await sync(a, b, a, b);
+    const fresh = fleet.machine("fresh");
+    await sync(fresh);
+    for (const machine of [a, b, fresh]) {
+      machine.use();
+      expect(machine.store.plan().ideaView(idea).blockedBy, machine.label).toEqual([]);
+    }
+  }, 60_000);
+});

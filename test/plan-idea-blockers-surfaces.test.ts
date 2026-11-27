@@ -104,6 +104,11 @@ describe("blocker edges on every surface", () => {
     const looped = await mcp.call("update_idea", { ws: WS, ref: target.number, add_blockers: [audit.number], actor: CONTRACT_AGENT });
     expect(looped.isError).toBe(true);
     expect(JSON.stringify(looped)).toContain("already waits on it");
+    // One write: a refused blocker leaves the title and the other edges as they were.
+    const whole = await mcp.call("update_idea", { ws: WS, ref: target.number, title: "Export renamed", add_blockers: [search.number, audit.number], actor: CONTRACT_AGENT });
+    expect(whole.isError).toBe(true);
+    const after = JSON.parse((await cli("idea", "show", target.number, "--json")).stdout) as { idea: Idea & { title: string } };
+    expect(after.idea).toMatchObject({ title: "Export", blockedBy: [] });
   });
 });
 
