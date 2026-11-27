@@ -72,7 +72,7 @@ export function formatAgo(seconds: number): string {
  * the instant the store would accept the steal the button is about to ask for.
  */
 export function isStaleClaim(
-  claim: ClaimActivity | null | undefined,
+  claim: Pick<ClaimActivity, "idleSeconds"> | null | undefined,
   thresholdSeconds: number = STALE_CLAIM_SECONDS,
 ): boolean {
   if (!claim) return false;

@@ -1,6 +1,7 @@
 /**
- * The rail's Inbox and Autopilot rows and the phone's five tabs, rendered to markup from given
- * reads: the parts are presentational, so what a test hands them is all they show.
+ * The rail's first zone (Inbox, Autopilot, Queue), the phone's five tabs and the More sheet's
+ * views, rendered to markup from given reads: the parts are presentational, so what a test
+ * hands them is all they show.
  */
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -57,11 +58,16 @@ const rows = (over: Partial<Parameters<typeof RailTopRows>[0]> = {}) =>
 const tag = (markup: string, hook: string) => new RegExp(`<[a-z]+[^>]*${hook}[^>]*>`).exec(markup)?.[0] ?? "";
 
 describe("the rail's top rows", () => {
-  it("are an unlabelled list of Inbox then Autopilot, with the rail's row hooks", () => {
-    const markup = rows();
-    expect(tag(markup, 'data-nav-group="top"')).toContain('aria-label="Inbox and Autopilot"');
+  it("are an unlabelled list of Inbox, Autopilot and Queue, Queue directly after Autopilot's runs", () => {
+    const markup = rows({ live: [run("a")] });
+    expect(tag(markup, 'data-nav-group="top"')).toContain('aria-label="Inbox, Autopilot and Queue"');
     expect(markup).not.toContain("aria-expanded");
-    expect(markup.indexOf('data-nav-item="view:attention"')).toBeLessThan(markup.indexOf('data-nav-item="view:autopilot"'));
+    const at = (hook: string) => markup.indexOf(hook);
+    expect(at('data-nav-item="view:attention"')).toBeLessThan(at('data-nav-item="view:autopilot"'));
+    expect(at('data-nav-item="view:autopilot"')).toBeLessThan(at('data-nav-run="a"'));
+    expect(at('data-nav-run="a"')).toBeLessThan(at('data-nav-item="view:queue"'));
+    // Queue carries no mark of its own.
+    expect(/<button[^>]*data-nav-item="view:queue"[\s\S]*?<\/button>/.exec(markup)?.[0]).not.toContain("tabular-nums");
   });
 
   it("give the Inbox its count and a new dot from the badge, in words for a screen reader", () => {
@@ -80,7 +86,8 @@ describe("the rail's top rows", () => {
     expect(rows()).not.toContain("data-nav-autopilot-live");
     expect(rows()).not.toContain("data-nav-run=");
     const two = rows({ live: [run("a", { ticket: "STA-9" }), run("b", { state: "paused" })] });
-    expect(two).toMatch(/data-nav-autopilot-live="true"[^>]*>2 live</);
+    // The live mark is the state dot, then "n live": ok while any run works.
+    expect(two).toMatch(/data-nav-autopilot-live="true"[^>]*><span[^>]*data-run-dot="ok"[^>]*><\/span>2 live</);
     expect(two.match(/data-nav-run="/g)).toHaveLength(2);
     expect(two).toMatch(/data-nav-run="a"[\s\S]*?>Run a<\/span>[\s\S]*?>STA-9<\/span>/);
     expect(two).toMatch(/data-nav-run="b"[\s\S]*?>Run b<\/span>[\s\S]*?>Paused<\/span>/);
@@ -90,10 +97,20 @@ describe("the rail's top rows", () => {
     const paused = tag(two.slice(two.indexOf('data-nav-run="b"')), "data-run-dot");
     expect(paused).toContain("var(--plain-tight-fg)");
     expect(paused).not.toContain("animate");
+    // Every run paused or waiting: the mark's dot is tight.
+    expect(rows({ live: [run("b", { state: "paused" })] })).toMatch(/data-nav-autopilot-live="true"[^>]*><span[^>]*data-run-dot="tight"/);
     const six = rows({ live: ["a", "b", "c", "d", "e", "f"].map((id) => run(id)) });
-    expect(six).toMatch(/data-nav-autopilot-live="true"[^>]*>6 live</);
+    expect(six).toMatch(/data-nav-autopilot-live="true"[^>]*>(<span[^>]*><\/span>)?6 live</);
     expect(six.match(/data-nav-run="/g)).toHaveLength(4);
     expect(six).toMatch(/data-nav-run-more="true"[^>]*>[\s\S]*?>2 more</);
+  });
+
+  it("keep every state dot in its own colour under forced colours", () => {
+    const markup = rows({ live: [run("a"), run("b", { state: "paused" })] });
+    const dots = [...markup.matchAll(/<span[^>]*data-run-dot="[^"]*"[^>]*>/g)].map((match) => match[0]);
+    // Two run lines and the "n live" mark.
+    expect(dots).toHaveLength(3);
+    for (const dot of dots) expect(dot).toContain("forced-color-adjust-none");
   });
 
   it("make each run a real link to its own address, titled with the run's line", () => {
@@ -110,15 +127,32 @@ describe("the rail's top rows", () => {
     expect(tag(rows({ live: one }), 'data-nav-run="a"')).toContain('aria-label="Run a, Working, EXE-1"');
   });
 
-  it("mark the Inbox, the run list, a live run's sub-row or an ended run's Autopilot row as the page", () => {
+  it("mark the Inbox, Autopilot or Queue as the page", () => {
     const live = [run("a"), run("b")];
     const current = (view: ViewName, at: string | null) =>
       [...rows({ view, run: at, live }).matchAll(/(data-nav-(?:item|run)="[^"]+") aria-current="page"/g)].map((match) => match[1]);
     expect(current("attention", null)).toEqual(['data-nav-item="view:attention"']);
     expect(current("autopilot", null)).toEqual(['data-nav-item="view:autopilot"']);
-    expect(current("autopilot", "b")).toEqual(['data-nav-run="b"']);
     expect(current("autopilot", "ended")).toEqual(['data-nav-item="view:autopilot"']);
+    expect(current("queue", null)).toEqual(['data-nav-item="view:queue"']);
     expect(current("tree", null)).toEqual([]);
+  });
+
+  it("give the one highlight to a live run open on the Autopilot page, Autopilot keeping only its tone", () => {
+    const live = [run("a"), run("b")];
+    const open = rows({ view: "autopilot", run: "b", live });
+    // The run is the place: the only `aria-current="true"`, a filled sub-row.
+    expect(tag(open, 'data-nav-run="b"')).toContain('aria-current="true"');
+    expect(open.match(/aria-current="true"/g)).toHaveLength(1);
+    // The page is still Autopilot, drawn without the fill.
+    const autopilot = tag(open, 'data-nav-item="view:autopilot"');
+    expect(autopilot).toContain('aria-current="page"');
+    expect(autopilot).toContain('data-child-current=""');
+    // Otherwise no child is the place and no row carries the marker.
+    for (const markup of [rows({ view: "autopilot", run: null, live }), rows({ view: "autopilot", run: "ended", live }), rows({ view: "attention", live })]) {
+      expect(markup).not.toContain('data-child-current=""');
+      expect(markup).not.toContain('aria-current="true"');
+    }
   });
 });
 
@@ -126,8 +160,26 @@ const tabs = (over: Partial<Parameters<typeof ViewTabs>[0]> = {}) =>
   renderToStaticMarkup(<ViewTabs view="tree" waiting={0} live={0} liveTone={null} moreOpen={false} onSelect={noop} onMore={noop} {...over} />);
 
 describe("the phone's tab bar", () => {
-  it("has five tabs: Inbox, Autopilot, Tasks, Queue, More", () => {
-    expect([...tabs().matchAll(/data-view-tab="([^"]+)"/g)].map((match) => match[1])).toEqual(["attention", "autopilot", "tree", "queue", "more"]);
+  it("has five tabs: Inbox, Autopilot, Queue, Tasks, More", () => {
+    expect([...tabs().matchAll(/data-view-tab="([^"]+)"/g)].map((match) => match[1])).toEqual(["attention", "autopilot", "queue", "tree", "more"]);
+  });
+
+  it("outlines the current tab in Highlight under forced colours, and keeps its marks coloured", () => {
+    const markup = tabs({ view: "queue", waiting: 3, live: 1, liveTone: "ok" });
+    const pill = /<button[^>]*data-view-tab="queue"[^>]*><span[^>]*>/.exec(markup)?.[0] ?? "";
+    expect(pill).toContain("forced-colors:outline-[Highlight]");
+    expect(/<button[^>]*data-view-tab="tree"[^>]*><span[^>]*>/.exec(markup)?.[0]).not.toContain("forced-colors:outline");
+    expect(tag(markup, "data-view-tab-live")).toContain("forced-color-adjust-none");
+    expect(tag(markup, "data-view-tab-badge")).toContain("forced-color-adjust-none");
+  });
+
+  it("draws the Inbox badge quiet, and in the accent only while something waiting is new", () => {
+    const quiet = tag(tabs({ waiting: 28 }), "data-view-tab-badge");
+    expect(quiet).toContain("from-surface-selected");
+    expect(quiet).not.toContain("--badge-fresh");
+    const fresh = tag(tabs({ waiting: 28, fresh: true }), "data-view-tab-badge");
+    expect(fresh).toContain("bg-[var(--badge-fresh)]");
+    expect(fresh).not.toContain("from-surface-selected");
   });
 
   it("badges the Inbox with what waits, 99+ past 99, and names it in words", () => {
@@ -159,17 +211,16 @@ describe("the phone's tab bar", () => {
   });
 });
 
-describe("the More sheet", () => {
+describe("the More sheet's views", () => {
   const sheet = (view: ViewName, planningEnabled: boolean) => renderToStaticMarkup(<MoreSheetRows view={view} planningEnabled={planningEnabled} onChoose={noop} />);
 
-  it("lists every other view, This computer's under its caption, the current one marked", () => {
+  it("lists the workspace's other views first, with no label, the current one marked", () => {
     const markup = sheet("milestones", true);
-    // Estimates is a lens of Analytics now, so it is not listed; Analytics reads every workspace, so it sits with Usage.
-    expect([...markup.matchAll(/data-more-view="([^"]+)"/g)].map((match) => match[1])).toEqual(["graph", "milestones", "plan", "budget", "analytics"]);
-    expect(markup.indexOf(">This computer<")).toBeGreaterThan(markup.indexOf('data-more-view="plan"'));
-    expect(markup.indexOf(">This computer<")).toBeLessThan(markup.indexOf('data-more-view="budget"'));
+    // Estimates is a lens of Analytics now, so it is not listed.
+    expect([...markup.matchAll(/data-more-view="([^"]+)"/g)].map((match) => match[1])).toEqual(["graph", "milestones", "plan"]);
+    expect(markup).not.toContain("<h3");
     expect(markup).toMatch(/data-more-view="milestones" aria-current="page"/);
-    expect(markup.match(/aria-current/g)).toHaveLength(1);
+    expect(markup.match(/ aria-current="/g)).toHaveLength(1);
   });
 
   it("hides Plan while planning is off", () => {

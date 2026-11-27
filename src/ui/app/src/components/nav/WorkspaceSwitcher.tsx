@@ -2,37 +2,41 @@
  * The workspace switcher — the name of what you are looking at, and one tap to look at
  * something else.
  *
- * ── THE TRIGGER SAYS THE WHOLE NAME ───────────────────────────────────────────────────
+ * ── THE TRIGGER SAYS THE NAME, NOTHING ELSE ───────────────────────────────────────────
  *
- * It used to squeeze a count caption beside the name and truncate the name to make room,
- * so the most important words on the page read "All wo…". The trigger now says the full
- * selection and nothing else — "All workspaces", or the workspace's name, wrapping to a
- * second line before it would ever cut a name short. The counts moved into the list, where
- * each row has room for them.
+ * Every trigger says the selection and nothing beside it: "All workspaces", or the
+ * workspace's name. The rail's head adds the scope's tile. A name too long for its box
+ * truncates and the whole of it is the trigger's title; it never wraps the head or pushes
+ * the chevrons out. What each workspace holds is said in the list, where each row has room.
  *
  * ── A LIST, NOT A MENU ────────────────────────────────────────────────────────────────
  *
- * Each row is the workspace's name with one plain caption under it (switcher-model.ts), and
- * past `SWITCHER_SEARCH_THRESHOLD` workspaces a search box leads the list. The list is a
- * cmdk listbox, so arrows, Home/End and Enter work from the keyboard exactly as in the
- * command palette. On a wide screen it drops from the trigger; on a phone it is a bottom
- * sheet with 48px rows, reached in one tap from the top bar.
+ * Each row is one line, read at a glance: the workspace's tile, its name, and how much waits
+ * on a person there (the Inbox's own count, so the list says where the waiting is; nothing at
+ * 0; All workspaces carries the total). The task-number prefix is in the row's title and
+ * still finds the row in the search box, which leads the list past
+ * `SWITCHER_SEARCH_THRESHOLD` workspaces. The list is a cmdk listbox, so arrows, Home/End and
+ * Enter work from the keyboard exactly as in the command palette. On a desk it drops from the
+ * trigger with 36px rows; on a phone it is a bottom sheet with 48px rows, reached in one tap
+ * from the top bar. Closing either hands the focus back to the trigger.
  *
  * Choosing a workspace keeps the page you are on (see `afterWorkspaceSwitch` in
  * lib/session-url.ts) and is remembered as the default answer to "which workspace?".
  */
-import { Check, ChevronsUpDown, MoreHorizontal } from "lucide-react";
+import { Check, ChevronsUpDown } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useCompactHeader } from "@/components/filters/useCompactHeader";
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { isAllWorkspaces, useSession } from "@/lib/session";
-import { isResolvedStatus } from "@/lib/settings";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useAttentionRead } from "@/lib/attention";
+import { currentWorkspace, isAllWorkspaces, isMachineView, scopeName, useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { BottomSheet } from "./BottomSheet";
+import { MARK_CLASS, useFocusOnClose } from "./nav-shared";
 import {
   filterSwitcherRows,
-  openCountsByWorkspace,
+  waitingByWorkspace,
   switcherRows,
   switcherSearches,
   switcherTriggerLabel,
@@ -40,31 +44,42 @@ import {
 import { useBackToClose } from "@/lib/back-to-close";
 import { sharedRow, useSharedWorkspaces } from "@/lib/shared-workspaces";
 
-/** The brand mark the trigger wears as its avatar — the app's own name did not leave the page. */
-function BrandMark({ large = false }: { large?: boolean }) {
+/**
+ * A workspace's tile, 20px: its letter (the first of its prefix, else of its name), or the
+ * app's mark (a half-filled circle) for All workspaces. The rail's head and every row of the
+ * list wear the same one.
+ */
+function WorkspaceTile({ workspace }: { workspace: { slug: string; prefix: string } | null }) {
+  const letter = workspace ? (workspace.prefix || workspace.slug).slice(0, 1).toUpperCase() : null;
   return (
     <span
       aria-hidden
+      data-scope-tile
       className={cn(
-        "flex shrink-0 items-center justify-center rounded-[5px] bg-foreground leading-none text-background",
-        large ? "size-6 text-[14px]" : "size-5 text-[12px]",
+        "flex size-5 shrink-0 items-center justify-center rounded-md bg-foreground leading-none text-background",
+        letter ? "text-[11px] font-semibold" : "text-[12px]",
       )}
     >
-      &#9680;
+      {letter ?? <>&#9680;</>}
     </span>
   );
 }
 
+/** The tile of the scope the page is on. */
+function ScopeTile() {
+  const session = useSession();
+  return <WorkspaceTile workspace={isAllWorkspaces(session) ? null : currentWorkspace(session)} />;
+}
+
 /** The list itself, shared by the popover and the sheet. */
-function SwitcherList({ onChosen, phone }: { onChosen: () => void; phone: boolean }) {
+export function SwitcherList({ onChosen, phone }: { onChosen: () => void; phone: boolean }) {
   const session = useSession();
   const [query, setQuery] = useState("");
-  // Counts only when the page holds every workspace's rows; see `switcherRows`.
-  const counts = useMemo(
-    () => (isAllWorkspaces(session) ? openCountsByWorkspace(session.issues.data ?? [], isResolvedStatus) : null),
-    [session, session.issues.data],
-  );
-  const rows = switcherRows(session, counts);
+  const rows = switcherRows(session);
+  // What waits on a person in each workspace: the Inbox's read, which is always every workspace's.
+  const attention = useAttentionRead().data;
+  const waiting = useMemo(() => waitingByWorkspace(attention?.rows ?? []), [attention]);
+  const waitingIn = (value: string) => (value === "" ? (attention?.rows.length ?? 0) : (waiting.get(value) ?? 0));
   const sharedRows = useSharedWorkspaces();
   const prefixes = useMemo(
     () => new Map(session.workspaces.map((workspace) => [workspace.slug, workspace.prefix])),
@@ -112,20 +127,23 @@ function SwitcherList({ onChosen, phone }: { onChosen: () => void; phone: boolea
       ) : null}
       <CommandList className={cn("p-1", phone ? "max-h-none" : "max-h-[min(24rem,60dvh)]")}>
         <CommandEmpty>No workspace matches “{query}”.</CommandEmpty>
-        {shown.map((row) => (
-          <CommandItem
-            key={row.value || "__all__"}
-            value={row.value || "__all__"}
-            data-workspace-option={row.value}
-            aria-current={row.current ? "true" : undefined}
-            onSelect={() => {
-              if (session.mode === "hub" && !row.current) session.setWs(row.value);
-              onChosen();
-            }}
-            className={cn("items-start gap-3 rounded-lg px-2.5", phone ? "min-h-12 py-2.5" : "min-h-10 py-2")}
-          >
-            <span className="flex min-w-0 flex-1 flex-col">
-              <span className={cn("font-medium break-words", phone ? "text-[16px]" : "text-[13px]")}>
+        {shown.map((row) => {
+          const count = waitingIn(row.value);
+          return (
+            <CommandItem
+              key={row.value || "__all__"}
+              value={row.value || "__all__"}
+              data-workspace-option={row.value}
+              aria-current={row.current ? "true" : undefined}
+              title={row.prefix ? `${row.name} · task numbers start with ${row.prefix}` : undefined}
+              onSelect={() => {
+                if (session.mode === "hub" && !row.current) session.setWs(row.value);
+                onChosen();
+              }}
+              className={cn("gap-2.5 rounded-lg px-2", phone ? "h-12" : "h-9")}
+            >
+              <WorkspaceTile workspace={row.value ? { slug: row.value, prefix: row.prefix } : null} />
+              <span className={cn("min-w-0 flex-1 truncate font-medium", phone ? "text-[16px]" : "text-body")}>
                 {row.name}
                 {sharedRow(sharedRows, row.value) ? (
                   <span
@@ -137,45 +155,40 @@ function SwitcherList({ onChosen, phone }: { onChosen: () => void; phone: boolea
                   </span>
                 ) : null}
               </span>
-              <span className={cn("text-text-tertiary", phone ? "text-[13px]" : "text-[12px]")}>{row.caption}</span>
-            </span>
-            {row.prefix ? (
-              <span className={cn("mt-0.5 shrink-0 font-mono text-text-tertiary", phone ? "text-[12px]" : "text-[11px]")}>
-                {row.prefix}
-              </span>
-            ) : null}
-            <Check
-              aria-hidden
-              className={cn("mt-0.5 size-4 shrink-0", row.current ? "text-foreground opacity-100" : "opacity-0")}
-            />
-          </CommandItem>
-        ))}
+              {count > 0 ? (
+                <span data-workspace-waiting={count} aria-label={`${count} waiting`} className={MARK_CLASS}>
+                  {count}
+                </span>
+              ) : null}
+              <Check aria-hidden className={cn("size-4 shrink-0", row.current ? "text-foreground opacity-100" : "opacity-0")} />
+            </CommandItem>
+          );
+        })}
       </CommandList>
     </Command>
   );
 }
 
 /**
- * `rail`: the phone drawer's trigger (the mark and the full name). `bar`: the phone top bar's
- * pill. `more`: the desk rail's last workspace row, "More workspaces", shown only when the rail
- * could not list them all (`railWorkspaces`), opening the same searchable list. `crumb`: the
- * desk top bar's scope, "All workspaces ›", which opens the same list — so the scope can be
- * changed from the top bar too, and still can when the rail is put away.
+ * `head`: the desk rail's head, the scope as the rail's first control (the tile, the name and
+ * the chevrons; `compact` is the narrow rail's tile alone, its name in a tooltip). With one
+ * workspace there is nothing to switch to, and the head is the name as words, not a menu of
+ * one. `bar`: the phone top bar's pill. `crumb`: the desk top bar's scope, "All workspaces ›",
+ * which opens the same list.
  */
-export function WorkspaceSwitcher({
-  variant = "rail",
-  moreCount = 0,
-}: {
-  variant?: "rail" | "bar" | "more" | "crumb";
-  moreCount?: number;
-}) {
+export function WorkspaceSwitcher({ variant, compact = false }: { variant: "head" | "bar" | "crumb"; compact?: boolean }) {
   const session = useSession();
   const phone = useCompactHeader();
   const [open, setOpen] = useState(false);
   // Phone Back closes the sheet (and the desktop list) rather than leaving the page.
   useBackToClose(open, () => setOpen(false));
+  // When the phone's sheet closes, the pill takes the focus back (the popover's trigger takes its own).
+  const pill = useRef<HTMLButtonElement>(null);
+  useFocusOnClose(open, () => pill.current, phone);
   const label = switcherTriggerLabel(session);
   const hub = session.mode === "hub";
+
+  if (variant === "head" && !hub) return <ScopeHead compact={compact} />;
 
   const trigger =
     variant === "crumb" ? (
@@ -187,23 +200,33 @@ export function WorkspaceSwitcher({
         title={hub ? `${label} — switch workspace` : label}
         data-workspace-switcher="crumb"
         data-scope-name
-        className="-ml-1.5 flex h-7 min-w-0 items-center gap-1 rounded-md px-1.5 pointer-coarse:h-11 text-body text-text-secondary transition-colors hover:bg-surface-hover hover:text-foreground focus-ring data-[state=open]:bg-surface-selected"
+        className="relative -ml-1.5 flex h-7 min-w-0 items-center gap-1 rounded-md px-1.5 pointer-coarse:min-h-0 pointer-coarse:before:absolute pointer-coarse:before:inset-x-0 pointer-coarse:before:-inset-y-2 pointer-coarse:before:content-[''] text-body text-text-secondary transition-colors hover:bg-surface-hover hover:text-foreground focus-ring data-[state=open]:bg-surface-selected"
       >
         <span className="truncate">{label}</span>
         <ChevronsUpDown aria-hidden className="size-3.5 shrink-0 text-text-tertiary" />
       </button>
-    ) : variant === "more" ? (
+    ) : variant === "head" ? (
       <button
         type="button"
+        aria-label={`Workspace: ${label}. Switch workspace`}
         aria-haspopup="dialog"
         aria-expanded={open}
-        data-workspace-switcher="more"
-        onClick={phone ? () => setOpen(true) : undefined}
-        className="flex h-8 w-full min-w-0 items-center gap-2.5 rounded-lg px-2 pointer-coarse:h-11 text-left text-body text-text-secondary transition-colors hover:bg-surface-hover hover:text-foreground focus-ring-inset data-[state=open]:bg-surface-selected [&_svg]:size-4 [&_svg]:text-text-tertiary"
+        // The narrow head's name is its tooltip; the full head's name truncates, so it is the title.
+        title={compact ? undefined : label}
+        data-workspace-switcher="head"
+        className={cn(
+          "flex h-9 items-center rounded-lg text-left transition-colors duration-(--motion-duration-fast) hover:bg-surface-hover focus-ring-inset data-[state=open]:bg-surface-hover",
+          // The tile's centre sits on the row icons' centre line below it (see NavRail).
+          compact ? "relative w-9 shrink-0 justify-center pointer-coarse:min-h-0 pointer-coarse:before:absolute pointer-coarse:before:-inset-1 pointer-coarse:before:content-['']" : "w-full min-w-0 gap-2 px-1.5",
+        )}
       >
-        <MoreHorizontal aria-hidden />
-        <span className="truncate">More workspaces</span>
-        <span className="ml-auto text-caption text-text-tertiary tabular-nums">{moreCount}</span>
+        <ScopeTile />
+        {compact ? null : (
+          <>
+            <ScopeName />
+            <ChevronsUpDown aria-hidden className="size-3.5 shrink-0 text-text-tertiary" />
+          </>
+        )}
       </button>
     ) : (
       <button
@@ -212,22 +235,16 @@ export function WorkspaceSwitcher({
         aria-haspopup="dialog"
         aria-expanded={open}
         title={hub ? `${label} — switch workspace` : label}
-        data-workspace-switcher={variant}
+        ref={pill}
+        data-workspace-switcher="bar"
         onClick={phone ? () => setOpen(true) : undefined}
-        className={cn(
-          "flex min-w-0 items-center gap-2 rounded-md text-left focus-ring",
-          variant === "rail"
-            ? "min-h-7 flex-1 px-1.5 py-1 hover:bg-surface-hover data-[state=open]:bg-surface-selected max-md:min-h-11 pointer-coarse:min-h-11"
-            : "min-h-11 max-w-full rounded-full border bg-card px-3 py-1.5 shadow-xs active:bg-surface-hover",
-        )}
+        // A 32px pill, its 44px of touch an invisible area round it (7px: an absolute box is measured
+        // from inside the 1px border). The bar draws no inflated controls.
+        className="relative flex h-8 min-h-0 max-w-full min-w-0 items-center gap-1.5 rounded-full border bg-card px-3 text-left shadow-xs focus-ring active:bg-surface-hover before:absolute before:inset-x-0 before:-inset-y-[7px] before:content-['']"
       >
-        {variant === "rail" ? <BrandMark /> : null}
         <span
           data-workspace-name
-          className={cn(
-            "min-w-0 flex-1 leading-tight font-semibold tracking-[var(--tracking-heading)] break-words",
-            variant === "rail" ? "line-clamp-2 text-[13px]" : "line-clamp-1 text-[15px]",
-          )}
+          className="min-w-0 flex-1 truncate text-[15px] leading-tight font-semibold tracking-[var(--tracking-heading)]"
         >
           {label}
         </span>
@@ -252,13 +269,24 @@ export function WorkspaceSwitcher({
     );
   }
 
+  // The narrow rail's head opens beside the rail; every other trigger drops below itself.
+  const beside = variant === "head" && compact;
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+      {beside ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+          </TooltipTrigger>
+          <TooltipContent side="right">{label}</TooltipContent>
+        </Tooltip>
+      ) : (
+        <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+      )}
       <PopoverContent
         align="start"
-        side={variant === "more" ? "right" : "bottom"}
-        sideOffset={variant === "more" ? 8 : 4}
+        side={beside ? "right" : "bottom"}
+        sideOffset={beside ? 8 : 4}
         className="w-[288px] p-1"
         data-workspace-popover
         // The list focuses itself (above); Radix focusing the first tabbable would pre-empt it.
@@ -270,5 +298,43 @@ export function WorkspaceSwitcher({
         <SwitcherList phone={false} onChosen={() => setOpen(false)} />
       </PopoverContent>
     </Popover>
+  );
+}
+
+/** The scope's name in the head. On a view about this computer it steps back to the secondary tone. */
+function ScopeName() {
+  const session = useSession();
+  const machine = isMachineView(session.view);
+  return (
+    <span
+      data-workspace-name
+      className={cn("min-w-0 flex-1 truncate text-body", machine ? "font-normal text-text-secondary" : "font-semibold text-foreground")}
+    >
+      {scopeName(session)}
+    </span>
+  );
+}
+
+/** The head of a single-workspace page: the workspace, named, with nothing to open. */
+function ScopeHead({ compact }: { compact: boolean }) {
+  const session = useSession();
+  if (!compact) {
+    return (
+      <div data-workspace-switcher="head" title={scopeName(session)} className="flex h-9 w-full min-w-0 items-center gap-2 px-1.5">
+        <ScopeTile />
+        <ScopeName />
+      </div>
+    );
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <div data-workspace-switcher="head" className="flex size-9 shrink-0 items-center justify-center">
+          <ScopeTile />
+          <span className="sr-only">{scopeName(session)}</span>
+        </div>
+      </TooltipTrigger>
+      <TooltipContent side="right">{scopeName(session)}</TooltipContent>
+    </Tooltip>
   );
 }

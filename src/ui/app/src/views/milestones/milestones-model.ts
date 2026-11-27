@@ -25,7 +25,6 @@ import type {
   IssueRow,
   MilestoneListRow,
   MilestoneMemberRow,
-  MilestoneNext,
   MilestoneState,
   MilestoneView,
   StatusCategory,
@@ -147,32 +146,6 @@ export function milestoneRisk(
   }
   // Overdue on the reader's local day, as every other word on the page (`shownState`).
   return { overdue: shownState(row.milestone, now) === "overdue", blocked, gated, waitingIn, waiting };
-}
-
-/** The risk as words, each with its own glyph. Empty when there is nothing to warn about. */
-export function riskLabels(risk: MilestoneRisk): string[] {
-  const out: string[] = [];
-  if (risk.overdue) out.push("! overdue");
-  if (risk.blocked > 0) out.push(`⊘ ${risk.blocked} blocked`);
-  if (risk.gated > 0) out.push(`◇ ${risk.gated} gated`);
-  return out;
-}
-
-/** "5/11 done · 45%", or the honest sentence when nothing is countable. */
-export function progressLabel(progress: MilestoneView["progress"]): string {
-  if (progress.countable === 0) return "nothing to count yet";
-  return `${progress.counts.done}/${progress.countable} done · ${progress.percent ?? 0}%`;
-}
-
-/** What the list and the detail say about the queue's answer. */
-export const NOT_QUEUED_LABEL = "no eligible work";
-
-export function nextWorkLabel(next: MilestoneNext | null): string {
-  return next ? `next: ${next.identifier} (#${next.position})` : NOT_QUEUED_LABEL;
-}
-
-export function dateLabel(date: string | null): string {
-  return date ?? "no date";
 }
 
 // ---------- members, with their hierarchy ----------
@@ -402,42 +375,11 @@ export function movedOrder(members: readonly MilestoneMemberRow[], from: number,
   return order;
 }
 
-// ---------- layout ----------
-
-export type MilestonesLayout = "stacked" | "split";
-
-/**
- * Tailwind's `lg` (64rem at 16px): below it the list and the detail stack, above it they
- * split. It was `md` (768px), which measured the VIEWPORT while the page only gets what the
- * navigation rail leaves: at 768px that is ~536px, split into a 256px list and a ~280px
- * detail whose member rows had no title left at all. Stacked, the detail gets the page.
- */
-export const SPLIT_MIN_WIDTH_PX = 1024;
-
-export function layoutFor(widthPx: number): MilestonesLayout {
-  return widthPx >= SPLIT_MIN_WIDTH_PX ? "split" : "stacked";
-}
-
 // ---------- finished milestones ----------
 
 /** A milestone that is over: finished or cancelled. Read-only on this page. */
 export function isFinishedMilestone(state: MilestoneState): boolean {
   return state === "done" || state === "cancelled";
-}
-
-/**
- * The milestones the list shows under the Done toggle, and how many finished ones it hides.
- * `keep` names ones that stay listed whatever the toggle says: the one the page was pointed
- * at (a `focus=` link) or has open, so a link to a finished milestone shows that milestone
- * rather than quietly opening another.
- */
-export function visibleMilestones<T extends Pick<MilestoneListRow, "milestone">>(
-  all: readonly T[],
-  showDone: boolean,
-  keep: readonly (string | null)[] = [],
-): { rows: T[]; hiddenFinished: number } {
-  const rows = showDone ? [...all] : all.filter((row) => !isFinishedMilestone(row.milestone.state) || keep.includes(row.milestone.identifier));
-  return { rows, hiddenFinished: all.length - rows.length };
 }
 
 // ---------- All workspaces ----------
@@ -473,32 +415,26 @@ export interface MilestoneGroup {
 }
 
 export interface AllMilestones {
-  /** Workspaces with milestones to list, in the order given, each list sorted like one workspace's page. */
+  /** Workspaces with milestones, in the order given, each list sorted like one workspace's page. */
   groups: MilestoneGroup[];
   /** Workspaces whose read failed for a reason other than "milestones are not turned on". */
   failed: { workspace: string; error: unknown }[];
-  /** Finished milestones the Done toggle hides, over every workspace: what an empty page says. */
-  hiddenFinished: number;
 }
 
 /**
- * Every workspace's milestones, grouped, under the Done toggle exactly as one workspace's page
- * lists them. A workspace with none to list — including one that has not turned milestones on
- * — is left out rather than shown as an empty heading or an error; the finished ones the toggle
- * hides are counted, so an empty page can say they exist.
+ * Every workspace's milestones, grouped, finished ones included: the page puts those on each
+ * group's Finished shelf. A workspace with none, including one that has not turned milestones
+ * on, is left out rather than shown as an empty heading or an error.
  */
-export function groupAllMilestones(results: readonly WorkspaceMilestonesResult[], showDone = true): AllMilestones {
+export function groupAllMilestones(results: readonly WorkspaceMilestonesResult[]): AllMilestones {
   const groups: MilestoneGroup[] = [];
   const failed: { workspace: string; error: unknown }[] = [];
-  let hiddenFinished = 0;
   for (const result of results) {
     if (result.ok) {
-      const { rows: shown, hiddenFinished: hidden } = visibleMilestones(sortMilestones(result.rows), showDone);
-      hiddenFinished += hidden;
-      if (shown.length > 0) groups.push({ workspace: result.workspace, rows: shown, effective: result.effective ?? [] });
+      if (result.rows.length > 0) groups.push({ workspace: result.workspace, rows: sortMilestones(result.rows), effective: result.effective ?? [] });
     } else if (!isMissingMilestoneKind(result.error)) {
       failed.push({ workspace: result.workspace, error: result.error });
     }
   }
-  return { groups, failed, hiddenFinished };
+  return { groups, failed };
 }

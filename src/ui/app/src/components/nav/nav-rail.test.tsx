@@ -1,14 +1,12 @@
 /**
- * The shell, rendered to a string: a rail on the left, a content header on the right,
- * and every control the old two-tier header held still on the page.
+ * The desk shell, rendered to a string: the rail on the left (its head, three zones and the
+ * foot), the top bar and toolbar on the right, and the workspace list the head opens.
  *
- * No jsdom here, as everywhere in this repo — `react-dom/server` answers which elements
- * exist, in what order, with what accessible names. That is exactly what the claims
- * below are about: the rail's rows come in the order the model says, the active view is
- * the one `aria-current` marks, and the New task row is unmistakably a button.
+ * No jsdom here, as everywhere in this repo: `react-dom/server` answers which elements exist,
+ * in what order, with what accessible names. That is what the claims below are about: the
+ * rail's rows come in the order the model says, exactly one row is the place, and every
+ * control is a real button with a name.
  */
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
@@ -16,12 +14,13 @@ import { AppShell, TopBar } from "@/components/AppShell";
 import { buildFilterContext } from "@/lib/filter-dimensions";
 import { emptyFilters } from "@/lib/filters";
 import { AttentionContext } from "@/lib/attention";
+import type { AttentionList, AttentionRow } from "@/lib/types";
+import type { Resource } from "@/lib/useStaple";
 import { SessionContext, type StapleSession } from "@/lib/session";
 import { DEFAULT_SORT } from "@/lib/sort-modes";
 import type { HubCloudReport, IssueRow, IssueStatus, Project, ProjectRow } from "@/lib/types";
-import { NAV_GROUPS } from "./nav-model";
 import { IntegrationsRailRow, NavRail, RAIL_ROW_CLASS } from "./NavRail";
-import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
+import { SwitcherList, WorkspaceSwitcher } from "./WorkspaceSwitcher";
 
 const noop = () => {};
 
@@ -48,8 +47,10 @@ function session(over: Partial<StapleSession> = {}): StapleSession {
     focusMilestone: noop,
     run: null,
     openRun: noop,
+    openHorizon: noop,
     projects: { data: [], error: undefined, loading: false, reload: noop },
     focusProject: noop,
+    showAllTasks: noop,
     ws: "",
     setWs: noop,
     issues: { data: [], error: undefined, loading: false, reload: noop },
@@ -77,12 +78,31 @@ function session(over: Partial<StapleSession> = {}): StapleSession {
 /** The root's Inbox read (App.tsx provides it): nothing waiting. */
 const NO_ATTENTION = { data: { rows: [], workspaces: [], failed: [], now: "2026-11-26T12:00:00.000Z" }, error: undefined, loading: false, reload: () => {} };
 
-const inSession = (node: ReactElement, over: Partial<StapleSession> = {}) =>
+const inSession = (node: ReactElement, over: Partial<StapleSession> = {}, attention: Resource<AttentionList> = NO_ATTENTION) =>
   renderToStaticMarkup(
     <SessionContext.Provider value={session(over)}>
-      <AttentionContext value={NO_ATTENTION}>{node}</AttentionContext>
+      <AttentionContext value={attention}>{node}</AttentionContext>
     </SessionContext.Provider>,
   );
+
+/** An Inbox read holding one row per workspace named, as `/api/attention` answers on a hub. */
+function waiting(...workspaces: string[]) {
+  const rows = workspaces.map((workspace, i) => ({ key: `${workspace}/gate/${i}`, workspace }) as unknown as AttentionRow);
+  const data: AttentionList = { rows, workspaces: [...new Set(workspaces)], failed: [], now: "2026-11-26T12:00:00.000Z" };
+  return { data, error: undefined, loading: false, reload: () => {} };
+}
+
+const HUB: Partial<StapleSession> = {
+  mode: "hub",
+  ws: "",
+  workspaces: [
+    { slug: "aardvark", prefix: "AAR" },
+    { slug: "pinecone", prefix: "XYZ" },
+  ],
+};
+
+/** The opening tag of the first element carrying `hook`. */
+const tag = (markup: string, hook: string) => new RegExp(`<[a-z]+[^>]*${hook}[^>]*>`).exec(markup)?.[0] ?? "";
 
 const shell = (over: Partial<StapleSession> = {}) =>
   inSession(
@@ -92,7 +112,7 @@ const shell = (over: Partial<StapleSession> = {}) =>
     over,
   );
 
-const rail = (over: Partial<StapleSession> = {}) => inSession(<NavRail onHide={noop} />, over);
+const rail = (over: Partial<StapleSession> = {}) => inSession(<NavRail mode="full" />, over);
 
 /** Positions of the given markers, in the order given; every one must be present. */
 function positions(markup: string, markers: readonly string[]): number[] {
@@ -115,36 +135,25 @@ describe("the shell", () => {
     ).toBe(true);
   });
 
-  it("reads 'scope › page' in the top bar, then find-anything and the one primary action, New task", () => {
-    const markup = shell({ mode: "hub", ws: "", workspaces: [{ slug: "staple", prefix: "STA" }, { slug: "pinecone", prefix: "PIN" }] });
-    expect(markup).toMatch(/<h1[^>]*>Tasks<\/h1>/);
-    const bar = markup.slice(markup.indexOf("data-top-bar"), markup.indexOf("data-toolbar"));
-    expect(
-      ascending(positions(bar, ["data-scope-name", "<h1", "data-top-search", "data-top-new-task"])),
-    ).toBe(true);
-    // The scope is the switcher: a click on it opens the workspace list.
-    expect(bar).toMatch(/data-workspace-switcher="crumb"[^>]*data-scope-name/);
-    // New task is the chrome's one filled button; find-anything shows its shortcut.
-    const newTask = /<button[^>]*data-top-new-task[^>]*>/.exec(bar)?.[0] ?? "";
-    expect(newTask).toContain('data-variant="default"');
-    expect(bar).toMatch(/data-top-search[\s\S]*?<kbd[^>]*>(⌘K|Ctrl K)<\/kbd>/);
-    expect(shell({ view: "queue" })).toMatch(/<h1[^>]*>Queue<\/h1>/);
-  });
-
-  it("says This computer — not a workspace — as the scope of a view about this computer, in the top bar AND the rail", () => {
-    const markup = shell({ view: "budget", mode: "hub", ws: "", workspaces: [{ slug: "staple", prefix: "STA" }] });
-    expect(markup).toMatch(/data-scope-name[^>]*>[\s\S]*?This computer<\/span>/);
-    expect(markup).not.toContain('data-workspace-switcher="crumb"');
-    // The rail agrees: no workspace row claims the page.
-    expect(markup).not.toMatch(/data-nav-workspace="[^"]*" aria-current/);
-    expect(markup).toMatch(/data-nav-item="view:budget" aria-current="page"/);
+  it("draws the rail on a desk always, full by default, sized from the shared tokens", () => {
+    const nav = tag(shell(), 'aria-label="Primary"');
+    expect(nav).toContain('data-rail-mode="full"');
+    expect(nav).toContain("w-rail");
+    const narrow = tag(inSession(<NavRail mode="narrow" />), 'aria-label="Primary"');
+    expect(narrow).toContain('data-rail-mode="narrow"');
+    expect(narrow).toContain("w-rail-narrow");
+    // The width eases between the two, and never under reduced motion.
+    expect(nav).toContain("transition-[width]");
+    expect(nav).toContain("motion-reduce:transition-none");
+    expect(/<header[^>]*data-top-bar[^>]*>/.exec(shell())?.[0]).toContain("h-topbar");
+    expect(/<div[^>]*data-toolbar[^>]*>/.exec(shell())?.[0]).toContain("h-toolbar");
   });
 
   it("shows the sync pill for a workspace view, and never on a view about this computer", () => {
     const hub = { connected: 2, total: 3, automatic: 1 };
     const report = { counts: hub, workspaces: [] } as unknown as HubCloudReport;
     const bar = (view: StapleSession["view"]) =>
-      inSession(<TopBar railVisible onShowRail={noop} cloud={null} hubCloud={report} />, {
+      inSession(<TopBar railMode="full" onToggleRail={noop} cloud={null} hubCloud={report} />, {
         view,
         mode: "hub",
         ws: "",
@@ -189,106 +198,145 @@ describe("the shell", () => {
     expect(shell()).not.toMatch(/data-top-bar[\s\S]*?data-filter-done[\s\S]*?data-toolbar/);
   });
 
-  it("offers no 'show navigation' button while the rail is on screen", () => {
-    expect(shell()).not.toContain("data-nav-show");
-  });
-
   it("lays the content in a card on the desk tint, a gutter all round, dropped below md", () => {
     const markup = shell();
     // `h-dvh`: the frame is the dynamic viewport, so a phone's collapsing toolbar never hides the foot.
     expect(markup).toMatch(/<div class="flex h-dvh bg-sidebar/);
-    const tag = /<div[^>]*data-content-frame[^>]*>/.exec(markup)?.[0] ?? "";
-    const frame = /class="([^"]*)"/.exec(tag)?.[1] ?? "";
+    const frame = /class="([^"]*)"/.exec(tag(markup, "data-content-frame"))?.[1] ?? "";
     for (const cls of ["bg-card", "md:my-gutter", "md:mr-gutter", "md:rounded-xl", "md:border"]) {
       expect(frame).toContain(cls);
     }
+    // The rail is always there on a desk, so the card never needs a gutter of its own on the left.
+    expect(frame).not.toContain("md:ml-gutter");
     // The rail carries no border of its own; the card's hairline is the only edge.
     expect(markup).not.toMatch(/<nav aria-label="Primary"[^>]*border-r/);
   });
-
-  it("sizes the chrome from the shared tokens, not from one-off pixel values", () => {
-    const markup = shell();
-    expect(/<header[^>]*data-top-bar[^>]*>/.exec(markup)?.[0]).toContain("h-topbar");
-    expect(/<div[^>]*data-toolbar[^>]*>/.exec(markup)?.[0]).toContain("h-toolbar");
-    expect(/<nav aria-label="Primary"[^>]*>/.exec(markup)?.[0]).toContain("w-rail");
-    expect(/<header[^>]*data-top-bar[^>]*>/.exec(markup)?.[0]).toContain("px-page");
-  });
 });
 
-describe("the rail", () => {
-  const hub = {
-    mode: "hub" as const,
-    ws: "",
-    workspaces: [
-      { slug: "aardvark", prefix: "AAR" },
-      { slug: "staple", prefix: "STA" },
-    ],
+describe("the top bar", () => {
+  const bar = (railMode: "full" | "narrow", over: Partial<StapleSession> = {}) => {
+    const markup = inSession(<TopBar railMode={railMode} onToggleRail={noop} cloud={null} hubCloud={null} />, over);
+    return markup.slice(markup.indexOf("data-top-bar"), markup.indexOf("data-top-search"));
   };
 
-  it("reads top to bottom: the mark, Inbox and Autopilot, the workspaces, the views, This computer, settings, theme", () => {
-    const markup = rail(hub);
-    expect(
-      ascending(
-        positions(markup, [
-          "data-nav-brand",
-          'data-nav-group="top"',
-          'data-nav-item="view:attention"',
-          'data-nav-item="view:autopilot"',
-          'data-nav-group="workspaces"',
-          'data-nav-workspace=""',
-          'data-nav-workspace="aardvark"',
-          'data-nav-workspace="staple"',
-          'data-nav-group="views"',
-          'data-nav-item="view:tree"',
-          'data-nav-item="view:queue"',
-          'data-nav-item="view:graph"',
-          'data-nav-item="view:milestones"',
-          'data-nav-group="machine"',
-          'data-nav-item="view:budget"',
-          'aria-label="Settings"',
-          "data-nav-theme",
-        ]),
-      ),
-    ).toBe(true);
-    // The global verbs live in the top bar now: the rail is only where you are.
-    expect(markup).not.toContain("data-nav-new-task");
-    expect(markup).not.toContain("data-nav-search");
+  it("keeps the toggle 32px under a finger, its 44px an invisible area inside the bar", () => {
+    const toggle = tag(bar("full"), "data-nav-toggle");
+    expect(toggle).toContain("pointer-coarse:size-8");
+    expect(toggle).toContain("pointer-coarse:min-h-0");
+    expect(toggle).toContain("pointer-coarse:before:-inset-1.5");
   });
 
-  it("shows the scope and the way to change it without a menu: every workspace, the current one marked", () => {
-    const all = rail(hub);
-    expect(all.match(/data-nav-workspace=/g)).toHaveLength(3);
-    expect(all).toMatch(/data-nav-workspace="" aria-current="true"/);
-    expect(all.match(/data-nav-workspace="[^"]*" aria-current/g)).toHaveLength(1);
-    const chosen = rail({ ...hub, ws: "staple" });
-    expect(chosen).toMatch(/data-nav-workspace="staple" aria-current="true"/);
-    expect(chosen).not.toMatch(/data-nav-workspace="" aria-current/);
-    // A single-workspace page has nothing to switch to: no section, and the top bar names the
-    // workspace as words rather than a switcher with one entry.
-    expect(rail()).not.toContain("data-nav-workspace");
-    expect(rail()).not.toContain('data-nav-group="workspaces"');
-    const single = shell();
+  it("leads with the rail's toggle, named for what it does and saying whether the rail is open", () => {
+    const full = tag(bar("full"), "data-nav-toggle");
+    expect(full).toContain('aria-label="Collapse navigation"');
+    expect(full).toContain('aria-expanded="true"');
+    expect(full).toContain('aria-keyshortcuts="["');
+    const narrow = tag(bar("narrow"), "data-nav-toggle");
+    expect(narrow).toContain('aria-label="Expand navigation"');
+    expect(narrow).toContain('aria-expanded="false"');
+    // First in the bar, before the page's name.
+    const markup = bar("narrow", HUB);
+    expect(markup.indexOf("data-nav-toggle")).toBeLessThan(markup.indexOf("data-scope-name"));
+    expect(shell()).not.toContain("data-nav-show");
+  });
+
+  it("says only the page while the rail is full, because the rail's head already names the scope", () => {
+    for (const over of [{}, HUB, { ...HUB, ws: "pinecone" }]) {
+      const markup = bar("full", over);
+      expect(markup).toMatch(/<h1[^>]*>Tasks<\/h1>/);
+      expect(markup).not.toContain("data-scope-name");
+      expect(markup).not.toContain("lucide-chevron-right");
+    }
+    // The shell on a desk starts full: the same.
+    expect(shell(HUB)).not.toContain('data-workspace-switcher="crumb"');
+  });
+
+  it("says 'scope › page' while the rail is narrow, the scope being the switcher on a hub", () => {
+    const all = bar("narrow", HUB);
+    expect(ascending(positions(all, ['data-workspace-switcher="crumb"', "lucide-chevron-right", "<h1"]))).toBe(true);
+    expect(tag(all, 'data-workspace-switcher="crumb"')).toContain('aria-label="Workspace: All workspaces. Switch workspace"');
+    expect(all).toContain(">All workspaces</span>");
+    expect(bar("narrow", { ...HUB, ws: "pinecone" })).toContain(">pinecone</span>");
+    // One workspace: its name as words, not a menu of one.
+    const single = bar("narrow");
     expect(single).not.toContain('data-workspace-switcher="crumb"');
     expect(single).toMatch(/<span data-scope-name="true"[^>]*>staple<\/span>/);
   });
 
-  it("puts the workspaces that do not fit behind More workspaces, with a count", () => {
-    const many = rail({
-      mode: "hub",
-      ws: "",
-      workspaces: Array.from({ length: 9 }, (_, i) => ({ slug: `w${i}`, prefix: `W${i}` })),
-    });
-    expect(many.match(/data-nav-workspace=/g)).toHaveLength(7);
-    expect(many).toMatch(/data-workspace-switcher="more"[\s\S]*?More workspaces[\s\S]*?>3<\/span>/);
-    expect(rail(hub)).not.toContain('data-workspace-switcher="more"');
+  it("says 'This computer › Usage' on a view about this computer, at either width", () => {
+    for (const mode of ["full", "narrow"] as const) {
+      const markup = bar(mode, { ...HUB, view: "budget" });
+      expect(markup).toMatch(/data-scope-name[^>]*>[\s\S]*?This computer<\/span>/);
+      expect(markup).toContain("lucide-chevron-right");
+      expect(markup).toMatch(/<h1[^>]*>Usage<\/h1>/);
+      expect(markup).not.toContain('data-workspace-switcher="crumb"');
+    }
   });
 
-  it("sets every row at 32px on the type scale, with an unmistakable active state", () => {
+  it("ends with find-anything and the one primary action, New task", () => {
+    const markup = shell(HUB);
+    const top = markup.slice(markup.indexOf("data-top-bar"), markup.indexOf("data-toolbar"));
+    expect(ascending(positions(top, ["data-nav-toggle", "<h1", "data-top-search", "data-top-new-task"]))).toBe(true);
+    expect(tag(top, "data-top-new-task")).toContain('data-variant="default"');
+    expect(top).toMatch(/data-top-search[\s\S]*?<kbd[^>]*>(⌘K|Ctrl K)<\/kbd>/);
+  });
+});
+
+describe("the rail", () => {
+  it("reads top to bottom: the head, then now, then the workspace's records, then this computer at the foot", () => {
+    const markup = rail(HUB);
+    expect(
+      ascending(
+        positions(markup, [
+          'data-workspace-switcher="head"',
+          'data-nav-group="top"',
+          'data-nav-item="view:attention"',
+          'data-nav-item="view:autopilot"',
+          'data-nav-item="view:queue"',
+          'data-nav-group="views"',
+          'data-nav-item="view:tree"',
+          'data-nav-item="view:graph"',
+          'data-nav-item="view:milestones"',
+          'data-nav-item="view:plan"',
+          'data-nav-group="machine"',
+          'data-nav-item="view:budget"',
+          "data-nav-integrations",
+          // Analytics reads every workspace on this computer: under Integrations, above Settings.
+          'data-nav-item="view:analytics"',
+          "data-nav-settings",
+          "data-nav-theme",
+        ]),
+      ),
+    ).toBe(true);
+    // The global verbs live in the top bar: the rail is only where you are.
+    expect(markup).not.toContain("data-nav-new-task");
+    expect(markup).not.toContain("data-nav-search");
+  });
+
+  it("sets the zones apart by space alone: no labels, nothing to fold, no workspace list", () => {
+    const markup = rail(HUB);
+    expect(markup).not.toContain("aria-expanded=\"true\"><span");
+    expect(markup).not.toContain("data-nav-group-label");
+    expect(markup).not.toContain(">Views<");
+    expect(markup).not.toContain("data-nav-workspace");
+    expect(markup).not.toContain("data-nav-brand");
+    // The records zone stands 12px below now; the foot sits above one hairline.
+    expect(tag(markup, 'data-nav-group="views"')).toContain("mt-3");
+    expect(markup).toMatch(/<div class="[^"]*border-t border-sidebar-border\/70[^"]*"><ul role="list" data-nav-group="machine"/);
+  });
+
+  it("lists Plan only while planning is on", () => {
+    expect(rail()).toContain('data-nav-item="view:plan"');
+    expect(rail({ planningEnabled: false })).not.toContain('data-nav-item="view:plan"');
+    expect(inSession(<NavRail mode="narrow" />, { planningEnabled: false })).not.toContain('data-nav-item="view:plan"');
+  });
+
+  it("sets every row at 32px on the type scale, filled only when it is the place", () => {
     expect(RAIL_ROW_CLASS).toContain("h-8");
     expect(RAIL_ROW_CLASS).toContain("rounded-lg");
     expect(RAIL_ROW_CLASS).toContain("text-body");
-    // Active: a fill, medium weight, the foreground icon — the fill alone was too quiet.
-    expect(RAIL_ROW_CLASS).toContain("aria-[current]:bg-surface-selected");
+    // Active: medium weight and the foreground icon; the fill only when no child is the place.
+    expect(RAIL_ROW_CLASS).toContain("[&[aria-current]:not([data-child-current])]:bg-surface-selected");
     expect(RAIL_ROW_CLASS).toContain("aria-[current]:font-medium");
     expect(RAIL_ROW_CLASS).toContain("aria-[current]:[&_svg]:text-foreground");
     expect(RAIL_ROW_CLASS).toContain("[&_svg]:size-4");
@@ -296,48 +344,29 @@ describe("the rail", () => {
     expect(RAIL_ROW_CLASS).toContain("focus-ring-inset");
   });
 
-  it("labels each group in plain sentence case, tertiary, with no letter spacing", () => {
-    const markup = rail(hub);
-    const label = /<button[^>]*data-nav-group-label[^>]*>/.exec(markup)?.[0] ?? "";
-    expect(label).toContain("text-label");
-    expect(label).toContain("text-text-tertiary");
-    expect(label).not.toContain("uppercase");
-    expect(label).not.toContain("tracking-");
-    for (const name of ["Workspaces", "Views", "This computer"]) {
-      expect(markup).toMatch(new RegExp(`data-nav-group-name="true" class="truncate">${name}<`));
-    }
-  });
-
-  it("never names the first workspace as the scope on All workspaces", () => {
-    const markup = rail(hub);
-    expect(markup).toMatch(/data-nav-workspace="" aria-current="true"[^>]*>[\s\S]*?All workspaces<\/span>/);
-    expect(markup).not.toMatch(/data-nav-workspace="aardvark" aria-current/);
+  it("marks the place for forced colours with a Highlight outline, and keeps its dots and badges coloured", () => {
+    const outline = "forced-colors:[&[aria-current]:not([data-child-current])]:outline-[Highlight]";
+    expect(RAIL_ROW_CLASS).toContain(outline);
+    const narrow = inSession(<NavRail mode="narrow" />);
+    expect(tag(narrow, 'data-nav-item="view:tree"').replaceAll("&amp;", "&")).toContain(outline);
   });
 
   it("offers Settings as a row and the theme as a switch at the foot", () => {
     const markup = rail();
-    // DELIBERATELY CHANGED from "Work Workspace Settings": Settings is global now.
     expect(markup).toMatch(/<button[^>]*aria-label="Settings"[^>]*>[\s\S]*?Settings<\/button>/);
-    expect(markup).not.toContain("Work Workspace Settings");
     // On a desk the theme is an icon switch beside Settings, named for what it does.
     expect(markup).toMatch(/<button[^>]*role="switch"[^>]*aria-checked="false"[^>]*aria-label="Dark mode"[^>]*data-nav-theme/);
+    // Under a finger the switch's 6px hit area must not reach Settings: they stand 8px apart there.
+    expect(markup).toMatch(/<li class="flex items-center gap-1 pointer-coarse:gap-2"><button[^>]*data-nav-settings/);
   });
 
-  it("draws every labelled group in the model as a disclosure, the top rows as a plain list, and every item as a button", () => {
+  it("draws every item in the model as a button, wearing its label", () => {
     const markup = rail();
-    for (const group of NAV_GROUPS) {
-      expect(markup).toContain(`data-nav-group="${group.id}"`);
-      if (group.label) expect(markup).toMatch(new RegExp(`aria-expanded="true"[^>]*><span[^>]*>${group.label}`));
-      for (const entry of group.items) {
-        expect(markup).toMatch(new RegExp(`<button type="button" data-nav-item="${entry.id}"`));
-        expect(markup).toContain(`>${entry.label}</span>`);
-      }
+    for (const id of ["top", "views", "machine"]) expect(markup).toContain(`data-nav-group="${id}"`);
+    for (const label of ["Inbox", "Autopilot", "Queue", "Tasks", "Graph", "Milestones", "Plan", "Usage", "Analytics"]) {
+      expect(markup).toContain(`>${label}</span>`);
     }
-    // Inbox and Autopilot: no heading, no fold.
-    const top = /<ul[^>]*data-nav-group="top"[\s\S]*?<\/ul>/.exec(markup)?.[0] ?? "";
-    expect(top).toContain('aria-label="Inbox and Autopilot"');
-    expect(top).not.toContain("aria-expanded");
-    expect(top).not.toContain("data-nav-group-label");
+    expect(markup).toMatch(/<button type="button" data-nav-item="view:budget"/);
   });
 
   it("marks exactly the active view with aria-current, and moves it with the view", () => {
@@ -352,6 +381,61 @@ describe("the rail", () => {
 
   it("puts nothing in the tab order out of sequence", () => {
     expect(rail()).not.toContain("tabindex");
+    expect(inSession(<NavRail mode="narrow" />)).not.toContain("tabindex");
+  });
+});
+
+describe("the head", () => {
+  const head = (over: Partial<StapleSession> = {}) => inSession(<WorkspaceSwitcher variant="head" />, over);
+  const tile = (markup: string) => /<span[^>]*data-scope-tile[^>]*>([\s\S]*?)<\/span>/.exec(markup)?.[1] ?? "";
+
+  it("is the workspace switcher on a hub: a button that opens the list, its chevrons on the right", () => {
+    const markup = head(HUB);
+    const button = tag(markup, 'data-workspace-switcher="head"');
+    expect(button).toMatch(/^<button /);
+    expect(button).toContain('aria-haspopup="dialog"');
+    expect(button).toContain('aria-label="Workspace: All workspaces. Switch workspace"');
+    expect(button).toContain('title="All workspaces"');
+    expect(markup).toContain("lucide-chevrons-up-down");
+    // The rail's head is the switcher.
+    expect(rail(HUB)).toContain('<button type="button" aria-label="Workspace: All workspaces. Switch workspace"');
+  });
+
+  it("shows the list open with the hover fill, so the selected fill only ever means the place", () => {
+    for (const markup of [head(HUB), inSession(<WorkspaceSwitcher variant="head" compact />, HUB)]) {
+      const cls = /class="([^"]*)"/.exec(tag(markup, 'data-workspace-switcher="head"'))?.[1] ?? "";
+      expect(cls).toContain("data-[state=open]:bg-surface-hover");
+      expect(cls).not.toContain("bg-surface-selected");
+    }
+  });
+
+  it("is the workspace's name as words with one workspace: nothing to open, no chevrons", () => {
+    const markup = head();
+    expect(tag(markup, 'data-workspace-switcher="head"')).toMatch(/^<div /);
+    expect(markup).not.toContain("<button");
+    expect(markup).not.toContain("lucide-chevrons-up-down");
+    expect(markup).toContain(">staple</span>");
+  });
+
+  it("wears the app's mark for All workspaces and the workspace's letter, from its prefix, for one", () => {
+    expect(tile(head(HUB))).toBe("◐");
+    expect(tile(head({ ...HUB, ws: "pinecone" }))).toBe("X");
+    expect(head({ ...HUB, ws: "pinecone" })).toContain(">pinecone</span>");
+  });
+
+  it("steps the name back to the secondary tone on a view about this computer", () => {
+    const name = (markup: string) => tag(markup, "data-workspace-name");
+    expect(name(head(HUB))).toContain("font-semibold text-foreground");
+    expect(name(head({ ...HUB, view: "budget" }))).toContain("font-normal text-text-secondary");
+  });
+
+  it("is the scope's tile alone on the narrow rail, still the switcher", () => {
+    const markup = inSession(<WorkspaceSwitcher variant="head" compact />, HUB);
+    expect(tag(markup, 'data-workspace-switcher="head"')).toMatch(/^<button /);
+    expect(markup).not.toContain("data-workspace-name");
+    expect(markup).not.toContain("lucide-chevrons-up-down");
+    // Its name is the button's own, not only a tooltip's.
+    expect(tag(markup, 'data-workspace-switcher="head"')).toContain('aria-label="Workspace: All workspaces. Switch workspace"');
   });
 });
 
@@ -360,6 +444,7 @@ describe("projects under Tasks", () => {
     { workspace: "staple", project: project({ id: "p-docs", slug: "docs", name: "Docs" }) },
     { workspace: "staple", project: project({ id: "p-site", slug: "site", name: "Site" }) },
   ];
+  const withProjects = { projects: { data: rows, error: undefined, loading: false, reload: noop } };
 
   it("gives the Tasks row a New project action, reachable by keyboard, and no other row", () => {
     const markup = rail();
@@ -373,8 +458,8 @@ describe("projects under Tasks", () => {
     expect(markup).not.toContain("tabindex");
   });
 
-  it("lists each project as a sub-row with its own settings gear, in served order", () => {
-    const markup = rail({ projects: { data: rows, error: undefined, loading: false, reload: noop } });
+  it("lists each project as a sub-row with its own settings gear, in served order, before Graph", () => {
+    const markup = rail(withProjects);
     expect(
       ascending(
         positions(markup, [
@@ -384,53 +469,22 @@ describe("projects under Tasks", () => {
           'aria-label="Project settings: Docs"',
           'data-nav-project="p-site"',
           'aria-label="Project settings: Site"',
-          'data-nav-item="view:queue"',
+          'data-nav-item="view:graph"',
         ]),
       ),
     ).toBe(true);
     expect(markup).toContain('data-nav-project-settings="p-docs"');
   });
 
-  it("draws each project with a glyph one step in and its open-task count from the rows on hand", () => {
+  it("hangs the projects on a spine under Tasks, each with a folder and its open-task count", () => {
     const issue = (identifier: string, projectId: string | null, status: IssueStatus = "todo"): IssueRow =>
       ({
         workspace: "staple",
         claim: null,
-        issue: {
-          id: identifier,
-          identifier,
-          title: identifier,
-          description: null,
-          status,
-          statusVersion: 0,
-          kind: "task",
-          priority: "medium",
-          parentId: null,
-          depth: 0,
-          assignee: null,
-          createdBy: null,
-          labels: [],
-          acceptanceCriteria: null,
-          blockParentUntilDone: false,
-          unblockOwner: null,
-          unblockAction: null,
-          originKind: "manual",
-          originId: null,
-          idempotencyKey: null,
-          checkoutAgent: null,
-          checkoutAt: null,
-          blockedTransitionAt: null,
-          estimatedSeconds: null,
-          projectId,
-          startedAt: null,
-          completedAt: null,
-          cancelledAt: null,
-          createdAt: "2026-09-05T00:00:00.000Z",
-          updatedAt: "2026-09-05T00:00:00.000Z",
-        },
-      });
+        issue: { id: identifier, identifier, title: identifier, status, projectId, kind: "task" },
+      }) as unknown as IssueRow;
     const markup = rail({
-      projects: { data: rows, error: undefined, loading: false, reload: noop },
+      ...withProjects,
       issues: {
         data: [issue("A", "p-docs"), issue("B", "p-docs"), issue("C", "p-docs", "done"), issue("D", null)],
         error: undefined,
@@ -438,11 +492,13 @@ describe("projects under Tasks", () => {
         reload: noop,
       },
     });
+    // The spine drops from the parent icon's centre: the list is indented and ruled on its left.
+    expect(tag(markup, "data-nav-projects")).toMatch(/class="[^"]*ml-4[^"]*border-l[^"]*"/);
     const docs = /<button[^>]*data-nav-project="p-docs"[^>]*>[\s\S]*?<\/button>/.exec(markup)?.[0] ?? "";
-    expect(docs).toContain("pl-7");
+    expect(docs).toContain("h-7");
     expect(docs).toContain("lucide-folder-kanban");
-    // Two open, one done: the count is open work only.
-    expect(docs).toMatch(/data-nav-project-count[^>]*aria-label="2 open"[^>]*>2</);
+    // Two open, one done: the count is open work only, in the marks' register.
+    expect(docs).toMatch(/data-nav-project-count[^>]*aria-label="2 open"[^>]*class="[^"]*tabular-nums[^"]*"[^>]*>2</);
     const site = /<button[^>]*data-nav-project="p-site"[^>]*>[\s\S]*?<\/button>/.exec(markup)?.[0] ?? "";
     expect(site).toMatch(/data-nav-project-count[^>]*>0</);
   });
@@ -451,19 +507,37 @@ describe("projects under Tasks", () => {
     expect(rail()).not.toContain("data-nav-projects");
   });
 
-  it("marks the project the list is narrowed to, and only on Tasks", () => {
+  it("gives the one highlight to the project Tasks is narrowed to, Tasks keeping only its tone", () => {
     const filtered = { ...emptyFilters(), dims: { project: ["p-site"] } };
-    const on = rail({ projects: { data: rows, error: undefined, loading: false, reload: noop }, filters: filtered });
+    const on = rail({ ...withProjects, filters: filtered });
     expect(on).toMatch(/data-nav-project="p-site" aria-current="true"/);
     expect(on).not.toMatch(/data-nav-project="p-docs" aria-current/);
-    // The view row keeps `page`; the project is a place within it.
+    // The page is still Tasks, drawn without the fill.
+    const tasks = tag(on, 'data-nav-item="view:tree"');
+    expect(tasks).toContain('aria-current="page"');
+    expect(tasks).toContain('data-child-current=""');
     expect(on.match(/aria-current="page"/g)).toHaveLength(1);
-    const elsewhere = rail({
-      projects: { data: rows, error: undefined, loading: false, reload: noop },
-      filters: filtered,
-      view: "graph",
-    });
-    expect(elsewhere).not.toMatch(/data-nav-project="p-site" aria-current/);
+    // Unfiltered, narrowed to two, or on another view: no child is the place.
+    const twoFilter = { ...emptyFilters(), dims: { project: ["p-site", "p-docs"] } };
+    for (const markup of [rail(withProjects), rail({ ...withProjects, filters: twoFilter }), rail({ ...withProjects, filters: filtered, view: "graph" })]) {
+      expect(markup).not.toContain('data-child-current=""');
+      expect(markup).not.toContain('aria-current="true"');
+    }
+  });
+
+  it("keeps the highlight on Tasks when the project it is narrowed to is not a row on screen", () => {
+    // Loading, a failed read, or a project of another workspace named in the address.
+    const elsewhere = { ...emptyFilters(), dims: { project: ["p-elsewhere"] } };
+    for (const over of [
+      { ...withProjects, filters: elsewhere },
+      { projects: { data: undefined, error: undefined, loading: true, reload: noop }, filters: { ...emptyFilters(), dims: { project: ["p-site"] } } },
+    ] as Partial<StapleSession>[]) {
+      const markup = rail(over);
+      const tasks = tag(markup, 'data-nav-item="view:tree"');
+      expect(tasks).toContain('aria-current="page"');
+      expect(tasks).not.toContain('data-child-current=""');
+      expect(markup).not.toContain('aria-current="true"');
+    }
   });
 
   it("shows only the chosen workspace's projects when one is chosen, and every workspace's on all", () => {
@@ -487,24 +561,25 @@ describe("projects under Tasks", () => {
     expect(all).toContain('data-nav-project="p-docs"');
   });
 
-  it("closes the sheet before it opens the dialog, from the + and from every gear", () => {
-    /*
-     * A dialog stacked on the open sheet would make Escape ambiguous. The click handlers
-     * cannot be exercised without a DOM, so what is pinned is the source: every call
-     * that opens the project dialog is immediately preceded by the navigate callback.
-     */
-    const text = readFileSync(fileURLToPath(new URL("./NavRail.tsx", import.meta.url)), "utf8").replace(
-      /\/\/[^\n]*|\/\*[\s\S]*?\*\//g,
-      "",
-    );
-    const opens = text.match(/openProjectDialog\(/g) ?? [];
-    expect(opens.length).toBeGreaterThanOrEqual(2);
-    expect((text.match(/onNavigate\?\.\(\);\s*openProjectDialog\(/g) ?? []).length).toBe(opens.length);
+  it("never lets a long workspace caption take the project's name: the caption gives way at 40%", () => {
+    const long: ProjectRow[] = [{ workspace: "an-unusually-long-workspace-name-to-test", project: project({ id: "p-x", slug: "x", name: "Docs" }) }, ...rows];
+    const markup = rail({
+      mode: "hub",
+      workspaces: [
+        { slug: "staple", prefix: "STA" },
+        { slug: "an-unusually-long-workspace-name-to-test", prefix: "ANU" },
+      ],
+      projects: { data: long, error: undefined, loading: false, reload: noop },
+    });
+    const row = /<button[^>]*data-nav-project="p-x"[^>]*>[\s\S]*?<\/button>/.exec(markup)?.[0] ?? "";
+    expect(tag(row, 'data-nav-project="p-x"')).toContain('title="Docs · an-unusually-long-workspace-name-to-test"');
+    expect(row).toMatch(/<span class="min-w-0 flex-1 truncate">Docs<\/span>/);
+    expect(row).toMatch(/<span class="max-w-\[40%\] min-w-0 truncate[^"]*">an-unusually-long-workspace-name-to-test<\/span>/);
   });
 
   it("captions a project with its workspace only when the rows span several", () => {
-    const one = rail({ projects: { data: rows, error: undefined, loading: false, reload: noop } });
-    const projectsOf = (markup: string) => markup.slice(markup.indexOf("data-nav-projects"), markup.indexOf('data-nav-item="view:queue"'));
+    const one = rail(withProjects);
+    const projectsOf = (markup: string) => markup.slice(markup.indexOf("data-nav-projects"), markup.indexOf('data-nav-item="view:graph"'));
     expect(projectsOf(one)).not.toContain(">staple</span>");
     const many: ProjectRow[] = [
       ...rows,
@@ -524,57 +599,40 @@ describe("projects under Tasks", () => {
   });
 });
 
-describe("the workspace switcher", () => {
-  const trigger = (markup: string) => /<button[^>]*data-workspace-switcher[^>]*>[\s\S]*?<\/button>/.exec(markup)?.[0] ?? "";
-  // The drawer's trigger (the phone's menu), rendered on its own.
-  const drawer = (over: Partial<StapleSession> = {}) => inSession(<WorkspaceSwitcher variant="rail" />, over);
+describe("the workspace list", () => {
+  const list = (over: Partial<StapleSession>, attention: Resource<AttentionList> = NO_ATTENTION, phone = false) =>
+    inSession(<SwitcherList phone={phone} onChosen={noop} />, over, attention);
+  const option = (markup: string, value: string) =>
+    new RegExp(`<div[^>]*data-workspace-option="${value}"[^>]*>[\\s\\S]*?</div>`).exec(markup)?.[0] ?? "";
 
-  it("names the one workspace outside hub mode, and keeps the prefix off the trigger", () => {
-    const button = trigger(drawer());
-    expect(button).toContain('aria-label="Workspace: staple. Workspace"');
-    expect(button).toContain(">staple</span>");
-    expect(button).not.toContain(">STA<");
+  it("is one line per workspace: the tile, the name, then the check on the current one", () => {
+    const markup = list({ ...HUB, ws: "pinecone" });
+    const pine = option(markup, "pinecone");
+    expect(ascending(positions(pine, ["data-scope-tile", ">X</span>", ">pinecone", "lucide-check"]))).toBe(true);
+    expect(tag(pine, 'data-workspace-option="pinecone"')).toContain('aria-current="true"');
+    expect(pine).toMatch(/lucide-check[^"]*text-foreground opacity-100/);
+    expect(option(markup, "aardvark")).toMatch(/lucide-check[^"]*opacity-0/);
+    // All workspaces leads, wearing the app's mark.
+    expect(option(markup, "").indexOf("◐")).toBeGreaterThan(-1);
+    expect(markup.indexOf('data-workspace-option=""')).toBeLessThan(markup.indexOf('data-workspace-option="aardvark"'));
+    // 36px on a desk, 48px on a phone; no second line of caption, no prefix column.
+    expect(tag(pine, 'data-workspace-option="pinecone"')).toContain("h-9");
+    expect(tag(option(list(HUB, NO_ATTENTION, true), "pinecone"), 'data-workspace-option="pinecone"')).toContain("h-12");
+    expect(pine).not.toContain("Task numbers start with");
+    expect(pine).not.toContain("font-mono");
   });
 
-  /**
-   * DELIBERATELY CHANGED. The count caption beside the name is gone from the trigger — it
-   * was what truncated the name to "All wo…" — and the name may wrap to a second line
-   * rather than ever being cut short.
-   */
-  it("says the FULL selection — All workspaces in hub mode until one is chosen, then its name", () => {
-    const hub: Partial<StapleSession> = {
-      mode: "hub",
-      workspaces: [
-        { slug: "staple", prefix: "STA" },
-        { slug: "pinecone", prefix: "PIN" },
-      ],
-    };
-    const all = trigger(drawer({ ...hub, ws: "" }));
-    expect(all).toMatch(/data-workspace-name="true" class="[^"]*line-clamp-2[^"]*">All workspaces<\/span>/);
-    expect(all).not.toContain("truncate");
-    expect(all).not.toContain("workspaces</span><span");
-    expect(all).toContain('aria-label="Workspace: All workspaces. Switch workspace"');
-
-    const one = trigger(drawer({ ...hub, ws: "pinecone" }));
-    expect(one).toContain(">pinecone</span>");
-    expect(one).not.toContain(">PIN<");
+  it("keeps the prefix in the row's title, so it is still there to read", () => {
+    expect(tag(option(list(HUB), "pinecone"), 'data-workspace-option="pinecone"')).toContain('title="pinecone · task numbers start with XYZ"');
   });
 
-  it("is the top bar's scope on a desk: the full selection, named as the switcher it is", () => {
-    const hub: Partial<StapleSession> = {
-      mode: "hub",
-      workspaces: [
-        { slug: "staple", prefix: "STA" },
-        { slug: "pinecone", prefix: "PIN" },
-      ],
-    };
-    const crumb = (markup: string) => /<button[^>]*data-workspace-switcher="crumb"[^>]*>[\s\S]*?<\/button>/.exec(markup)?.[0] ?? "";
-    const all = crumb(shell({ ...hub, ws: "" }));
-    expect(all).toContain('aria-label="Workspace: All workspaces. Switch workspace"');
-    expect(all).toContain(">All workspaces</span>");
-    const one = crumb(shell({ ...hub, ws: "pinecone" }));
-    expect(one).toContain(">pinecone</span>");
-    expect(one).not.toContain(">PIN<");
+  it("says how much waits on a person in each workspace, the total on All workspaces, nothing at 0", () => {
+    const markup = list(HUB, waiting("pinecone", "pinecone", "aardvark"));
+    expect(option(markup, "pinecone")).toMatch(/data-workspace-waiting="2"[^>]*aria-label="2 waiting"[^>]*class="[^"]*tabular-nums[^"]*">2</);
+    expect(option(markup, "aardvark")).toContain('data-workspace-waiting="1"');
+    expect(option(markup, "")).toContain('data-workspace-waiting="3"');
+    const none = list(HUB);
+    expect(none).not.toContain("data-workspace-waiting");
   });
 });
 

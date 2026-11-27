@@ -76,11 +76,10 @@ web          ◌  WEB-1     backlog     Reset password page
 
 `inbox --hub` lists the open tickets of every workspace, each with its workspace's
 name. Run `staple inbox` inside one repository for its ready and blocked split.
-`staple open --hub` serves the [web UI](web-ui.md) over every workspace: the rail
-lists them under *Workspaces*, and *All workspaces* shows Tasks, Graph and
-Milestones across all of them. The Queue asks you to pick one, because each
-workspace keeps its own pickup order. [Analytics](analytics.md) reads them all,
-with its own workspace filter.
+`staple open --hub` serves the [web UI](web-ui.md) over every workspace: the name
+at the top of the rail switches between them, and *All workspaces* shows Tasks,
+Queue, Graph and Milestones across all of them. [Analytics](analytics.md) reads
+every workspace too, with its own workspace filter.
 
 ## 4. Work in another repository without moving
 

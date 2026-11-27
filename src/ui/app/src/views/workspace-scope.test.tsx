@@ -38,12 +38,10 @@ describe("workspaceScope", () => {
 });
 
 /**
- * The pages that ASK in All workspaces. Milestones is not one of them any more: it lists every
- * workspace's milestones read-only (see its own block below), because reading them does not
- * need a workspace — only opening one does.
+ * The pages that ASK in All workspaces. Milestones and Queue are not among them any more: they
+ * list every workspace in its own section (see their blocks below).
  */
 const PAGES: Array<[string, () => ReactElement]> = [
-  ["Queue", () => <QueueView onAuthError={() => {}} />],
   ["Estimates", () => <CalibrationView onAuthError={() => {}} />],
 ];
 
@@ -97,7 +95,8 @@ describe("per-workspace pages in All workspaces", () => {
       const markup = render(page, { mode: "hub", ws: "", workspaces: THREE });
       expect(markup).toContain("data-all-milestones");
       expect(markup).not.toContain("data-choose-workspace");
-      expect(markup).toContain("Milestones in every workspace");
+      // While every workspace's list is read: the outline's skeleton, under no heading of its own.
+      expect(markup).toContain("data-milestones-loading");
       // The old tell: a page that silently read the first workspace named it.
       expect(markup).not.toMatch(/in exercises-api/);
     });
@@ -110,6 +109,29 @@ describe("per-workspace pages in All workspaces", () => {
       ]) {
         const markup = render(page, over);
         expect(markup).not.toContain("data-all-milestones");
+        expect(markup).not.toContain("data-choose-workspace");
+      }
+    });
+  });
+
+  describe("Queue", () => {
+    const page = () => <QueueView onAuthError={() => {}} />;
+
+    it("shows every workspace's plan instead of asking", () => {
+      const markup = render(page, { mode: "hub", ws: "", workspaces: THREE });
+      expect(markup).toContain("data-queue-board");
+      expect(markup).toContain('aria-label="Every workspace&#x27;s queue"');
+      expect(markup).not.toContain("data-choose-workspace");
+    });
+
+    it("goes straight to one workspace's queue when a workspace is chosen, or there is only one", () => {
+      for (const over of [
+        { mode: "hub" as const, ws: "workshop", workspaces: THREE },
+        { mode: "hub" as const, ws: "", workspaces: [THREE[1]!] },
+        { mode: "workspace" as const, ws: "", workspaces: [THREE[1]!] },
+      ]) {
+        const markup = render(page, over);
+        expect(markup).not.toContain("Every workspace&#x27;s queue");
         expect(markup).not.toContain("data-choose-workspace");
       }
     });

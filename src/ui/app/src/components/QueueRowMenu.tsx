@@ -45,6 +45,7 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
@@ -110,6 +111,7 @@ export function QueueRowMenu({
   onMoveUp,
   onMoveDown,
   statusSubmenu,
+  plan = false,
 }: {
   /** The ready-made `⋯` button `TaskRowLine` hands us. */
   trigger: ReactNode;
@@ -155,6 +157,12 @@ export function QueueRowMenu({
   onMoveDown?: () => void;
   /** "Change status", on the desk: the keyboard's and a finger's way to the row's status. */
   statusSubmenu?: ReactNode;
+  /**
+   * The Queue page's wording: "Open", the four moves in order with their keys (an edge move
+   * is shown disabled rather than missing), "Remove from the plan" and "Queue last". The tree
+   * leaves it off and keeps its own words.
+   */
+  plan?: boolean;
 }) {
   const held = state.heldBy;
   /**
@@ -185,7 +193,7 @@ export function QueueRowMenu({
           onSelect={onOpen}
         >
           <ArrowUpRight aria-hidden />
-          Open details
+          {plan ? `Open ${identifier}` : "Open details"}
         </DropdownMenuItem>
         {statusSubmenu}
         <DropdownMenuSeparator />
@@ -194,25 +202,50 @@ export function QueueRowMenu({
             Queue in {queueWorkspace}
           </DropdownMenuLabel>
         ) : null}
-        {state.queued && onMoveUp ? (
+        {state.queued && plan ? (
+          <>
+            <DropdownMenuItem data-menu-item="move-top" disabled={disabled || !onMoveToTop} onSelect={onMoveToTop}>
+              <ArrowUpToLine aria-hidden />
+              Move to the top
+              <DropdownMenuShortcut>Alt Home</DropdownMenuShortcut>
+            </DropdownMenuItem>
+            <DropdownMenuItem data-menu-item="move-up" disabled={disabled || !onMoveUp} onSelect={onMoveUp}>
+              <ArrowUp aria-hidden />
+              Move up
+              <DropdownMenuShortcut>Alt ↑</DropdownMenuShortcut>
+            </DropdownMenuItem>
+            <DropdownMenuItem data-menu-item="move-down" disabled={disabled || !onMoveDown} onSelect={onMoveDown}>
+              <ArrowDown aria-hidden />
+              Move down
+              <DropdownMenuShortcut>Alt ↓</DropdownMenuShortcut>
+            </DropdownMenuItem>
+            <DropdownMenuItem data-menu-item="move-bottom" disabled={disabled || !onMoveToBottom} onSelect={onMoveToBottom}>
+              <ArrowDownToLine aria-hidden />
+              Move to the bottom
+              <DropdownMenuShortcut>Alt End</DropdownMenuShortcut>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+          </>
+        ) : null}
+        {state.queued && !plan && onMoveUp ? (
           <DropdownMenuItem data-menu-item="move-up" disabled={disabled} onSelect={onMoveUp}>
             <ArrowUp aria-hidden />
             Move up
           </DropdownMenuItem>
         ) : null}
-        {state.queued && onMoveDown ? (
+        {state.queued && !plan && onMoveDown ? (
           <DropdownMenuItem data-menu-item="move-down" disabled={disabled} onSelect={onMoveDown}>
             <ArrowDown aria-hidden />
             Move down
           </DropdownMenuItem>
         ) : null}
-        {state.queued && onMoveToTop ? (
+        {state.queued && !plan && onMoveToTop ? (
           <DropdownMenuItem data-menu-item="move-top" disabled={disabled} onSelect={onMoveToTop}>
             <ArrowUpToLine aria-hidden />
             Move to top
           </DropdownMenuItem>
         ) : null}
-        {state.queued && onMoveToBottom ? (
+        {state.queued && !plan && onMoveToBottom ? (
           <DropdownMenuItem data-menu-item="move-bottom" disabled={disabled} onSelect={onMoveToBottom}>
             <ArrowDownToLine aria-hidden />
             Move to bottom
@@ -221,12 +254,13 @@ export function QueueRowMenu({
         {state.queued ? (
           <DropdownMenuItem
             data-menu-item="dequeue"
+            variant={plan ? "destructive" : undefined}
             disabled={disabled || held !== null}
             reason={held ? `${held} is working on this, so it stays in the queue` : disabled ? disabledReason : undefined}
             onSelect={onDequeue}
           >
             <ListX aria-hidden />
-            Remove from queue
+            {plan ? "Remove from the plan" : "Remove from queue"}
           </DropdownMenuItem>
         ) : (
           <>
@@ -241,7 +275,7 @@ export function QueueRowMenu({
             </DropdownMenuItem>
             <DropdownMenuItem data-menu-item="queue-last" disabled={disabled} onSelect={onQueueLast}>
               <ListPlus aria-hidden />
-              Add to queue
+              {plan ? "Queue last" : "Add to queue"}
             </DropdownMenuItem>
           </>
         )}

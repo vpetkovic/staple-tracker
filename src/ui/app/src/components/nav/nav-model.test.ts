@@ -1,20 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { UNLISTED_VIEWS, VIEWS, VIEW_LABELS, VIEW_SHORT_LABELS, viewControls, viewUsesIssueFilters } from "@/lib/session";
-import {
-  NAV_GROUPS,
-  RAIL_STORAGE_KEY,
-  decodeRailCollapsed,
-  encodeRailCollapsed,
-  isRailToggleKey,
-  loadRailCollapsed,
-  navItemForView,
-  overlayFocusTarget,
-  projectCaption,
-  railKeyAction,
-  railWorkspaces,
-  chooseRailWorkspace,
-  saveRailCollapsed,
-} from "./nav-model";
+import { TAB_VIEWS, TOP_VIEWS, UNLISTED_VIEWS, VIEWS, VIEW_LABELS, VIEW_SHORT_LABELS, viewControls, viewUsesIssueFilters } from "@/lib/session";
+import { NAV_GROUPS, isRailToggleKey, navItemForView, projectCaption, railKeyAction } from "./nav-model";
 
 describe("the rail's groups", () => {
   it("lists every view exactly once, across all groups, except the ones reached through another view", () => {
@@ -25,15 +11,18 @@ describe("the rail's groups", () => {
     expect(new Set(views).size).toBe(views.length);
   });
 
-  it("opens with Inbox and Autopilot, unlabelled, then the Views group in VIEWS order without them", () => {
+  it("opens with Inbox, Autopilot and Queue, then the records in VIEWS order without them", () => {
     expect(NAV_GROUPS.map((group) => group.id)).toEqual(["top", "views", "machine", "foot"]);
     const [top, views] = NAV_GROUPS;
-    expect(top!.label).toBe("");
-    expect(top!.items.map((entry) => entry.view)).toEqual(["attention", "autopilot"]);
-    expect(top!.items.map((entry) => entry.label)).toEqual(["Inbox", "Autopilot"]);
-    expect(views!.label).toBe("Views");
-    expect(views!.items.map((entry) => entry.label)).toEqual(["Tasks", "Queue", "Graph", "Milestones", "Plan"]);
-    expect(views!.items.map((entry) => entry.view)).toEqual(["tree", "queue", "graph", "milestones", "plan"]);
+    expect(top!.items.map((entry) => entry.view)).toEqual(["attention", "autopilot", "queue"]);
+    expect(top!.items.map((entry) => entry.label)).toEqual(["Inbox", "Autopilot", "Queue"]);
+    expect(views!.items.map((entry) => entry.label)).toEqual(["Tasks", "Graph", "Milestones", "Plan"]);
+    expect(views!.items.map((entry) => entry.view)).toEqual(["tree", "graph", "milestones", "plan"]);
+  });
+
+  it("places the same views first on the phone's tab bar, Tasks after the three", () => {
+    expect([...TOP_VIEWS]).toEqual(["attention", "autopilot", "queue"]);
+    expect([...TAB_VIEWS]).toEqual(["attention", "autopilot", "queue", "tree"]);
   });
 
   it("lists the machine's Usage in its own This computer group — Settings' name for it — after the workspace's views", () => {
@@ -99,64 +88,6 @@ describe("the rail's groups", () => {
   });
 });
 
-describe("the rail's workspace list", () => {
-  const ws = (slug: string, prefix = slug.slice(0, 3).toUpperCase()) => ({ slug, prefix });
-  const hub = (count: number, current = "") => ({
-    mode: "hub",
-    ws: current,
-    workspaces: Array.from({ length: count }, (_, i) => ws(`w${i + 1}`, `W${i + 1}`)),
-  });
-
-  it("lists All workspaces first, then every workspace, and marks the one on screen", () => {
-    const { rows, hidden } = railWorkspaces({ mode: "hub", ws: "staple", workspaces: [ws("pinecone"), ws("staple")] });
-    expect(rows.map((row) => row.value)).toEqual(["", "pinecone", "staple"]);
-    expect(rows.map((row) => row.name)).toEqual(["All workspaces", "pinecone", "staple"]);
-    expect(rows.filter((row) => row.current).map((row) => row.value)).toEqual(["staple"]);
-    expect(rows[2]!.initials).toBe("S");
-    expect(hidden).toBe(0);
-  });
-
-  it("marks All workspaces — and nothing else — as current when no workspace is chosen", () => {
-    const { rows } = railWorkspaces(hub(3));
-    expect(rows.filter((row) => row.current).map((row) => row.value)).toEqual([""]);
-  });
-
-  it("caps the list and counts the rest, never cutting the workspace on screen", () => {
-    const capped = railWorkspaces(hub(9), 6);
-    expect(capped.rows).toHaveLength(7);
-    expect(capped.hidden).toBe(3);
-    const deep = railWorkspaces(hub(9, "w9"), 6);
-    expect(deep.rows.map((row) => row.value)).toEqual(["", "w1", "w2", "w3", "w4", "w5", "w9"]);
-    expect(deep.rows.at(-1)!.current).toBe(true);
-    expect(deep.hidden).toBe(3);
-  });
-
-  it("switches on a click — to the workspace, or to All workspaces — and does nothing on the current row", () => {
-    const calls: string[] = [];
-    const scope = { mode: "hub", setWs: (next: string) => calls.push(next) };
-    const { rows } = railWorkspaces({ mode: "hub", ws: "staple", workspaces: [ws("pinecone"), ws("staple")] });
-    chooseRailWorkspace(scope, rows[1]!);
-    chooseRailWorkspace(scope, rows[0]!);
-    chooseRailWorkspace(scope, rows[2]!);
-    expect(calls).toEqual(["pinecone", ""]);
-    // A single-workspace page never asks the session to switch.
-    chooseRailWorkspace({ mode: "workspace", setWs: (next: string) => calls.push(next) }, { ...rows[1]!, current: false });
-    expect(calls).toEqual(["pinecone", ""]);
-  });
-
-  it("lists nothing on a single-workspace page: one row that switches nowhere is a dead control", () => {
-    const { rows, hidden } = railWorkspaces({ mode: "workspace", ws: "", workspaces: [ws("staple", "STA")] });
-    expect(rows).toEqual([]);
-    expect(hidden).toBe(0);
-  });
-
-  it("marks no workspace current on a view about this computer, and the chosen one elsewhere", () => {
-    const scope = { mode: "hub", ws: "", workspaces: [ws("staple")] };
-    expect(railWorkspaces({ ...scope, view: "budget" }).rows.some((row) => row.current)).toBe(false);
-    expect(railWorkspaces({ ...scope, view: "tree" }).rows.filter((row) => row.current).map((row) => row.value)).toEqual([""]);
-  });
-});
-
 describe("the toggle shortcut", () => {
   const key = (over: Partial<Parameters<typeof isRailToggleKey>[0]>) => ({
     key: "",
@@ -192,17 +123,15 @@ describe("what the shell does with a key", () => {
     shiftKey: false,
     ...over,
   });
-  const quiet = { overlayOpen: false, surfaceOpen: false, typing: false };
+  const quiet = { surfaceOpen: false, typing: false };
 
-  it("lets an open dialog, menu or listbox own the keyboard — Escape and the toggle alike", () => {
-    const busy = { overlayOpen: true, surfaceOpen: true, typing: false };
-    expect(railKeyAction(key({ key: "Escape" }), busy)).toBeNull();
+  it("lets an open dialog, menu or listbox own the keyboard", () => {
+    const busy = { surfaceOpen: true, typing: false };
     expect(railKeyAction(key({ key: "[" }), busy)).toBeNull();
     expect(railKeyAction(key({ key: "\\", metaKey: true }), busy)).toBeNull();
   });
 
-  it("closes the sheet on Escape only while it is open", () => {
-    expect(railKeyAction(key({ key: "Escape" }), { ...quiet, overlayOpen: true })).toBe("close-overlay");
+  it("leaves Escape to whatever is open: the shell has no overlay of its own", () => {
     expect(railKeyAction(key({ key: "Escape" }), quiet)).toBeNull();
   });
 
@@ -213,46 +142,5 @@ describe("what the shell does with a key", () => {
     // cmd-\ can afford to fire from a field: it is not a character anyone types there.
     expect(railKeyAction(key({ key: "\\", metaKey: true }), { ...quiet, typing: true })).toBe("toggle");
     expect(railKeyAction(key({ key: "k", metaKey: true }), quiet)).toBeNull();
-  });
-});
-
-describe("where focus goes when the sheet opens or closes", () => {
-  it("lands in the rail on open, returns to the show button on close, and moves otherwise not at all", () => {
-    expect(overlayFocusTarget(false, true)).toBe("rail");
-    expect(overlayFocusTarget(true, false)).toBe("show-navigation");
-    expect(overlayFocusTarget(true, true)).toBeNull();
-    expect(overlayFocusTarget(false, false)).toBeNull();
-  });
-});
-
-describe("the collapsed envelope", () => {
-  it("round-trips, and reads anything unexpected as open", () => {
-    expect(decodeRailCollapsed(encodeRailCollapsed(true))).toBe(true);
-    expect(decodeRailCollapsed(encodeRailCollapsed(false))).toBe(false);
-    expect(decodeRailCollapsed(null)).toBe(false);
-    expect(decodeRailCollapsed("garbage")).toBe(false);
-  });
-
-  it("survives a storage that throws, and a page with none", () => {
-    const store = new Map<string, string>();
-    const storage = {
-      getItem: (k: string) => store.get(k) ?? null,
-      setItem: (k: string, v: string) => void store.set(k, v),
-    };
-    saveRailCollapsed(storage, true);
-    expect(store.get(RAIL_STORAGE_KEY)).toBe("collapsed");
-    expect(loadRailCollapsed(storage)).toBe(true);
-
-    const broken = {
-      getItem: () => {
-        throw new Error("private mode");
-      },
-      setItem: () => {
-        throw new Error("private mode");
-      },
-    };
-    expect(loadRailCollapsed(broken)).toBe(false);
-    expect(() => saveRailCollapsed(broken, true)).not.toThrow();
-    expect(loadRailCollapsed(undefined)).toBe(false);
   });
 });

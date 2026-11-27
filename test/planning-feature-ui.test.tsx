@@ -17,7 +17,7 @@ import { SETTING_CATEGORIES, SETTING_DEFINITIONS } from "../src/core/settings-re
 it("OFF removes Plan navigation and its lenses; ON restores navigation", () => {
   for (const planningEnabled of [false, true]) {
     const attention = { data: { rows: [], workspaces: [], failed: [], now: "2026-11-26T12:00:00.000Z" }, error: undefined, loading: false, reload: () => {} };
-    const markup = renderToStaticMarkup(<SessionContext.Provider value={fakeSession({ planningEnabled })}><AttentionContext value={attention}><ViewTabBar /><NavRail onHide={() => {}} /><MoreSheetRows view="tree" planningEnabled={planningEnabled} onChoose={() => {}} /></AttentionContext></SessionContext.Provider>);
+    const markup = renderToStaticMarkup(<SessionContext.Provider value={fakeSession({ planningEnabled })}><AttentionContext value={attention}><ViewTabBar /><NavRail mode="full" /><MoreSheetRows view="tree" planningEnabled={planningEnabled} onChoose={() => {}} /></AttentionContext></SessionContext.Provider>);
     // The phone reaches Plan through the tab bar's More sheet; the bar itself holds four views and More.
     expect(markup.includes('data-view-tab="plan"')).toBe(false);
     expect(markup.includes('data-more-view="plan"')).toBe(planningEnabled);

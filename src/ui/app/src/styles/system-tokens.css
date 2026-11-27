@@ -28,6 +28,7 @@
  * geometry is named here so a view can line up with it instead of guessing:
  *
  *   --shell-rail-width     the sidebar (240px; 264px from 1680px)   → w-rail
+ *   --shell-rail-narrow    the sidebar as icons only (52px)          → w-rail-narrow
  *   --shell-topbar-height  the top bar (52px)                       → h-topbar
  *   --shell-toolbar-height the filter + view-options toolbar (44px) → h-toolbar
  *   --shell-gutter         the desk showing round the content card  → m-gutter / p-gutter
@@ -78,6 +79,7 @@
 
   /* shell geometry, as spacing utilities (w-rail, h-topbar, h-toolbar, px-page, m-gutter) */
   --spacing-rail: var(--shell-rail-width);
+  --spacing-rail-narrow: var(--shell-rail-narrow);
   --spacing-topbar: var(--shell-topbar-height);
   --spacing-toolbar: var(--shell-toolbar-height);
   --spacing-gutter: var(--shell-gutter);
@@ -107,6 +109,7 @@
 
 :root {
   --shell-rail-width: 240px;
+  --shell-rail-narrow: 52px;
   --shell-topbar-height: 52px;
   --shell-toolbar-height: 44px;
   --shell-gutter: 8px;
@@ -131,6 +134,10 @@
   --flag-todo: #8a5100;
   --flag-you: #0058c2;
 
+  /* A count badge that says "new to you": the accent, one step deeper so white text on it
+     reads at AA (5.7:1). In dark mode the accent is light, so its text is the page colour. */
+  --badge-fresh: var(--ds-blue-800);
+
   --focus-ring-color: var(--ring);
   --focus-ring-width: 2px;
   --focus-ring-offset: 2px;
@@ -139,6 +146,7 @@
 }
 
 .dark {
+  --badge-fresh: var(--ds-blue-700);
   --surface-sunken: color-mix(in oklab, #000 18%, var(--card));
   --scrim: rgb(0 0 0 / 0.55);
   --text-secondary: var(--ds-gray-800);

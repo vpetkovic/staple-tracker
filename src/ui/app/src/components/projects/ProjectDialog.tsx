@@ -60,6 +60,7 @@ import {
   type ProjectDraft,
   type ProjectFormMode,
 } from "./projectForm";
+import { useReturnFocus } from "@/lib/return-focus";
 
 function SectionTitle({ children }: { children: string }) {
   return (
@@ -313,9 +314,11 @@ export function ProjectDialog({
       ? { mode: "edit", row: request.row }
       : { mode: "create", workspace: request.workspace || defaultTargetWorkspace(session, loadRememberedWorkspace()) };
   const copy = projectFormCopy(mode);
+  // Opened by an event, not a trigger: the focus goes back to what opened it (lib/return-focus.ts).
+  const returnFocus = useReturnFocus(true);
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent data-project-dialog className={`sm:max-w-md ${PHONE_SHEET_CLASS}`}>
+      <DialogContent data-project-dialog className={`sm:max-w-md ${PHONE_SHEET_CLASS}`} onCloseAutoFocus={returnFocus}>
         <DialogHeader>
           <DialogTitle>{copy.title}</DialogTitle>
           <DialogDescription>{copy.description}</DialogDescription>

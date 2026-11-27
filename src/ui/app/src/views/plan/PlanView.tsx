@@ -24,6 +24,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { DetailTabStrip } from "@/detail/tabs/DetailTabStrip";
 import { useIsDesk } from "@/lib/use-media";
+import { usePhoneHeaderSlot } from "@/lib/phone-header-slot";
 import { afterHistorySettles, replaceUrl } from "@/lib/back-to-close";
 import { personActor } from "@/detail/parts/person";
 import { getPlan, planWrite, type AuthError } from "@/lib/api";
@@ -34,14 +35,14 @@ import { useResource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
 import { ErrorState } from "@/views/ViewChrome";
 import { workspaceScope } from "@/views/workspace-scope";
-import { AddHorizon, HorizonsBoard } from "./HorizonsLens";
+import { AddHorizon, FoldAll, HorizonsBoard, NONE } from "./HorizonsLens";
 import { IdeasBoard, IdeasNothing } from "./IdeasLens";
 import { PlanTimeline } from "./PlanTimeline";
 import type { BoardProps, Write } from "./plan-board";
 import { focusCounts, focusing, focusPlan, type PlanFocus } from "./plan-focus";
 import { inHorizonsLens, inIdeasLens, LENSES, type Lens } from "./plan-model";
 import { CaptureForm, PLAN_WIDTH, useElementWidth } from "./plan-parts";
-import { loadPlanMemory, readPlanLens, savePlanMemory, withPlanLens } from "./plan-memory";
+import { keepFolds, loadPlanMemory, readPlanLens, savePlanMemory, withPlanLens } from "./plan-memory";
 
 export function PlanView({ onAuthError }: { onAuthError: (error: AuthError) => void }) {
   const session = useSession();
@@ -69,6 +70,9 @@ function WorkspacePlan({ workspace, onAuthError }: { workspace: string; onAuthEr
   // View state only: it starts again with each workspace (this component is keyed by it) and is not remembered.
   const [focus, setFocus] = useState<PlanFocus>("all");
   const memory = useRef(loadPlanMemory(workspace));
+  const [folded, setFolded] = useState(() => memory.current.folded);
+  // The Horizons sections a link unfolded for this visit, by horizon id; not remembered.
+  const [visit, setVisit] = useState<ReadonlySet<string>>(() => new Set());
   const [lens, setLens] = useState<Lens>(() => {
     const params = new URLSearchParams(window.location.search);
     const sameWorkspace = !params.get("ws") || params.get("ws") === workspace;
@@ -163,6 +167,14 @@ function WorkspacePlan({ workspace, onAuthError }: { workspace: string; onAuthEr
   const selected = session.selection && session.selection.workspace === workspace ? (plan.ideas.find((idea) => idea.id === session.selection!.ref || idea.identifier === session.selection!.ref)?.id ?? null) : null;
   const text = session.filters.text;
   const setText = (next: string) => session.setFilters({ ...session.filters, text: next });
+  // A fold is remembered with the rest; a horizon that is gone takes its fold with it. It ends the
+  // visit's unfold of each section it names: one section's own fold, or all of them.
+  const fold = (changes: Record<string, boolean>) => {
+    setVisit((current) => new Set([...current].filter((id) => !(id in changes))));
+    memory.current.folded = keepFolds(memory.current.folded, changes, [NONE, ...plan.horizons.map((horizon) => horizon.id)]);
+    savePlanMemory(workspace, memory.current);
+    setFolded(memory.current.folded);
+  };
   // Capture never moves the page: the idea lands in Raw, and the toolbar offers a way there.
   const capture = (title: string) => write("capture", { title });
   return (
@@ -177,7 +189,14 @@ function WorkspacePlan({ workspace, onAuthError }: { workspace: string; onAuthEr
         onText={setText}
         onCapture={capture}
         onViewIdeas={() => chooseLens("ideas")}
-        tools={lens === "horizons" ? <AddHorizon write={write} /> : null}
+        tools={
+          lens === "horizons" ? (
+            <>
+              <FoldAll plan={plan} folded={folded} visit={visit} onFold={fold} filtering={focusing(focus, text)} />
+              <AddHorizon write={write} />
+            </>
+          ) : null
+        }
       />
       {refusal ? (
         <div className="px-gutter pt-2" data-plan-refusal>
@@ -195,6 +214,11 @@ function WorkspacePlan({ workspace, onAuthError }: { workspace: string; onAuthEr
           onOpen={open}
           selected={selected}
           capture={capture}
+          folded={folded}
+          onFold={fold}
+          landing={session.milestoneFocus}
+          visit={visit}
+          onLand={(id) => setVisit((current) => (current.has(id) ? current : new Set(current).add(id)))}
         />
       </TabsContent>
       </Tabs>
@@ -267,17 +291,6 @@ const PILLS: ReadonlyArray<{ id: Exclude<PlanFocus, "all">; label: string; dot: 
   { id: "late", label: "Late", dot: "bg-destructive" },
   { id: "notStarted", label: "Not started", dot: "bg-[color:var(--status-task-todo)]" },
 ];
-
-/**
- * The phone shell's slot beside the page name (AppShell), or null: on the desk, and wherever the
- * shell drew none, the lens tabs stay in the toolbar.
- */
-function usePhoneHeaderSlot(): HTMLElement | null {
-  const desk = useIsDesk();
-  const [slot, setSlot] = useState<HTMLElement | null>(null);
-  useLayoutEffect(() => setSlot(desk ? null : document.querySelector<HTMLElement>("[data-phone-header-slot]")), [desk]);
-  return slot;
-}
 
 /**
  * The one toolbar: lens tabs with their counts, the "Show only" pills, the lens's own tools, the

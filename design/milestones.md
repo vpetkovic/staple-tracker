@@ -470,6 +470,30 @@ wire, so concurrent marks of one criterion are a field conflict, preserved until
 someone decides, and marks of two criteria never collide ([sync.md](sync.md)). The runs
 that usually make them stay machine-local; a mark's `runId` is a label.
 
+A mark is stored by position but reads by its words (`placeCriterionMarks`), because a
+criteria edit moves only the marks the editing device holds: a mark judged at the same
+time on another device arrives by its old position. It reads on its own position while
+that still holds its words, else on the first position that holds them and no other
+mark. When its words are a criterion that already holds a mark, it is a second judgement
+of that criterion made concurrently elsewhere (the two sit in different fields, so the
+sync sees no conflict): the later one (`markedAt`) reads, and the earlier one is
+`superseded`. It is never read as a reword of another criterion. A mark whose words are
+no criterion now reads on its own position as a reword (unknown) while that position is
+in the list and holds no other mark; else it is `removed`. A superseded or removed mark
+counts for nothing and is reported in `goal.cleared` (criterion, verdict, who, when and
+`reason`), present only while one exists. The next criteria edit clears it and names it
+in its `marks.cleared`. Which of the last two a mark is can depend on arrival order: one
+that arrives after an edit has put a new criterion at its position reads there as a
+reword rather than as removed. Every device still reads the same once they hold the
+same rows, and the verdict is `unknown` either way. A mark written on a position that
+holds a mark reading elsewhere first stores every mark where it reads, journaled with
+it, so the write cannot land on a mark that moved. Any other mark write touches its own
+field only, so it cannot conflict with a judgement of another criterion. The rule is a
+function of the stored rows alone, so every device and a fresh one read the same goal
+once they hold the same rows. (Pinned by `milestone-goal.test.ts` — *"where a stored
+mark reads"*; `milestone-goal-sync.test.ts` — *"a mark judged while another device
+edits the criteria"*.)
+
 **Pace** is `goal.pace`: done work, the remaining estimate and the days to the
 target date, from the same certified plans `staple compare` reads. One plan per
 member that is not nested under another member; `laborSeconds` adds their
@@ -488,7 +512,9 @@ verdict alone compares the remaining estimate with the seconds left to the end
 of the target day at the moment of the read, so it can flip from `on_track` to
 `behind` during that day with nothing else changed. `show` prints it as the
 `pace` line. The web UI shows the whole check on the milestone's detail
-([runs.md](runs.md#in-the-web-ui)).
+([runs.md](runs.md#in-the-web-ui)) and under the Goal line of its section on the
+Milestones page ([web-ui.md](web-ui.md#milestones)), both with `goal.cleared` as quiet
+lines under the criteria, drawn by one component.
 
 ### Gating a milestone
 
@@ -652,13 +678,18 @@ id), `description` and `acceptanceCriteria`, the view carries `goal` (see
 resolver fills them: `planPosition` is the milestone's
 own row in the pickup plan, `null` when it is not queued, and `next` is the
 first `eligible` effective row that reports this milestone in its
-`milestonePath` — the real next work under this plan, in the position an agent
-sees it at, and `null` when nothing under the milestone is takeable. A milestone
-that is not queued still has next work: its members are in the unqueued band and
-are still work, just later. `ls` returns the same object without `members`
+`milestonePath`, taken in the order a pickup scoped to the milestone uses
+(`queue next --scope`, `run continue`): rows the plan reaches in effective
+order first, then the milestone's unqueued work in its own order, members by
+rank. It is the real next work under this plan, carried with the position an
+agent sees it at, and `null` when nothing under the milestone is takeable. A
+milestone that is not queued still has next work: its members are in the
+unqueued band and are still work, just later, and a `milestone mv` reorders
+them for `next` as it does for a scoped pickup. `ls` returns the same object without `members`
 and `goal`, plus `memberCount`, sorted by plan position first. (Pinned by
 `store-milestones.test.ts` — *"fills planPosition and next from the resolver"*,
-*"sorts the list by plan position first, then by date"*;
+*"sorts the list by plan position first, then by date"*, *"an unqueued
+milestone's next follows its member order, as a pickup scoped to it does"*;
 `contract-milestones.test.ts` — *"a queued milestone reports its plan position
 and its next eligible row everywhere"*.) The service behind every surface
 is `src/core/milestone-store.ts` (`store.milestones()`), and every membership
@@ -806,11 +837,12 @@ carries a claim goes through all three at once.
 serving the same fixture, into the real view components rendered with
 `react-dom/server`. No jsdom, no screenshot harness, no new dependency: a
 "browser test" here is the real HTTP routes plus the real markup. It pins the
-list and the detail drawn entirely from the wire; the three layouts at real
-widths; the accessible row order equalling the server's member order; a name on
-every reorder control with only the true edges disabled; each state legible as a
-glyph AND a word with the glyph hidden from a screen reader; the conflict banner
-after a genuinely stale `baseRevision`, showing the store's sentence verbatim
-while the server keeps the other writer's order; and the risk lines and rollups
-counting the fixture's one genuinely blocked leaf and two genuinely gated ones
-off `GET /api/queue`'s `eligibility`, where the status categories read zero.
+outline's sections and their work drawn entirely from the wire; the accessible
+row order equalling the server's member order; a name on every reorder control
+with only the true edges disabled; each state legible as a word with the glyph
+hidden from a screen reader; the conflict notice after a genuinely stale
+`baseRevision`, showing the store's sentence verbatim while the server keeps the
+other writer's order; and the facts and flags counting the fixture's one
+genuinely blocked leaf and two genuinely gated ones off `GET /api/queue`'s
+`eligibility`, where the status categories read zero.
+`test/ui-milestones-page.test.ts` presses the same page in Chromium.

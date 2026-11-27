@@ -326,7 +326,7 @@ describe.skipIf(Boolean(reason))("the Milestones page: keys on a member row's ow
       const trigger = memberRow(page, refs.member).getByRole("button", { name: `Actions for ${refs.member}` });
       await trigger.focus();
       await page.keyboard.press("Enter");
-      const item = page.getByRole("menuitem", { name: `Move ${refs.member} down` });
+      const item = page.getByRole("menuitem", { name: "Move down", exact: true });
       await item.waitFor({ timeout: 5_000 });
       await item.focus();
       expect(members()).toEqual([refs.member, refs.second]);

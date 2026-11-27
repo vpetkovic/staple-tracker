@@ -15,7 +15,7 @@ here. It needs `staple open --hub` to see more than one.
 
 ## 1. Open it
 
-**Analytics** is the last row of the rail, under *Integrations*. On a phone it is
+**Analytics** is at the foot of the rail, under *Integrations*. On a phone it is
 in *More*, under *This computer*. `⌘K` then *Go to Analytics* works anywhere.
 
 Beside the page name are three lenses and two filters:

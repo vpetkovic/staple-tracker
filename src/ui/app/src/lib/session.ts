@@ -31,14 +31,13 @@ export const VIEWS = ["tree", "queue", "attention", "autopilot", "graph", "miles
 export type ViewName = (typeof VIEWS)[number];
 
 /**
- * WHERE EACH VIEW SITS IN THE NAVIGATION. The two views about what needs a person and what
- * agents are doing sit above the workspaces at the top of the rail, apart from the Views
- * group; the phone's tab bar shows `TAB_VIEWS` and every other view is one tap further, in
- * its More sheet. They are the placement the rail and the tab bar are to follow (STA-557
- * lays them out); nothing else decides it.
+ * WHERE EACH VIEW SITS IN THE NAVIGATION. `TOP_VIEWS` are the rail's first zone, what is
+ * happening now: what waits on a person, what agents are doing, and what they take next. The
+ * phone's tab bar shows `TAB_VIEWS` and every other view is one tap further, in its More
+ * sheet. They are the placement the rail and the tab bar follow; nothing else decides it.
  */
-export const TOP_VIEWS: readonly ViewName[] = ["attention", "autopilot"];
-export const TAB_VIEWS: readonly ViewName[] = ["attention", "autopilot", "tree", "queue"];
+export const TOP_VIEWS: readonly ViewName[] = ["attention", "autopilot", "queue"];
+export const TAB_VIEWS: readonly ViewName[] = ["attention", "autopilot", "queue", "tree"];
 
 export function isTopView(view: ViewName): boolean {
   return TOP_VIEWS.includes(view);
@@ -69,8 +68,8 @@ export const VIEW_LABELS: Record<ViewName, string> = {
 /**
  * The views that are about THIS MACHINE, not a workspace: the provider budget is read from the
  * machine's hub, never synchronizes, and is the same whichever workspace is picked. The rail
- * lists them in their own "Machine" group (`components/nav/nav-model.ts`), apart from the
- * workspace's views.
+ * lists them at its foot with Integrations and Settings (`components/nav/nav-model.ts`),
+ * apart from the workspace's views.
  */
 export const MACHINE_VIEWS: readonly ViewName[] = ["budget", "analytics"];
 
@@ -248,19 +247,21 @@ export interface StapleSession {
   analyticsLanding?: AnalyticsLanding | null;
 
   /**
-   * THE MILESTONE THE PAGE IS POINTED AT — R4c (STA-188).
+   * THE MILESTONE THE PAGE IS ON — R4c (STA-188), `?view=milestones&focus=<identifier>`.
    *
    * `focusMilestone` is one navigation primitive, exactly like `open` below: it switches to
    * the Milestones view AND records which milestone the reader asked for, so a row's
    * milestone marker can send somebody to the plan it names rather than to whichever
-   * milestone happened to sort first.
+   * milestone happened to sort first. It is also how the view itself selects one, and with
+   * null goes back to the list: the focus IS the selected milestone, so every change is a
+   * history step (`isNavigation`) and Back and Forward walk the milestones opened.
    *
    * It lives here for the reason `view` does — the row that dispatches it, the header tabs
    * and the palette must all drive navigation without any one of them owning it. Cleared to
    * `null` on any other view switch, so a stale focus cannot outlive the trip.
    */
   milestoneFocus: string | null;
-  focusMilestone: (ref: string) => void;
+  focusMilestone: (ref: string | null) => void;
 
   /**
    * THE RUN THE AUTOPILOT PAGE IS ON — `?view=autopilot&run=<run id>`, null on the page
@@ -272,6 +273,17 @@ export interface StapleSession {
    */
   run: string | null;
   openRun: (runId: string | null) => void;
+
+  /**
+   * A HORIZON, opened where the plan shows it: Plan's Horizons lens, landing on that horizon
+   * (`?view=plan&plan-lens=horizons&focus=<identifier>`). It switches to the horizon's
+   * workspace when the page is on another (hub only), writes the Horizons lens into that
+   * workspace's plan memory so the page opens on it, and puts the horizon in `milestoneFocus`,
+   * which on Plan names the horizon the lens lands on. A history step, like `focusMilestone`.
+   * Planning is read for the horizon's own workspace: with it off there, a horizon is a
+   * milestone and this opens it on Milestones instead. A row's horizon chip calls it.
+   */
+  openHorizon: (workspace: string, ref: string) => void;
 
   /**
    * THE TRACKED PROJECTS, fetched once for the whole page — the rail lists them under
@@ -289,6 +301,12 @@ export interface StapleSession {
    * and a click from the graph would otherwise filter the graph and then leave it.
    */
   focusProject: (projectId: string) => void;
+  /**
+   * The rail's Tasks row: switch to Tasks AND drop its project narrowing, so Tasks means
+   * every task in scope. Every other filter stays. Written into the Tasks scope for the
+   * same reason as `focusProject`.
+   */
+  showAllTasks: () => void;
 
   /**
    * "" means every workspace, and is only reachable in hub mode. It is its OWN state:
@@ -392,6 +410,16 @@ export interface StapleSession {
   version: number;
   /** Force a refresh now, without waiting for the next poll. Call after a write. */
   refresh: () => void;
+}
+
+/**
+ * Every menu's way to a view: the rail, the phone's tab bar, the palette's "Go to". Tasks
+ * from a menu means every task in scope, so it leaves a project the list was narrowed to
+ * (`showAllTasks`); every other view is switched to as it is.
+ */
+export function navigateTo(session: Pick<StapleSession, "setView" | "showAllTasks">, view: ViewName): void {
+  if (view === "tree") session.showAllTasks();
+  else session.setView(view);
 }
 
 export const SessionContext = createContext<StapleSession | null>(null);

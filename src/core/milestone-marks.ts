@@ -14,6 +14,7 @@ import {
   criterionMarkPosition,
   criterionMarkValue,
   followCriterionMarks,
+  placeCriterionMarks,
 } from "./milestone-goal.js";
 
 /**
@@ -56,29 +57,20 @@ export function criterionMarkFields(db: DatabaseSync, milestoneId: string): Reco
 }
 
 
-/**
- * Carry an issue's marks across an edit of its criteria (`followCriterionMarks` decides where each
- * goes): the rows are rewritten here, and what changed comes back as the fields a milestone update
- * journals (`criterion<n>`, null where a position lost its mark), so every device moves them alike.
- */
-export function followMarksAcrossEdit(
-  db: DatabaseSync,
-  issueId: string,
-  before: readonly string[],
-  after: readonly string[],
-  positions?: ReadonlyMap<number, number | null>,
-): { moves: CriterionMarkMoves; fields: Record<string, CriterionMarkValue | null> } {
-  const held = new Map(
+/** Every mark a milestone holds, by stored position. */
+function heldMarks(db: DatabaseSync, issueId: string): Map<number, CriterionMarkValue> {
+  return new Map(
     Object.entries(criterionMarkFields(db, issueId)).map(([field, value]) => [criterionMarkPosition(field)!, value] as const),
   );
-  const { moves, placement } = followCriterionMarks(
-    before,
-    after,
-    [...held].map(([position, value]) => ({ position, criterion: value.criterion, verdict: value.verdict })),
-    positions,
-  );
-  const next = new Map<number, CriterionMarkValue>();
-  for (const [from, to] of placement) if (to !== null) next.set(to, held.get(from)!);
+}
+
+/** Rewrite the stored marks as `next`, returning the fields that changed (null where a position lost its mark). */
+function rewriteMarks(
+  db: DatabaseSync,
+  issueId: string,
+  held: ReadonlyMap<number, CriterionMarkValue>,
+  next: ReadonlyMap<number, CriterionMarkValue>,
+): Record<string, CriterionMarkValue | null> {
   const fields: Record<string, CriterionMarkValue | null> = {};
   for (const position of new Set([...held.keys(), ...next.keys()])) {
     const value = next.get(position) ?? null;
@@ -87,5 +79,61 @@ export function followMarksAcrossEdit(
     writeCriterionMark(db, issueId, position, value);
     fields[criterionMarkField(position)] = value;
   }
-  return { moves, fields };
+  return fields;
+}
+
+/** The held marks in the shape `placeCriterionMarks` reads, each carrying its stored value. */
+function readable(held: ReadonlyMap<number, CriterionMarkValue>) {
+  return [...held].map(([position, value]) => ({ position, criterion: value.criterion, markedAt: value.markedAt, markedBy: value.markedBy, value }));
+}
+
+/**
+ * Before a mark is written at `position`, move the mark stored there to where it reads
+ * (`placeCriterionMarks`) when that is elsewhere, so the write cannot land on it: a mark judged on
+ * another device by an old position stays on its criterion. Only then are the marks rewritten
+ * where they read, so a write that lands on its own criterion's mark (or on an empty position)
+ * touches no other field and cannot conflict on a criterion nobody touched. A mark that reads on
+ * no criterion, or was superseded, stays stored (and reported) unless a moved mark now goes where
+ * it sits; a criteria edit clears it. Returns the fields that changed, for the journal.
+ */
+export function placeMarksBeforeMark(
+  db: DatabaseSync,
+  issueId: string,
+  criteria: readonly string[],
+  position: number,
+): Record<string, CriterionMarkValue | null> {
+  const held = heldMarks(db, issueId);
+  const there = held.get(position);
+  if (there === undefined) return {};
+  const { placed, superseded, cleared } = placeCriterionMarks(criteria, readable(held));
+  if (placed.get(position)?.value === there) return {};
+  const next = new Map([...placed].map(([at, mark]) => [at, mark.value] as const));
+  for (const mark of [...superseded, ...cleared]) if (!next.has(mark.position)) next.set(mark.position, mark.value);
+  return rewriteMarks(db, issueId, held, next);
+}
+
+/**
+ * Carry an issue's marks across an edit of its criteria (`followCriterionMarks` decides where each
+ * goes), from where each reads now (`placeCriterionMarks`): the rows are rewritten here, and what
+ * changed comes back as the fields a milestone update journals (`criterion<n>`, null where a
+ * position lost its mark), so every device moves them alike. A mark that read on no criterion, or
+ * was superseded, before the edit is cleared by it, and named in `moves.cleared`.
+ */
+export function followMarksAcrossEdit(
+  db: DatabaseSync,
+  issueId: string,
+  before: readonly string[],
+  after: readonly string[],
+  positions?: ReadonlyMap<number, number | null>,
+): { moves: CriterionMarkMoves; fields: Record<string, CriterionMarkValue | null> } {
+  const held = heldMarks(db, issueId);
+  const reading = placeCriterionMarks(before, readable(held));
+  const placedMarks = [...reading.placed].map(([position, mark]) => ({ position, criterion: mark.criterion, verdict: mark.value.verdict, value: mark.value }));
+  const { moves, placement } = followCriterionMarks(before, after, placedMarks, positions);
+  const byPosition = new Map(placedMarks.map((mark) => [mark.position, mark.value] as const));
+  const next = new Map<number, CriterionMarkValue>();
+  for (const [from, to] of placement) if (to !== null) next.set(to, byPosition.get(from)!);
+  for (const mark of [...reading.superseded, ...reading.cleared]) moves.cleared.push({ criterion: mark.criterion, verdict: mark.value.verdict, position: mark.position });
+  moves.cleared.sort((a, b) => a.position - b.position);
+  return { moves, fields: rewriteMarks(db, issueId, held, next) };
 }

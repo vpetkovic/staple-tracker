@@ -89,7 +89,7 @@ const usesHook = (file: string) => {
 };
 /** Wired: the detail holds its Back step through the `?issue=` entry it pushes (lib/issue-url.ts). */
 const detailSheetWired = true;
-const milestoneMenuWired = usesHook("views/milestones/MilestonesView.tsx");
+const milestoneMenuWired = usesHook("views/milestones/WorkTree.tsx");
 const rowMenuWired = usesHook("components/QueueRowMenu.tsx") || usesHook("views/TreeView.tsx") || usesHook("components/task-list/TaskRowLine.tsx");
 
 let home: string;
@@ -176,19 +176,15 @@ async function tapView(p: Page, view: string): Promise<void> {
 }
 
 describe.skipIf(Boolean(reason))("phone Back closes the overlay on top, and the page stays", () => {
-  it("the menu drawer", async () => {
+  it("the More sheet", async () => {
     const { page: p, context } = await page("/?view=tasks");
-    await tap(p, 'button[aria-label="Menu"]');
+    // A phone has no menu drawer: More is its one menu.
+    expect(await count(p, 'button[aria-label="Menu"]')).toBe(0);
+    await tap(p, '[data-view-tab="more"]');
     await settle(p);
-    expect(await count(p, "[data-nav-overlay]")).toBe(1);
-    // The drawer does not repeat the top bar's New task and Search, and offers a plain close
-    // rather than the desktop's collapse-the-rail icon.
-    expect(await p.locator("[data-nav-rail] [data-nav-new-task]").isVisible()).toBe(false);
-    expect(await p.locator("[data-nav-rail] [data-nav-search]").isVisible()).toBe(false);
-    expect(await p.locator('[data-nav-rail] [aria-label="Hide navigation"]').isVisible()).toBe(false);
-    expect(await p.locator("[data-nav-close]").isVisible()).toBe(true);
+    expect(await count(p, '[data-sheet="more-views"]')).toBe(1);
     await back(p);
-    expect(await count(p, "[data-nav-overlay]")).toBe(0);
+    expect(await count(p, '[data-sheet="more-views"]')).toBe(0);
     expect(viewOf(p)).toBe("tasks");
     await context.close();
   }, 30_000);
@@ -204,16 +200,16 @@ describe.skipIf(Boolean(reason))("phone Back closes the overlay on top, and the 
     await context.close();
   }, 30_000);
 
-  it("Settings opened from the drawer: Back from a section returns to the list, Back again closes it", async () => {
+  it("Settings opened from the More sheet: Back from a section returns to the list, Back again closes it", async () => {
     const { page: p, context } = await page("/?view=tasks");
-    await tap(p, 'button[aria-label="Menu"]');
+    await tap(p, '[data-view-tab="more"]');
     await settle(p);
-    // One tap closes the drawer AND opens Settings: Settings' entry must land after the
-    // drawer's has gone, or the drawer's pop would take Settings with it.
-    await tap(p, '[data-nav-rail] button[aria-label="Settings"]');
+    // One tap closes the sheet AND opens Settings: Settings' entry must land after the
+    // sheet's has gone, or the sheet's pop would take Settings with it.
+    await tap(p, "[data-more-settings]");
     await settle(p, 700);
     expect(await count(p, "[data-settings-dialog]")).toBe(1);
-    expect(await count(p, "[data-nav-overlay]")).toBe(0);
+    expect(await count(p, '[data-sheet="more-views"]')).toBe(0);
     await tap(p, '[data-settings-category="statuses"]');
     await settle(p, 600);
     expect(await p.locator("[data-settings-shell]").getAttribute("data-pane")).toBe("content");
@@ -255,10 +251,10 @@ describe.skipIf(Boolean(reason))("phone Back closes the overlay on top, and the 
     const { page: p, context } = await page("/?view=tasks");
     await tapView(p, "graph");
     await settle(p, 600);
-    await tap(p, 'button[aria-label="Menu"]');
+    await tap(p, '[data-view-tab="more"]');
     await settle(p);
     expect(await overlayIds(p)).toBe(1);
-    await tap(p, "[data-nav-close]");
+    await tap(p, '[data-sheet="more-views"] button[aria-label="Close"]');
     await settle(p, 600);
     expect(await overlayIds(p)).toBe(0);
     // One Back is one page: Graph → Tasks, not Graph → Graph.
@@ -267,17 +263,17 @@ describe.skipIf(Boolean(reason))("phone Back closes the overlay on top, and the 
     await context.close();
   }, 30_000);
 
-  it("a view chosen in the drawer: the drawer closes first, and Back returns to the page before", async () => {
+  it("a view chosen in the More sheet: the sheet closes first, and Back returns to the page before", async () => {
     const { page: p, context } = await page("/?view=tasks");
-    await tap(p, 'button[aria-label="Menu"]');
+    await tap(p, '[data-view-tab="more"]');
     await settle(p);
-    await tap(p, '[data-nav-item="view:graph"]');
+    await tap(p, '[data-more-view="graph"]');
     await settle(p, 700);
     expect(viewOf(p)).toBe("graph");
     expect(await overlayIds(p)).toBe(0);
     await back(p);
     expect(viewOf(p)).toBe("tasks");
-    expect(await count(p, "[data-nav-overlay]")).toBe(0);
+    expect(await count(p, '[data-sheet="more-views"]')).toBe(0);
     await context.close();
   }, 30_000);
 
@@ -519,9 +515,9 @@ describe.skipIf(Boolean(reason))("phone Back closes the overlay on top, and the 
     const { page: p, context } = await page("/?ws=alpha&view=tasks");
     await tapView(p, "graph");
     await settle(p, 600);
-    await tap(p, 'button[aria-label="Menu"]');
+    await tap(p, '[data-view-tab="more"]');
     await settle(p);
-    await tap(p, '[data-nav-rail] button[aria-label="Settings"]');
+    await tap(p, "[data-more-settings]");
     await settle(p, 700);
     await tap(p, '[data-settings-category="statuses"]');
     await settle(p, 800);
@@ -559,9 +555,9 @@ describe.skipIf(Boolean(reason))("phone Back closes the overlay on top, and the 
     await back(p);
     expect(viewOf(p)).toBe("tasks");
     // Clean, Back closes Settings at once, as before.
-    await tap(p, 'button[aria-label="Menu"]');
+    await tap(p, '[data-view-tab="more"]');
     await settle(p);
-    await tap(p, '[data-nav-rail] button[aria-label="Settings"]');
+    await tap(p, "[data-more-settings]");
     await settle(p, 700);
     await back(p);
     expect(await count(p, "[data-settings-dialog]")).toBe(0);
@@ -695,16 +691,16 @@ describe.skipIf(Boolean(reason))("the shell, measured", () => {
       await context.close();
       return out;
     };
-    // DELIBERATELY CHANGED with the desktop shell: the rail's collapse control is 32px, the
-    // switcher on a desk is the top bar's scope crumb (28px), and a rail workspace row is 32px.
+    // The rail's toggle is 32px, the switcher on a desk is the rail's head (36px), and a rail
+    // row is 32px.
     expect(
       await heights("/?ws=alpha&view=queue", [
         "[data-queue-next-open]",
-        'button[aria-label="Hide navigation"]',
-        '[data-workspace-switcher="crumb"]',
-        '[data-nav-workspace="alpha"]',
+        "[data-nav-toggle]",
+        '[data-workspace-switcher="head"]',
+        '[data-nav-item="view:tree"]',
       ]),
-    ).toEqual([24, 32, 28, 32]);
+    ).toEqual([24, 32, 36, 32]);
     expect(await heights("/?view=budget", ['[data-testid="budget-refresh"]'])).toEqual([24]);
     expect((await heights("/?ws=alpha&view=estimate-accuracy", ["[data-workspace-filter]"]))[0]).toBeLessThanOrEqual(32);
   }, 60_000);
@@ -712,16 +708,15 @@ describe.skipIf(Boolean(reason))("the shell, measured", () => {
   it("a tablet's desk layout under a finger: the rail's controls and the rows' small controls are 44px targets", async () => {
     const { page: p, context } = await page("/?ws=beta&view=tasks", TABLET);
     await settle(p, 400);
-    // DELIBERATELY CHANGED with the desktop shell: find-anything and New task moved to the top
-    // bar, the switcher is the top bar's scope crumb, and the workspaces are rail rows.
+    // A tablet starts with the narrow rail: its icons, its head and the top bar's scope crumb
+    // keep their drawn size and are 44px targets through an invisible hit area.
     for (const control of [
-      'button[aria-label="Hide navigation"]',
+      "[data-nav-toggle]",
       "[data-top-search]",
       "[data-top-new-task]",
       '[data-workspace-switcher="crumb"]',
-      '[data-nav-workspace="beta"]',
+      '[data-workspace-switcher="head"]',
       '[data-nav-item="view:tree"]',
-      '[data-nav-action="new-project"]',
       '[data-filter-add]',
       '[data-filter-preset="mine"]',
       'button[aria-label="Group tasks"]',
@@ -807,8 +802,8 @@ describe.skipIf(Boolean(reason))("the shell, measured", () => {
     const { page: p, context } = await page("/?view=tasks", DESK);
     const selected = () =>
       p.evaluate(() => document.querySelector("[data-workspace-list] [cmdk-item][data-selected=true]")?.getAttribute("data-workspace-option"));
-    // The desk's switcher is the top bar's scope crumb.
-    await p.locator('[data-workspace-switcher="crumb"]').focus();
+    // The desk's switcher is the rail's head.
+    await p.locator('[data-workspace-switcher="head"]').focus();
     await p.keyboard.press("Enter");
     await settle(p, 300);
     expect(await selected()).toBe("");
@@ -825,7 +820,7 @@ describe.skipIf(Boolean(reason))("the shell, measured", () => {
     await settle(p, 500);
     expect(new URL(p.url()).searchParams.get("ws")).toBe("alpha");
     // Reopened on a workspace, the list starts on that workspace.
-    await p.locator('[data-workspace-switcher="crumb"]').focus();
+    await p.locator('[data-workspace-switcher="head"]').focus();
     await p.keyboard.press("Enter");
     await settle(p, 300);
     expect(await selected()).toBe("alpha");

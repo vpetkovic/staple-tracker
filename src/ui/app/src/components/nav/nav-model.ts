@@ -1,20 +1,19 @@
 /**
- * What the navigation rail holds, as data — and the two shell rules that go with it.
+ * What the navigation rail holds, as data, and the shell's rail shortcut.
  *
  * ── Groups are an array, not JSX ──────────────────────────────────────────────────────
  *
- * The rail's sections are `NAV_GROUPS`: a list of groups, each a labelled list of items,
- * each item a view. Moving a view between groups, adding a group, or reordering a section
- * is an edit to this array and nothing else — `NavRail.tsx` iterates it and has no
- * opinion about what is in it. That is the whole point: the grouping is expected to keep
+ * The rail's zones are `NAV_GROUPS`: a list of groups, each a list of items, each item a
+ * view. Moving a view between zones, or reordering one, is an edit to this array and
+ * nothing else: `NavRail.tsx` iterates it and has no opinion about what is in it, and the
+ * command palette lists the views in the same order. The grouping is expected to keep
  * changing, and a rail laid out by hand would have to be re-laid every time.
  *
- * ── Why the shortcut and the storage envelope live here ───────────────────────────────
+ * ── Why the shortcut lives here ───────────────────────────────────────────────────────
  *
- * `[` and cmd-\ toggle the rail, and whether it is collapsed is remembered. Both rules
- * are pure — a keystroke in, a boolean out; a stored string in, a boolean out — so they
- * sit next to the data they belong to and are tested without a DOM, the way
- * `lib/view-prefs.ts` treats the sort envelope.
+ * `[` and cmd-\ switch the rail between full and narrow (`railKeyAction`). The rule is pure,
+ * a keystroke in and an answer out, so it sits next to the data it belongs to and is tested
+ * without a DOM. The width itself is `rail-mode.ts`'s.
  */
 import type { LucideIcon } from "lucide-react";
 import { BatteryMedium, Bot, ChartNoAxesColumn, Gauge, GitFork, Inbox, Layers, Lightbulb, ListOrdered, Milestone } from "lucide-react";
@@ -42,7 +41,7 @@ export interface NavItem {
 
 export interface NavGroup {
   id: string;
-  /** The section label, rendered as an eyebrow above the rows; "" for the top rows, which have none. */
+  /** The zone's name. The rail draws no labels (zones are set apart by space); it names the group in code and tests. */
   label: string;
   items: readonly NavItem[];
 }
@@ -76,18 +75,15 @@ function item(view: ViewName): NavItem {
 }
 
 /**
- * The rail's sections of VIEWS, top to bottom. (The workspaces the views are scoped to are
- * listed between the top rows and Views, from the session, not from here: they are data,
- * not a registry.)
+ * The rail's zones of VIEWS, top to bottom, under the scope at the rail's head:
  *
- *   top      Inbox and Autopilot (`TOP_VIEWS`), unlabelled, above everything: what waits on
- *            a person and what agents are doing are read across every workspace, so they
- *            sit above the workspace list rather than among one workspace's views.
- *   views    every other view in `VIEWS` order. The tuple is the registry and the rail must
- *            not keep a second copy of it.
- *   machine  the machine's views, in "This computer" at the foot of the rail: the provider
- *            budget is this computer's and reads the same whichever workspace is chosen, so
- *            filing it among the workspace's views would say otherwise.
+ *   top      now (`TOP_VIEWS`): Inbox, Autopilot and Queue, what waits on a person, what
+ *            agents are doing and what they take next.
+ *   views    the workspace's records: every other view in `VIEWS` order. The tuple is the
+ *            registry and the rail must not keep a second copy of it.
+ *   machine  the machine's views, at the foot of the rail with Integrations and Settings:
+ *            the provider budget is this computer's and reads the same whichever workspace
+ *            is chosen, so filing it among the workspace's views would say otherwise.
  */
 export const NAV_GROUPS: readonly NavGroup[] = [
   { id: "top", label: "", items: TOP_VIEWS.map(item) },
@@ -109,57 +105,6 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 /** A group of `NAV_GROUPS` by its id. */
 export function navGroup(id: "top" | "views" | "machine" | "foot"): NavGroup {
   return NAV_GROUPS.find((group) => group.id === id)!;
-}
-
-/** How many workspaces the rail lists before the rest go behind "More workspaces". */
-export const RAIL_WORKSPACE_LIMIT = 6;
-
-export interface RailWorkspaceRow {
-  /** "" is All workspaces. */
-  value: string;
-  name: string;
-  /** One or two letters for the row's tile. */
-  initials: string;
-  current: boolean;
-}
-
-/**
- * The workspaces the rail lists, and how many did not fit.
- *
- * Hub mode: All workspaces first, then every workspace in registry order — capped at
- * `limit`, with the CURRENT one always kept (it replaces the last listed one when it would
- * have been cut), so the rail never hides where you are. A single-workspace page lists
- * nothing (one row that does nothing is a dead control), and on a view about this computer
- * no row is marked current — the page is not in a workspace.
- */
-export function railWorkspaces(
-  scope: { mode: string; ws: string; workspaces: readonly { slug: string; prefix: string }[]; view?: ViewName },
-  limit: number = RAIL_WORKSPACE_LIMIT,
-): { rows: RailWorkspaceRow[]; hidden: number } {
-  const tile = (slug: string, prefix: string) => (prefix || slug).slice(0, 1).toUpperCase();
-  // A single-workspace page has nothing to switch to: no list at all (the top bar names it).
-  if (scope.mode !== "hub") return { rows: [], hidden: 0 };
-  // A view about THIS COMPUTER is in no workspace, so no workspace row claims to be current.
-  const inWorkspace = !(scope.view && isMachineView(scope.view));
-  const all: RailWorkspaceRow = { value: "", name: "All workspaces", initials: "", current: inWorkspace && scope.ws === "" };
-  let listed = scope.workspaces.slice(0, limit);
-  const current = scope.workspaces.find((workspace) => workspace.slug === scope.ws);
-  if (current && !listed.includes(current)) listed = [...listed.slice(0, Math.max(0, limit - 1)), current];
-  const rows = listed.map((workspace) => ({
-    value: workspace.slug,
-    name: workspace.slug,
-    initials: tile(workspace.slug, workspace.prefix),
-    current: inWorkspace && workspace.slug === scope.ws,
-  }));
-  return { rows: [all, ...rows], hidden: scope.workspaces.length - listed.length };
-}
-
-/**
- * What a click on a workspace row does: switch to it — unless it is already the one on
- * screen, or the page is a single workspace and has nothing to switch to.
- */
-export function chooseRailWorkspace(scope: { mode: string; setWs: (ws: string) => void }, row: RailWorkspaceRow): void {
-  if (scope.mode === "hub" && !row.current) scope.setWs(row.value);
 }
 
 /**
@@ -206,69 +151,37 @@ export function isRailToggleKey(event: KeyLike): boolean {
 
 /** What the shell knows when a key arrives, as booleans so the decision needs no DOM. */
 export interface RailKeyContext {
-  /** The narrow-viewport sheet is open. */
-  overlayOpen: boolean;
   /** A dialog, menu, listbox or popover is open and owns the keyboard. */
   surfaceOpen: boolean;
   /** The event came out of a text field. */
   typing: boolean;
 }
 
-export type RailKeyAction = "close-overlay" | "toggle" | null;
+export type RailKeyAction = "toggle" | null;
 
 /**
- * What the shell does with a keystroke — ONE decision, in order:
+ * What the shell does with a keystroke, ONE decision, in order:
  *
- *   1. An open floating surface owns the keyboard. Escape closes THAT (Radix does it),
- *      not the sheet behind it; `[` does not collapse the rail under an open menu.
- *   2. Escape closes the sheet when it is open, and is nobody's otherwise.
- *   3. The toggle shortcut — except a bare `[` typed into a text field, which is text.
+ *   1. An open floating surface owns the keyboard: `[` does not switch the rail under an
+ *      open menu, and Escape is that surface's (Radix closes it).
+ *   2. The toggle shortcut, except a bare `[` typed into a text field, which is text.
  */
 export function railKeyAction(event: KeyLike, context: RailKeyContext): RailKeyAction {
   if (context.surfaceOpen) return null;
-  if (event.key === "Escape") return context.overlayOpen ? "close-overlay" : null;
   if (!isRailToggleKey(event)) return null;
   if (event.key === "[" && context.typing) return null;
   return "toggle";
 }
 
+// ---------------------------------------------------------------- the old preference
+
 /**
- * Where focus goes when the sheet's open state changes. Opening: into the rail, so the
- * keyboard lands inside it rather than behind it. Closing: back to the "Show navigation"
- * button that opened it, rather than dropping to `<body>`. Nothing when nothing changed.
+ * Where the rail's hidden-or-shown choice was kept before it had two widths. Never written
+ * now; `rail-mode.ts` reads it once, for a browser that has not chosen a width yet.
  */
-export function overlayFocusTarget(previouslyOpen: boolean, open: boolean): "rail" | "show-navigation" | null {
-  if (previouslyOpen === open) return null;
-  return open ? "rail" : "show-navigation";
-}
-
-// ---------------------------------------------------------------- persistence
-
 export const RAIL_STORAGE_KEY = "staple:rail:v1";
 
-/** `"collapsed"` or absent. Anything else is treated as the default: open. */
+/** The old value: `"collapsed"`, or anything else, which was the rail shown. */
 export function decodeRailCollapsed(raw: string | null): boolean {
   return raw === "collapsed";
-}
-
-export function encodeRailCollapsed(collapsed: boolean): string {
-  return collapsed ? "collapsed" : "open";
-}
-
-export function loadRailCollapsed(storage: Pick<Storage, "getItem"> | undefined): boolean {
-  if (!storage) return false;
-  try {
-    return decodeRailCollapsed(storage.getItem(RAIL_STORAGE_KEY));
-  } catch {
-    return false;
-  }
-}
-
-export function saveRailCollapsed(storage: Pick<Storage, "setItem"> | undefined, collapsed: boolean): void {
-  if (!storage) return;
-  try {
-    storage.setItem(RAIL_STORAGE_KEY, encodeRailCollapsed(collapsed));
-  } catch {
-    /* private mode: the choice lasts for this page load */
-  }
 }

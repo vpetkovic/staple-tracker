@@ -192,10 +192,22 @@ following a parent on it included, and the dropped ideas scheduled on it. Removi
 ideas with no horizon. A horizon that still holds open work, or sits in the queue, cannot be
 removed until you move that work or take it off the queue. The refusal names what to move.
 
+Each section folds with its chevron, **Not scheduled** too once it holds ideas. **Collapse all**
+or **Expand all**, beside **+ Horizon**, folds or opens every section at once. Where the Plan area
+is narrower than 900 px it is a small text button at the right end of the outline's first line.
+This browser remembers your folds for each workspace. Until you fold one, a shipped horizon
+starts folded and the rest start open. While **Show only** or the filter is on, nothing folds and
+the button is held; your folds come back when you clear them.
+
+A task's horizon chip in **Tasks** opens this lens on that horizon: the page scrolls to its
+section, opens it for that visit and outlines it for a moment. Your remembered folds do not change.
+Folding that section closes it again; folding another section leaves it open. **Collapse all**
+counts it as open, and pressing **Collapse all** or **Expand all** applies to every section.
+
 ### How a horizon reads
 
 A horizon reads the same in three places: its section in the **Horizons** lens, its drawer, and
-its detail in **Milestones**. Each shows the same header and the same outline.
+the **Plan** line of its section in **Milestones**. Each shows the same header and the same outline.
 
 The header gives the name and date (`Mar 5, 2027 · in 99 days`); a bar split into done, open
 and planned work with its percentage, **Needs you: n** when n of its next steps wait on you, and
@@ -264,7 +276,7 @@ Two alternatives:
 Once it is scaffolded, promoted or linked to work, the idea reads **started**. Its progress and
 real dates now come from that work, and it reads **shipped**, with ✓ and the date, when all of it
 is done. A horizon reads **active** while it holds open work and **shipped** when its milestone is
-done; its section then folds to a ✓ summary.
+done; its section then starts folded to a ✓ summary, unless you opened it before.
 
 **What progress counts.** Progress counts work items. A ticket counts once it exists, done or
 open, and each breakdown row of an idea that has no tickets yet counts as one **planned** item.
