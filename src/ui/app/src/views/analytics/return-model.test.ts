@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import type { CostModelValue, RoiLens, RoiResponse, RoiRoleValue } from "@/lib/analytics-api";
 import { readCostModel } from "../../../../../core/analytics/home.ts";
-import { aiDetail, assumedFigures, assumedWords, currencySymbol, entryDates, peopleWords, returnView, sharePercent, shareWords } from "./return-model";
+import { aiDetail, assumedFigures, assumedWords, currencySymbol, entryDates, netFigure, peopleWords, returnView, sharePercent, shareWords } from "./return-model";
 
 const MODEL = readCostModel([], null, "/nonexistent-staple-home");
 
@@ -190,5 +190,25 @@ describe("small figures are not said as nothing", () => {
     expect(peopleWords(2.74)).toBe("2.7");
     expect(peopleWords(0.026)).toBe("under 0.1");
     expect(peopleWords(0)).toBe("0");
+  });
+});
+
+describe("hiring against AI, in one tile", () => {
+  const say = (amount: number) => `${amount < 0 ? "minus " : ""}$${Math.abs(amount)}`;
+
+  it("both counts ahead is what was saved, low to high", () => {
+    expect(netFigure(28, 114, say)).toMatchObject({ label: "Saved against hiring", value: "$28–$114" });
+    expect(netFigure(28, null, say)).toMatchObject({ label: "Saved against hiring", value: "$28" });
+  });
+
+  it("both counts behind is what was spent over hiring, as plain amounts, smaller first", () => {
+    const tile = netFigure(-11000, -1944, say);
+    expect(tile.label).toBe("Spent over hiring");
+    expect(tile.value).toBe("$1944–$11000");
+    expect(netFigure(-500, null, say)).toMatchObject({ label: "Spent over hiring", value: "$500" });
+  });
+
+  it("one count behind and one ahead says both ends, signed", () => {
+    expect(netFigure(-300, 900, say)).toMatchObject({ label: "Against hiring", value: "minus $300 to $900" });
   });
 });

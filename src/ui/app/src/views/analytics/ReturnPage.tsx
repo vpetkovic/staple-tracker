@@ -28,7 +28,7 @@ import { CostSetupDialog, SCENARIOS } from "./CostSetupDialog";
 import { costEdits } from "./cost-edits";
 import { AssumedTag, Segmented, type CostApi } from "./return-parts";
 import { RolePage } from "./RolePage";
-import { ATTEMPT_CAP_HOURS, aiDetail, assumedFigures, assumedWords, isAssumed, peopleWords, returnView, scenarioWords, shareWords, type ReturnView, type RoleView } from "./return-model";
+import { ATTEMPT_CAP_HOURS, aiDetail, assumedFigures, assumedWords, isAssumed, netFigure, peopleWords, returnView, scenarioWords, shareWords, type ReturnView, type RoleView } from "./return-model";
 
 export function ReturnPage({ roi, cost, error, onRetry, query, onAuthError, onOpenTicket }: {
   roi: RoiResponse | undefined;
@@ -200,6 +200,7 @@ function Figures({ view }: { view: ReturnView }) {
   // In a range the cents of a thousand are noise: $43K–$129K, not $43.3K–$129.2K.
   const round = (value: number) => (Math.abs(value) >= 10_000 && Math.abs(value) < 1_000_000 ? `${value < 0 ? "−" : ""}${view.sign}${Math.round(Math.abs(value) / 1000)}K` : money(value));
   const weeks = formatNumber(view.period.weeks);
+  const net = netFigure(low.net, high ? high.net : null, high ? round : money);
   const aiShare = view.cost > 0 ? view.aiSpend / view.cost : 0;
   return (
     <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5 max-xl:[&>*:last-child]:col-span-2" data-return-figures>
@@ -214,7 +215,7 @@ function Figures({ view }: { view: ReturnView }) {
           <span className="inline-flex items-center gap-1"><span className="size-2 rounded-full bg-[var(--viz-accent)]" />{solo ? "Your time" : "Employee"}</span>
         </span>
       </StatTile>
-      <StatTile label={low.net >= 0 ? "Saved against hiring" : "Against hiring"} value={high ? range(round(low.net), round(high.net)) : money(low.net)} sentence={low.net >= 0 ? "The team's cost, less what this cost." : "By the conservative count this cost more than the team."} />
+      <StatTile label={net.label} value={net.value} sentence={net.sentence} />
       <StatTile
         label={solo ? "Your leverage" : "Output per employee"}
         value={low.leverage === null ? null : range(formatMultiple(low.leverage).replace("×", high?.leverage != null ? "" : "×"), high?.leverage != null ? formatMultiple(high.leverage) : null)}

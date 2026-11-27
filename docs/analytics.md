@@ -84,17 +84,26 @@ shows its two counts, what hiring would cost by each, and the AI you assigned to
 it. Your directing time and any AI shared by the whole team are their own rows,
 and the rows add up to the total.
 
-Open a role for its page: the four figures with where each comes from, every
-ticket it caught with why, and the rule that recognizes it.
+Open a role for its page: the four figures with where each comes from, the
+tickets it caught with why (the 200 with the most agent time when there are
+more), and how staple recognizes it.
 
 ### How a role is recognized
 
 staple has no record of what kind of agent did a ticket, so it reads the ticket.
-A role's rule is a list of ticket labels, words in the title, agent names, ticket
-kinds and whole workspaces; a finished ticket that has any of them is that role's
-work. Roles are tried in order and the last one takes everything else, so every
-ticket lands on exactly one. Edit the rule on the role's page: the ticket list
-beside it shows what it catches at once.
+Two things decide the role, and both are on the role's page:
+
+- **Kinds of agent work.** staple sorts every finished ticket into engineering,
+  design, documentation, research or orchestration, from its labels, its agent's
+  name and the words in its title. Each kind belongs to one role, and you can
+  move a kind to another role.
+- **Also any ticket with.** Chips you add yourself: a ticket label, a word in the
+  title, part of an agent's name, a ticket kind or a whole workspace. A ticket
+  that has one of a role's chips is that role's work, whatever its kind.
+
+Chips are tried first, and the role that holds engineering takes whatever nothing
+else matched, so every ticket lands on exactly one role. The ticket list beside
+the editor says what caught each ticket, and updates once a change is saved.
 
 ## 4. Cost setup
 
@@ -115,8 +124,12 @@ the page counts them, so a default is never read as your own number.
 An **API bill** is the monthly figure on your provider's invoice. staple does not
 record token use, so it cannot price API usage itself.
 
-Changes are saved as you make them and follow you to your other devices through
-[cloud sync](cloud-sync.md).
+Changes are saved as you make them. The setup is kept in one workspace, named at
+the foot of the dialog, and covers every workspace on this computer. If that
+workspace is connected to [cloud sync](cloud-sync.md) the setup follows you to
+your other devices; if it is not, the dialog says *Saved on this computer only*
+and **Move** puts it in a workspace that is. *Reset both profiles* clears the two
+profiles' figures and keeps your roles and chips.
 
 ## 5. Estimates: how far off they run
 
