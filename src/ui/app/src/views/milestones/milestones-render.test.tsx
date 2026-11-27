@@ -350,12 +350,13 @@ describe("a section's work", () => {
   it("moves to the top and the bottom with the same reorder write", () => {
     const moves: [number, number][] = [];
     const onMove = (from: number, to: number) => moves.push([from, to]);
-    for (const item of ["top", "bottom", "up", "down"] as const) memberMenuMove(item, 1, 3, onMove);
+    // From the middle of five, each move lands somewhere different.
+    for (const item of ["top", "bottom", "up", "down"] as const) memberMenuMove(item, 2, 5, onMove);
     expect(moves).toEqual([
-      [1, 0],
-      [1, 2],
-      [1, 0],
-      [1, 2],
+      [2, 0],
+      [2, 4],
+      [2, 1],
+      [2, 3],
     ]);
     expect(movedAnnouncement(1, 3)).toBe("Moved to 2 of 3");
   });
