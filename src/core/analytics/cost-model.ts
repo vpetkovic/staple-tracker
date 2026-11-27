@@ -41,12 +41,22 @@ export const COST_MODEL_KEYS: Readonly<Record<CostModelPart, string>> = {
   aiSpend: "analytics.aiSpend",
 };
 
+/**
+ * How the agents standing in for a role are paid for: a flat `subscription` (a plan), or
+ * metered `api` usage. VP's ruling (2026-11-26): companies pay API prices by default, and each
+ * role can be set either way.
+ */
+export const BILLING_KINDS = ["subscription", "api"] as const;
+export type Billing = (typeof BILLING_KINDS)[number];
+
 export interface Role {
   /** Stable id the mapping refers to: lowercase letters, digits and dashes. */
   readonly id: string;
   readonly title: string;
   /** What an hour of this role costs, in the scenario's currency. */
   readonly hourlyRate: number;
+  /** How this role's agents are billed. Unset follows the scenario (`billingOf`). */
+  readonly billing?: Billing;
 }
 
 /** Figure ids still at their shipped default (see the module comment). */
@@ -93,6 +103,8 @@ export interface AiSpendEntry {
   readonly from: string;
   /** Last month it applies, `YYYY-MM`, or null for "still paying". */
   readonly to: string | null;
+  /** Which bill this is. Unset is `subscription`. */
+  readonly kind?: Billing;
 }
 
 export interface AiSpendValue {
@@ -193,13 +205,14 @@ function rolesProblem(value: unknown): string | null {
   const seen = new Set<string>();
   for (const [index, role] of value.roles.entries()) {
     if (!isObject(role)) return `role ${index + 1} must be an object {id, title, hourlyRate}`;
-    const roleExtra = unknownField(role, ["id", "title", "hourlyRate"], `role ${index + 1}`);
+    const roleExtra = unknownField(role, ["id", "title", "hourlyRate", "billing"], `role ${index + 1}`);
     if (roleExtra) return roleExtra;
     if (typeof role.id !== "string" || !ROLE_ID.test(role.id)) return `role ${index + 1}'s id must be lowercase letters, digits and dashes`;
     if (seen.has(role.id)) return `role id "${role.id}" appears twice`;
     seen.add(role.id);
     if (!isText(role.title, 80)) return `role "${role.id}" needs a title of at most 80 characters`;
     if (!isAmount(role.hourlyRate, MAX_RATE)) return `role "${role.id}"'s hourlyRate must be a number from 0 to ${MAX_RATE}`;
+    if (role.billing !== undefined && !(BILLING_KINDS as readonly unknown[]).includes(role.billing)) return `role "${role.id}"'s billing must be one of ${BILLING_KINDS.join(", ")}`;
   }
   return savedAtProblem(value);
 }
@@ -262,7 +275,7 @@ function aiSpendProblem(value: unknown): string | null {
   for (const [index, entry] of value.entries.entries()) {
     const where = `spend entry ${index + 1}`;
     if (!isObject(entry)) return `${where} must be an object {id, label, monthlyAmount, from, to}`;
-    const entryExtra = unknownField(entry, ["id", "label", "monthlyAmount", "from", "to"], where);
+    const entryExtra = unknownField(entry, ["id", "label", "monthlyAmount", "from", "to", "kind"], where);
     if (entryExtra) return entryExtra;
     if (typeof entry.id !== "string" || !ROLE_ID.test(entry.id)) return `${where}'s id must be lowercase letters, digits and dashes`;
     if (seen.has(entry.id)) return `spend entry id "${entry.id}" appears twice`;
@@ -272,6 +285,7 @@ function aiSpendProblem(value: unknown): string | null {
     if (typeof entry.from !== "string" || !MONTH.test(entry.from)) return `${where}'s from must be a month YYYY-MM`;
     if (entry.to !== null && (typeof entry.to !== "string" || !MONTH.test(entry.to))) return `${where}'s to must be a month YYYY-MM or null`;
     if (typeof entry.to === "string" && entry.to < entry.from) return `${where} ends (${entry.to}) before it starts (${entry.from})`;
+    if (entry.kind !== undefined && !(BILLING_KINDS as readonly unknown[]).includes(entry.kind)) return `${where}'s kind must be one of ${BILLING_KINDS.join(", ")}`;
   }
   return savedAtProblem(value);
 }
@@ -302,23 +316,39 @@ export function costModelSavedAt(model: CostModel): string | null {
 
 // ------------------------------------------------------------------ pricing
 
+/** An entry's bill: `subscription` unless it says `api`. */
+export const kindOf = (entry: AiSpendEntry): Billing => entry.kind ?? "subscription";
+
+/** How a role's agents are billed: its own setting, else the scenario's default (solo: subscription; company: API). */
+export function billingOf(role: Role, scenario: ScenarioValue): Billing {
+  return role.billing ?? (scenario.mode === "company" ? "api" : "subscription");
+}
+
+const inForce = (entry: AiSpendEntry, month: string): boolean => month >= entry.from && (entry.to === null || month <= entry.to);
+
 /**
- * The AI spend that falls inside `[fromDay, toDay]` (calendar days, both included): each day
- * costs its month's amount divided by the days in that month, summed over every entry in
- * force that month. Proration by day is what makes a two-week period cost half a month.
+ * The AI spend that falls inside `days` (calendar days): each day costs its month's amount
+ * divided by the days in that month, summed over every entry in force that month (of `kind`
+ * only, when given). Proration by day is what makes a two-week period cost half a month.
  */
-export function aiSpendFor(spend: AiSpendValue, days: readonly string[]): number {
+export function aiSpendFor(spend: AiSpendValue, days: readonly string[], kind?: Billing): number {
   let total = 0;
   for (const day of days) {
     const month = day.slice(0, 7);
     const [year, monthNumber] = month.split("-").map(Number) as [number, number];
     const daysInMonth = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
     for (const entry of spend.entries) {
-      if (month < entry.from || (entry.to !== null && month > entry.to)) continue;
+      if (!inForce(entry, month) || (kind !== undefined && kindOf(entry) !== kind)) continue;
       total += entry.monthlyAmount / daysInMonth;
     }
   }
   return total;
+}
+
+/** True when some entry of `kind` is in force on at least one of `days`. */
+export function spendCovers(spend: AiSpendValue, days: readonly string[], kind: Billing): boolean {
+  const months = new Set(days.map((day) => day.slice(0, 7)));
+  return spend.entries.some((entry) => kindOf(entry) === kind && [...months].some((month) => inForce(entry, month)));
 }
 
 /** One role's share of the value: the hours attributed to it and what they cost at its rate. */
@@ -334,6 +364,13 @@ export interface RoleValue {
   readonly tickets: number;
   /** Planned lens: of those, the ones whose estimate counts. Null on the measured lens. */
   readonly plannedTickets: number | null;
+  /** How this role's agents are billed (`billingOf`). */
+  readonly billing: Billing;
+  /**
+   * This role's share of the AI spend of its kind: that spend split over the roles billed the
+   * same way, by their (measured) agent-hours. 0 when no role of the kind ran.
+   */
+  readonly aiCost: number;
 }
 
 /** The ROI under one lens. Every input is echoed so a surface can print the formula. */
@@ -406,50 +443,73 @@ export function roi(input: {
   readonly lens: "measured" | "planned";
   /** Hours by role id. A role id the list does not hold is priced at the first role (see `resolveRoles`). */
   readonly byRole: ReadonlyMap<string, RoleTally>;
-  readonly aiCost: number;
+  /** The scope's AI spend for the period, by bill. `aiCost` is their sum. */
+  readonly aiCostByKind: Readonly<Record<Billing, number>>;
+  /** Measured agent-hours by role id: what each kind's spend is split by, on both lenses. */
+  readonly agentHoursByRole: ReadonlyMap<string, number>;
   readonly directorHours: number;
   readonly model: CostModel;
 }): RoiResult {
   const { role: roleById } = resolveRoles(input.model);
-  const merged = new Map<string, { role: Role; hours: number; types: Set<AgentType>; tickets: number; plannedTickets: number | null }>();
+  type Held = { role: Role; hours: number; types: Set<AgentType>; tickets: number; plannedTickets: number | null; agentHours: number };
+  const merged = new Map<string, Held>();
+  const hold = (id: string): Held => {
+    const role = roleById(id);
+    let held = merged.get(role.id);
+    if (!held) {
+      held = { role, hours: 0, types: new Set<AgentType>(), tickets: 0, plannedTickets: input.lens === "planned" ? 0 : null, agentHours: 0 };
+      merged.set(role.id, held);
+    }
+    return held;
+  };
   for (const [id, tally] of input.byRole) {
     if (tally.hours <= 0 && tally.tickets === 0) continue;
-    const role = roleById(id);
-    const held = merged.get(role.id) ?? { role, hours: 0, types: new Set<AgentType>(), tickets: 0, plannedTickets: input.lens === "planned" ? 0 : null };
+    const held = hold(id);
     held.hours += tally.hours;
     for (const type of tally.types) held.types.add(type);
     held.tickets += tally.tickets;
     if (held.plannedTickets !== null) held.plannedTickets += tally.plannedTickets ?? 0;
-    merged.set(role.id, held);
   }
+  // A role that ran carries its share of the spend on both lenses, planned hours or not.
+  for (const [id, hours] of input.agentHoursByRole) if (hours > 0) hold(id).agentHours += hours;
+  const scenario = input.model.scenario;
+  const hoursOfKind: Record<Billing, number> = { subscription: 0, api: 0 };
+  for (const held of merged.values()) hoursOfKind[billingOf(held.role, scenario)] += held.agentHours;
   const byRole: RoleValue[] = [...merged.values()]
-    .map(({ role, hours, types, tickets, plannedTickets }) => ({
-      roleId: role.id,
-      title: role.title,
-      hourlyRate: role.hourlyRate,
-      hours,
-      value: hours * role.hourlyRate,
-      types: AGENT_TYPES.filter((type) => types.has(type)),
-      tickets,
-      plannedTickets,
-    }))
+    .map(({ role, hours, types, tickets, plannedTickets, agentHours }) => {
+      const billing = billingOf(role, scenario);
+      return {
+        roleId: role.id,
+        title: role.title,
+        hourlyRate: role.hourlyRate,
+        hours,
+        value: hours * role.hourlyRate,
+        types: AGENT_TYPES.filter((type) => types.has(type)),
+        tickets,
+        plannedTickets,
+        billing,
+        aiCost: hoursOfKind[billing] > 0 ? (input.aiCostByKind[billing] * agentHours) / hoursOfKind[billing] : 0,
+      };
+    })
     .sort((a, b) => b.value - a.value || b.hours - a.hours || a.roleId.localeCompare(b.roleId));
   const valueHours = byRole.reduce((sum, role) => sum + role.hours, 0);
   const value = byRole.reduce((sum, role) => sum + role.value, 0);
-  const rate = input.model.scenario.director.hourlyRate;
+  // Every bill counts, whether or not a role billed that way ran.
+  const aiCost = input.aiCostByKind.subscription + input.aiCostByKind.api;
+  const rate = scenario.director.hourlyRate;
   const directorCost = input.directorHours * rate;
-  const totalCost = input.aiCost + directorCost;
+  const totalCost = aiCost + directorCost;
   return {
     lens: input.lens,
     valueHours,
     value,
     byRole,
-    aiCost: input.aiCost,
+    aiCost,
     director: { hours: input.directorHours, hourlyRate: rate, cost: directorCost },
     totalCost,
     net: value - totalCost,
     returnOnTotalCost: totalCost > 0 ? value / totalCost : null,
-    returnOnAiSpend: input.aiCost > 0 ? value / input.aiCost : null,
+    returnOnAiSpend: aiCost > 0 ? value / aiCost : null,
     breakEvenRate: valueHours > 0 ? totalCost / valueHours : null,
     outputMultiplier: input.directorHours > 0 ? valueHours / input.directorHours : null,
   };

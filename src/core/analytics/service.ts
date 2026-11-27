@@ -7,7 +7,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { StapleError } from "../types.js";
 import type { AgentTypeRule } from "./agent-type.js";
 import type { AnalyticsReport, AnalyticsWorkspaceRef, Caveat, CostModelResponse, RoiResponse, RoiTicketsResponse } from "./contract.js";
-import { COST_MODEL_PARTS, aiSpendFor, resolveRoles, roi, type CostModel } from "./cost-model.js";
+import { COST_MODEL_PARTS, aiSpendFor, billingOf, resolveRoles, roi, spendCovers, type Billing, type CostModel } from "./cost-model.js";
 import type { AgentType } from "./agent-type.js";
 import { analyticsReport, resolvePeriod, roleTallies, round2, type AnalyticsQuery } from "./metrics.js";
 import { readWorkspaceRows, type WorkspaceRows } from "./rows.js";
@@ -67,18 +67,41 @@ export function readRoi(input: {
   const scoped = roleTallies(scopeRows, resolved, rules, roleOf);
   const hub = hubRows === scopeRows ? scoped : roleTallies(hubRows, resolved, rules, roleOf);
   const share = hubRows === scopeRows ? 1 : hub.agentHours > 0 ? scoped.agentHours / hub.agentHours : 0;
-  const aiSpendHub = aiSpendFor(costModel.aiSpend, resolved.window.days);
+  const days = resolved.window.days;
+  const aiSpendHubByKind: Record<Billing, number> = {
+    subscription: aiSpendFor(costModel.aiSpend, days, "subscription"),
+    api: aiSpendFor(costModel.aiSpend, days, "api"),
+  };
+  const aiSpendHub = aiSpendHubByKind.subscription + aiSpendHubByKind.api;
   const hoursPerActiveDay = costModel.scenario.director.hoursPerActiveDay;
   const directorHoursHub = hub.activeDays * hoursPerActiveDay;
+  // Each bill is split over the roles billed that way by the agent-hours they ran in this scope.
+  const agentHoursByRole = new Map([...scoped.measured].map(([id, tally]) => [id, tally.hours]));
   const lens = (name: "measured" | "planned") =>
-    roi({ lens: name, byRole: scoped[name], aiCost: aiSpendHub * share, directorHours: directorHoursHub * share, model: costModel });
+    roi({
+      lens: name,
+      byRole: scoped[name],
+      aiCostByKind: { subscription: aiSpendHubByKind.subscription * share, api: aiSpendHubByKind.api * share },
+      agentHoursByRole,
+      directorHours: directorHoursHub * share,
+      model: costModel,
+    });
   const { fallbacks } = roles;
+  // Roles that ran, are billed by API, and have no API bill in force anywhere in the period: the AI cost is understated.
+  const unbilled = new Set(
+    [...agentHoursByRole]
+      .filter(([, hours]) => hours > 0)
+      .map(([id]) => roles.role(id))
+      .filter((role) => billingOf(role, costModel.scenario) === "api")
+      .map((role) => role.id),
+  );
   const caveats: Caveat[] = [...report.caveats];
   const defaults = COST_MODEL_PARTS.filter((part) => input.model.source[part] === "default").length;
   if (defaults > 0) caveats.push({ code: "default_cost_model", count: defaults, of: COST_MODEL_PARTS.length });
   if (fallbacks.length > 0) caveats.push({ code: "mapping_fallback", count: fallbacks.length, of: null });
   if (input.model.home.slug !== null && !input.model.home.synced) caveats.push({ code: "home_not_synced", count: 1, of: null });
   if (input.model.home.others.length > 0) caveats.push({ code: "several_homes", count: input.model.home.others.length + 1, of: null });
+  if (unbilled.size > 0 && !spendCovers(costModel.aiSpend, days, "api")) caveats.push({ code: "api_bill_missing", count: unbilled.size, of: null });
   return {
     asOf: input.query.now,
     period: report.period,
@@ -88,6 +111,7 @@ export function readRoi(input: {
     planned: lens("planned"),
     basis: {
       aiSpendHub,
+      aiSpendHubByKind,
       directorHoursHub,
       activeDaysHub: hub.activeDays,
       hoursPerActiveDay,

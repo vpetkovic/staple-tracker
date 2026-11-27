@@ -179,6 +179,31 @@ describe("the cost model over HTTP", () => {
     expect(roi.body.measured.director).toMatchObject({ hours: 8 * (2 / 3), hourlyRate: 100 });
     expect(roi.body.caveats.map((caveat: { code: string }) => caveat.code)).toContain("home_not_synced");
 
+    expect(roi.body.basis.aiSpendHubByKind.subscription).toBeCloseTo(70);
+    expect(roi.body.basis.aiSpendHubByKind.api).toBe(0);
+    // Solo: roles bill by subscription, so all of alpha's AI cost lands on its one role.
+    expect(roi.body.measured.byRole[0]).toMatchObject({ billing: "subscription" });
+    expect(roi.body.measured.byRole[0].aiCost).toBeCloseTo(70 * (2 / 3));
+    expect(roi.body.caveats.map((caveat: { code: string }) => caveat.code)).not.toContain("api_bill_missing");
+    expect(roi.body.model.model.aiSpend.entries[0].kind).toBe("subscription");
+
+    // A company bills its roles by API by default: with only a subscription entry, the API bill is missing.
+    expect(
+      (await http(`/api/analytics/cost-model`, { scenario: { mode: "company", currency: "USD", director: { title: "Employee", hourlyRate: 100, hoursPerActiveDay: 8 } } })).status,
+    ).toBe(200);
+    const company = await http(`/api/analytics/roi?scope=alpha&${QUERY}`);
+    expect(company.body.measured.byRole[0]).toMatchObject({ billing: "api", aiCost: 0 });
+    expect(company.body.measured.aiCost).toBeCloseTo(70 * (2 / 3));
+    expect(company.body.caveats).toContainEqual({ code: "api_bill_missing", count: 1, of: null });
+    expect(
+      (await http(`/api/analytics/cost-model`, { aiSpend: { entries: [{ id: "plan", label: "Plan", monthlyAmount: 300, from: "2026-09", to: null }, { id: "metered", label: "API", monthlyAmount: 600, from: "2026-09", to: null, kind: "api" }] } })).status,
+    ).toBe(200);
+    const billed = await http(`/api/analytics/roi?scope=alpha&${QUERY}`);
+    expect(billed.body.caveats.map((caveat: { code: string }) => caveat.code)).not.toContain("api_bill_missing");
+    expect(billed.body.measured.byRole[0].aiCost).toBeCloseTo(140 * (2 / 3));
+    // Back to solo for the rest of the file.
+    await http(`/api/analytics/cost-model`, { scenario: { mode: "solo", currency: "USD", director: { title: "You", hourlyRate: 100, hoursPerActiveDay: 8 } }, aiSpend: { entries: [{ id: "plan", label: "Plan", monthlyAmount: 300, from: "2026-09", to: null }] } });
+
     const hub = await http(`/api/analytics/roi?${QUERY}`);
     expect(hub.body.basis.share).toBe(1);
     expect(hub.body.measured.aiCost).toBeCloseTo(70);

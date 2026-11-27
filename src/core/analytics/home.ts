@@ -75,8 +75,13 @@ function readHeldModel(store: WorkspaceStore): HeldModel {
     }
     const saved = view.source === "workspace";
     source[part] = saved ? "saved" : "default";
-    const value = (saved ? view.value : DEFAULT_COST_MODEL[part]) as { assumed?: readonly string[] };
-    parts[part] = { ...value, assumed: value.assumed ?? [] };
+    const value = (saved ? view.value : DEFAULT_COST_MODEL[part]) as { assumed?: readonly string[]; entries?: ReadonlyArray<{ kind?: string }> };
+    parts[part] = {
+      ...value,
+      assumed: value.assumed ?? [],
+      // A spend entry always reads with its bill: `subscription` when the stored entry leaves it out.
+      ...(part === "aiSpend" ? { entries: (value.entries ?? []).map((entry) => ({ ...entry, kind: entry.kind ?? "subscription" })) } : {}),
+    };
   }
   const model = parts as unknown as CostModel;
   const stamps = [

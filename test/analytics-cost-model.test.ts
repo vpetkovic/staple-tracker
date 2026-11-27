@@ -12,6 +12,8 @@ import { deriveAgentType, globMatches, type AgentTypeInput } from "../src/core/a
 import {
   DEFAULT_COST_MODEL,
   aiSpendFor,
+  billingOf,
+  spendCovers,
   costModelPartProblem,
   costModelSavedAt,
   resolveRoles,
@@ -135,6 +137,10 @@ describe("cost model validation", () => {
     expect(costModelPartProblem("aiSpend", { entries: [{ ...entry, from: "2026-13" }], savedAt: null })).toMatch(/from/);
     expect(costModelPartProblem("aiSpend", { entries: [{ ...entry, to: "2026-08" }], savedAt: null })).toMatch(/before it starts/);
     expect(costModelPartProblem("aiSpend", { entries: [entry, entry], savedAt: null })).toMatch(/twice/);
+    expect(costModelPartProblem("aiSpend", { entries: [{ ...entry, kind: "metered" }], savedAt: null })).toMatch(/kind must be one of subscription, api/);
+    expect(costModelPartProblem("aiSpend", { entries: [{ ...entry, kind: "api" }], savedAt: null })).toBeNull();
+    expect(costModelPartProblem("roles", { roles: [{ id: "a", title: "A", hourlyRate: 1, billing: "tokens" }], savedAt: null })).toMatch(/billing must be one of subscription, api/);
+    expect(costModelPartProblem("roles", { roles: [{ id: "a", title: "A", hourlyRate: 1, billing: "api" }], savedAt: null })).toBeNull();
   });
 
   it("ships three roles, prices orchestration as engineering, and lists every default figure as assumed", () => {
@@ -172,6 +178,17 @@ describe("AI spend over a period", () => {
     expect(aiSpendFor(spend, ["2026-09-30", "2026-10-01"])).toBeCloseTo(10 + 100);
     expect(aiSpendFor(spend, ["2026-08-31"])).toBe(0);
   });
+
+  it("splits the spend by bill, an entry without a kind being a subscription", () => {
+    const mixed = { entries: [...spend.entries, { id: "metered", label: "API", monthlyAmount: 600, from: "2026-09", to: null, kind: "api" as const }], savedAt: null };
+    const september = eachDate("2026-09-01", "2026-09-30");
+    expect(aiSpendFor(mixed, september, "subscription")).toBeCloseTo(300);
+    expect(aiSpendFor(mixed, september, "api")).toBeCloseTo(600);
+    expect(aiSpendFor(mixed, september)).toBeCloseTo(900);
+    expect(spendCovers(mixed, september, "api")).toBe(true);
+    expect(spendCovers(spend, september, "api")).toBe(false);
+    expect(spendCovers(mixed, ["2026-08-31"], "api")).toBe(false);
+  });
 });
 
 describe("the ROI", () => {
@@ -195,9 +212,12 @@ describe("the ROI", () => {
     return out;
   };
 
+  const sub = (amount: number) => ({ subscription: amount, api: 0 });
+  const none = new Map<string, number>();
+
   it("reproduces the shaping discussion's measured-lens figures (0.73×)", () => {
     // VP's numbers: $70/h, $17,000/month for 2.5 months, 256 h directing, 633 measured agent-hours.
-    const result = roi({ lens: "measured", byRole: byRole({ engineering: 633 }), aiCost: 17_000 * 2.5, directorHours: 256, model });
+    const result = roi({ lens: "measured", byRole: byRole({ engineering: 633 }), aiCostByKind: sub(17_000 * 2.5), agentHoursByRole: new Map([["eng", 633]]), directorHours: 256, model });
     expect(result.value).toBeCloseTo(44_310);
     expect(result.totalCost).toBeCloseTo(42_500 + 17_920);
     expect(result.returnOnTotalCost).toBeCloseTo(44_310 / 60_420, 6);
@@ -206,16 +226,16 @@ describe("the ROI", () => {
   });
 
   it("prices each agent type at its role and folds types that share a role", () => {
-    const result = roi({ lens: "planned", byRole: byRole({ engineering: 10, design: 5, documentation: 4 }, { eng: 3, writer: 1 }), aiCost: 100, directorHours: 0, model });
+    const result = roi({ lens: "planned", byRole: byRole({ engineering: 10, design: 5, documentation: 4 }, { eng: 3, writer: 1 }), aiCostByKind: sub(100), agentHoursByRole: new Map([["eng", 3], ["writer", 1]]), directorHours: 0, model });
     expect(result.byRole).toEqual([
-      { roleId: "eng", title: "Engineer", hourlyRate: 70, hours: 15, value: 1050, types: ["engineering", "design"], tickets: 3, plannedTickets: 0 },
-      { roleId: "writer", title: "Writer", hourlyRate: 50, hours: 4, value: 200, types: ["documentation"], tickets: 1, plannedTickets: 0 },
+      { roleId: "eng", title: "Engineer", hourlyRate: 70, hours: 15, value: 1050, types: ["engineering", "design"], tickets: 3, plannedTickets: 0, billing: "subscription", aiCost: 75 },
+      { roleId: "writer", title: "Writer", hourlyRate: 50, hours: 4, value: 200, types: ["documentation"], tickets: 1, plannedTickets: 0, billing: "subscription", aiCost: 25 },
     ]);
     expect(result).toMatchObject({ valueHours: 19, value: 1250, totalCost: 100, net: 1150, returnOnTotalCost: 12.5, returnOnAiSpend: 12.5, outputMultiplier: null });
   });
 
   it("answers null, not infinity, when there is no cost or no hours", () => {
-    const result = roi({ lens: "measured", byRole: new Map(), aiCost: 0, directorHours: 0, model });
+    const result = roi({ lens: "measured", byRole: new Map(), aiCostByKind: sub(0), agentHoursByRole: none, directorHours: 0, model });
     expect(result).toMatchObject({ value: 0, totalCost: 0, returnOnTotalCost: null, returnOnAiSpend: null, breakEvenRate: null });
   });
 
@@ -225,7 +245,55 @@ describe("the ROI", () => {
     const ruled: CostModel = { ...model, roleMapping: { ...model.roleMapping, rules: [{ title: "qa", roleId: "qa" }] } };
     expect(resolveRoles(ruled).fallbacks).toEqual([{ type: null, rule: 0, missingRoleId: "qa", usedRoleId: "eng" }]);
     const tally = new Map([["gone", { hours: 2, types: new Set(["documentation" as const]), tickets: 1, plannedTickets: null }]]);
-    expect(roi({ lens: "measured", byRole: tally, aiCost: 0, directorHours: 0, model: orphaned }).value).toBe(140);
+    expect(roi({ lens: "measured", byRole: tally, aiCostByKind: sub(0), agentHoursByRole: none, directorHours: 0, model: orphaned }).value).toBe(140);
+  });
+
+  it("bills each role by subscription or API, its own setting first, else the scenario's default", () => {
+    const qa: CostModel = {
+      ...model,
+      roles: { roles: [...model.roles.roles, { id: "qa", title: "QA", hourlyRate: 60, billing: "subscription" }], savedAt: null },
+      scenario: { ...model.scenario, mode: "company" },
+    };
+    expect(billingOf(qa.roles.roles[0]!, qa.scenario)).toBe("api");
+    expect(billingOf(qa.roles.roles[2]!, qa.scenario)).toBe("subscription");
+    expect(billingOf(qa.roles.roles[0]!, model.scenario)).toBe("subscription");
+    const tally = new Map([
+      ["eng", { hours: 6, types: new Set(["engineering" as const]), tickets: 2, plannedTickets: null }],
+      ["writer", { hours: 2, types: new Set(["documentation" as const]), tickets: 1, plannedTickets: null }],
+      ["qa", { hours: 4, types: new Set(["engineering" as const]), tickets: 1, plannedTickets: null }],
+    ]);
+    const result = roi({
+      lens: "measured",
+      byRole: tally,
+      aiCostByKind: { subscription: 200, api: 800 },
+      agentHoursByRole: new Map([["eng", 6], ["writer", 2], ["qa", 4]]),
+      directorHours: 0,
+      model: qa,
+    });
+    // The API bill splits 6 : 2 over the two API-billed roles; the subscription goes whole to QA.
+    expect(Object.fromEntries(result.byRole.map((role) => [role.roleId, [role.billing, role.aiCost]]))).toEqual({
+      eng: ["api", 600],
+      writer: ["api", 200],
+      qa: ["subscription", 200],
+    });
+    expect(result.aiCost).toBe(1000);
+  });
+
+  it("counts every bill in the total, even when no role billed that way ran, and gives a role that ran its share on the planned lens", () => {
+    const planned = new Map([["eng", { hours: 5, types: new Set(["engineering" as const]), tickets: 1, plannedTickets: 1 }]]);
+    const result = roi({
+      lens: "planned",
+      byRole: planned,
+      aiCostByKind: { subscription: 300, api: 50 },
+      agentHoursByRole: new Map([["eng", 1], ["writer", 1]]),
+      directorHours: 0,
+      model,
+    });
+    expect(result.aiCost).toBe(350);
+    expect(result.byRole.map((role) => [role.roleId, role.hours, role.aiCost])).toEqual([
+      ["eng", 5, 150],
+      ["writer", 0, 150],
+    ]);
   });
 });
 

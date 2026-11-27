@@ -297,7 +297,9 @@ export type CaveatCode =
   | "mapping_fallback"
   | "default_cost_model"
   | "home_not_synced"
-  | "several_homes";
+  | "several_homes"
+  /** Roles (`count`) that ran and are billed by API, with no API spend entry in force in the period: the AI cost is understated. */
+  | "api_bill_missing";
 
 /** One limit on what the figures can claim: `count` of `of` records are affected. */
 export interface Caveat {
@@ -333,10 +335,15 @@ export interface AnalyticsReport {
 
 // ------------------------------------------------------------------ the cost model
 
+/** How agents are paid for: a flat plan, or metered API usage. */
+export type BillingKind = "subscription" | "api";
+
 export interface CostRole {
   readonly id: string;
   readonly title: string;
   readonly hourlyRate: number;
+  /** How this role's agents are billed. Unset follows the scenario: solo is `subscription`, company is `api`. */
+  readonly billing?: BillingKind;
 }
 
 /** A person's rule: every matcher given must match (at least one); exactly one of `type` and `roleId`. */
@@ -375,10 +382,20 @@ export interface CostModelValue {
     readonly savedAt: string | null;
   };
   readonly aiSpend: {
-    readonly entries: readonly { readonly id: string; readonly label: string; readonly monthlyAmount: number; readonly from: string; readonly to: string | null }[];
+    /** `kind` is always present on a read (`subscription` when the stored entry leaves it out); optional on a write. */
+    readonly entries: readonly AiSpendEntryValue[];
     readonly assumed: readonly string[];
     readonly savedAt: string | null;
   };
+}
+
+export interface AiSpendEntryValue {
+  readonly id: string;
+  readonly label: string;
+  readonly monthlyAmount: number;
+  readonly from: string;
+  readonly to: string | null;
+  readonly kind?: BillingKind;
 }
 
 export type CostModelPartId = "roles" | "roleMapping" | "scenario" | "aiSpend";
@@ -412,7 +429,7 @@ export interface CostModelWrite {
   readonly roles?: { readonly roles: readonly CostRole[]; readonly assumed?: readonly string[] };
   readonly roleMapping?: { readonly types: Readonly<Record<AgentTypeId, string>>; readonly rules: readonly CostTypeRule[]; readonly assumed?: readonly string[] };
   readonly scenario?: Omit<CostModelValue["scenario"], "savedAt" | "assumed"> & { readonly assumed?: readonly string[] };
-  readonly aiSpend?: { readonly entries: CostModelValue["aiSpend"]["entries"]; readonly assumed?: readonly string[] };
+  readonly aiSpend?: { readonly entries: readonly AiSpendEntryValue[]; readonly assumed?: readonly string[] };
   /** Return these parts to their defaults (a reset is journaled as a delete). */
   readonly reset?: readonly CostModelPartId[];
 }
@@ -428,6 +445,14 @@ export interface RoiRoleValue {
   readonly tickets: number;
   /** Planned lens: of those, the ones whose estimate counts. Null on the measured lens. */
   readonly plannedTickets: number | null;
+  /** How the role's agents are billed (its own setting, else the scenario's default). */
+  readonly billing: BillingKind;
+  /**
+   * The role's share of the AI spend of its kind: that spend split over the roles billed the
+   * same way by their measured agent-hours (on both lenses). 0 when no role of the kind ran;
+   * `aiCost` on the lens still counts every bill, so these shares can sum to less than it.
+   */
+  readonly aiCost: number;
 }
 
 export interface RoiLens {
@@ -457,6 +482,8 @@ export interface RoiResponse {
   readonly basis: {
     /** AI spend over the period for the whole hub, before the share. */
     readonly aiSpendHub: number;
+    /** The same, by bill. */
+    readonly aiSpendHubByKind: Readonly<Record<BillingKind, number>>;
     readonly directorHoursHub: number;
     /** Days agents ran anywhere in the hub. */
     readonly activeDaysHub: number;
