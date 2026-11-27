@@ -6,6 +6,9 @@
  */
 import { Button } from "@/components/ui/button";
 
+/** 28px at every width (`min-h-0` lifts the touch floor); on a phone a 32px tap through an invisible inset, never a thumb-sized box. */
+const TEXT_BUTTON = "relative h-7 min-h-0 max-md:before:absolute max-md:before:-inset-y-0.5 max-md:before:inset-x-0 max-md:before:content-['']";
+
 export function hiddenDoneText(count: number): string {
   return count === 1 ? "1 finished item hidden" : `${count} finished items hidden`;
 }
@@ -23,7 +26,7 @@ export function HiddenDoneNotice({ count, all, onShowDone }: { count: number; al
         {all ? ". Everything in this milestone is finished; Done is hidden." : ""}
       </p>
       {onShowDone ? (
-        <Button variant={all ? "outline" : "ghost"} size="sm" onClick={onShowDone} data-show-done="" className="max-md:min-h-11">
+        <Button variant={all ? "outline" : "ghost"} size="sm" onClick={onShowDone} data-show-done="" className={TEXT_BUTTON}>
           Show done
         </Button>
       ) : null}

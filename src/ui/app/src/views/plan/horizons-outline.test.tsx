@@ -8,7 +8,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
 import type { HorizonData, IdeaData, PlanData } from "@/lib/plan-types";
-import { DropRail, HorizonsBoard, lensColumns, ReadySection } from "./HorizonsLens";
+import { DropRail, FoldAll, foldAll, HorizonsBoard, lensColumns, ReadySection } from "./HorizonsLens";
 import { cardMenuItems } from "./plan-board";
 import { horizonsColumns } from "./plan-model";
 import { outlineEntries, outlineKey, shippedKey } from "./plan-outline";
@@ -105,7 +105,8 @@ const IDEAS = [co, r0, r1, r2, r3];
 
 const plan = (ideas: IdeaData[] = IDEAS, horizons: HorizonData[] = [horizon("now"), horizon("later")]): PlanData => ({ enabled: true, today: "2026-11-13", horizons, ideas });
 const text = (html: string) => html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
-const board = (over: { plan?: PlanData; filtering?: boolean } = {}) => renderToStaticMarkup(<HorizonsBoard plan={over.plan ?? plan()} write={async () => true} onOpen={noop} selected={null} filtering={over.filtering} />);
+const board = (over: { plan?: PlanData; filtering?: boolean; folded?: Record<string, boolean> } = {}) =>
+  renderToStaticMarkup(<HorizonsBoard plan={over.plan ?? plan()} write={async () => true} onOpen={noop} selected={null} filtering={over.filtering} folded={over.folded} onFold={noop} />);
 const drawn = (html: string) => [...html.matchAll(/data-plan-tree-row="([^"]+)"/g)].map((m) => m[1]);
 
 /** Render as if the viewport were `width` px: what `matchMedia` would answer. */
@@ -222,6 +223,93 @@ describe("while a focus or filter is on", () => {
   });
 });
 
+describe("folds the person chose", () => {
+  // Now is open with its group; Later is done with one record; one record waits with no horizon.
+  const done = horizon("later", { shipped: true, percent: 100, complete: true });
+  const full = plan([...IDEAS, idea("l1", { horizonId: "later" }), idea("w1", { horizonId: null })], [horizon("now"), done]);
+  const empty = plan([...IDEAS, idea("l1", { horizonId: "later" })], [horizon("now"), done]);
+  const section = (html: string, key: string) => {
+    const start = html.indexOf(`data-plan-column="h:${key}"`);
+    const end = html.indexOf("data-plan-column=", start + 1);
+    return html.slice(start, end === -1 ? undefined : end);
+  };
+
+  it("with no choice folds a done horizon and leaves the rest unfolded", () => {
+    const html = board({ plan: full, folded: {} });
+    expect(drawn(section(html, "later"))).toEqual([]);
+    expect(text(section(html, "later"))).toContain("All 4 members landed · show");
+    expect(drawn(section(html, "now"))).toEqual(["co", "r3"]);
+    expect(drawn(section(html, ""))).toEqual(["w1"]);
+  });
+
+  it("applies a remembered fold to an open horizon and a remembered unfold to a done one", () => {
+    const html = board({ plan: full, folded: { now: true, later: false } });
+    expect(drawn(section(html, "now"))).toEqual([]);
+    expect(section(html, "now")).toContain('aria-expanded="false" aria-label="Show Now"');
+    expect(drawn(section(html, "later"))).toEqual(["l1"]);
+    expect(text(section(html, "later"))).toContain("All 4 members landed · hide");
+  });
+
+  it("applies nothing it remembers while a focus or filter is on", () => {
+    const html = board({ plan: full, folded: { now: true, later: true, none: true }, filtering: true });
+    expect(drawn(section(html, "now"))).toEqual(["co", "r0", "r1", "r2", "r3"]);
+    expect(drawn(section(html, "later"))).toEqual(["l1"]);
+    expect(drawn(section(html, ""))).toEqual(["w1"]);
+    expect(html).not.toContain("data-plan-ready-fold");
+  });
+
+  it("gives Not scheduled the horizon's chevron when it has rows, and folds it", () => {
+    const open = section(board({ plan: full, folded: {} }), "");
+    expect(open).toMatch(/<button type="button" aria-expanded="true" aria-label="Hide Not scheduled" data-plan-ready-fold="" class="[^"]*-ml-1 inline-flex size-5[^"]*before:-inset-1\.5/);
+    // The header keeps the horizon header's padding, so the chevron and the title sit at a horizon's x.
+    expect(open).toMatch(/<header class="[^"]*\bpx-4 py-3 [^"]*@max-\[760px\]\/plan:gap-x-2 @max-\[760px\]\/plan:px-3" data-plan-ready="true">/);
+    const folded = section(board({ plan: full, folded: { none: true } }), "");
+    expect(folded).toContain('aria-expanded="false" aria-label="Show Not scheduled"');
+    expect(drawn(folded)).toEqual([]);
+    expect(text(folded)).toContain("Not scheduled 1 idea with no horizon");
+    // Its one quiet line has nothing to fold.
+    expect(section(board({ plan: empty, folded: { none: false } }), "")).not.toContain("data-plan-ready-fold");
+  });
+
+  it("collapses every section while one that folds is open, and expands them once all are folded", () => {
+    const every = (value: boolean) => ({ none: value, now: value, later: value });
+    expect(foldAll(full, {})).toEqual({ collapse: true, changes: every(true) });
+    expect(foldAll(full, { none: true, now: true })).toEqual({ collapse: false, changes: every(false) });
+    expect(foldAll(full, { now: true, later: false, none: true })).toEqual({ collapse: true, changes: every(true) });
+    // An empty Not scheduled cannot fold, so it does not hold the control at Collapse all.
+    expect(foldAll(empty, { now: true })).toEqual({ collapse: false, changes: every(false) });
+    expect(foldAll(empty, { now: true, none: false })?.collapse).toBe(false);
+    // With nothing that folds there is nothing to do.
+    expect(foldAll(plan([], []), {})).toBeNull();
+  });
+
+  it("names the control by what it will do and holds it while a focus or filter is on", () => {
+    const control = (over: { folded?: Record<string, boolean>; filtering?: boolean; data?: PlanData }) =>
+      renderToStaticMarkup(<FoldAll plan={over.data ?? full} folded={over.folded ?? {}} onFold={noop} filtering={over.filtering ?? false} />);
+    expect(text(control({}))).toContain("Collapse all");
+    expect(control({})).toContain("lucide-chevrons-down-up");
+    expect(control({})).not.toContain(`disabled=""`);
+    expect(text(control({ folded: { none: true, now: true } }))).toContain("Expand all");
+    expect(control({ folded: { none: true, now: true } })).toContain("lucide-chevrons-up-down");
+    const held = control({ filtering: true });
+    expect(held).toMatch(/<button[^>]*disabled=""/);
+    expect(held).toContain('title="Clear the focus and filter to fold sections"');
+    expect(control({ data: plan([], []) })).toMatch(/<button[^>]*disabled=""/);
+  });
+
+  it("sits at the right end of the outline's first line, for the widths where the toolbar has no room", () => {
+    const html = board({ plan: full, folded: {} });
+    // In Not scheduled's line, before any horizon: the top of the outline, not its last row.
+    const at = html.indexOf("data-plan-fold-all");
+    expect(at).toBeGreaterThan(-1);
+    expect(at).toBeLessThan(html.indexOf("data-plan-horizon="));
+    expect(html.match(/data-plan-fold-all/g)).toHaveLength(1);
+    // A small text button, shown only under 900px of the Plan container; never a 44px box.
+    expect(html).toMatch(/@max-\[900px\]\/plan:inline-flex[^>]*>\s*<button[^>]*\bh-7\b[^>]*data-plan-fold-all/);
+    expect(html).not.toMatch(/<button[^>]*min-h-11[^>]*data-plan-fold-all/);
+  });
+});
+
 describe("dragging to schedule", () => {
   // On Now, it may be scheduled elsewhere; dropping it on Now again changes nothing.
   const movable = idea("m", { actions: [{ id: "schedule", label: "Schedule", who: "person" }] });
@@ -245,7 +333,7 @@ describe("dragging to schedule", () => {
 
   it("gives a section that would refuse the drop no highlight", () => {
     const ready = (dragging: IdeaData) => {
-      const lens = { ...lensFor(dragging), onOpen: noop, selected: null, filtering: false };
+      const lens = { ...lensFor(dragging), onOpen: noop, selected: null, filtering: false, folded: {}, onFold: noop, visit: new Set<string>(), landed: null };
       return renderToStaticMarkup(<ReadySection lens={lens} column={lens.columns[0]!} />);
     };
     expect(ready(movable)).toMatch(/data-plan-drop="allowed" class="[^"]*shadow-\[inset_0_0_0_2px_var\(--color-ring\)\]/);

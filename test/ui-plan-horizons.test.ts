@@ -277,7 +277,8 @@ it("draws the empty Not scheduled section as one line on a phone", async () => {
   try {
     const empty = page.locator('[data-plan-column="h:"]');
     expect(await empty.evaluate((section) => Math.round(section.getBoundingClientRect().height))).toBeLessThanOrEqual(44);
-    expect(await empty.innerText()).toMatch(/^Not scheduled\s+nothing here$/);
+    // Its line also carries the outline's fold control at its right end, where the toolbar has no room for it.
+    expect(await empty.innerText()).toMatch(/^Not scheduled\s+nothing here\s+(Collapse|Expand) all$/);
   } finally {
     await close();
   }

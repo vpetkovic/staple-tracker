@@ -10,10 +10,10 @@
  * projection again. The projection itself is never stored.
  */
 import { CalendarDays } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type RefObject } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { personActor } from "@/detail/parts/person";
 import { updateMilestoneDates } from "@/lib/api";
 import { useBackToClose } from "@/lib/back-to-close";
@@ -40,6 +40,11 @@ export function useSetMilestoneTarget(workspace: string | undefined, milestoneId
   const clear = useCallback(() => setError(null), []);
   const set = useCallback(
     async (targetDate: string | null): Promise<boolean> => {
+      // Never a write with no milestone named: the store would answer "No issue matches".
+      if (!milestoneId) {
+        setError("This milestone has not loaded yet. Try again in a moment.");
+        return false;
+      }
       setBusy(true);
       setError(null);
       try {
@@ -70,6 +75,10 @@ export function MilestoneDueControl({
   onOpen,
   className,
   defaultOpen = false,
+  open: openProp,
+  onOpenChange,
+  button = true,
+  anchor,
 }: {
   milestone: DueMilestone;
   projection: ProjectedDue | null;
@@ -84,11 +93,30 @@ export function MilestoneDueControl({
   className?: string;
   /** Tests render the field open; the page opens it on a click. */
   defaultOpen?: boolean;
+  /** Held open by the caller, who can open it from elsewhere (a menu's "Change due date"). */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /** False: no calendar button; the field opens from `open` and sits under the words. */
+  button?: boolean;
+  /** With no button: the element the field opens from instead of the words (a phone's stuck `⋯`, which stays in view). */
+  anchor?: RefObject<HTMLElement | null>;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
+  const [ownOpen, setOwnOpen] = useState(defaultOpen);
+  const open = openProp ?? ownOpen;
+  const setOpen = (next: boolean) => {
+    setOwnOpen(next);
+    onOpenChange?.(next);
+  };
   useBackToClose(open, () => setOpen(false));
   const projected = !milestone.targetDate && projection !== null && milestone.state !== "done" && milestone.state !== "cancelled";
   const [draft, setDraft] = useState(milestone.targetDate ?? (projection ? localIso(projection.at) : ""));
+  // Opened by the caller (a menu's "Change due date"): start from the date it has now, as a click does.
+  useEffect(() => {
+    if (!openProp) return;
+    setDraft(milestone.targetDate ?? (projection ? localIso(projection.at) : ""));
+    onOpen?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openProp]);
   const text = dueText(milestone, projection, now);
   const save = async (value: string | null) => {
     const ok = await onSetTarget?.(value);
@@ -109,7 +137,6 @@ export function MilestoneDueControl({
 
   return (
     <span className={cn("inline-flex items-center gap-1", className)} data-milestone-due-control="">
-      {words}
       <Popover
         open={open}
         onOpenChange={(next) => {
@@ -120,21 +147,31 @@ export function MilestoneDueControl({
           setOpen(next);
         }}
       >
-        <PopoverTrigger asChild>
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label={milestone.targetDate ? "Change the due date" : "Set a due date"}
-            title={milestone.targetDate ? "Change the due date" : "Set a due date"}
-            data-milestone-due-button=""
-            // 44px on a phone, where it is a thumb's target.
-            className="max-md:size-11"
-            disabled={busy}
-          >
-            <CalendarDays aria-hidden />
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent align="start" className="w-72" data-milestone-due-picker="">
+        {button ? words : anchor ? (
+          <>
+            <PopoverAnchor virtualRef={anchor} />
+            {words}
+          </>
+        ) : (
+          <PopoverAnchor asChild>{words}</PopoverAnchor>
+        )}
+        {button ? (
+          <PopoverTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label={milestone.targetDate ? "Change the due date" : "Set a due date"}
+              title={milestone.targetDate ? "Change the due date" : "Set a due date"}
+              data-milestone-due-button=""
+              // Its look at every width; on a phone a 32px tap through an invisible inset.
+              className="relative max-md:before:absolute max-md:before:-inset-1 max-md:before:content-['']"
+              disabled={busy}
+            >
+              <CalendarDays aria-hidden />
+            </Button>
+          </PopoverTrigger>
+        ) : null}
+        <PopoverContent align={anchor && !button ? "end" : "start"} className="w-72" data-milestone-due-picker="">
           <form
             className="flex flex-col gap-3"
             onSubmit={(event) => {
@@ -150,7 +187,7 @@ export function MilestoneDueControl({
                 aria-label="Due date"
                 disabled={busy}
                 onChange={(event) => setDraft(event.target.value)}
-                className="h-9 text-body"
+                className="h-9 min-h-0 text-body"
               />
             </label>
             <p className="m-0 text-label text-text-secondary">
@@ -167,11 +204,11 @@ export function MilestoneDueControl({
             ) : null}
             <div className="flex items-center justify-end gap-2">
               {milestone.targetDate ? (
-                <Button type="button" variant="ghost" size="sm" className="max-md:min-h-11" disabled={busy} onClick={() => void save(null)} data-milestone-due-clear="">
+                <Button type="button" variant="ghost" size="sm" className="min-h-0" disabled={busy} onClick={() => void save(null)} data-milestone-due-clear="">
                   {projection ? "Use the estimate" : "Clear date"}
                 </Button>
               ) : null}
-              <Button type="submit" size="sm" className="max-md:min-h-11" disabled={busy || !draft || draft === milestone.targetDate} data-milestone-due-save="">
+              <Button type="submit" size="sm" className="min-h-0" disabled={busy || !draft || draft === milestone.targetDate} data-milestone-due-save="">
                 Save
               </Button>
             </div>

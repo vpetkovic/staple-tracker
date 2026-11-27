@@ -7,7 +7,8 @@
  * says, the evidence as links (a ticket opens the ticket, a document opens it on that
  * ticket's Documents tab), who marked it and when, and, for an unknown one, why.
  *
- * Then the pace against the target date (the check's verdict and its numbers, in words),
+ * Under the criteria, any mark the check cleared (`ClearedMarks`, shared with the Milestones
+ * page). Then the pace against the target date (the check's verdict and its numbers, in words),
  * the milestone's gate (whose approval it waits for, and whether a goal run or a person
  * asked for it), and the goal run working it, if any.
  *
@@ -32,7 +33,7 @@ import { endedStateText, isLiveRun, liveStateText, tickets } from "@/lib/run-tex
 import { useRuns } from "@/lib/runs";
 import { useOptionalSession, useSession } from "@/lib/session";
 import { statusLabel } from "@/lib/settings";
-import type { CriterionVerdict, EvidenceItem, GoalCriterion, IssueGate, MilestoneView, RunEntry } from "@/lib/types";
+import type { ClearedCriterionMark, CriterionVerdict, EvidenceItem, GoalCriterion, IssueGate, MilestoneView, RunEntry } from "@/lib/types";
 import { DetailCard, SectionHeading, cn, useNow } from "./parts";
 import { openDetailTab, openTabOnArrival } from "./tabs/registry";
 
@@ -125,6 +126,30 @@ export function CriterionRow({ criterion, workspace, openRef, now }: { criterion
   );
 }
 
+/**
+ * A mark that counts for nothing, in a sentence: judged while another device removed its
+ * criterion, or the earlier of two judgements of one criterion made at once.
+ */
+export function clearedMarkText(mark: Pick<ClearedCriterionMark, "criterion" | "verdict" | "markedBy" | "reason">): string {
+  return mark.reason === "removed"
+    ? `${mark.markedBy}'s ${mark.verdict} mark on “${mark.criterion}” was cleared: its criterion was removed.`
+    : `${mark.markedBy}'s earlier ${mark.verdict} mark on “${mark.criterion}” was replaced by a later one.`;
+}
+
+/** The goal's cleared marks as quiet lines under its criteria, on the Milestones page and in the drawer. Nothing when there are none. */
+export function ClearedMarks({ cleared, className }: { cleared?: readonly ClearedCriterionMark[]; className?: string }) {
+  if (!cleared || cleared.length === 0) return null;
+  return (
+    <ul aria-label="Cleared marks" className={cn("m-0 flex list-none flex-col gap-0.5 p-0", className)} data-goal-cleared="">
+      {cleared.map((mark, i) => (
+        <li key={i} data-goal-cleared-reason={mark.reason} className="text-label text-text-tertiary wrap-anywhere">
+          {clearedMarkText(mark)}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 /** The newest goal run over this milestone, live first; null when none was ever run here. */
 export function goalRunOf(entries: readonly RunEntry[], workspace: string, milestoneId: string): RunEntry | null {
   const over = entries.filter((entry) => entry.workspace === workspace && entry.run.scope.kind === "milestone" && entry.run.scope.issueId === milestoneId);
@@ -178,6 +203,7 @@ export function MilestoneGoalSection({ plan, gate, workspace }: { plan: Mileston
           ))}
         </ul>
       ) : null}
+      <ClearedMarks cleared={goal.cleared} className="pt-1" />
 
       <DetailCard className="mt-3 flex flex-col gap-3">
         <div className="flex min-w-0 flex-col gap-1" data-goal-pace={pace.verdict}>

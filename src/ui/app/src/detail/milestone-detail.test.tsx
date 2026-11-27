@@ -10,7 +10,7 @@ import { SessionContext } from "@/lib/session";
 import type { EffectiveMilestone, IssueDetail } from "@/lib/types";
 import { fakeSession } from "@/views/fake-session";
 import { emptyFilters } from "@/lib/filters";
-import { member, progress, view } from "@/views/milestones/fixtures";
+import { criterion, goal, member, progress, view } from "@/views/milestones/fixtures";
 import { effective } from "@/views/queue/fixtures";
 import { MilestoneMembers, MilestoneProgressSummary } from "./MilestoneParts";
 import { detail, issue } from "./detail-fixture";
@@ -133,9 +133,48 @@ describe("a milestone's own detail", () => {
     expect(html).toContain("Autopilot runs");
   });
 
-  it("keeps the ordinary primary on a finished milestone, which the plan list hides", () => {
+  // The phone's action bar draws the same `OpenPlanAction`; it sits outside `DetailContent`.
+  it("names its primary Show in Milestones, in the drawer and on the full page", () => {
+    for (const presentation of ["drawer", "full"] as const) {
+      const primary = /<button[^>]*data-primary="open-plan"[^>]*>[\s\S]*?<\/button>/.exec(render(PLAN, presentation))?.[0] ?? "";
+      expect(primary.replace(/<[^>]+>/g, "")).toBe("Show in Milestones");
+    }
+    expect(render(PLAN)).not.toContain("Open plan");
+  });
+
+  it("keeps the ordinary primary on a finished milestone: Reopen, not Show in Milestones", () => {
     const done = { ...PLAN, milestonePlan: view({ milestone: { state: "done" } }) };
     expect(render(done)).not.toContain('data-primary="open-plan"');
+  });
+});
+
+describe("a milestone's goal in the drawer", () => {
+  const criteria = [criterion({ position: 1, text: "Ships", verdict: "met", marked: "met", why: null })];
+  const judged = (cleared?: NonNullable<IssueDetail["milestonePlan"]>["goal"]["cleared"]) =>
+    render({ ...PLAN, milestonePlan: view({ milestone: { identifier: "STA-190" }, goal: { ...goal({ criteria }), ...(cleared ? { cleared } : {}) } }) });
+  const goalOf = (html: string) => /<section[^>]*data-milestone-goal[\s\S]*?<\/section>/.exec(html)?.[0] ?? "";
+  const textOf = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/\s+/g, " ");
+
+  it("lists the marks it cleared under the criteria, removed and superseded, as the Milestones page does", () => {
+    const html = goalOf(
+      judged([
+        { criterion: "Old wording", verdict: "met", markedBy: "bob", markedAt: "2026-09-01T00:00:00.000Z", reason: "removed" },
+        { criterion: "Ships", verdict: "unmet", markedBy: "alice", markedAt: "2026-09-02T00:00:00.000Z", reason: "superseded" },
+      ]),
+    );
+    expect(html).toContain('data-goal-cleared-reason="removed"');
+    expect(html).toContain('data-goal-cleared-reason="superseded"');
+    expect(textOf(html)).toContain("bob's met mark on “Old wording” was cleared: its criterion was removed.");
+    expect(textOf(html)).toContain("alice's earlier unmet mark on “Ships” was replaced by a later one.");
+    // Under the criteria, before the pace.
+    expect(html.indexOf('aria-label="Criteria"')).toBeLessThan(html.indexOf("data-goal-cleared"));
+    expect(html.indexOf("data-goal-cleared")).toBeLessThan(html.indexOf("data-goal-pace"));
+  });
+
+  it("draws nothing for cleared marks when the goal has none, or an empty list", () => {
+    expect(goalOf(judged())).toContain("data-goal-criterion");
+    expect(goalOf(judged())).not.toContain("data-goal-cleared");
+    expect(goalOf(judged([]))).not.toContain("data-goal-cleared");
   });
 });
 
