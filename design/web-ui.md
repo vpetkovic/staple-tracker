@@ -251,9 +251,10 @@ the done toggle, a milestone focus and every filter are written into the URL
 `lib/session-url.ts`), so a link opens the same page. Going to another view or
 workspace pushes a history entry, so Back returns from it; narrowing the list
 replaces the entry. An address naming a workspace the hub does not have lands on
-*All workspaces*. The page re-reads on a change fingerprint polled every 1.5s
-(`lib/useStaple.ts`), so a write from the CLI, MCP or another tab shows within
-one poll. A poll not answered within 8s is given up and the next one asked, so
+*All workspaces*, with the address's own filters when it names a view (none when it
+carries none), never the filters remembered for *All workspaces*. The page re-reads
+on a change fingerprint polled every 1.5s (`lib/useStaple.ts`), so a write from the
+CLI, MCP or another tab shows within one poll. A poll not answered within 8s is given up and the next one asked, so
 a request lost to a network change cannot stop the page refreshing.
 
 ### Keyboard

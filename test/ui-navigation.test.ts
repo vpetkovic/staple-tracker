@@ -58,10 +58,18 @@ const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile:
 async function withPage(
   options: BrowserContextOptions,
   run: (page: Page) => Promise<void>,
-  at: { server?: UiHandle; search?: string; ready?: (page: Page) => Promise<void> } = {},
+  at: { server?: UiHandle; search?: string; ready?: (page: Page) => Promise<void>; stored?: Record<string, string> } = {},
 ): Promise<void> {
   const context = await browser.newContext(options);
   try {
+    // What this browser remembered before the page opened: written once, before the first load.
+    if (at.stored) {
+      await context.addInitScript((entries) => {
+        if (sessionStorage.getItem("seeded")) return;
+        for (const [key, value] of Object.entries(entries)) localStorage.setItem(key, value);
+        sessionStorage.setItem("seeded", "1");
+      }, at.stored);
+    }
     const page = await context.newPage();
     const target = at.server ?? ui;
     await page.goto(`http://127.0.0.1:${(target.server.address() as AddressInfo).port}/?token=${target.token}${at.search ?? ""}`, { waitUntil: "networkidle" });
@@ -120,25 +128,17 @@ describe("the theme", () => {
 
   it("does not read the old key as a pick, and removes it", async () => {
     // Builds before this one wrote the first visit's system answer to `staple:theme` on every load.
-    const context = await browser.newContext({ ...DESK, colorScheme: "light" });
-    try {
-      await context.addInitScript(() => {
-        if (!sessionStorage.getItem("seeded")) {
-          localStorage.setItem("staple:theme", "dark");
-          sessionStorage.setItem("seeded", "1");
-        }
-      });
-      const page = await context.newPage();
-      await page.goto(`http://127.0.0.1:${(ui.server.address() as AddressInfo).port}/?token=${ui.token}`, { waitUntil: "networkidle" });
-      await page.getByText("A task to list").first().waitFor();
-      expect(await dark(page)).toBe(false);
-      expect(await stored(page, "staple:theme")).toBeNull();
-      expect(await stored(page)).toBeNull();
-      await page.emulateMedia({ colorScheme: "dark" });
-      await expect.poll(() => dark(page)).toBe(true);
-    } finally {
-      await context.close();
-    }
+    await withPage(
+      { ...DESK, colorScheme: "light" },
+      async (page) => {
+        expect(await dark(page)).toBe(false);
+        expect(await stored(page, "staple:theme")).toBeNull();
+        expect(await stored(page)).toBeNull();
+        await page.emulateMedia({ colorScheme: "dark" });
+        await expect.poll(() => dark(page)).toBe(true);
+      },
+      { stored: { "staple:theme": "dark" } },
+    );
   });
 });
 
@@ -331,4 +331,90 @@ describe("the rail while the server does not answer", () => {
       }
     }
   }, 40_000);
+});
+
+describe("an address naming a workspace the hub does not have", () => {
+  /**
+   * Tasks filters remembered for each workspace ("" = All workspaces), searching `remembered-<ws or all>`.
+   * The stored shape is lib/view-prefs.ts's (`encodeViewPrefs`, scope `sortScopeKey`), which this
+   * Node-side program cannot import.
+   */
+  const remembered = (...workspaces: string[]) => ({
+    "staple:view:v1": JSON.stringify({
+      version: 3,
+      filters: Object.fromEntries(
+        workspaces.map((ws) => [`${ws || "*"}::tree`, { dims: { project: [projectId] }, text: `remembered-${ws || "all"}`, showDone: false }]),
+      ),
+    }),
+  });
+  const address = (page: Page) => {
+    const params = new URL(page.url()).searchParams;
+    return { ws: params.get("ws"), view: params.get("view"), project: params.getAll("project"), q: params.get("q") };
+  };
+  const hub = (search: string, stored: Record<string, string>) => ({
+    server: hubUi,
+    search,
+    stored,
+    ready: (page: Page) => page.locator('[data-workspace-switcher="head"]').waitFor(),
+  });
+
+  it.each([
+    ["none, not the remembered ones", "", null],
+    ["exactly the ones it carries", "&q=task", "task"],
+  ])("lands on All workspaces with the address's own filters: %s", async (_, filters, q) => {
+    await withPage(
+      DESK,
+      async (page) => {
+        await expect.poll(() => address(page).ws).toBeNull();
+        expect(address(page)).toEqual({ ws: null, view: "tasks", project: [], q });
+        // ...and the page shows it: the remembered project and search would hide this task.
+        await page.getByText("A task to list").first().waitFor({ timeout: 5000 });
+      },
+      hub(`&view=tasks&ws=nowhere${filters}`, remembered("")),
+    );
+  });
+
+  it("leaves a known workspace's address as it is", async () => {
+    await withPage(
+      DESK,
+      async (page) => {
+        await page.getByText("A task to list").first().waitFor();
+        expect(address(page)).toEqual({ ws: "navfocus", view: "tasks", project: [], q: null });
+      },
+      hub("&view=tasks&ws=navfocus", remembered("navfocus")),
+    );
+  });
+
+  it("keeps the address's filters when Forward returns to one", async () => {
+    await withPage(
+      DESK,
+      async (page) => {
+        await page.getByText("A task to list").first().waitFor();
+        // An entry naming a workspace the hub lost, reached by history rather than by a load.
+        await page.evaluate(() => {
+          const unknown = new URL(location.href);
+          unknown.search = `?view=tasks&ws=nowhere&q=task`;
+          history.pushState(null, "", unknown);
+        });
+        await page.goBack();
+        await expect.poll(() => address(page).ws).toBe("navfocus");
+        await page.goForward();
+        await expect.poll(() => address(page).ws).toBeNull();
+        expect(address(page)).toEqual({ ws: null, view: "tasks", project: [], q: "task" });
+      },
+      hub("&view=tasks&ws=navfocus", remembered("")),
+    );
+  });
+
+  it("restores what was remembered when the address names no view (a ticket link)", async () => {
+    await withPage(
+      DESK,
+      async (page) => {
+        await expect.poll(() => address(page).ws).toBeNull();
+        await expect.poll(() => address(page)).toEqual({ ws: null, view: "tasks", project: [projectId], q: "remembered-all" });
+      },
+      // `nowhere` remembered filters before it was unregistered; they are not All workspaces'.
+      hub("&ws=nowhere&issue=NOPE-1", remembered("", "nowhere")),
+    );
+  });
 });

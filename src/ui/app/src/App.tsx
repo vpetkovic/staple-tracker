@@ -606,6 +606,8 @@ export function App() {
    * onto the same page.
    */
   const correcting = useRef(false);
+  /** The workspace an address naming a view named (first load, Back, Forward), until a correction uses it. */
+  const addressWorkspace = useRef<string | null>(initialUrl?.ws ?? null);
   const shellState = useMemo<ShellUrlState>(
     () => ({ ws, view, filters, focus: milestoneFocus, run }),
     [ws, view, filters, milestoneFocus, run],
@@ -664,6 +666,7 @@ export function App() {
       const next = readShellUrl(window.location.search);
       if (!next) return;
       lastSynced.current = next;
+      addressWorkspace.current = next.ws;
       setWsState(next.ws);
       setView(next.view);
       setMilestoneFocus(next.focus);
@@ -677,6 +680,9 @@ export function App() {
   /**
    * An address naming a workspace this hub does not have (a link from another machine, a
    * workspace unregistered since) lands on All workspaces rather than on an error.
+   * An address that names a view says what the filters are, and they were seeded under the
+   * unknown workspace: they move with the page, or All workspaces' remembered filters would
+   * replace them. A ticket link names no view and no filters, so the remembered ones answer.
    */
   const knownWorkspaces = bootstrap.data?.workspaces;
   const hubMode = bootstrap.data?.mode === "hub";
@@ -684,9 +690,16 @@ export function App() {
     if (!knownWorkspaces || ws === "") return;
     if (!hubMode || !knownWorkspaces.some((workspace) => workspace.slug === ws)) {
       correcting.current = true;
+      if (addressWorkspace.current === ws) {
+        addressWorkspace.current = null;
+        setFilterPrefs((current) => {
+          const { [sortScopeKey(ws, view)]: seeded, ...rest } = current;
+          return seeded ? withFiltersForScope(rest, sortScopeKey("", view), seeded) : current;
+        });
+      }
       setWsState("");
     }
-  }, [knownWorkspaces, hubMode, ws]);
+  }, [knownWorkspaces, hubMode, ws, view]);
 
   const open = useCallback((workspace: string, ref: string) => setSelection({ workspace, ref }), []);
   const pin = useCallback(
