@@ -1,39 +1,60 @@
 /**
- * The return on AI spend, as arithmetic and nothing else. Every figure the Return lens shows is
- * computed here from the role hours the report carries and the cost model the person owns, so the
- * page can recompute as a figure changes and the formulas it prints are the ones it ran.
+ * The Return lens's adapter: what the server's `RoiResponse` says, in the shape the page draws.
  *
- *   value of the work  =  Σ over roles ( hours that role would have put in × that role's rate )
+ * Every figure is the server's (`GET /api/analytics/roi`, `src/core/analytics/contract.ts`).
+ * Nothing here prices anything: the value of the work, the cost, the return, each role's AI
+ * lines and their arithmetic all arrive computed. The adapter only joins the two lenses role by
+ * role, puts the roles the work came from ahead of the ones it did not, and names the figures
+ * still at their shipped default, so the components read one plain object.
+ *
+ *   value of the work  =  Σ over roles ( hours priced at that role × that role's rate )
  *   cost               =  AI spend for the period  +  the directing person's hours × their rate
  *   return             =  value ÷ cost
  *
- * Hours are counted two ways and never blended: MEASURED agent time (what the attempts recorded,
- * each capped; conservative, because agents are fast and run in parallel) and PLANNED effort (the
- * estimates on the finished tickets; closer to what a person would have needed, but only for the
- * tickets that carry an estimate).
- *
- * AI spend is assigned, never split by a formula: each subscription (a price × how many) and each
- * API bill belongs to the role whose agents use it, or to the whole team. A role's AI cost is the
- * sum of its own lines for the period.
- * Roles come from the work: a role that caught no ticket in scope is not part of this team, so it
- * is left out and its AI lines cost nothing here. On a single workspace a role's lines count for
- * that workspace's share of the role's agent time; shared lines and directing time count for the
- * workspace's share of all agent time.
+ * Hours are counted two ways and never blended: MEASURED agent time and PLANNED effort (the
+ * estimates on the finished tickets). On one workspace, a role's AI lines count for the role's
+ * `share` and the shared lines and directing time for `basis.share`; the server applies both,
+ * and the page prints them.
  */
-import type { CostModel, CostProfile, ReturnReport, SpendLine } from "./proto-api";
+import type {
+  AgentTypeId,
+  AiSpendEntryValue,
+  Caveat,
+  CaveatCode,
+  CostModelValue,
+  CostProfileValue,
+  CostTypeRule,
+  ProfileId,
+  RoiAiEntry,
+  RoiLens,
+  RoiResponse,
+} from "@/lib/analytics-api";
+import { formatNumber, formatPercent } from "@/components/analytics/format";
 
+/** A full-time week, for "Team to match it". The server's `definitions.fteHoursPerWeek`; `RoiResponse` does not echo the definitions. */
+export const FTE_HOURS_PER_WEEK = 40;
+/** The server's `definitions.attemptCapHours`, for the sentence that says agent time is capped. */
+export const ATTEMPT_CAP_HOURS = 12;
+/** The rate a role the profile does not set reads at (the contract's default). */
+export const DEFAULT_RATE = 100;
+
+export const AGENT_TYPES: readonly AgentTypeId[] = ["engineering", "design", "documentation", "research", "orchestration"];
+
+/** One AI line as the page prints it: the entry, what it costs a month, and what it cost this scope in the period. */
 export interface AiLine {
   id: string;
   label: string;
-  kind: SpendLine["kind"];
+  kind: RoiAiEntry["kind"];
+  /** The price of one a month (a subscription), or the bill a month (an API bill). */
   perMonth: number;
-  quantity: number;
-  /** What the line costs a month: price × how many, or the API bill. */
-  monthly: number;
-  /** What it cost over the period (and, on one workspace, that workspace's share). */
+  /** How many are bought; null for an API bill. */
+  quantity: number | null;
+  /** The server's cost for the period, the share already applied. */
   cost: number;
 }
-export interface RoleLine {
+
+/** One role, both lenses joined. */
+export interface RoleView {
   roleId: string;
   title: string;
   rate: number;
@@ -41,119 +62,215 @@ export interface RoleLine {
   plannedHours: number;
   measuredValue: number;
   plannedValue: number;
-  /** The AI lines assigned to this role, and their sum for the period. */
-  aiLines: AiLine[];
-  aiCost: number;
+  /** Done tickets in the period priced at the role. */
   tickets: number;
+  /** Of those, the ones whose estimate counts. */
   estimatedTickets: number;
-  /** Did any of this role's work happen in scope? A role with none is left out of the page and of the cost. */
   present: boolean;
-  /** The part of the role's AI lines this scope carries: 1 for every workspace, else this workspace's share of the role's agent time. */
+  /** The part of the role's own AI lines this scope carries. */
   share: number;
+  aiCost: number;
+  aiLines: AiLine[];
+  /** The agent types whose work landed on the role in this period. */
+  types: AgentTypeId[];
 }
-export interface ValueSide {
+
+/** One lens's headline figures. */
+export interface LensView {
   hours: number;
   value: number;
-  /** value ÷ cost; null when the cost is 0. */
+  /** Return on total cost; null when nothing was spent. */
   multiple: number | null;
   net: number;
-  /** Work-hours delivered per hour the person put in. */
+  /** Value hours per directing hour; null with no directing time. */
   leverage: number | null;
-  /** Full-time people it would take to put those hours in over the period. */
+  /** Full-time people it would take to put the hours in over the period. */
   fte: number;
 }
-export interface ReturnResult {
-  roles: RoleLine[];
-  directingHours: number;
-  personCost: number;
-  /** AI lines no role is assigned: shared by the whole team. */
-  sharedLines: AiLine[];
-  sharedAiCost: number;
+
+export interface ReturnView {
+  currency: string;
+  /** The sign amounts are written with ("$" for USD). */
+  sign: string;
+  mode: ProfileId;
+  /** "all workspaces", or the workspace's slug. */
+  scope: string;
+  hub: boolean;
+  period: { from: string; to: string; days: number; weeks: number };
+  /** Present roles, the server's order (most value first). */
+  roles: RoleView[];
+  /** Roles in the list that did no work in scope, in the list's order. */
+  absent: RoleView[];
+  /** Every role in the list, present or not, for the role page. */
+  all: RoleView[];
+  shared: { cost: number; lines: AiLine[] };
+  director: { hours: number; rate: number; cost: number; activeDays: number; hoursPerActiveDay: number };
+  /** The scope's share of the shared AI and directing time: 1 on the hub. */
+  share: number;
   aiSpend: number;
   cost: number;
-  /** No AI spend is entered in the profile in use: the cost is the person's time alone. */
-  aiMissing: boolean;
-  months: number;
-  share: number;
-  measured: ValueSide;
+  measured: LensView;
   /** Null when no finished ticket in the period carries an estimate. */
-  planned: ValueSide | null;
-  /** The blended hourly rate at which measured agent time exactly pays for the cost. */
+  planned: LensView | null;
   breakEvenRate: number | null;
+  /** Finished tickets, and how many of them carry an estimate that counts. */
+  estimates: { covered: number; total: number };
+  caveats: Partial<Record<CaveatCode, Caveat>>;
+  /** Roles the mapping or a rule names that the list lacks, and the role their hours are priced at. */
+  fallbacks: { missingRoleId: string; usedTitle: string; type: AgentTypeId | null; rule: number | null }[];
 }
 
-const FTE_HOURS_PER_WEEK = 40;
-export const DEFAULT_RATE = 100;
+const lineOf = (entry: RoiAiEntry): AiLine => ({ id: entry.id, label: entry.label, kind: entry.kind, perMonth: entry.monthlyAmount, quantity: entry.quantity, cost: entry.cost });
 
-/** The figures of the profile in use. */
-export function profileOf(model: CostModel): CostProfile {
-  return model.profiles[model.scenario];
-}
-export function rateOf(model: CostModel, roleId: string): number {
-  return profileOf(model).rates[roleId] ?? DEFAULT_RATE;
-}
-/** What a line costs a month: a subscription is its price × how many are paid for; an API bill is the bill. */
-export function lineCost(line: Pick<SpendLine, "kind" | "perMonth" | "quantity">): number {
-  return line.kind === "api" ? line.perMonth : line.perMonth * Math.max(0, line.quantity ?? 1);
-}
-
-export function computeReturn(report: ReturnReport, model: CostModel): ReturnResult {
-  const share = report.share ?? 1;
-  const months = report.period.months;
-  const profile = profileOf(model);
-  const known = new Set(model.roles.map((role) => role.id));
-  const all = report.scope.kind === "all";
-  const ai = (line: SpendLine, part: number): AiLine => ({ id: line.id, label: line.label, kind: line.kind, perMonth: line.perMonth, quantity: line.quantity, monthly: lineCost(line), cost: lineCost(line) * months * part });
-  const total = (lines: readonly AiLine[]) => lines.reduce((sum, line) => sum + line.cost, 0);
-  const roles: RoleLine[] = model.roles.map((role) => {
-    const hours = report.roles.find((row) => row.roleId === role.id);
-    const rate = rateOf(model, role.id);
-    const measuredHours = hours?.measuredHours ?? 0;
-    const plannedHours = hours?.plannedHours ?? 0;
-    // Roles come from the work: one that caught nothing in scope is not part of this team and costs nothing here.
-    const present = (hours?.tickets ?? 0) > 0 || measuredHours > 0;
-    const hubHours = hours?.hubMeasuredHours ?? 0;
-    const part = !present ? 0 : all ? 1 : hubHours > 0 ? Math.min(1, measuredHours / hubHours) : 0;
-    const aiLines = present ? profile.spend.filter((line) => line.roleId === role.id).map((line) => ai(line, part)) : [];
-    return { roleId: role.id, title: role.title, rate, measuredHours, plannedHours, measuredValue: measuredHours * rate, plannedValue: plannedHours * rate, aiLines, aiCost: total(aiLines), tickets: hours?.tickets ?? 0, estimatedTickets: hours?.estimatedTickets ?? 0, present, share: part };
-  });
-  // A line with no role, or for a role that no longer exists, is the whole team's.
-  const sharedLines = profile.spend.filter((line) => line.roleId === null || !known.has(line.roleId)).map((line) => ai(line, share));
-  const sharedAiCost = total(sharedLines);
-  const aiSpend = sharedAiCost + roles.reduce((sum, role) => sum + role.aiCost, 0);
-  const directingHours = report.directing.activeDays * profile.person.hoursPerActiveDay * share;
-  const personCost = directingHours * profile.person.rate;
-  const cost = aiSpend + personCost;
-  const weeks = report.period.days / 7;
-  const side = (hours: number, value: number): ValueSide => ({
-    hours,
-    value,
-    multiple: cost > 0 ? value / cost : null,
-    net: value - cost,
-    leverage: directingHours > 0 ? hours / directingHours : null,
-    fte: weeks > 0 ? hours / (weeks * FTE_HOURS_PER_WEEK) : 0,
-  });
-  const measuredHours = roles.reduce((sum, role) => sum + role.measuredHours, 0);
-  const plannedHours = roles.reduce((sum, role) => sum + role.plannedHours, 0);
+function lensView(lens: RoiLens, days: number): LensView {
+  const weeks = days / 7;
   return {
-    roles,
-    directingHours,
-    personCost,
-    sharedLines,
-    sharedAiCost,
-    aiSpend,
-    cost,
-    aiMissing: aiSpend <= 0,
-    months,
-    share,
-    measured: side(measuredHours, roles.reduce((sum, role) => sum + role.measuredValue, 0)),
-    planned: plannedHours > 0 ? side(plannedHours, roles.reduce((sum, role) => sum + role.plannedValue, 0)) : null,
-    breakEvenRate: measuredHours > 0 ? cost / measuredHours : null,
+    hours: lens.valueHours,
+    value: lens.value,
+    multiple: lens.returnOnTotalCost,
+    net: lens.net,
+    leverage: lens.outputMultiplier,
+    fte: weeks > 0 ? lens.valueHours / (weeks * FTE_HOURS_PER_WEEK) : 0,
   };
 }
 
+/** The page's view of one ROI answer. `model` is the cost model on screen (the person's latest edit), for the role list. */
+export function returnView(roi: RoiResponse, model: CostModelValue = roi.model.model): ReturnView {
+  const { measured, planned } = roi;
+  const plannedOf = new Map(planned.byRole.map((row) => [row.roleId, row]));
+  const listed = new Map(model.roles.roles.map((role) => [role.id, role]));
+  const view = (roleId: string): RoleView => {
+    const low = measured.byRole.find((row) => row.roleId === roleId);
+    const high = plannedOf.get(roleId);
+    const rate = low?.hourlyRate ?? high?.hourlyRate ?? model[model.scenario.mode].rates[roleId] ?? DEFAULT_RATE;
+    return {
+      roleId,
+      title: listed.get(roleId)?.title ?? low?.title ?? high?.title ?? roleId,
+      rate,
+      measuredHours: low?.hours ?? 0,
+      plannedHours: high?.hours ?? 0,
+      measuredValue: low?.value ?? 0,
+      plannedValue: high?.value ?? 0,
+      tickets: low?.tickets ?? high?.tickets ?? 0,
+      estimatedTickets: high?.estimatedTickets ?? 0,
+      present: low?.present ?? false,
+      share: low?.share ?? 0,
+      aiCost: low?.aiCost ?? 0,
+      aiLines: (low?.aiEntries ?? []).map(lineOf),
+      types: [...new Set([...(low?.types ?? []), ...(high?.types ?? [])])],
+    };
+  };
+  const roles = measured.byRole.filter((row) => row.present).map((row) => view(row.roleId));
+  const presentIds = new Set(roles.map((role) => role.roleId));
+  const absent = model.roles.roles.filter((role) => !presentIds.has(role.id)).map((role) => view(role.id));
+  const titleOf = (id: string): string => listed.get(id)?.title ?? measured.byRole.find((row) => row.roleId === id)?.title ?? id;
+  const caveats: Partial<Record<CaveatCode, Caveat>> = {};
+  for (const caveat of roi.caveats) caveats[caveat.code] = caveat;
+  const total = measured.byRole.reduce((sum, row) => sum + row.tickets, 0);
+  const partial = caveats.estimates_partial;
+  const covered = partial?.of != null ? partial.of - partial.count : planned.byRole.reduce((sum, row) => sum + (row.estimatedTickets ?? 0), 0);
+  return {
+    // The figures were priced with the profile the server read; the words follow it, not the edit in flight.
+    currency: roi.model.model.scenario.currency,
+    sign: currencySymbol(roi.model.model.scenario.currency),
+    mode: roi.model.model.scenario.mode,
+    scope: roi.scope.kind === "hub" ? "all workspaces" : (roi.scope.workspaces[0]?.slug ?? "this workspace"),
+    hub: roi.scope.kind === "hub",
+    period: { from: roi.period.from, to: roi.period.to, days: roi.period.days, weeks: roi.period.days / 7 },
+    roles,
+    absent,
+    all: [...roles, ...absent],
+    shared: { cost: measured.sharedAiCost, lines: measured.sharedAiEntries.map(lineOf) },
+    director: { hours: measured.director.hours, rate: measured.director.hourlyRate, cost: measured.director.cost, activeDays: roi.basis.activeDaysHub, hoursPerActiveDay: roi.basis.hoursPerActiveDay },
+    share: roi.basis.share,
+    aiSpend: measured.aiCost,
+    cost: measured.totalCost,
+    measured: lensView(measured, roi.period.days),
+    planned: planned.valueHours > 0 ? lensView(planned, roi.period.days) : null,
+    breakEvenRate: measured.breakEvenRate,
+    estimates: { covered, total: partial?.of ?? total },
+    caveats,
+    fallbacks: roi.fallbacks.map((fallback) => ({ missingRoleId: fallback.missingRoleId, usedTitle: titleOf(fallback.usedRoleId), type: fallback.type, rule: fallback.rule })),
+  };
+}
+
+/** "Copilot $19 × 4 a month", "API bill $230 a month". */
+export const planWords = (line: AiLine, sign: string): string => `${line.label} ${sign}${formatNumber(line.perMonth)}${line.kind === "subscription" ? ` × ${line.quantity ?? 1}` : ""} a month`;
+
+/** " × 34% of agent time", the share in the arithmetic of one workspace. */
+export const shareWords = (share: number, whose: string): string => ` × ${formatPercent(share)} of ${whose}`;
+
+/** The AI lines of a role or the shared row, each with its arithmetic: price × how many a month, × the share on one workspace (null on the hub). */
+export function aiDetail(lines: readonly AiLine[], sign: string, share: number | null, whose: string): string {
+  return lines.map((line) => `${planWords(line, sign)}${share !== null && share < 1 ? shareWords(share, whose) : ""}`).join(", ");
+}
+
+// ---------------------------------------------------------------- the cost model, read
+
+/** The sign an ISO currency is written with ("USD" is "$"); the code itself when there is none. */
+export function currencySymbol(code: string): string {
+  try {
+    return new Intl.NumberFormat("en-US", { style: "currency", currency: code, currencyDisplay: "narrowSymbol" }).formatToParts(0).find((part) => part.type === "currency")?.value ?? code;
+  } catch {
+    return code;
+  }
+}
+
+/** The figures of the profile in use. */
+export const activeProfile = (model: CostModelValue): CostProfileValue => model[model.scenario.mode];
+
+/** What one entry costs a month: a subscription is its price × how many, an API bill is the bill. */
+export function monthlyOf(entry: Pick<AiSpendEntryValue, "kind" | "monthlyAmount" | "quantity">): number {
+  return entry.kind === "api" ? entry.monthlyAmount : entry.monthlyAmount * Math.max(0, entry.quantity ?? 1);
+}
+
+/** Is `id` still at its shipped default in the profile in use? */
+export const isAssumed = (model: CostModelValue, id: string): boolean => activeProfile(model).assumed.includes(id);
+
+/**
+ * The figures of the profile in use still at their shipped default, named for the notice: the
+ * ids the server listed, for things that still exist (a role in the list, an entry in the profile).
+ */
+export function assumedFigures(model: CostModelValue): string[] {
+  const profile = activeProfile(model);
+  const roles = new Set(model.roles.roles.map((role) => `roles.${role.id}.hourlyRate`));
+  const entries = new Set(profile.entries.map((entry) => `entries.${entry.id}.monthlyAmount`));
+  return profile.assumed.filter((id) => id.startsWith("director.") || roles.has(id) || entries.has(id));
+}
+
+/** The words for the figures `assumedFigures` lists. */
+export function assumedWords(ids: readonly string[], whose: string): string[] {
+  const words: string[] = [];
+  if (ids.includes("director.hourlyRate")) words.push(`${whose} hourly rate`);
+  if (ids.includes("director.hoursPerActiveDay")) words.push(`${whose} hours a day`);
+  if (ids.some((id) => id.startsWith("entries."))) words.push("AI spend");
+  if (ids.some((id) => id.startsWith("roles."))) words.push("role rates");
+  return words;
+}
+
+/** The role that holds `engineering`: every ticket no rule or word places lands there. */
+export const catchAllRole = (model: CostModelValue): string => model.roleMapping.types.engineering;
+
+/** A month key `YYYY-MM` as "Mar 2026". */
+export function monthWords(month: string): string {
+  const [year, number] = month.split("-").map(Number);
+  return new Date(Date.UTC(year ?? 2000, (number ?? 1) - 1, 1)).toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" });
+}
+/** The months an entry covers, in words, or null when it covers every month (a new entry does). */
+export function entryDates(entry: Pick<AiSpendEntryValue, "from" | "to">): string | null {
+  if (entry.to === null && entry.from <= "2000-01") return null;
+  if (entry.to === null) return `from ${monthWords(entry.from)}`;
+  if (entry.from <= "2000-01") return `until ${monthWords(entry.to)}`;
+  return entry.from === entry.to ? monthWords(entry.from) : `${monthWords(entry.from)} to ${monthWords(entry.to)}`;
+}
+
+/** A rule's matchers, as the role page words them. */
+export const RULE_FIELDS = ["label", "title", "agent", "kind", "workspace"] as const;
+export type RuleField = (typeof RULE_FIELDS)[number];
+export const matchersOf = (rule: CostTypeRule): RuleField[] => RULE_FIELDS.filter((field) => rule[field] !== undefined);
+
 /** The words that change with who pays. One formula, two ways of saying whose money it is. */
-export function scenarioWords(scenario: CostModel["scenario"]) {
+export function scenarioWords(scenario: ProfileId) {
   return scenario === "solo"
     ? {
         who: "you",
@@ -175,4 +292,91 @@ export function scenarioWords(scenario: CostModel["scenario"]) {
         payer: "The company",
         label: "A company",
       };
+}
+
+// ---------------------------------------------------------------- LEGACY, removed at integration
+//
+// The Overview's Return tile (the sibling lens's `overview-parts.tsx`) still prices the preview
+// stand-in's payload with these two until it reads `useRoi` itself; the design lead removes them
+// with `proto-api.ts`. They are typed structurally here so this module does not import it.
+
+interface LegacySpend {
+  id: string;
+  label: string;
+  kind: "subscription" | "api";
+  perMonth: number;
+  quantity: number;
+  roleId: string | null;
+}
+interface LegacyProfile {
+  person: { rate: number; hoursPerActiveDay: number };
+  rates: Record<string, number>;
+  spend: LegacySpend[];
+  assumed: string[];
+}
+interface LegacyModel {
+  scenario: "solo" | "company";
+  roles: { id: string; title: string }[];
+  profiles: Record<"solo" | "company", LegacyProfile>;
+}
+interface LegacyReport {
+  scope: { kind: "all" | "workspace" };
+  period: { days: number; months: number };
+  roles: { roleId: string; measuredHours: number; plannedHours: number; tickets: number; estimatedTickets: number; hubMeasuredHours: number }[];
+  directing: { activeDays: number };
+  share: number;
+}
+interface LegacySide {
+  hours: number;
+  value: number;
+  multiple: number | null;
+  net: number;
+  leverage: number | null;
+  fte: number;
+}
+
+/** LEGACY: the profile in use of the stand-in's model. */
+export function profileOf<P>(model: { scenario: "solo" | "company"; profiles: Record<"solo" | "company", P> }): P {
+  return model.profiles[model.scenario];
+}
+
+/** LEGACY: the stand-in's return, priced in the browser. */
+export function computeReturn(report: LegacyReport, model: LegacyModel): { measured: LegacySide; planned: LegacySide | null; cost: number; aiMissing: boolean } {
+  const share = report.share ?? 1;
+  const profile = profileOf(model);
+  const known = new Set(model.roles.map((role) => role.id));
+  const all = report.scope.kind === "all";
+  const lineCost = (line: LegacySpend) => (line.kind === "api" ? line.perMonth : line.perMonth * Math.max(0, line.quantity ?? 1));
+  let measuredHours = 0;
+  let plannedHours = 0;
+  let measuredValue = 0;
+  let plannedValue = 0;
+  let aiSpend = 0;
+  for (const role of model.roles) {
+    const hours = report.roles.find((row) => row.roleId === role.id);
+    const rate = profile.rates[role.id] ?? DEFAULT_RATE;
+    const low = hours?.measuredHours ?? 0;
+    const high = hours?.plannedHours ?? 0;
+    measuredHours += low;
+    plannedHours += high;
+    measuredValue += low * rate;
+    plannedValue += high * rate;
+    const present = (hours?.tickets ?? 0) > 0 || low > 0;
+    const hub = hours?.hubMeasuredHours ?? 0;
+    const part = !present ? 0 : all ? 1 : hub > 0 ? Math.min(1, low / hub) : 0;
+    if (present) for (const line of profile.spend) if (line.roleId === role.id) aiSpend += lineCost(line) * report.period.months * part;
+  }
+  for (const line of profile.spend) if (line.roleId === null || !known.has(line.roleId)) aiSpend += lineCost(line) * report.period.months * share;
+  const directingHours = report.directing.activeDays * profile.person.hoursPerActiveDay * share;
+  const cost = aiSpend + directingHours * profile.person.rate;
+  const weeks = report.period.days / 7;
+  const side = (hours: number, value: number): LegacySide => ({
+    hours,
+    value,
+    multiple: cost > 0 ? value / cost : null,
+    net: value - cost,
+    leverage: directingHours > 0 ? hours / directingHours : null,
+    fte: weeks > 0 ? hours / (weeks * FTE_HOURS_PER_WEEK) : 0,
+  });
+  return { measured: side(measuredHours, measuredValue), planned: plannedHours > 0 ? side(plannedHours, plannedValue) : null, cost, aiMissing: aiSpend <= 0 };
 }
