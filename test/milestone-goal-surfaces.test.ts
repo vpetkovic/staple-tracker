@@ -39,7 +39,7 @@ function goalOf(view: Record<string, unknown>): unknown {
 
 beforeAll(async () => {
   home = tempDir("goal-surfaces");
-  const init = await spawnAsync(process.execPath, [TSX_CLI, CLI_ENTRY, "init", "--global", WS], {
+  const init = await spawnAsync(process.execPath, [TSX_CLI, CLI_ENTRY, "init", "--no-planning", "--global", WS], {
     cwd: REPO_ROOT,
     env: bareEnv({ STAPLE_HOME: home, HOME: home }),
     encoding: "utf8",

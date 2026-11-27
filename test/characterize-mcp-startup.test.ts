@@ -43,8 +43,8 @@ beforeAll(() => {
   repo = join(root, "mcprepo");
   mkdirSync(repo, { recursive: true });
   repoDb = join(repo, ".staple", "staple.db");
-  expect(runCliAt(repo, ["init"], { STAPLE_HOME: home }).status).toBe(0);
-  expect(runCliAt(repo, ["init", "--global", "mcpglobal"], { STAPLE_HOME: home }).status).toBe(0);
+  expect(runCliAt(repo, ["init", "--no-planning"], { STAPLE_HOME: home }).status).toBe(0);
+  expect(runCliAt(repo, ["init", "--no-planning", "--global", "mcpglobal"], { STAPLE_HOME: home }).status).toBe(0);
 }, 60_000);
 
 afterAll(() => {
@@ -197,7 +197,7 @@ describe("a server started with no workspace in reach", () => {
 
   it("the `init` tool creates the same layout the CLI does, and returns the same fields", async () => {
     const target = join(orphan, "made-by-mcp");
-    const result = (await client.callTool({ name: "init", arguments: { dir: target } })) as {
+    const result = (await client.callTool({ name: "init", arguments: { dir: target, planning: false } })) as {
       isError?: boolean;
       content: Array<{ text?: string }>;
     };

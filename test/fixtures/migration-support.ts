@@ -53,7 +53,7 @@ export function makeCurrentRepo(prefix = "a5"): Sandbox {
   const home = track(tempDir(`${prefix}-home`));
   const repo = track(tempDir(`${prefix}-repo`));
   const env = { HOME: home, STAPLE_HOME: home };
-  const init = runCliAt(repo, ["init"], env);
+  const init = runCliAt(repo, ["init", "--no-planning"], env);
   if (init.status !== 0) throw new Error(`init failed: ${init.stderr || init.stdout}`);
   return {
     home,
@@ -78,7 +78,7 @@ export function makeLegacyRepo(prefix = "a5"): Sandbox {
     const from = join(box.repo, ".tasks", `staple.db${suffix}`);
     if (existsSync(from)) renameSync(from, `${box.legacyDb}${suffix}`);
   }
-  const reinit = runCliAt(box.repo, ["init"], box.env);
+  const reinit = runCliAt(box.repo, ["init", "--no-planning"], box.env);
   if (reinit.status !== 0) throw new Error(`re-init failed: ${reinit.stderr || reinit.stdout}`);
   return box;
 }

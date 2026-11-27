@@ -103,8 +103,8 @@ the next ticket: [Connect your agent](connect-your-agent.md).
 
 - [How an agent works a ticket](working-a-ticket.md): the loop your agents follow.
 - [Plans become tickets](plans-to-tickets.md): turn a feature plan into an epic.
-- [Planning (experimental)](plan.md): off by default. Capture ideas and plan horizons before
-  they become tickets.
+- [Planning](plan.md): capture ideas and plan horizons before they become tickets. On in a
+  new workspace.
 - [Configuration](configuration.md): machine preferences and workspace settings.
 
 Going deeper: [packaging and install](../design/packaging.md) covers the runtime,

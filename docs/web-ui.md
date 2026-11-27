@@ -185,8 +185,8 @@ for this visit and marks it for a moment. The milestone marker on a task row and
 workspaces** chosen, the page lists every workspace's milestones read-only;
 click one to switch to its workspace and land on it.
 
-**Plan** sits beside it once a person turns on the experimental planning setting
-(**Settings → Experimental**). It holds ideas that are not work yet, in three lenses.
+**Plan** sits beside it while planning is on, as it is in a new workspace; a person turns it
+on or off under **Settings → Features**. It holds ideas that are not work yet, in three lenses.
 **Ideas** has a Raw list with a capture field at its top and a pane of exploring cards that say
 what shaping still needs; **Horizons** is an outline of ideas ready for a horizon, then each
 horizon (Now, Next or your own) with progress, shipped, late and not-started counts;
@@ -261,7 +261,7 @@ Open **Settings** from the foot of the rail (in *More* on a phone), or `⌘K` th
   [view in an agent's thread](mcp-apps.md) are recorded under).
 - **Per workspace:** *Statuses* and *Task types* (rename, add, reorder; turn on
   milestones here), *Picking up work* (the queue's advisory or strict policy) and
-  *Cloud sync* for that workspace, and *Experimental*, where a person turns
+  *Cloud sync* for that workspace, and *Features*, where a person turns
   [planning](plan.md) on or off.
 
 ## Next

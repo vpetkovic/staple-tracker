@@ -116,7 +116,7 @@ beforeAll(async () => {
   process.env.STAPLE_HOME = home;
   process.env.NODE_NO_WARNINGS = "1";
 
-  expect((await cli("init", "--global", WS)).status).toBe(0);
+  expect((await cli("init", "--no-planning", "--global", WS)).status).toBe(0);
 
   ({ settingValueIn } = (await import(UI_SETTINGS_MODULE)) as UiSettingsModule);
 

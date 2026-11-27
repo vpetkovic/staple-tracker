@@ -59,7 +59,7 @@ The loop an agent follows, described in
 ## Planning
 
 The idea and horizon tools (`list_ideas` through `convert_to_idea`) belong to
-[experimental planning](plan.md). They refuse until a person turns on `features.planning`,
+[planning](plan.md), on for a new workspace. They refuse while `features.planning` is off,
 which an agent reads with `get_setting` and cannot change.
 
 Every idea has a permanent idea number, `I-<PREFIX>-<n>` (`I-STA-12`), from capture on: an issue
@@ -156,7 +156,7 @@ Turning budget capture on is a person's decision and has no tool
 
 | Tool | What it does | CLI | Writes |
 |---|---|---|---|
-| `init` | Create a workspace when a tool reports there is none | `staple init` | yes |
+| `init` | Create a workspace when a tool reports there is none. A new one starts with planning on; `planning: false` starts it without | `staple init` | yes |
 | `get_setting` | Read a workspace setting, such as `queue.policy` | `staple settings get` | no |
 | `set_setting` | Change a workspace setting | `staple settings set` | yes |
 | `list_statuses` | This workspace's statuses | `staple statuses ls` | no |

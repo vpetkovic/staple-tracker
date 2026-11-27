@@ -79,7 +79,7 @@ syncs it sees the same value.
 | `queue.silentClaimMinutes` | 1 to 10080 | `30` | How long a claim's holder may write nothing and send no attempt heartbeat before `staple attention` lists the claim. It never releases or takes over the claim |
 | `kinds.default` | a kind from `staple kinds ls` | `task` | The kind a new ticket gets when none is given |
 | `kinds.appearance` | an icon per kind | built-in icons | The icon each kind shows; set it in the web UI under **Settings → Task types** |
-| `features.planning` | `true`, `false` | `false` | Experimental. Turns on [planning](plan.md): ideas, horizons and the Plan view. Only a person changes it, under **Settings → Experimental** or with `--person`; turning it off keeps the data |
+| `features.planning` | `true`, `false` | `false`; `staple init` stores `true` in a new workspace | Turns on [planning](plan.md): ideas, horizons and the Plan view. A workspace made by an older build, or never given a value, reads the default. Only a person changes it, under **Settings → Features** or with `--person`; turning it off keeps the data |
 
 ```bash
 staple settings set queue.policy strict

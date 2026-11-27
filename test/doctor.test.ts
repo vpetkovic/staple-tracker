@@ -37,7 +37,7 @@ beforeAll(() => {
   root = tempDir("a7-doctor-root");
   repo = join(root, "doctorrepo");
   mkdirSync(repo, { recursive: true });
-  expect(runCliAt(repo, ["init"], { STAPLE_HOME: home }).status).toBe(0);
+  expect(runCliAt(repo, ["init", "--no-planning"], { STAPLE_HOME: home }).status).toBe(0);
 }, 60_000);
 
 afterAll(() => {
@@ -139,7 +139,7 @@ describe("the JSON contract", () => {
     const broken = tempDir("a7-doctor-broken");
     const brokenRepo = join(root, "brokenrepo");
     mkdirSync(brokenRepo, { recursive: true });
-    expect(runCliAt(brokenRepo, ["init"], { STAPLE_HOME: broken }).status).toBe(0);
+    expect(runCliAt(brokenRepo, ["init", "--no-planning"], { STAPLE_HOME: broken }).status).toBe(0);
     const db = new DatabaseSync(join(broken, "hub.db"));
     try {
       const path = join(brokenRepo, ".staple", "staple.db");
@@ -198,7 +198,7 @@ describe("read-only by default", () => {
     const unstamped = tempDir("a7-unstamped-home");
     const dir = join(root, "unstampedrepo");
     mkdirSync(dir, { recursive: true });
-    expect(runCliAt(dir, ["init"], { STAPLE_HOME: unstamped }).status).toBe(0);
+    expect(runCliAt(dir, ["init", "--no-planning"], { STAPLE_HOME: unstamped }).status).toBe(0);
 
     const hubDb = join(unstamped, "hub.db");
     const db = new DatabaseSync(hubDb);
@@ -232,7 +232,7 @@ describe("read-only by default", () => {
   it("explains an ambiguous workspace instead of dying on it", () => {
     const dir = join(root, "ambiguousrepo");
     mkdirSync(dir, { recursive: true });
-    expect(runCliAt(dir, ["init"], { STAPLE_HOME: home }).status).toBe(0);
+    expect(runCliAt(dir, ["init", "--no-planning"], { STAPLE_HOME: home }).status).toBe(0);
     mkdirSync(join(dir, ".tasks"), { recursive: true });
     copyFileSync(join(dir, ".staple", "staple.db"), join(dir, ".tasks", "tasks.db"));
 
@@ -302,7 +302,7 @@ describe("the consent gate for --fix", () => {
 function staleSpellingRepo(hubHome: string): string {
   const dir = join(root, `stale-${Math.random().toString(36).slice(2, 8)}`);
   mkdirSync(dir, { recursive: true });
-  expect(runCliAt(dir, ["init"], { STAPLE_HOME: hubHome }).status).toBe(0);
+  expect(runCliAt(dir, ["init", "--no-planning"], { STAPLE_HOME: hubHome }).status).toBe(0);
   const canonical = join(dir, ".staple", "staple.db");
   // Built by concatenation, not `join`: `path.join` normalises `/./` away, which
   // is exactly the difference this fixture needs to preserve.
@@ -377,7 +377,7 @@ describe("the repairs", () => {
     // A real legacy workspace…
     const seed = join(root, "journalseed");
     mkdirSync(seed, { recursive: true });
-    expect(runCliAt(seed, ["init", "--slug", "journalrepo"], { STAPLE_HOME: fixHome }).status).toBe(0);
+    expect(runCliAt(seed, ["init", "--no-planning", "--slug", "journalrepo"], { STAPLE_HOME: fixHome }).status).toBe(0);
     copyFileSync(join(seed, ".staple", "staple.db"), join(dir, ".tasks", "tasks.db"));
     // …and a "migrated" target beside it.
     copyFileSync(join(seed, ".staple", "staple.db"), join(dir, ".staple", "staple.db"));
@@ -503,7 +503,7 @@ describe("the queue check", () => {
   it("reports the revision, the entry count and an open plan", () => {
     const dir = join(root, "queuerepo");
     mkdirSync(dir, { recursive: true });
-    expect(runCliAt(dir, ["init"], { STAPLE_HOME: home }).status).toBe(0);
+    expect(runCliAt(dir, ["init", "--no-planning"], { STAPLE_HOME: home }).status).toBe(0);
 
     // An empty plan is the healthy default, and it says so rather than passing
     // silently — an empty queue is a fact about the workspace, not an absence.
@@ -530,7 +530,7 @@ describe("the queue check", () => {
   it("warns about an orphaned entry and an exhausted rank gap, and repairs neither", () => {
     const dir = join(root, "queuebrokenrepo");
     mkdirSync(dir, { recursive: true });
-    expect(runCliAt(dir, ["init"], { STAPLE_HOME: home }).status).toBe(0);
+    expect(runCliAt(dir, ["init", "--no-planning"], { STAPLE_HOME: home }).status).toBe(0);
     for (const title of ["one", "two"]) {
       expect(runCliAt(dir, ["new", title], { STAPLE_HOME: home }).status).toBe(0);
     }
@@ -649,7 +649,7 @@ describe("schema compatibility", () => {
     schemaHomes.push(hubHome);
     const dir = join(root, `schema-${Math.random().toString(36).slice(2, 8)}`);
     mkdirSync(dir, { recursive: true });
-    expect(runCliAt(dir, ["init"], { STAPLE_HOME: hubHome }).status).toBe(0);
+    expect(runCliAt(dir, ["init", "--no-planning"], { STAPLE_HOME: hubHome }).status).toBe(0);
     const dbPath = join(dir, ".staple", "staple.db");
     populate(dbPath);
     for (const suffix of ["-wal", "-shm"]) rmSync(`${dbPath}${suffix}`, { force: true });

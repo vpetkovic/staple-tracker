@@ -16,6 +16,8 @@ import { resolveJoinTarget } from "../src/core/cloud/share.js";
 import { settingDefinition } from "../src/core/settings-registry.js";
 import { readStoredRepositoryId } from "../src/core/repo-identity.js";
 import { createHash } from "node:crypto";
+import { runCliAt } from "./fixtures/characterize-support.js";
+import { startMcpClient, toolPayload } from "./fixtures/contract-support.js";
 
 /** The id a default horizon takes in a repository (`defaultHorizonId` in the plan store). */
 function stableHorizonId(repositoryId: string, name: string): string {
@@ -59,8 +61,9 @@ function planning(store: WorkspaceStore) {
   };
 }
 
+/** `initWorkspace` as a person's door calls it (`planning: true`), unless the case says otherwise. */
 function withInit<T>(options: Parameters<typeof initWorkspace>[0], read: (store: WorkspaceStore) => T): T {
-  const opened = initWorkspace(options);
+  const opened = initWorkspace({ planning: true, ...options });
   try {
     return read(opened.store);
   } finally {
@@ -134,6 +137,12 @@ describe("an existing workspace keeps its own setting", () => {
     });
   });
 
+  it("an init that is not a person's door leaves the default alone", () => {
+    withInit({ dir: dir("internal"), planning: false }, (store) => {
+      expect(planning(store)).toEqual({ setting: false, on: false, kinds: [] });
+    });
+  });
+
   it("a workspace made to join a shared one does not turn planning on", () => {
     const home = process.env.STAPLE_HOME!;
     const link = { endpoint: "https://sync.example", repositoryId: REPO_ID, name: "shared", prefix: null, sharedBy: "vp", invitedAs: null };
@@ -147,4 +156,51 @@ describe("an existing workspace keeps its own setting", () => {
       db.close();
     }
   });
+});
+
+describe("the doors a person creates a workspace through", () => {
+  it("staple init and staple init --global start with planning on, and the first task is the third number", () => {
+    const home = process.env.STAPLE_HOME!;
+    const repo = dir("cli-repo");
+    const env = { STAPLE_HOME: home };
+    expect(runCliAt(repo, ["init", "--slug", "lark"], env, 30_000).status).toBe(0);
+    const setting = runCliAt(repo, ["settings", "get", "features.planning", "--json"], env, 30_000);
+    expect(JSON.parse(setting.stdout)).toMatchObject({ value: true, source: "workspace" });
+    // Now and Next are milestones, so they hold the first two ticket numbers.
+    const created = runCliAt(repo, ["new", "First task", "--json"], env, 30_000);
+    expect(JSON.parse(created.stdout).identifier).toBe("LAR-3");
+    const global = runCliAt(repo, ["init", "--global", "notes", "--json"], env, 30_000);
+    expect(JSON.parse(global.stdout)).toMatchObject({ created: true, planning: true });
+    const notes = runCliAt(repo, ["settings", "get", "features.planning", "--ws", "notes", "--json"], env, 30_000);
+    expect(JSON.parse(notes.stdout)).toMatchObject({ value: true, source: "workspace" });
+  }, 60_000);
+
+  it("staple init says planning is on, and --no-planning starts a plain workspace", () => {
+    const env = { STAPLE_HOME: process.env.STAPLE_HOME! };
+    const said = runCliAt(dir("cli-said"), ["init"], env, 30_000);
+    expect(said.stdout).toContain("Planning is on: ideas, and the horizons Now and Next");
+    const plain = dir("cli-plain");
+    const made = runCliAt(plain, ["init", "--slug", "plain", "--no-planning", "--json"], env, 30_000);
+    expect(JSON.parse(made.stdout)).toMatchObject({ created: true, planning: false });
+    const setting = runCliAt(plain, ["settings", "get", "features.planning", "--json"], env, 30_000);
+    expect(JSON.parse(setting.stdout)).toMatchObject({ value: false, source: "default" });
+    expect(JSON.parse(runCliAt(plain, ["new", "First task", "--json"], env, 30_000).stdout).identifier).toBe("PLA-1");
+    // Init again without the flag is not a new workspace: nothing turns on.
+    expect(JSON.parse(runCliAt(plain, ["init", "--json"], env, 30_000).stdout)).toMatchObject({ created: false, planning: false });
+  }, 60_000);
+
+  it("the MCP init tool starts a new workspace with planning on", async () => {
+    const home = process.env.STAPLE_HOME!;
+    const mcp = await startMcpClient({ home, cwd: dir("mcp-cwd"), agent: "worker" });
+    try {
+      const made = await mcp.call("init", { global: true, slug: "wren" });
+      expect(made.isError).toBeFalsy();
+      expect(toolPayload(await mcp.call("get_setting", { ws: "wren", key: "features.planning" }))).toMatchObject({ value: true, source: "workspace" });
+      expect((await mcp.call("list_horizons", { ws: "wren" })).isError).toBeFalsy();
+      expect((await mcp.call("init", { global: true, slug: "finch", planning: false })).isError).toBeFalsy();
+      expect(toolPayload(await mcp.call("get_setting", { ws: "finch", key: "features.planning" }))).toMatchObject({ value: false, source: "default" });
+    } finally {
+      await mcp.close();
+    }
+  }, 60_000);
 });

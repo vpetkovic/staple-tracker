@@ -39,7 +39,7 @@ beforeAll(() => {
   home = mkdtempSync(join(tmpdir(), "staple-contract-cli-"));
   planFile = join(home, "plan.md");
 
-  expect(cli("init", "--global", WS).status).toBe(0);
+  expect(cli("init", "--no-planning", "--global", WS).status).toBe(0);
   expect(cliAs(CONTRACT_AGENT, "new", "Contract root task", "--ws", WS).status).toBe(0);
   expect(cliAs(CONTRACT_AGENT, "start", "CON-1", "--agent", CONTRACT_AGENT, "--ws", WS).status).toBe(0);
 

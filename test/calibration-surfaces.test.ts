@@ -51,7 +51,7 @@ beforeAll(async () => {
   emptyDir = mkdtempSync(join(tmpdir(), "staple-calibration-cwd-"));
   process.env.STAPLE_HOME = home;
   process.env.NODE_NO_WARNINGS = "1";
-  expect((await cli("init", "--global", WS)).status).toBe(0);
+  expect((await cli("init", "--no-planning", "--global", WS)).status).toBe(0);
 
   /**
    * One epic: three exact task leaves by opus and two by sonnet (all area:ui), one exact bug,

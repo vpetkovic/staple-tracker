@@ -125,7 +125,7 @@ beforeAll(async () => {
   process.env.STAPLE_HOME = home;
   process.env.NODE_NO_WARNINGS = "1";
 
-  expect((await cli("init", "--global", WS)).status).toBe(0);
+  expect((await cli("init", "--no-planning", "--global", WS)).status).toBe(0);
   // QLI-1 (epic) > QLI-2, QLI-3; QLI-4 standalone. Plan: the epic, then QLI-4,
   // which resolves to the three leaves QLI-2, QLI-3, QLI-4.
   await ok("new", "R: orchestration", "--kind", "epic");

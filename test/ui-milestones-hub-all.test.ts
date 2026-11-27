@@ -43,9 +43,9 @@ beforeAll(async () => {
   home = mkdtempSync(join(tmpdir(), "staple-ms-hub-all-"));
   process.env.STAPLE_HOME = home;
   process.env.NODE_NO_WARNINGS = "1";
-  await cli("init", "--global", BARE);
+  await cli("init", "--no-planning", "--global", BARE);
   for (const ws of [BETA, GAMMA]) {
-    await cli("init", "--global", ws);
+    await cli("init", "--no-planning", "--global", ws);
     await cli("kinds", "add", "milestone", "--label", "Milestone", "--ws", ws);
     await cli("milestone", "new", `${ws} cut`, "--ws", ws);
   }

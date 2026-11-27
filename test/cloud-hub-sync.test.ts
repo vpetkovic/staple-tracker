@@ -73,7 +73,7 @@ function makeWorkspace(
 ): Workspace {
   const dir = join(scratch, slug);
   mkdirSync(dir, { recursive: true });
-  const report = performSetup({ dir, yes: true, gitignore: false, interactive: false });
+  const report = performSetup({ dir, yes: true, gitignore: false, planning: false, interactive: false });
   const repositoryId = (
     JSON.parse(readFileSync(join(dir, ".staple", "repository.json"), "utf8")) as {
       repositoryId: string;

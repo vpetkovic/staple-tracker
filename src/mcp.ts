@@ -3104,6 +3104,10 @@ server.registerTool(
         .string()
         .optional()
         .describe("Workspace slug; defaults to the directory name, required when global"),
+      planning: z
+        .boolean()
+        .optional()
+        .describe("A new workspace starts with planning on (ideas, and the horizons Now and Next); false starts it without. An existing workspace keeps its own setting"),
     },
     outputSchema: {
       slug: z.string(),
@@ -3128,9 +3132,9 @@ server.registerTool(
       openWorldHint: false,
     },
   },
-  ({ dir, global: isGlobal, slug }) =>
+  ({ dir, global: isGlobal, slug, planning }) =>
     run(() => {
-      const opened = initWorkspace({ dir, global: isGlobal, slug });
+      const opened = initWorkspace({ dir, global: isGlobal, slug, planning: planning !== false });
       const summary = {
         slug: opened.store.slug,
         prefix: opened.store.prefix,

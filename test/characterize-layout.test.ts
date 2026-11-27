@@ -92,7 +92,7 @@ describe("a fresh repo-local `staple init`", () => {
     const project = join(root, "layoutrepo");
     mkdirSync(project, { recursive: true });
 
-    expect(runCliAt(project, ["init"], { STAPLE_HOME: home }).status).toBe(0);
+    expect(runCliAt(project, ["init", "--no-planning"], { STAPLE_HOME: home }).status).toBe(0);
 
     expect(diskTree(root)).toEqual([
       "layoutrepo/",
@@ -120,7 +120,7 @@ describe("a fresh repo-local `staple init`", () => {
     const project = join(root, "layoutrepo");
     mkdirSync(project, { recursive: true });
 
-    expect(runCliAt(project, ["init", "--no-gitignore"], { STAPLE_HOME: home }).status).toBe(0);
+    expect(runCliAt(project, ["init", "--no-planning", "--no-gitignore"], { STAPLE_HOME: home }).status).toBe(0);
 
     // STA-68: `--no-gitignore` declines the IGNORE file and nothing else. The
     // manifest is not gated on it, deliberately — the two answer opposite
@@ -144,7 +144,7 @@ describe("a fresh repo-local `staple init`", () => {
     const ignore = join(project, ".gitignore");
     writeFileSync(ignore, "node_modules\n");
 
-    expect(runCliAt(project, ["init"], { STAPLE_HOME: home }).status).toBe(0);
+    expect(runCliAt(project, ["init", "--no-planning"], { STAPLE_HOME: home }).status).toBe(0);
     expect(readFileSync(ignore, "utf8")).toBe("node_modules\n");
   }, 30_000);
 
@@ -153,7 +153,7 @@ describe("a fresh repo-local `staple init`", () => {
     const root = scratch("char-layout-root3");
     const project = join(root, "metarepo");
     mkdirSync(project, { recursive: true });
-    expect(runCliAt(project, ["init"], { STAPLE_HOME: home }).status).toBe(0);
+    expect(runCliAt(project, ["init", "--no-planning"], { STAPLE_HOME: home }).status).toBe(0);
 
     expect(metaRows(join(project, ".staple", "staple.db"))).toEqual([
       { key: "prefix", value: "MET" },
@@ -182,7 +182,7 @@ describe("a fresh repo-local `staple init`", () => {
     const root = scratch("char-layout-root4");
     const project = join(root, "schemarepo");
     mkdirSync(project, { recursive: true });
-    expect(runCliAt(project, ["init"], { STAPLE_HOME: home }).status).toBe(0);
+    expect(runCliAt(project, ["init", "--no-planning"], { STAPLE_HOME: home }).status).toBe(0);
 
     expect(schemaObjects(join(project, ".staple", "staple.db"))).toEqual([
       // 018-attachments: an issue's files, and the blob a shared hash points at.
@@ -356,7 +356,7 @@ describe("a fresh repo-local `staple init`", () => {
     const root = scratch("char-layout-root5");
     const project = join(root, "pragmarepo");
     mkdirSync(project, { recursive: true });
-    expect(runCliAt(project, ["init"], { STAPLE_HOME: home }).status).toBe(0);
+    expect(runCliAt(project, ["init", "--no-planning"], { STAPLE_HOME: home }).status).toBe(0);
 
     const db = new DatabaseSync(join(project, ".staple", "staple.db"));
     try {
@@ -378,14 +378,14 @@ describe("the machine home", () => {
     const project = join(root, "homerepo");
     mkdirSync(project, { recursive: true });
 
-    expect(runCliAt(project, ["init"], { STAPLE_HOME: home }).status).toBe(0);
+    expect(runCliAt(project, ["init", "--no-planning"], { STAPLE_HOME: home }).status).toBe(0);
     // NOTE for A3: there is no config.json, no version marker, and no bootstrap
     // locator anywhere. The home is created implicitly by openDb's mkdirSync and
     // its ONLY contents are databases. A3 introduces a versioned config.json
     // here; this golden is what "no configuration at all" looks like today.
     expect(diskTree(home)).toEqual(["hub.db 644"]);
 
-    expect(runCliAt(project, ["init", "--global", "globalone"], { STAPLE_HOME: home }).status).toBe(0);
+    expect(runCliAt(project, ["init", "--no-planning", "--global", "globalone"], { STAPLE_HOME: home }).status).toBe(0);
     /**
      * UPDATED BY STA-273. A global workspace now gets an identity directory of
      * its own beside its database, holding the same `repository.json` a
@@ -408,7 +408,7 @@ describe("the machine home", () => {
     const root = scratch("char-layout-root7");
     const project = join(root, "hubschemarepo");
     mkdirSync(project, { recursive: true });
-    expect(runCliAt(project, ["init"], { STAPLE_HOME: home }).status).toBe(0);
+    expect(runCliAt(project, ["init", "--no-planning"], { STAPLE_HOME: home }).status).toBe(0);
 
     /**
      * UPDATED BY A4 (STA-34). Two objects were added here: `table:meta` and its
@@ -485,7 +485,7 @@ describe("the machine home", () => {
     const root = scratch("char-layout-root8");
     const project = join(root, "tokenrepo");
     mkdirSync(project, { recursive: true });
-    expect(runCliAt(project, ["init"], { STAPLE_HOME: home }).status).toBe(0);
+    expect(runCliAt(project, ["init", "--no-planning"], { STAPLE_HOME: home }).status).toBe(0);
     expect(existsSync(join(home, "ui-token"))).toBe(false);
 
     // `--port abc` makes server.listen throw synchronously, so the token is
@@ -509,7 +509,7 @@ describe("global workspaces", () => {
     const project = join(root, "anyrepo");
     mkdirSync(project, { recursive: true });
 
-    expect(runCliAt(project, ["init", "--global", "solo"], { STAPLE_HOME: home }).status).toBe(0);
+    expect(runCliAt(project, ["init", "--no-planning", "--global", "solo"], { STAPLE_HOME: home }).status).toBe(0);
     // Nothing lands in the repository at all — not even a .staple directory.
     expect(diskTree(root)).toEqual(["anyrepo/"]);
     expect(diskTree(home)).toEqual([
@@ -542,11 +542,11 @@ describe("global workspaces", () => {
     const project = join(root, "sluggy");
     mkdirSync(project, { recursive: true });
 
-    const collapsed = runCliAt(project, ["init", "--global", "!!!"], { STAPLE_HOME: home });
+    const collapsed = runCliAt(project, ["init", "--no-planning", "--global", "!!!"], { STAPLE_HOME: home });
     expect(collapsed.status).toBe(0);
     expect(collapsed.stdout).toContain('Created workspace "workspace" (prefix WOR)');
 
-    const numeric = runCliAt(project, ["init", "--global", "123"], { STAPLE_HOME: home });
+    const numeric = runCliAt(project, ["init", "--no-planning", "--global", "123"], { STAPLE_HOME: home });
     expect(numeric.status).toBe(0);
     expect(numeric.stdout).toContain('Created workspace "123" (prefix WS)');
 

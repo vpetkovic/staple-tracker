@@ -25,11 +25,16 @@ in `plan-accounting.ts`, and the store half in
 `plan-store.ts` (`store.plan()`). The surfaces are `src/commands/plan.ts` (CLI), the plan tools in
 `src/mcp.ts`, the `/api/plan` routes in `src/ui/server.ts` and `src/ui/app/src/views/plan/`.
 
-## The flag: experimental, off by default
+## The flag: on for a new workspace
 
-Planning is experimental and may change. One synchronized workspace setting,
-`features.planning` (`settings-registry.ts`), defaults to false. Only a person changes it, in
-Settings → Experimental or with `staple settings set features.planning true|false --person`
+One synchronized workspace setting, `features.planning` (`settings-registry.ts`), turns planning
+on. Its registry default is false, so a workspace that never stored it (one an older build made)
+keeps planning off; `initWorkspace` stores true, through the person path, in a workspace whose
+database and repository identity it has just made, so a new workspace starts with planning on.
+A clone (identity from git) and a join target (identity from the share link) are an existing
+workspace arriving on a machine: init leaves the key alone there and the workspace's own value
+arrives by sync, since writing true would overrule the owner's choice on every device. Only a
+person changes it, in Settings → Features or with `staple settings set features.planning true|false --person`
 under their `humanName`. `staple plan enable --person` is an alias that sets the same flag; there
 is no second switch. Agents read it through `get_setting` and `show_about`; an agent's
 `set_setting` on it is refused.
@@ -898,7 +903,7 @@ keeps its timestamps while it is.
 
 The hold is protection, not presentation: it keys on what the records are, so it holds with the
 flag off too, where the horizon reads as a plain milestone that says it is held by its plan
-([the flag](#the-flag-experimental-off-by-default)). Dates are calendar days in UTC, inclusive, as for milestones
+([the flag](#the-flag-on-for-a-new-workspace)). Dates are calendar days in UTC, inclusive, as for milestones
 ([milestones.md](milestones.md#dates-calendar-days-utc-inclusive)).
 
 **Dependencies between records.** Only an explicit reference counts: a line of the Dependencies
@@ -1431,7 +1436,6 @@ What converges, under both folds, on a tail device and a freshly hydrated one:
 
 ## Known limits
 
-- **Experimental.** The model, its surfaces and its storage may change in any release.
 - **Mixed builds.** A device that has not migrated refuses a pulled operation page stamped schema
   20 with `schema_ahead`, and one on schema 20 refuses a page stamped 21 (the delivered mark) the
   same way. The snapshot route checks the protocol only, so an older build that

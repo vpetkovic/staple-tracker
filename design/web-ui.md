@@ -2339,7 +2339,7 @@ in Plan, Tasks grouping, chip and filter; only dated horizons list in Milestones
 milestones retain their existing listing behavior. The rules are in
 [plan.md](plan.md#unscheduled-and-optional-dates), and the synchronized upgrade of an earlier
 build's Later column in [plan.md](plan.md#upgrade-from-the-later-column). All of it shows only
-while the experimental `features.planning` setting is on.
+while the `features.planning` setting is on.
 
 Milestones and horizon drawers link each planned idea directly to its Plan drawer, by stable id.
 Promoted epics link back to that same original idea. Both layouts use the same links.

@@ -56,7 +56,7 @@ beforeAll(async () => {
   process.env.STAPLE_HOME = home;
   process.env.NODE_NO_WARNINGS = "1";
 
-  expect((await cli("init", "--global", WS)).status).toBe(0);
+  expect((await cli("init", "--no-planning", "--global", WS)).status).toBe(0);
   expect((await cli("new", "Contract root task", "--ws", WS)).status).toBe(0);
   writeFileSync(planFile, "# plan v1\n");
   expect((await cli("doc", "CON-1", "plan", "--put", planFile, "--ws", WS)).status).toBe(0);

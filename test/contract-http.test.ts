@@ -71,7 +71,7 @@ beforeAll(async () => {
   process.env.STAPLE_HOME = home;
   process.env.NODE_NO_WARNINGS = "1";
 
-  expect((await cli("init", "--global", WS)).status).toBe(0);
+  expect((await cli("init", "--no-planning", "--global", WS)).status).toBe(0);
   expect((await cli("new", "Contract root task", "--ws", WS)).status).toBe(0);
   expect((await cli("start", "CON-1", "--agent", CONTRACT_AGENT, "--ws", WS)).status).toBe(0);
   expect((await cli("comment", "CON-1", "contract comment", "--ws", WS)).status).toBe(0);

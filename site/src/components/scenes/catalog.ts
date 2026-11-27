@@ -34,7 +34,7 @@ export const SCENES: SceneEntry[] = [
   {name: 'ApprovalGate', feature: 'Approval gate', story: 'An epic waits on a person. Approve all is pressed and the tickets under it become ready.', Component: ApprovalGate},
   {name: 'AutopilotRun', feature: 'Autopilot run', story: 'Tickets go done one after another, then the budget stops the run.', Component: AutopilotRun},
   {name: 'MilestoneGoal', feature: 'Milestone goal', story: 'Goal criteria are marked met with evidence and the progress fills.', Component: MilestoneGoal},
-  {name: 'IdeaToShipped', feature: 'Planning (experimental)', story: 'An idea is shaped, scheduled on a horizon, scaffolded into an epic and its tasks, and ships.', Component: IdeaToShipped},
+  {name: 'IdeaToShipped', feature: 'Planning', story: 'An idea is shaped, scheduled on a horizon, scaffolded into an epic and its tasks, and ships.', Component: IdeaToShipped},
   {name: 'TrackerSync', feature: 'Tracker links', story: 'staple beside GitHub, Linear, Azure DevOps and ClickUp, which it reads, with writing back marked planned.', Component: TrackerSync},
   {name: 'Budget', feature: 'Budget', story: 'Provider limits as gauges with the reserve, and an estimate against what the work took.', Component: Budget},
   {name: 'Analytics', feature: 'Analytics', story: 'Agent capacity, features shipped and time to done arrive, then agent time per day stacks up by workspace.', Component: Analytics},

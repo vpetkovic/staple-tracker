@@ -50,7 +50,7 @@ while you check a change.
 | `ApprovalGate` | An epic waits on a person; Approve all is pressed; the tickets under it become ready. |
 | `AutopilotRun` | Tickets go done one after another, then the budget stops the run. |
 | `MilestoneGoal` | Goal criteria are marked met with evidence; the progress fills. |
-| `IdeaToShipped` | Experimental planning: an idea is shaped, scheduled on a horizon, scaffolded into an epic and its tasks, and ships. |
+| `IdeaToShipped` | Planning: an idea is shaped, scheduled on a horizon, scaffolded into an epic and its tasks, and ships. |
 | `TrackerSync` | staple beside GitHub, Linear, Azure DevOps and ClickUp (Shipped); between them, Reads is Shipped and Writes back is Planned. |
 | `Budget` | Provider limits as gauges with the reserve; an estimate against what the work took. |
 | `Analytics` | Agent capacity, features shipped and time to done arrive; agent time per day stacks up by workspace. |

@@ -40,7 +40,7 @@ beforeAll(() => {
   repo = join(root, "humanrepo");
   mkdirSync(repo, { recursive: true });
 
-  expect(cli("init").status).toBe(0);
+  expect(cli("init", "--no-planning").status).toBe(0);
   expect(cli("new", "Alpha", "-p", "high").status).toBe(0);
   expect(cli("new", "Beta").status).toBe(0);
   expect(cli("new", "Gamma", "-p", "critical", "--assignee", "someone").status).toBe(0);
@@ -312,7 +312,7 @@ describe("write command feedback", () => {
     const guide = join(project, ".staple", "AGENTS.md");
     const ignore = join(project, ".staple", ".gitignore");
 
-    const first = runCliAt(project, ["init"], { STAPLE_HOME: home });
+    const first = runCliAt(project, ["init", "--no-planning"], { STAPLE_HOME: home });
     expect(first.status).toBe(0);
     expect(first.stdout).toBe(
       `Created workspace "freshrepo" (prefix FRE) at ${db} — registered in hub.\n` +
@@ -320,7 +320,7 @@ describe("write command feedback", () => {
         `Wrote ${ignore} so the database stays out of git; AGENTS.md is deliberately NOT ignored.\n`,
     );
 
-    const again = runCliAt(project, ["init"], { STAPLE_HOME: home });
+    const again = runCliAt(project, ["init", "--no-planning"], { STAPLE_HOME: home });
     expect(again.status).toBe(0);
     // "Opened", not "Created", and the guide is reported as kept — the only
     // signal a user gets that their edits survived. The ignore file was already
@@ -333,7 +333,7 @@ describe("write command feedback", () => {
   }, 60_000);
 
   it("pins the `init --global` second line, which explains the missing guide", () => {
-    const result = runCliAt(repo, ["init", "--global", "charglobal"], { STAPLE_HOME: home });
+    const result = runCliAt(repo, ["init", "--no-planning", "--global", "charglobal"], { STAPLE_HOME: home });
     expect(result.status).toBe(0);
     expect(result.stdout).toBe(
       `Created workspace "charglobal" (prefix CHA) at ${join(home, "workspaces", "charglobal.db")} — registered in hub.\n` +

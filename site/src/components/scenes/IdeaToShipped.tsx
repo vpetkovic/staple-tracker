@@ -4,7 +4,7 @@ import Scene, {type SceneOptions} from './Scene';
 import {Chip, List, Meter, Reveal, Row, Swap, Wide, type Status} from './parts';
 import styles from './IdeaToShipped.module.css';
 
-// Experimental planning, start to end: an idea is shaped, scheduled on a horizon,
+// Planning, start to end: an idea is shaped, scheduled on a horizon,
 // scaffolded into an epic and its tasks, and ships when the tasks are done.
 
 const PHASES = ['Idea', 'Horizon', 'Epic + tasks', 'Shipped'];
@@ -35,9 +35,9 @@ function stateChip(step: number): ReactNode {
 export default function IdeaToShipped(options: SceneOptions): ReactNode {
   return (
     <Scene
-      label="Experimental planning. The idea Tenant self-serve signup is marked shaped once its plan has all three required sections, scheduled on the horizon Beta, and scaffolded: it becomes the epic APP-13 with three tasks, APP-14 to APP-16. The tasks are done one by one, the horizon reads 3 of 3, and the epic reads Shipped."
+      label="Planning. The idea Tenant self-serve signup is marked shaped once its plan has all three required sections, scheduled on the horizon Beta, and scaffolded: it becomes the epic APP-13 with three tasks, APP-14 to APP-16. The tasks are done one by one, the horizon reads 3 of 3, and the epic reads Shipped."
       title="Plan"
-      meta="experimental"
+      meta="idea to shipped"
       timeline={[350, 800, 1300, 1800, 2300, 2800, 3300]}
       {...options}>
       {(step) => {

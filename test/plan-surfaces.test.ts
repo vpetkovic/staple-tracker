@@ -74,7 +74,7 @@ beforeAll(async () => {
   emptyDir = mkdtempSync(join(tmpdir(), "staple-plan-cwd-"));
   process.env.STAPLE_HOME = home;
   process.env.NODE_NO_WARNINGS = "1";
-  expect((await cli("init", "--global", WS)).status).toBe(0);
+  expect((await cli("init", "--no-planning", "--global", WS)).status).toBe(0);
   expect((await cli("new", "Existing epic", "--kind", "epic", "--ws", WS)).status).toBe(0);
   mcp = await startMcpClient({ home, cwd: emptyDir, agent: CONTRACT_AGENT });
   ui = startUiServer({ port: 0, hub: true });

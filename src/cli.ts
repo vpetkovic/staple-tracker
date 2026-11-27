@@ -982,11 +982,13 @@ Workspace
               with no terminal, --yes still does the setup but refuses to start
               the server and prints the follow-up commands, exit 0; without
               --yes it exits 2 and names the explicit commands instead of prompting
-  init [--slug s] [--global <slug>] [--yes] [--no-gitignore] [--json]
+  init [--slug s] [--global <slug>] [--yes] [--no-gitignore] [--no-planning] [--json]
               create + register a workspace and EXIT — never starts the UI;
               repo-local also writes .staple/AGENTS.md, the working protocol for
               agents on this repo — an existing one is never overwritten — and
               .staple/.gitignore, which ignores the database but NOT AGENTS.md;
+              a new workspace starts with planning on (horizons Now and Next take
+              its first two numbers); --no-planning starts it without;
               a legacy .tasks repo is opened where it is unless --yes migrates it
   migrate [--dir p] [--yes]             move a legacy .tasks/tasks.db workspace to
               .staple/staple.db, or resume one a crash interrupted; previews and

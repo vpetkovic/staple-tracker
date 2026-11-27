@@ -21,6 +21,9 @@
  *     `--no-gitignore`. It is inside the directory init creates in the same
  *     breath, beside the guide init already wrote; it never touches the
  *     repository's own root `.gitignore`. See `core/workspace-gitignore.ts`.
+ *   - **Turn planning on in a new workspace.** Declined with `--no-planning`. Only
+ *     a workspace this init made; an existing, cloned or joined one keeps its own
+ *     setting (`initWorkspace`).
  *
  * Nothing else. `init` does not configure a harness, does not edit a shell
  * profile, does not install a runtime, and does not scan anything outside the
@@ -74,6 +77,8 @@ export interface InitReport {
   guideWritten: boolean;
   gitignorePath: string | null;
   gitignoreWritten: boolean;
+  /** Whether planning is on in the workspace, as init leaves it (a new one starts with it on). */
+  planning: boolean;
   migrated: boolean;
   migrationCommand: string | null;
   warnings: string[];
@@ -98,10 +103,12 @@ export function performSetup(options: {
   slug?: string;
   yes: boolean;
   gitignore: boolean;
+  /** false starts a new workspace without planning; an existing workspace keeps its own. */
+  planning?: boolean;
   interactive: boolean;
 }): InitReport {
   if (options.global !== undefined) {
-    const result = runSetup({ global: true, slug: options.global, gitignore: options.gitignore });
+    const result = runSetup({ global: true, slug: options.global, gitignore: options.gitignore, planning: options.planning });
     const ws = result.workspace;
     return {
       action: "create",
@@ -114,6 +121,7 @@ export function performSetup(options: {
       guideWritten: ws.guideWritten,
       gitignorePath: ws.gitignorePath,
       gitignoreWritten: ws.gitignoreWritten,
+      planning: ws.store.planningOn(),
       migrated: false,
       migrationCommand: null,
       warnings: [],
@@ -152,6 +160,7 @@ export function performSetup(options: {
     slug: options.slug,
     migrate,
     gitignore: options.gitignore,
+    planning: options.planning,
   });
   const ws = result.workspace;
 
@@ -166,6 +175,7 @@ export function performSetup(options: {
     guideWritten: ws.guideWritten,
     gitignorePath: ws.gitignorePath,
     gitignoreWritten: ws.gitignoreWritten,
+    planning: ws.store.planningOn(),
     migrated: result.migration !== null,
     // Printed whenever a legacy workspace was opened rather than moved, which is
     // both the headless case and an interactive "n".
@@ -196,6 +206,12 @@ export function printInitReport(report: InitReport): void {
       `Wrote ${report.gitignorePath} so the database stays out of git; AGENTS.md is deliberately NOT ignored.`,
     );
   }
+  if (report.created && report.planning) {
+    console.log(
+      "Planning is on: ideas, and the horizons Now and Next, which are milestones. " +
+        "A person turns it off in Settings → Features; `staple init --no-planning` starts a workspace without it.",
+    );
+  }
   if (report.migrationCommand) {
     console.log(
       "This workspace still stores its state in the legacy .tasks/ layout. " +
@@ -215,6 +231,7 @@ export function runInitCommand(argv: string[], options: InitOptions = {}): void 
       yes: { type: "boolean" },
       json: { type: "boolean" },
       "no-gitignore": { type: "boolean" },
+      "no-planning": { type: "boolean" },
     },
   });
 
@@ -224,6 +241,7 @@ export function runInitCommand(argv: string[], options: InitOptions = {}): void 
     slug: values.slug,
     yes: values.yes === true,
     gitignore: values["no-gitignore"] !== true,
+    planning: values["no-planning"] !== true,
     interactive: options.interactive ?? isInteractive(),
   });
 

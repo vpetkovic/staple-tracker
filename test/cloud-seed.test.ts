@@ -202,7 +202,7 @@ beforeAll(() => {
   template = mkdtempSync(join(tmpdir(), "staple-seed-template-"));
   const cliHome = mkdtempSync(join(tmpdir(), "staple-seed-cli-home-"));
   cleanup.push(cliHome);
-  staple(template, cliHome, ["init", "--yes", "--slug", "seedtest"]);
+  staple(template, cliHome, ["init", "--no-planning", "--yes", "--slug", "seedtest"]);
   const db = new DatabaseSync(dbPathOf(template));
   prefix = (db.prepare("SELECT value FROM meta WHERE key = 'prefix'").get() as { value: string }).value;
   db.close();

@@ -61,7 +61,7 @@ Guide: [Install and first workspace](getting-started.md).
 | Command | What it does |
 |---|---|
 | `staple` | Set this repository up if it needs it, then open the web UI. `--yes` takes the defaults. |
-| `staple init [--yes] [--slug s]` | Create and register a workspace, write `.staple/AGENTS.md` for agents, and exit. `--global <slug>` makes one outside any repository. |
+| `staple init [--yes] [--slug s] [--no-planning]` | Create and register a workspace, write `.staple/AGENTS.md` for agents, and exit. `--global <slug>` makes one outside any repository. A new workspace starts with [planning](plan.md) on, its horizons Now and Next taking the first two ticket numbers; `--no-planning` starts it without. An existing workspace keeps its own setting. |
 | `staple install [--yes] [--update-path]` | Install a runtime so `staple` is on your PATH. `install status` shows it; `--rollback` returns to the previous one. |
 | `staple doctor [--json] [--db <path> \| --ws <slug>]` | Check the home, config, workspace, UI port and runtime, read-only. Without `--db` or `--ws` it checks the workspace found from the current directory (`--dir` names another directory). Exits 1 when a check fails and prints the repair. |
 | `staple doctor --fix --only <check> --yes` | Apply one named repair. |
@@ -194,8 +194,8 @@ staple milestone criterion APP-7 1 --met --evidence APP-4
 
 ### The plan
 
-Guide: [Planning](plan.md). Experimental and off by default: these commands refuse until a
-person sets `features.planning` to true. Ideas and horizons sit above the tracker: they are never queued,
+Guide: [Planning](plan.md). On for a new workspace: these commands refuse while
+`features.planning` is false, which a workspace made by an older build keeps until a person turns it on. Ideas and horizons sit above the tracker: they are never queued,
 checked out or listed by `ls`. Maturity, horizons, dates and the baseline are the person's and
 need `--person`, which records the change under `humanName`. Writing a raw idea's plan sections,
 task rows, questions, decisions or research moves it to exploring, whoever writes them; capture,
@@ -203,7 +203,7 @@ import and title or brief edits do not.
 
 | Command | What it does |
 |---|---|
-| `staple plan enable --person` | Set `features.planning` true, initializing the `idea` and `milestone` kinds and the default horizons Now and Next. The same experimental switch is in Settings. |
+| `staple plan enable --person` | Set `features.planning` true, initializing the `idea` and `milestone` kinds and the default horizons Now and Next. The same switch is in **Settings → Features**. |
 | `staple plan show` / `staple horizon ls` | Horizons in order, with their late and not-started counts and their run setting. |
 | `staple idea ls` | Ideas with their idea number, stage, horizon and progress. `--maturity M`, `--horizon H` filter. An idea has no ticket number until it is promoted; it has an idea number, `I-<PREFIX>-<n>`, from capture on, kept once promoted. Every `<ref>` takes it (`I-STA-12`, any case, or `I-12` in its own workspace), the ticket number once promoted, or the id. |
 | `staple idea new <title>` | Capture a raw idea: a brainstorm, or a new capability nobody planned. A defect is a ticket, and what the ticket you hold needs is fixed in it ([Idea or ticket](plan.md#idea-or-ticket)). `--brief T`, `--parent REF`, `--sparked-by TICKET` (the ticket whose work turned it up: `idea show` prints it, and `staple show` of the ticket lists the idea under `sparked:`). |
