@@ -10,7 +10,7 @@
 .q-page {
   --q-next-bg: color-mix(in oklab, var(--status-task-in_progress) 6%, var(--card));
   --q-next-edge: var(--status-task-in_progress);
-  --q-blue-text: #005fcc;
+  --q-blue-text: var(--ds-blue-800);
   --q-amber: var(--status-task-icon-todo);
   --q-amber-text: var(--plain-tight-fg);
   --q-hair: color-mix(in oklab, var(--border) 60%, transparent);
@@ -32,7 +32,6 @@
 }
 .dark .q-page {
   --q-next-bg: color-mix(in oklab, var(--status-task-in_progress) 13%, var(--card));
-  --q-blue-text: #5aa9ff;
 }
 
 .q-page .q-wide-flex { display: inline-flex; }
