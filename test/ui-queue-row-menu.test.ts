@@ -60,6 +60,8 @@ let ui: UiHandle;
 let browser: Browser;
 let started: string;
 let claimed: string;
+let gone: string;
+let movable: string[];
 
 beforeAll(async () => {
   if (reason) return;
@@ -73,7 +75,9 @@ beforeAll(async () => {
   s.updateIssue(started, { status: "in_progress", assignee: "vp" }, "vp");
   claimed = s.createIssue({ title: "Document the API keys" }).identifier;
   s.checkoutIssue(claimed, "codex-1");
-  for (const ref of [started, claimed]) s.queue().enqueue(ref, {}, "vp");
+  movable = ["Write the release notes", "Tidy the settings page", "Rename the export"].map((title) => s.createIssue({ title }).identifier);
+  gone = s.createIssue({ title: "Drop the old exporter" }).identifier;
+  for (const ref of [started, claimed, movable[0]!, gone, movable[1]!, movable[2]!]) s.queue().enqueue(ref, {}, "vp");
   dbPath = ws.dbPath;
   s.db.close();
   ui = startUiServer({ port: 0, hub: false, db: dbPath });
@@ -132,13 +136,78 @@ describe.skipIf(Boolean(reason))("removing a row from the queue through its menu
       const remove = menu.locator('[data-menu-item="dequeue"]');
       expect(await remove.getAttribute("aria-disabled")).toBeNull();
       expect(await menu.innerText()).not.toContain("is working on this");
-      expect(planned()).toContain(started);
+      const before = planned();
+      expect(before).toContain(started);
       await remove.click();
       await page.locator(`[data-queue-entry="${started}"]`).waitFor({ state: "detached" });
-      expect(planned()).toEqual([claimed]);
+      expect(planned()).toEqual(before.filter((ref) => ref !== started));
       expect(errors).toEqual([]);
     } finally {
       await context.close();
     }
   });
+});
+
+/** The page's focus: the row it is on, or the body. */
+const focusedRow = (page: Page) =>
+  page.evaluate(() => {
+    const active = document.activeElement;
+    if (!active || active === document.body) return "body";
+    return (active as HTMLElement).dataset.queueEntry ?? active.outerHTML.slice(0, 80);
+  });
+
+describe.skipIf(Boolean(reason))("after a row leaves through its menu", () => {
+  it("puts the focus on the row that takes its place, not on the page", async () => {
+    const { page, context, errors } = await openMenu(gone);
+    try {
+      const after = planned()[planned().indexOf(gone) + 1]!;
+      await page.locator(`[data-queue-row-menu="${gone}"] [data-menu-item="dequeue"]`).click();
+      await page.locator(`[data-queue-entry="${gone}"]`).waitFor({ state: "detached" });
+      await expect.poll(() => focusedRow(page)).toBe(after);
+      expect(errors).toEqual([]);
+    } finally {
+      await context.close();
+    }
+  });
+});
+
+describe.skipIf(Boolean(reason))("moving an entry through its menu", () => {
+  /** The plan with `ref` moved to index `to`. */
+  const moved = (order: string[], ref: string, to: number) => {
+    const rest = order.filter((id) => id !== ref);
+    rest.splice(to, 0, ref);
+    return rest;
+  };
+
+  for (const [item, place] of [
+    ["move-up", (at: number) => at - 1],
+    ["move-down", (at: number) => at + 1],
+    ["move-top", () => 0],
+    ["move-bottom", (_at: number, last: number) => last],
+  ] as const) {
+    it(`moves the entry the menu was opened on with ${item}`, async () => {
+      const target = movable[1]!;
+      const before = planned();
+      const at = before.indexOf(target);
+      expect(at).toBeGreaterThan(0);
+      expect(at).toBeLessThan(before.length - 1);
+      const { page, context, errors } = await openMenu(target);
+      try {
+        const answered = page.waitForResponse((response) => response.url().includes("/api/queue/reorder"));
+        await page.locator(`[data-queue-row-menu="${target}"] [data-menu-item="${item}"]`).click();
+        expect((await answered).status()).toBe(200);
+        expect(planned()).toEqual(moved(before, target, place(at, before.length - 1)));
+        expect(errors).toEqual([]);
+      } finally {
+        // Back where it was, for the next move.
+        const { store } = openWorkspace(dbPath);
+        try {
+          store.queue().reorder(before, {}, "vp");
+        } finally {
+          store.db.close();
+        }
+        await context.close();
+      }
+    });
+  }
 });

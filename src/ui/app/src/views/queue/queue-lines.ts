@@ -208,6 +208,22 @@ export function withReveal(folds: SectionFolds, reveal: Reveal): SectionFolds {
   return { ...folds, flipped, whole };
 }
 
+/**
+ * The row that takes a departed row's place, for the focus that left with it: the first row
+ * after it that is still drawn, else the nearest before it. Rows that left with it (an entry's
+ * tasks, a folded section's rows) are passed over. The row itself while it is still drawn;
+ * null once nothing is.
+ */
+export function takesPlace(before: readonly string[], after: readonly string[], key: string): string | null {
+  if (after.includes(key)) return key;
+  const drawn = new Set(after);
+  const at = before.indexOf(key);
+  if (at < 0) return null;
+  for (let i = at + 1; i < before.length; i += 1) if (drawn.has(before[i]!)) return before[i]!;
+  for (let i = at - 1; i >= 0; i -= 1) if (drawn.has(before[i]!)) return before[i]!;
+  return null;
+}
+
 export function revealKey(workspace: string, reveal: Reveal): string {
   return rowKey(workspace, reveal.place, reveal.identifier);
 }

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { EffectiveQueueRow } from "@/lib/types";
 import { effective, entry, queue } from "./fixtures";
 import { planRows } from "./queue-model";
-import { NO_FOLDS, revealOf, rowKey, sectionLayout, withReveal, type SectionFolds, type SectionInput } from "./queue-lines";
+import { NO_FOLDS, revealOf, rowKey, sectionLayout, takesPlace, withReveal, type SectionFolds, type SectionInput } from "./queue-lines";
 
 /** A plan: STA-1 an epic expanding to eight tasks (the next pick is the seventh), STA-2 a leaf; twelve open tasks after it. */
 function input(over: { entries?: boolean } = {}): SectionInput {
@@ -105,5 +105,24 @@ describe("showing a task", () => {
     expect(revealOf(input(), "STA-2")).toEqual({ place: "entry", identifier: "STA-2" });
     expect(revealOf(input(), "NOPE-1")).toBeNull();
     expect(sectionLayout(input(), withReveal(page, revealOf(input(), "STA-91")!)).band!.open).toBe(true);
+  });
+});
+
+describe("the row that takes a departed row's place", () => {
+  it("is the next row still drawn, else the one before it", () => {
+    expect(takesPlace(["a", "b", "c"], ["a", "c"], "b")).toBe("c");
+    expect(takesPlace(["a", "b", "c"], ["a", "b"], "c")).toBe("b");
+  });
+
+  it("looks past the rows that left with it, such as an entry's tasks", () => {
+    expect(takesPlace(["a", "b", "b1", "b2", "c"], ["a", "c"], "b")).toBe("c");
+    expect(takesPlace(["a", "b", "b1", "c"], ["c"], "b1")).toBe("c");
+    expect(takesPlace(["a", "b", "b1"], ["a"], "b1")).toBe("a");
+  });
+
+  it("is the row itself while it is still drawn, and nothing once every row is gone", () => {
+    expect(takesPlace(["a", "b"], ["b", "a"], "b")).toBe("b");
+    expect(takesPlace(["a"], [], "a")).toBeNull();
+    expect(takesPlace(["a"], ["x"], "z")).toBeNull();
   });
 });

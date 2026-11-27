@@ -21,7 +21,8 @@
  * THE KEYBOARD. Every row of every open section is one tab stop (`useRovingFocus`): Up and
  * Down (and k, j) move, Home and End jump, Right and Left open and fold a container, Enter or
  * Space opens the task, Alt and the arrows move an entry. Alt and an arrow on a task under an
- * entry does nothing (`nestedRowKey`).
+ * entry does nothing (`nestedRowKey`). A row that leaves the page with the focus in it (a
+ * removal, a re-read, a fold) hands the focus to the row that takes its place.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
@@ -41,7 +42,7 @@ import { FailedBanner } from "@/views/attention/InboxParts";
 import "./queue.css";
 import { useEntryDrag } from "./queue-drag";
 import { nestedRowKey } from "./queue-keys";
-import { NO_FOLDS, revealKey, revealOf, rowKey, sectionLayout, withReveal, type RowPlace, type SectionFolds } from "./queue-lines";
+import { NO_FOLDS, revealKey, revealOf, rowKey, sectionLayout, takesPlace, withReveal, type RowPlace, type SectionFolds } from "./queue-lines";
 import { queueSummary } from "./queue-summary";
 import { issueFromEffective } from "./queue-tree";
 import { addableOptions, hasOpenWork, moveAnnouncement, nothingPickable, whyNext } from "./queue-words";
@@ -105,6 +106,28 @@ function usePhoneHeaderSlot(): HTMLElement | null {
 
 function QueuePage({ label, rows, children }: { label: string; rows: ReturnType<typeof usePageRows>; children: ReactNode }) {
   const { keys, roving } = rows;
+
+  // The row the focus is in, and the element holding it. When that element leaves the page with
+  // the focus on it, the row that takes its place gets the focus, and only if the focus fell to
+  // the page: a reader who moved somewhere on purpose keeps where they went (the Inbox's rule).
+  const focused = useRef<{ key: string; element: HTMLElement } | null>(null);
+  const shown = useRef<readonly string[]>(keys);
+  const order = keys.join("\n");
+  useEffect(() => {
+    const before = shown.current;
+    shown.current = keys;
+    const last = focused.current;
+    if (!last || last.element.isConnected) return;
+    focused.current = null;
+    if (document.activeElement !== null && document.activeElement !== document.body) return;
+    const next = takesPlace(before, keys, last.key);
+    const element = next === null ? null : document.querySelector<HTMLElement>(`[data-queue-row="${CSS.escape(next)}"]`);
+    if (!next || !element) return;
+    roving.set(next);
+    element.focus({ preventScroll: true });
+    element.scrollIntoView({ block: "nearest" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [order]);
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const key = (event.target as HTMLElement).dataset.queueRow;
     if (key === undefined || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
@@ -127,7 +150,17 @@ function QueuePage({ label, rows, children }: { label: string; rows: ReturnType<
       onKeyDown={onKeyDown}
       onFocus={(event) => {
         const row = (event.target as HTMLElement).closest<HTMLElement>("[data-queue-row]");
-        if (row?.dataset.queueRow) roving.set(row.dataset.queueRow);
+        if (!row?.dataset.queueRow) return;
+        roving.set(row.dataset.queueRow);
+        focused.current = { key: row.dataset.queueRow, element: event.target as HTMLElement };
+      }}
+      onBlur={(event) => {
+        const element = event.target as HTMLElement;
+        // Focus moved on while the element stayed on the page: forget the row. Focus that fell
+        // because the element left the page is the case above, so this checks once it settles.
+        window.setTimeout(() => {
+          if (focused.current?.element === element && element.isConnected && document.activeElement !== element) focused.current = null;
+        }, 0);
       }}
     >
       {children}
