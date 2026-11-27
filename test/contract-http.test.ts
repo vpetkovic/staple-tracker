@@ -268,6 +268,10 @@ describe("read shapes", () => {
       // Not filed for a finding, and none filed against it.
       foundIn: null,
       findings: [],
+      // Not scaffolded from an idea, not an idea, and it sparked none: the same as get_task.
+      scaffoldedFrom: null,
+      sparkedBy: null,
+      sparked: [],
       // KNOWN: authorType is "user" because the fixture comment was posted by the
       // CLI, which hardcodes "user" (src/cli.ts case "comment"), while MCP
       // add_comment defaults to "agent". Same store call, different default per
