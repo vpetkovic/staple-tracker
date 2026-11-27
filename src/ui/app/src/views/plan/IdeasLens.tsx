@@ -256,6 +256,13 @@ function RawRow({ plan, idea, column, columns, write, onOpen, selected, onDrag }
             </>
           ) : null}
           <span data-plan-captured-age>captured {capturedAge(idea.createdAt, plan.today)}</span>
+          {idea.nextStep?.need === "classify" ? (
+            // An import an agent has still to read and classify: the agent's step, so quiet words, not a flag.
+            // One item with its separator, so a narrow column wraps it whole instead of leaving a dangling dot.
+            <span data-plan-to-classify className="whitespace-nowrap">
+              <span aria-hidden className="mr-1.5">·</span>to classify
+            </span>
+          ) : null}
           {idea.openQuestions > 0 ? (
             <>
               <span aria-hidden>·</span>

@@ -95,6 +95,14 @@ describe("a raw idea", () => {
     expect(card(html, "held")).toContain('title="It needs a goal"');
   });
 
+  it("says a raw import waits for an agent to classify it, as idea ls does, and nothing on any other raw idea", () => {
+    const step = { ideaId: "imported", title: "Idea imported", parentId: null, parentTitle: null, horizonId: null, state: "raw" as const, need: "classify" as const, who: "agent" as const, instruction: "Read the imported file and classify it." };
+    const html = board([idea("imported", { nextStep: step }), idea("plain")]);
+    expect(card(html, "imported")).toContain("data-plan-to-classify");
+    expect(text(card(html, "imported"))).toContain("to classify");
+    expect(card(html, "plain")).not.toContain("data-plan-to-classify");
+  });
+
   it("lists the newest capture first", () => {
     const html = board([idea("old", { createdAt: "2026-11-01T00:00:00.000Z" }), idea("new", { createdAt: "2026-11-24T00:00:00.000Z" })]);
     expect(html.indexOf('data-plan-card="new"')).toBeLessThan(html.indexOf('data-plan-card="old"'));
