@@ -213,6 +213,28 @@ describe.skipIf(Boolean(reason))("the queue page through a write", () => {
     }
   });
 
+  for (const [key, ref, expected, words] of [
+    ["Alt+Home", () => second, () => [second, finished, epic, first], () => `${second} is now 1 of 4`],
+    ["Alt+End", () => finished, () => [epic, first, second, finished], () => `${finished} is now 4 of 4`],
+  ] as const) {
+    it(`moves the focused entry to the ${key === "Alt+Home" ? "first" : "last"} place with ${key}, and says so`, async () => {
+      setOrder([finished, epic, first, second]);
+      const { page, context, errors } = await openQueue();
+      try {
+        const answered = page.waitForResponse((response) => response.url().includes("/api/queue/reorder"));
+        await page.locator(`[data-queue-entry="${ref()}"]`).focus();
+        await page.keyboard.press(key);
+        expect((await answered).status()).toBe(200);
+        expect(plan().order).toEqual(expected());
+        await expect.poll(() => page.locator("[data-queue-announce]").innerText()).toBe(words());
+        expect(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.queueEntry)).toBe(ref());
+        expect(errors).toEqual([]);
+      } finally {
+        await context.close();
+      }
+    });
+  }
+
   it("does not move the epic when Alt and an arrow are pressed on a row nested under it", async () => {
     setOrder([finished, epic, first, second]);
     const before = plan();

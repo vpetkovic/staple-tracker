@@ -68,9 +68,10 @@ beforeAll(async () => {
   const ws = initWorkspace({ global: true, slug: "keys" });
   const container = ws.store.createIssue({ title: "Checkout rework", kind: "epic" });
   epic = container.identifier;
-  children = ["Price the basket", "Take the payment"].map(
-    (title) => ws.store.createChild(container.id, { title }).identifier,
-  );
+  const made = ["Price the basket", "Take the payment"].map((title) => ws.store.createChild(container.id, { title }));
+  children = made.map((child) => child.identifier);
+  // The payment waits on the basket: its state column links to the basket's row.
+  ws.store.setBlockedBy(made[1]!.identifier, [made[0]!.identifier], "tester");
   ws.store.createIssue({ title: "Write the release notes" });
   ws.store.createIssue({ title: "Tidy the settings page" });
   ws.store.queue().enqueue(epic, {}, "tester");
@@ -167,6 +168,44 @@ describe.skipIf(Boolean(reason))("a queue row opens from the keyboard", () => {
       await page.waitForTimeout(300);
       expect(await detail(page).count()).toBe(0);
       expect(openedIssue(page)).toBeNull();
+    } finally {
+      await context.close();
+    }
+  });
+});
+
+describe.skipIf(Boolean(reason))("a Waiting on link in the state column", () => {
+  const row = (page: Page, ref: string) => expansion(page).locator(`[role="listitem"][data-identifier="${ref}"]`);
+  const focused = (page: Page) =>
+    page.evaluate(() => {
+      const active = document.activeElement as HTMLElement | null;
+      return { row: active?.dataset.identifier ?? null, jump: active?.dataset.queueJump ?? null, listitem: active?.getAttribute("role") === "listitem" };
+    });
+
+  it("focuses the row it names when clicked", async () => {
+    const { page, context, errors } = await openQueue(DESK);
+    try {
+      await row(page, children[1]!).locator(`[data-queue-jump="${children[0]}"]`).click();
+      await expect.poll(() => focused(page)).toEqual({ row: children[0], jump: null, listitem: true });
+      expect(openedIssue(page)).toBeNull();
+      expect(errors).toEqual([]);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("is reached with Tab from its row, and Enter on it focuses the row it names without opening a task", async () => {
+    const { page, context, errors } = await openQueue(DESK);
+    try {
+      await row(page, children[1]!).focus();
+      await page.keyboard.press("Tab");
+      expect(await focused(page)).toEqual({ row: null, jump: children[0], listitem: false });
+      await page.keyboard.press("Enter");
+      await expect.poll(() => focused(page)).toEqual({ row: children[0], jump: null, listitem: true });
+      await page.waitForTimeout(300);
+      expect(await detail(page).count()).toBe(0);
+      expect(openedIssue(page)).toBeNull();
+      expect(errors).toEqual([]);
     } finally {
       await context.close();
     }
