@@ -13,7 +13,8 @@ import { basename } from "node:path";
 import { parseArgs } from "node:util";
 import { readInputFile } from "../core/input-file.js";
 import { configuredHumanName } from "../mcp-view-actions.js";
-import { holdLabel, holdWords, horizonWords, ideasOnHorizon, type HorizonView, type IdeaDetail, type IdeaView, type PlanView, type PlanWriteOptions, type ScaffoldPreview } from "../core/plan-store.js";
+import { holdLabel, holdWords, horizonWords, ideasOnHorizon, type HorizonView, type IdeaDetail, type IdeaView, type PlanFilesView, type PlanFileView, type PlanView, type PlanWriteOptions, type ScaffoldPreview } from "../core/plan-store.js";
+import { workspaceRootOf } from "../core/plan-discovery.js";
 import { splitDepends, type BreakdownRowInput, type PlanPatch } from "../core/plan-sections.js";
 import { resolveWorkspace } from "../core/workspace.js";
 import { StapleError } from "../core/types.js";
@@ -52,9 +53,33 @@ function writer(person: boolean | undefined): { actor: string; options: PlanWrit
 }
 
 function planFor(values: { db?: string; ws?: string }, enabling = false) {
-  const plan = resolveWorkspace({ db: values.db, ws: values.ws }).store.plan();
+  return planAndRootFor(values, enabling).plan;
+}
+
+/** The plan and the workspace root its plan files are found under (null for a global workspace). */
+function planAndRootFor(values: { db?: string; ws?: string }, enabling = false) {
+  const opened = resolveWorkspace({ db: values.db, ws: values.ws });
+  const plan = opened.store.plan();
   if (!enabling) plan.assertEnabled();
-  return plan;
+  return { plan, root: workspaceRootOf(opened.dbPath) };
+}
+
+const FILE_STATE_WORDS: Record<PlanFileView["state"], string> = { new: "new", imported: "imported", changed: "changed since import", ignored: "ignored" };
+
+/** One plan file as `staple idea files` lists it. */
+function planFileLine(file: PlanFileView): string {
+  const idea = file.idea === null ? "" : ` → ${file.idea.identifier ?? file.idea.number ?? file.idea.id}`;
+  const flags = [file.kind === "folder" ? `folder, ${file.files.length} files` : null, file.done ? `done${file.status ? ` (${file.status})` : ""}` : file.status, file.problem ? `cannot import: ${file.problem}` : null].filter(Boolean).join(", ");
+  return `${FILE_STATE_WORDS[file.state].padEnd(20)} ${file.path}  ${file.title}${flags ? `  [${flags}]` : ""}${idea}`;
+}
+
+function printPlanFiles(view: PlanFilesView): void {
+  if (view.unavailable) return console.log(view.unavailable);
+  console.log(`looking in: ${view.paths.join(", ") || "(nowhere: plan.discoveryPaths is empty)"}`);
+  if (view.files.length === 0) console.log("no plan files found");
+  for (const file of view.files) console.log(planFileLine(file));
+  const { counts } = view;
+  console.log(`${counts.new} new, ${counts.changed} changed since import, ${counts.imported} imported, ${counts.ignored} ignored${view.truncated ? " (cut short: narrow plan.discoveryPaths to see the rest)" : ""}`);
 }
 
 function ideaLine(idea: IdeaView, plan: PlanView): string {
@@ -226,7 +251,7 @@ export function runIdeaCommand(rest: string[]): void {
   if (values["sparked-by"] !== undefined && sub !== "new") {
     throw new StapleError("validation", "--sparked-by goes with staple idea new: an idea names the ticket that sparked it when it is captured.");
   }
-  const plan = planFor(values);
+  const { plan, root } = planAndRootFor(values);
   const { actor, options } = writer(values.person);
   const show = (ref: string) => {
     const detail = plan.detail(ref);
@@ -416,8 +441,33 @@ export function runIdeaCommand(rest: string[]): void {
       if (result.idea.idea.nextStep?.need === "classify") console.log(`  to classify: no maturity was chosen, so an agent reads the file and gives it its stage (staple idea show ${result.idea.idea.number ?? result.idea.idea.id})`);
       return;
     }
+    case "files": {
+      // Plan files under the workspace root: listed by anyone, imported or ignored by the person.
+      const verb = first ?? "ls";
+      const paths = others;
+      if (verb === "ls") {
+        const view = plan.discoverFiles(root);
+        if (values.json) return console.log(JSON.stringify(view));
+        return printPlanFiles(view);
+      }
+      if (verb === "import") {
+        if (paths.length === 0) throw new StapleError("validation", "staple idea files import needs one or more plan file paths, as staple idea files lists them");
+        const result = plan.importDiscovered(root, paths, { horizon: values.horizon ?? null, maturity: values.maturity }, actor, options);
+        if (values.json) return console.log(JSON.stringify(result));
+        for (const entry of result.imported) console.log(`imported ${entry.path} as ${entry.idea.title} (idea ${entry.idea.number ?? entry.idea.id})`);
+        return;
+      }
+      if (verb === "ignore" || verb === "unignore") {
+        const path = need(paths[0], "a plan file path, as staple idea files lists it");
+        const view = plan.ignoreDiscovered(root, path, verb === "ignore", actor, options);
+        if (values.json) return console.log(JSON.stringify(view));
+        const file = view.files.find((candidate) => candidate.path === path);
+        return console.log(file ? planFileLine(file) : `${path}: no longer ignored`);
+      }
+      throw new StapleError("validation", `Unknown idea files verb "${verb}". Use: ls, import, ignore, unignore`);
+    }
     default:
-      throw new StapleError("validation", `Unknown idea verb "${sub}". Use: ls, new, show, set, propose, plan, task, promote, scaffold, import, convert, adopt, unlink, block, unblock, ask, resolve, defer, decide, reset-baseline`);
+      throw new StapleError("validation", `Unknown idea verb "${sub}". Use: ls, new, show, set, propose, plan, task, promote, scaffold, import, files, convert, adopt, unlink, block, unblock, ask, resolve, defer, decide, reset-baseline`);
   }
 }
 

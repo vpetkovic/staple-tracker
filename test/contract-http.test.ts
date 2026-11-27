@@ -824,11 +824,15 @@ describe("KNOWN: logical errors this surface cannot project", () => {
        * test/plan-surfaces.test.ts against the CLI and MCP projections of the same plan.
        */
       "/api/plan",
+      // The Plan files tray's read (test/plan-discovery-surfaces.test.ts); its writes are in the family.
+      "/api/plan-files",
       "/api/plan-idea",
       "/api/plan/adopt",
       "/api/plan/blocker",
       "/api/plan/capture",
       "/api/plan/decision",
+      "/api/plan/files-ignore",
+      "/api/plan/files-import",
       "/api/plan/horizon-create",
       "/api/plan/horizon-queue",
       "/api/plan/horizon-remove",

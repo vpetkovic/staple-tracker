@@ -81,6 +81,8 @@ describe("the registered set", () => {
       "analytics.scenario",
       "analytics.solo",
       "analytics.company",
+      // Where the Plan files tray looks (edited in the tray).
+      "plan.discoveryPaths",
     ]);
   });
 
@@ -93,6 +95,7 @@ describe("the registered set", () => {
       "features:workspace:fields",
       // Edited on its own page; `settingRegistryView` leaves it out of the Settings screen.
       "analytics:workspace:page",
+      "plan:workspace:page",
       "machine:global:fields",
     ]);
     expect(settingCategoriesFor("global").map((c) => c.id)).toEqual(["machine"]);

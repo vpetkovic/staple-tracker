@@ -117,6 +117,8 @@ An idea imported from a file with no stage chosen waits for an agent: its
 `staple idea ls` marks it *(to classify)*), and pickups list it only while a
 horizon carries it. Read the file under Files, fill the plan from it and propose it
 shaped once it passes the gate, or leave it raw with `staple idea set <ref> --classified`.
+Plan files the repository already holds (`staple idea files`) are the person's to
+import or ignore: list them for the person, never import or ignore them yourself.
 
 A step is never claimed, and an idea is never checked out or queued. A run with
 nothing left to take but steps pending stops with `planning_needed` and lists

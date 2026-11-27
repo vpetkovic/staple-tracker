@@ -517,6 +517,51 @@ Every view reads the waiting imports in one statement. Two devices that settle o
 write the same empty body or touch different fields (an enrichment writes `plan_explored`), so
 every device, a fresh one included, reads the same step with no conflict.
 
+**Plan files in the workspace.** The Plan view's tray (`/api/plan-files`, and
+`/api/plan/files-import` and `/api/plan/files-ignore`) and `staple idea files` list what
+`plan-discovery.ts` finds under the workspace root, the directory that holds `.staple/`. A global
+workspace has none. Where it looks is the registered workspace setting `plan.discoveryPaths`
+(category `plan`, edited in the tray). It holds repo-relative globs and defaults to `*.md` and
+`plans/**`, matched in any case. Absolute paths, `..` and backslashes are refused. The walk never
+follows a link. It is bounded: a depth of 8, 4000 directory entries read and 500 plans, and past any
+of these the answer says it was cut short. Repository documents, `_` names, `assets/`, handoffs,
+hidden folders and `node_modules` are left out. A folder deeper than where its path starts that
+holds `assets/` is one plan when it has a main file (named for the folder, else plan, index or
+readme, else its only Markdown file), with its main file first and then every file in it, at most 50.
+A folder of several plans that share `assets/` lists each plan on its own. Entries are sorted before
+any cut, so every device keeps the same ones. The walk reads at most 256 MiB, and past that the rest
+are listed unread and the answer is cut short. Hashes are cached in the process by path, size and
+modification time. Its hash is `sha256` over
+its sorted list of paths and file hashes; a file's hash is `sha256` of its bytes. A plan's
+`status` is read from front matter, a `Status:` line, a `## Status` heading or a status table row
+near the top, and
+`done` is set by a done-like first word or a `done/`, `completed/` or `implemented/` folder.
+
+Each listed plan has one state. **imported**: an idea came from this path with this hash, or from
+this hash at another path. **ignored**: the path or the hash was ignored. **changed**: an idea came
+from this path with another hash. **new**: none of these. An unchanged import outranks an ignore,
+and an ignore outranks a change. An ignore of a hash some idea was imported from is spent. So an
+ignore on one device and an import on another, offline, read as imported everywhere, and a later
+change reads as changed. Each listed file also says whether it changed since its import
+(`changedSinceImport`, which an ignored file can be too), and names any other idea imported from
+it as it stands (`alsoImportedAs`). Import (`PlanStore.importDiscovered`) and ignore are the person's
+(`--person`, or the page), never an agent's, and there is no MCP tool for them. An import takes only
+paths the discovery lists at that moment, so no other file is ever read. A path spelled in another
+case takes the one listed path it matches. Each file is read through its real path, which must be
+the listed path under the root's real path (no link), and the bytes read must hash to what discovery
+listed, or the import is refused. It is all or none, refuses
+one already imported as it stands, and is otherwise `importPlan`: the main file is the original
+under Files and the folder's other files are attached beside it. It writes the synced document
+`import-source` (`{path, hash, files}`), which is how every device, a hydrated one included, tells
+imported from changed. A raw write of that key is refused. Each ignore is its own `setting` entity,
+`plan.ignoredFile:<sha256 of the path and hash, 32 hex>` with value `{path, hash}`. Like `repository.prefix`
+it is not a registered setting and is not reported as an unknown key. Two devices that ignore
+different files offline, or one path while their checkouts differ, write different entities, so
+both land with no conflict. The same path and content write one entity with one value. An ignore that is
+ended is a delete with a tombstone, and an ignore set again afterwards is a create that lifts it.
+Importing a file ends its ignores. The tray reads the import marks and the ignores in one
+statement each, and nothing on the Plan view's list path walks the files.
+
 **Import** of Markdown reads a plan file into one
 idea, in one transaction: the first heading outside a code fence is the title, the text before the
 first section is the brief, and each `##` heading is mapped by its words (Goal, Task or Step

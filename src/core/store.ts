@@ -9,6 +9,7 @@ import { MemberLens, withEventMembers } from "./cloud/member-lens.js";
 import { readMembersCache } from "./cloud/members-cache.js";
 import { readLocalLease } from "./cloud/lease-store.js";
 import { REPOSITORY_PREFIX_SETTING } from "./cloud/repository-prefix.js";
+import { IGNORED_FILE_SETTING_PREFIX, ignoredFileKey, isIgnoredPlanFile, normalizeDiscoveryPath, type IgnoredPlanFile } from "./plan-discovery-paths.js";
 import { JOURNAL_MAX_OP_BYTES, type Journal, journalFor, resolveDeviceId } from "./journal.js";
 import {
   type AttachmentMeta,
@@ -1465,7 +1466,8 @@ export class WorkspaceStore {
     // The repository's prefix rides a setting key so older builds preserve it unread
     // (`cloud/repository-prefix.ts`); this one knows it, and it is not a workspace setting.
     stored.delete(REPOSITORY_PREFIX_SETTING);
-    for (const key of stored.keys()) unknownSettingKeys.push(key);
+    // So do the person's ignored plan files, one entity each (`plan-discovery-paths.ts`).
+    for (const key of stored.keys()) if (!key.startsWith(IGNORED_FILE_SETTING_PREFIX)) unknownSettingKeys.push(key);
 
     const snapshot: SettingsSnapshot = {
       revision,
@@ -2388,6 +2390,51 @@ export class WorkspaceStore {
       });
       if (key === "features.planning" && next === true) this.plan().initialize(actor ?? null);
       return settingValueView(definition, next, "workspace");
+    });
+  }
+
+  /**
+   * The plan files the person ignored, in one statement. Each is its own `setting`
+   * entity keyed by its path (`plan-discovery-paths.ts`), applied and hydrated as any setting is;
+   * a row this build cannot read is passed over.
+   */
+  ignoredPlanFiles(): IgnoredPlanFile[] {
+    const out: IgnoredPlanFile[] = [];
+    for (const row of this.db
+      .prepare("SELECT value FROM meta WHERE key >= ? AND key < ? ORDER BY key")
+      .all(settingMetaKey(IGNORED_FILE_SETTING_PREFIX), settingMetaKey(`${IGNORED_FILE_SETTING_PREFIX.slice(0, -1)};`)) as Array<{ value: string }>) {
+      try {
+        const value = (JSON.parse(row.value) as { value?: unknown }).value;
+        if (isIgnoredPlanFile(value)) out.push({ path: value.path, hash: value.hash });
+      } catch {
+        /* passed over */
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Ignore one plan file as it stands (`ignored`), or end that ignore: the entity keyed by its path
+   * and hash is set, or deleted with a tombstone. A create when its last word here was a delete, as
+   * `setSetting` does, so an ignore ended and set again lands on every device. Writes nothing when
+   * it would change nothing.
+   */
+  setIgnoredPlanFile(entry: IgnoredPlanFile, ignored: boolean, actor: string | null): void {
+    const key = ignoredFileKey(entry);
+    const metaKey = settingMetaKey(key);
+    this.atomically(() => {
+      const row = this.db.prepare("SELECT value FROM meta WHERE key = ?").get(metaKey) as { value: string } | undefined;
+      if (!ignored) {
+        if (row === undefined) return;
+        this.db.prepare("DELETE FROM meta WHERE key = ?").run(metaKey);
+        this.journal.record({ entity: "setting", entityId: key, verb: "delete", payload: {}, actor });
+        return;
+      }
+      const value = { path: normalizeDiscoveryPath(entry.path), hash: entry.hash };
+      const encoded = JSON.stringify({ v: 1, value });
+      if (row?.value === encoded) return;
+      this.db.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(metaKey, encoded);
+      this.journal.record({ entity: "setting", entityId: key, verb: row === undefined && this.journal.isTombstoned("setting", key) ? "create" : "update", payload: { value }, actor });
     });
   }
 

@@ -46,6 +46,7 @@
 import { StapleError, VOCABULARY_ID_PATTERN, DEFAULT_ISSUE_KIND } from "./types.js";
 import { kindAppearanceMapProblem, type KindAppearanceMap } from "./kind-appearance.js";
 import { mappingProblem } from "./integrations/mapping-format.js";
+import { DEFAULT_DISCOVERY_PATHS, discoveryPathsProblem } from "./plan-discovery-paths.js";
 import { COST_MODEL_KEYS, DEFAULT_COST_MODEL, costModelPartProblem, type CostModelPart } from "./analytics/cost-model.js";
 
 
@@ -177,6 +178,14 @@ const categories: SettingCategory[] = [
     scope: "workspace",
     editor: "page",
     order: 50,
+  },
+  {
+    id: "plan",
+    label: "Plan files",
+    description: "Where the Plan view looks for plan files to import as ideas. Shared with every device; edited in the Plan view's Plan files.",
+    scope: "workspace",
+    editor: "page",
+    order: 60,
   },
   {
     id: "machine",
@@ -318,6 +327,12 @@ const definitions: SettingDefinition[] = [
       },
     }),
   ),
+  {
+    key: "plan.discoveryPaths", category: "plan", scope: "workspace",
+    schema: { type: "json", validate: discoveryPathsProblem, hint: "a JSON list of repo-relative paths or globs, matched in any case" },
+    default: [...DEFAULT_DISCOVERY_PATHS], version: 1, sensitivity: "normal",
+    ui: { label: "Where to look for plan files", description: "Repo-relative paths or globs under the workspace root. * matches within a folder name, ** any depth; a plain path is that file or everything under that folder.", control: "text", order: 10 },
+  },
   {
     key: "machine.browser",
     category: "machine",

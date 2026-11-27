@@ -559,6 +559,7 @@ describe("registered workspace settings", () => {
       { key: "queue.silentClaimMinutes", scope: "workspace", value: 30, source: "default", version: 1 },
       { key: "features.planning", scope: "workspace", value: false, source: "default", version: 1 },
       ...ANALYTICS_DEFAULTS,
+      { key: "plan.discoveryPaths", scope: "workspace", value: ["*.md", "plans/**"], source: "default", version: 1 },
     ]);
     // Nothing is written by a read — the fresh-workspace meta table stays exactly as seeded.
     expect(metaRows()).toEqual([]);
@@ -625,6 +626,7 @@ describe("registered workspace settings", () => {
       "queue.silentClaimMinutes",
       "features.planning",
       ...ANALYTICS_DEFAULTS.map((value) => value.key),
+      "plan.discoveryPaths",
     ]);
     store.setSetting("kinds.default", "bug");
     store.resetSetting("kinds.default");
@@ -730,6 +732,7 @@ describe("registered workspace settings", () => {
       { key: "queue.silentClaimMinutes", scope: "workspace", value: 30, source: "default", version: 1 },
       { key: "features.planning", scope: "workspace", value: false, source: "default", version: 1 },
       ...ANALYTICS_DEFAULTS,
+      { key: "plan.discoveryPaths", scope: "workspace", value: ["*.md", "plans/**"], source: "default", version: 1 },
     ]);
     expect(() => store.applySettingOps([{ op: "bogus", key: "kinds.default" } as never])).toThrow(
       /Unknown setting op "bogus"/,

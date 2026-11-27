@@ -13,10 +13,11 @@
  * compared column for column over every synchronized table (`design/sync.md`, "What
  * synchronizes").
  */
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { sha256Hex } from "../src/core/attachments.js";
 import { createBackup, restoreFromBackup, setBackupConsent } from "../src/core/cloud/backup.js";
 import { listConflicts, resolveConflict, type ResolutionChoice } from "../src/core/cloud/conflicts.js";
@@ -71,7 +72,7 @@ const READS: Record<StoreName, readonly string[]> = {
     "externalLinks", "journaled", "getStatuses", "getKinds", "kindAppearance", "getKindsWithAppearance", "kindOrder", "defaultKind",
     "statusOrder", "openStatusOrder", "inboxPickupOrder", "checkoutExpectedStatuses", "categoryOf", "isResolvedStatus",
     "isActiveStatus", "primaryStatusFor", "assertConfiguredStatus", "assertConfiguredKind", "statusUsageCount",
-    "kindUsageCount", "getSetting", "settingValue", "settingValues", "unknownSettingKeys", "movedOff", "removedByRestore", "getIssue",
+    "kindUsageCount", "getSetting", "settingValue", "settingValues", "unknownSettingKeys", "ignoredPlanFiles", "movedOff", "removedByRestore", "getIssue",
     "listEvents", "members", "otherMemberAssignees", "blockersOf", "dependentsOf", "unresolvedBlockersOf", "unresolvedBlockersFor", "openDependentsFor",
     "blockingChildrenOf", "gate", "gateFor", "gateDecision", "queuedByFor", "gateQueueOf", "queuedBy", "claimActivity",
     "claimActivityFor", "worklogSummaryFor", "timingFor", "timing", "detailTiming", "listComments", "latestComments", "listCommentsPage",
@@ -107,8 +108,23 @@ const READS: Record<StoreName, readonly string[]> = {
   QueueStore: ["revision", "entries", "effectiveQueue", "view", "scopeMembership"],
   ProjectStore: ["list", "get", "issueCounts"],
   // The plan layer's reads, and the lifecycle checks the tracker asks of it: derived on every call, nothing stored.
-  PlanStore: ["assertEnabled", "today", "enabled", "view", "ideaView", "detail", "stateOf", "assertEditable", "assertDocumentWrite", "assertQueueable", "sectionsOf", "scaffoldPreview", "horizonsOf", "horizonIds", "accountingOf", "heldByPlan", "holdOf", "holdsByHorizon", "planStepsOf", "pickupPlanSteps"],
+  PlanStore: ["assertEnabled", "today", "enabled", "view", "ideaView", "detail", "stateOf", "assertEditable", "assertDocumentWrite", "assertQueueable", "sectionsOf", "scaffoldPreview", "horizonsOf", "horizonIds", "accountingOf", "heldByPlan", "holdOf", "holdsByHorizon", "planStepsOf", "pickupPlanSteps", "discoverFiles"],
 };
+
+/** A workspace root holding plan files, made once: the plan-file scenarios read it on device A. */
+let filesRoot: string | null = null;
+function planFilesRoot(): string {
+  if (filesRoot !== null) return filesRoot;
+  filesRoot = mkdtempSync(join(tmpdir(), "staple-mutation-files-"));
+  for (const [path, body] of [["plans/found.md", "# Found\n"], ["plans/ignored.md", "# Ignored\n"], ["plans/other.md", "# Other\n"], ["plans/sso/sso.md", "# SSO\n"], ["plans/sso/assets/flow.jsx", "export {};\n"]] as const) {
+    mkdirSync(dirname(join(filesRoot, path)), { recursive: true });
+    writeFileSync(join(filesRoot, path), body);
+  }
+  return filesRoot;
+}
+afterAll(() => {
+  if (filesRoot !== null) rmSync(filesRoot, { recursive: true, force: true });
+});
 
 interface World {
   readonly a: Machine;
@@ -490,6 +506,27 @@ const SCENARIOS: readonly Scenario[] = [
         {},
         "alice",
       ).idea.idea.id),
+  },
+  {
+    method: "PlanStore.importDiscovered",
+    name: "import plan files found in the workspace, a folder with assets as one",
+    run: (w) =>
+      void w.a.store.plan().importDiscovered(planFilesRoot(), ["plans/found.md", "plans/sso"], {}, "alice", { person: { via: "test" } }),
+  },
+  {
+    method: "PlanStore.ignoreDiscovered",
+    name: "ignore a plan file found in the workspace, then end another's ignore",
+    run: (w) => {
+      const plan = w.a.store.plan();
+      plan.ignoreDiscovered(planFilesRoot(), "plans/ignored.md", true, "alice", { person: { via: "test" } });
+      plan.ignoreDiscovered(planFilesRoot(), "plans/other.md", true, "alice", { person: { via: "test" } });
+      plan.ignoreDiscovered(planFilesRoot(), "plans/other.md", false, "alice", { person: { via: "test" } });
+    },
+  },
+  {
+    method: "WorkspaceStore.setIgnoredPlanFile",
+    name: "ignore a plan file by path and hash",
+    run: (w) => void w.a.store.setIgnoredPlanFile({ path: "plans/raw.md", hash: `sha256:${"b".repeat(64)}` }, true, "alice"),
   },
   {
     method: "PlanStore.scaffold",

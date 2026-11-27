@@ -23,6 +23,8 @@
  *    lateness and a horizon's members are read or rebuilt from the work every time.
  */
 import type { DatabaseSync, StatementSync } from "node:sqlite";
+import { readFileSync, realpathSync } from "node:fs";
+import { join } from "node:path";
 import { insertEvent } from "./event-log.js";
 import { moveIdentifier } from "./identifier-moves.js";
 import { isIdeaNumber, nextIdeaNumber } from "./idea-numbers.js";
@@ -35,6 +37,7 @@ import {
   MATURITY_READ,
   SHAPE_PROPOSAL_KEY,
   CLASSIFY_KEY,
+  IMPORT_SOURCE_KEY,
   aKind,
   IDEA_KIND,
   PLAN_KINDS_MISSING_MESSAGE,
@@ -111,6 +114,8 @@ import {
 } from "./plan-sections.js";
 import { LISTED_HORIZON, rebuildPlanMembers } from "./plan-members.js";
 import { readImportFile } from "./plan-import.js";
+import { DISCOVERY_LIMITS, discoverPlanFiles, planHashOf, type DiscoveredPlan, type DiscoveryLimits } from "./plan-discovery.js";
+import { discoveryPaths, normalizeDiscoveryPath } from "./plan-discovery-paths.js";
 import { cleanFilename } from "./attachments.js";
 import { classifyStep, heldBySubIdeas, orderPlanSteps, planStepOf, type PlanStep, type PlanStepInput } from "./plan-steps.js";
 import { holdsHorizon, horizonAccounting, isUmbrella, ownUnits, unitPercent, unitProgress, units, type HorizonAccounting, type OwnUnits, type RecordCounts, type RecordSize, type ScheduledRecord, type Units } from "./plan-accounting.js";
@@ -119,6 +124,39 @@ import type { WorkspaceStore } from "./store.js";
 import { RESOLVED_CATEGORIES, StapleError, type PersonDecision, type StatusCategory } from "./types.js";
 
 /** Who is writing. A `person` is the distinction; without one the write is an agent's. */
+/** The setting that says where discovery looks. */
+export const DISCOVERY_PATHS_SETTING = "plan.discoveryPaths";
+
+/** What a discovered plan file is to the tracker. */
+export type PlanFileState = "new" | "imported" | "changed" | "ignored";
+
+interface ImportSource {
+  path: string;
+  hash: string;
+  idea: { id: string; number: string | null; identifier: string | null; title: string };
+}
+
+/** One plan file the workspace holds, and what it is to the tracker. */
+export interface PlanFileView extends DiscoveredPlan {
+  state: PlanFileState;
+  /** The idea it was imported as: the unchanged import, else the latest from its path, else one with its content; null when none. */
+  idea: ImportSource["idea"] | null;
+  /** Whether an idea came from this path and the file has changed since (an ignored file can be both). */
+  changedSinceImport: boolean;
+  /** Other ideas imported from the same file as it stands, such as two devices importing it offline. */
+  alsoImportedAs: Array<ImportSource["idea"]>;
+}
+
+/** The Plan files tray: where discovery looks, what it found, and how many of each state. */
+export interface PlanFilesView {
+  paths: string[];
+  files: PlanFileView[];
+  truncated: boolean;
+  counts: Record<PlanFileState, number>;
+  /** Why there is nothing to look in (a workspace outside a repository), or null. */
+  unavailable: string | null;
+}
+
 export interface PlanWriteOptions {
   person?: PersonDecision | null;
 }
@@ -842,6 +880,13 @@ export class PlanStore {
       throw new StapleError(
         "validation",
         `The classify request of ${displayRef(row)} is written by importing a file, and settled by filling its plan, proposing it shaped, or leaving it raw (update_idea with classified, or staple idea set --classified).`,
+        { key },
+      );
+    }
+    if (key === IMPORT_SOURCE_KEY) {
+      throw new StapleError(
+        "validation",
+        `Where ${displayRef(row)} was imported from is written by importing a plan file (the Plan view's Plan files, or staple idea files import --person), not by a document write.`,
         { key },
       );
     }
@@ -2482,27 +2527,225 @@ export class PlanStore {
   ): { idea: IdeaDetail; rows: number; warnings: string[] } {
     this.assertEnabled();
     const name = cleanFilename(file.name);
-    const { bytes, parsed } = readImportFile(name, file.content);
-    const sources = [`${name} (attached)`, ...parsed.sections.sources];
-    const id = this.store.journaled(() => {
-      const idea = this.captureWith(
-        {
-          title: parsed.title,
-          brief: parsed.brief,
-          parent: input.parent ?? null,
-          horizon: input.horizon ?? null,
-          maturity: input.maturity,
-          plan: { ...parsed.sections, sources },
-        },
-        { questions: parsed.questions, decisions: parsed.decisions },
-        actor,
-        options,
-      );
-      this.store.attachFile(idea.id, { filename: name, bytes, caption: "The file this idea was imported from", author: actor });
-      if (input.maturity === undefined) this.store.putDocument(idea.id, CLASSIFY_KEY, name, { author: actor, changeSummary: "imported: to classify" }, { plan: true });
-      return idea.id;
+    const read = readImportFile(name, file.content);
+    const id = this.store.journaled(() => this.importRead(name, read, input, actor, options, null));
+    return { idea: this.detail(id), rows: read.parsed.sections.breakdown.length, warnings: read.parsed.warnings };
+  }
+
+  /**
+   * One import, inside the caller's transaction: the idea, its original under Files, the classify
+   * step when no maturity was chosen and, for a plan file found in the workspace, where it came
+   * from (`IMPORT_SOURCE_KEY`) and every other file of its folder, attached beside it.
+   */
+  private importRead(
+    name: string,
+    { bytes, parsed }: ReturnType<typeof readImportFile>,
+    input: { parent?: string | null; horizon?: string | null; maturity?: string },
+    actor: string | null,
+    options: PlanWriteOptions,
+    source: { path: string; main: string; hash: string; others: Array<{ path: string; bytes: Uint8Array }> } | null,
+  ): string {
+    const sources = [`${source?.path ?? name} (attached)`, ...parsed.sections.sources];
+    const idea = this.captureWith(
+      {
+        title: parsed.title,
+        brief: parsed.brief,
+        parent: input.parent ?? null,
+        horizon: input.horizon ?? null,
+        maturity: input.maturity,
+        plan: { ...parsed.sections, sources },
+      },
+      { questions: parsed.questions, decisions: parsed.decisions },
+      actor,
+      options,
+    );
+    this.store.attachFile(idea.id, { filename: name, bytes, caption: source ? `The file this idea was imported from: ${source.main}` : "The file this idea was imported from", author: actor });
+    for (const other of source?.others ?? []) {
+      this.store.attachFile(idea.id, { filename: cleanFilename(other.path.split("/").pop() ?? other.path), bytes: other.bytes, caption: `Imported with the plan: ${other.path}`, author: actor });
+    }
+    if (input.maturity === undefined) this.store.putDocument(idea.id, CLASSIFY_KEY, name, { author: actor, changeSummary: "imported: to classify" }, { plan: true });
+    if (source) {
+      const body = JSON.stringify({ path: source.path, hash: source.hash, files: source.others.map((other) => other.path) });
+      this.store.putDocument(idea.id, IMPORT_SOURCE_KEY, body, { author: actor, changeSummary: `imported from ${source.path}` }, { plan: true });
+    }
+    return idea.id;
+  }
+
+  // ---------- Plan files: discovered in the workspace, imported only by the person ----------
+
+  /** The walk's bounds; a test narrows them. */
+  discoveryLimits: DiscoveryLimits = DISCOVERY_LIMITS;
+
+  /** Every record imported from a plan file, with where from, in one statement: a tray read, never a list path. */
+  private importSources(): ImportSource[] {
+    const rows = this.db
+      .prepare(
+        `SELECT i.id, i.identifier, i.plan_idea_number, i.title, r.body FROM documents d
+           JOIN document_revisions r ON r.issue_id = d.issue_id AND r.key = d.key AND r.revision = d.current_revision
+           JOIN issues i ON i.id = d.issue_id
+          WHERE d.key = ? AND trim(r.body) <> ''
+          ORDER BY r.created_at, i.id`,
+      )
+      .all(IMPORT_SOURCE_KEY) as Array<{ id: string; identifier: string | null; plan_idea_number: string | null; title: string; body: string }>;
+    const out: ImportSource[] = [];
+    for (const row of rows) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(row.body);
+      } catch {
+        continue;
+      }
+      const { path, hash } = (parsed ?? {}) as { path?: unknown; hash?: unknown };
+      if (typeof path !== "string" || typeof hash !== "string") continue;
+      out.push({
+        path,
+        hash,
+        idea: { id: row.id, number: ideaNumberOf({ identifier: row.identifier ?? "", plan_idea_number: row.plan_idea_number }), identifier: row.identifier === null || isIdeaNumber(row.identifier) ? null : row.identifier, title: row.title },
+      });
+    }
+    return out;
+  }
+
+  /**
+   * The plan files under the workspace root that the discovery paths reach, each with what it is
+   * to the tracker: `new`, `imported` (an idea came from it as it stands: by its path, or by its
+   * content found at another path), `changed` (an idea came from this path, and the file has
+   * changed since) or `ignored` (the person ignored this path, or this content). An unchanged
+   * import outranks an ignore, and an ignore outranks a change. Reads; imports nothing.
+   *
+   * `root` is the directory that holds `.staple/`; null for a workspace outside any repository,
+   * which has none to find.
+   */
+  discoverFiles(root: string | null): PlanFilesView {
+    this.assertEnabled();
+    const paths = discoveryPaths(this.store.getSetting(DISCOVERY_PATHS_SETTING));
+    const empty = { new: 0, changed: 0, imported: 0, ignored: 0 };
+    if (root === null) return { paths, files: [], truncated: false, counts: empty, unavailable: "This workspace is not inside a repository, so there are no plan files to find." };
+    const found = discoverPlanFiles(root, paths, this.discoveryLimits);
+    const sources = this.importSources();
+    // An ignore of content some idea was imported from is spent: an import on another device,
+    // offline, outranks it on every device alike, so a later change reads as changed.
+    const importedHashes = new Set(sources.map((source) => source.hash));
+    const ignored = this.store.ignoredPlanFiles().filter((entry) => !importedHashes.has(entry.hash));
+    const counts = { ...empty };
+    const files = found.plans.map((plan): PlanFileView => {
+      const samePath = sources.filter((source) => source.path === plan.path);
+      const exacts = samePath.filter((source) => source.hash === plan.hash);
+      const moved = sources.filter((source) => source.hash === plan.hash);
+      const ignore = ignored.some((entry) => entry.path === plan.path || entry.hash === plan.hash);
+      const changedSinceImport = samePath.length > 0 && exacts.length === 0;
+      const state: PlanFileState = exacts.length > 0 ? "imported" : ignore ? "ignored" : changedSinceImport ? "changed" : moved.length > 0 ? "imported" : "new";
+      counts[state] += 1;
+      const chosen = exacts.at(-1) ?? samePath.at(-1) ?? moved.at(-1);
+      const same = exacts.length > 0 ? exacts : moved;
+      return { ...plan, state, idea: chosen?.idea ?? null, changedSinceImport, alsoImportedAs: same.filter((source) => source !== chosen).map((source) => source.idea) };
     });
-    return { idea: this.detail(id), rows: parsed.sections.breakdown.length, warnings: parsed.warnings };
+    return { paths, files, truncated: found.truncated, counts, unavailable: null };
+  }
+
+  private assertPlanFilesPerson(options: PlanWriteOptions, what: string): void {
+    if (!options.person) {
+      throw new StapleError("validation", `${what} is the person's: the Plan view's Plan files, or staple idea files with --person. Nothing is imported on its own.`);
+    }
+  }
+
+  /** A listed plan file by its path as spelled, else by the one path that matches it in any case. */
+  private listed(view: PlanFilesView, path: string): PlanFileView | undefined {
+    const exact = view.files.find((file) => file.path === path);
+    if (exact) return exact;
+    const loose = view.files.filter((file) => file.path.toLowerCase() === path.toLowerCase());
+    return loose.length === 1 ? loose[0] : undefined;
+  }
+
+  private discovered(root: string | null, path: string): PlanFileView | undefined {
+    if (root === null) throw new StapleError("validation", "This workspace is not inside a repository, so there are no plan files to import or ignore.");
+    return this.listed(this.discoverFiles(root), path);
+  }
+
+  /**
+   * Import the plan files the person picked, one or many, all or none: each must be one discovery
+   * finds now (no other file is read), importable, and not already imported as it stands. Each
+   * becomes an idea like an uploaded file does, with its original and, for a folder, every file
+   * in it under Files, and remembers where it came from. Importing a file ends its ignore.
+   */
+  importDiscovered(
+    root: string | null,
+    paths: readonly string[],
+    input: { horizon?: string | null; maturity?: string },
+    actor: string | null,
+    options: PlanWriteOptions = {},
+  ): { imported: Array<{ path: string; idea: ImportSource["idea"] }>; files: PlanFilesView } {
+    this.assertEnabled();
+    this.assertPlanFilesPerson(options, "Importing plan files");
+    const wanted = [...new Set(paths.map(normalizeDiscoveryPath).filter((path) => path !== ""))];
+    if (wanted.length === 0) throw new StapleError("validation", "Name at least one plan file to import.");
+    if (root === null) throw new StapleError("validation", "This workspace is not inside a repository, so there are no plan files to import.");
+    const view = this.discoverFiles(root);
+    const picked = wanted.map((path) => {
+      const file = this.listed(view, path);
+      if (file === undefined) {
+        throw new StapleError("not_found", `"${path}" is not a plan file this workspace finds. staple idea files lists them; the paths it looks in are the plan.discoveryPaths setting.`, { path });
+      }
+      if (file.problem !== null) throw new StapleError("validation", `"${path}" cannot be imported: ${file.problem}.`, { path });
+      if (file.state === "imported") {
+        throw new StapleError("validation", `"${path}" is already imported, as ${file.idea?.identifier ?? file.idea?.number ?? file.idea?.title}.`, { path, idea: file.idea });
+      }
+      return file;
+    });
+    const realRoot = realpathSync(root);
+    const reads = [...new Map(picked.map((file) => [file.path, file])).values()].map((file) => {
+      // Read only inside the root, through no link, and only what discovery hashed a moment ago.
+      const bytesOf = (path: string) => {
+        const real = realpathSync(join(root, path));
+        if (real !== join(realRoot, path)) throw new StapleError("validation", `"${path}" is reached through a link, so it is not imported.`, { path });
+        return new Uint8Array(readFileSync(real));
+      };
+      const contents = new Map(file.files.map((path) => [path, bytesOf(path)]));
+      if (planHashOf(file, contents) !== file.hash) throw new StapleError("conflict", `"${file.path}" changed while it was being imported. Look again, then import it.`, { path: file.path });
+      const ext = file.main.slice(file.main.lastIndexOf("."));
+      const name = cleanFilename(file.main.split("/").pop()!);
+      // A folder's idea is titled for the folder when its main file has no title of its own.
+      const read = readImportFile(file.kind === "folder" ? `${file.path.split("/").pop()}${ext}` : name, contents.get(file.main)!);
+      return { file, name, read, others: file.files.filter((path) => path !== file.main).map((path) => ({ path, bytes: contents.get(path)! })) };
+    });
+    const ids = this.store.journaled(() => {
+      const out = reads.map(({ file, name, read, others }) => ({
+        path: file.path,
+        id: this.importRead(name, read, input, actor, options, { path: file.path, main: file.main, hash: file.hash, others }),
+      }));
+      for (const entry of this.store.ignoredPlanFiles()) {
+        if (picked.some((file) => entry.path === file.path || entry.hash === file.hash)) this.store.setIgnoredPlanFile(entry, false, actor);
+      }
+      return out;
+    });
+    const files = this.discoverFiles(root);
+    const ideas = new Map(this.importSources().map((source) => [source.idea.id, source.idea]));
+    return { imported: ids.map(({ path, id }) => ({ path, idea: ideas.get(id)! })), files };
+  }
+
+  /**
+   * Ignore a discovered plan file, or stop ignoring one: the person's, kept by path and content
+   * hash in the synchronized `plan.ignoredFiles`. An ignored file stays listed as ignored, and is
+   * never imported unless the person imports it. Stopping an ignore takes a path that is no
+   * longer found, too.
+   */
+  ignoreDiscovered(root: string | null, path: string, ignore: boolean, actor: string | null, options: PlanWriteOptions = {}): PlanFilesView {
+    this.assertEnabled();
+    this.assertPlanFilesPerson(options, ignore ? "Ignoring plan files" : "Ending an ignore");
+    const clean = normalizeDiscoveryPath(path);
+    const file = this.discovered(root, clean);
+    this.store.journaled(() => {
+      if (ignore) {
+        if (file === undefined) throw new StapleError("not_found", `"${clean}" is not a plan file this workspace finds, so there is nothing to ignore.`, { path: clean });
+        this.store.setIgnoredPlanFile({ path: file.path, hash: file.hash }, true, actor);
+        return;
+      }
+      const at = file?.path ?? clean;
+      for (const entry of this.store.ignoredPlanFiles()) {
+        if (entry.path === at || (file !== undefined && entry.hash === file.hash)) this.store.setIgnoredPlanFile(entry, false, actor);
+      }
+    });
+    return this.discoverFiles(root);
   }
 
   // ---------- Scaffold: promote, and the breakdown becomes the epic's tasks ----------

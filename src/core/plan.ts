@@ -285,6 +285,14 @@ export const SHAPE_PROPOSAL_KEY = "shape-proposal";
 export const CLASSIFY_KEY = "classify";
 
 /**
+ * Where an idea imported from the workspace's plan files came from: a JSON body naming the
+ * repo-relative path, the content hash it had then and every file attached with it. Written only
+ * by that import. It is how the Plan files tray tells imported from changed since import, on every
+ * device, since documents synchronize.
+ */
+export const IMPORT_SOURCE_KEY = "import-source";
+
+/**
  * The day a delivered-outside-the-tracker mark names: required, a calendar day, and not after
  * `today` (work is marked once it was delivered, not before).
  */

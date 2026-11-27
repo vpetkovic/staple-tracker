@@ -315,6 +315,53 @@ export interface PlanWriteResult {
   idea: IdeaDetailData | null;
 }
 
+/** What a discovered plan file is to the tracker (`PlanFileState` in plan-store.ts). */
+export type PlanFileState = "new" | "imported" | "changed" | "ignored";
+
+/** The idea a plan file was imported as. */
+export interface PlanFileIdea {
+  id: string;
+  number: string | null;
+  identifier: string | null;
+  title: string;
+}
+
+/** One plan file under the workspace root (`PlanFileView`): a file, or a folder with assets imported as one. */
+export interface PlanFileData {
+  path: string;
+  kind: "file" | "folder";
+  main: string;
+  files: string[];
+  format: "markdown" | "html" | "jsx";
+  title: string;
+  status: string | null;
+  done: boolean;
+  hash: string;
+  bytes: number;
+  problem: string | null;
+  state: PlanFileState;
+  idea: PlanFileIdea | null;
+  /** An idea came from this path and the file has changed since (an ignored file can be both). */
+  changedSinceImport: boolean;
+  /** Other ideas imported from the same file as it stands. */
+  alsoImportedAs: PlanFileIdea[];
+}
+
+/** The Plan files tray (`PlanFilesView`): where it looks, what it found, how many of each. */
+export interface PlanFilesData {
+  paths: string[];
+  files: PlanFileData[];
+  truncated: boolean;
+  counts: Record<PlanFileState, number>;
+  unavailable: string | null;
+}
+
+/** What an import or an ignore from the tray answers: the plan, and the tray as it now reads. */
+export interface PlanFilesWriteResult extends PlanWriteResult {
+  files: PlanFilesData;
+  imported?: Array<{ path: string; idea: PlanFileIdea }>;
+}
+
 /**
  * Whether a reference names this record by its idea number: `I-STA-12` in any case, or the short
  * `I-12` its own workspace takes (`src/core/idea-numbers.ts`).

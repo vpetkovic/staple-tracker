@@ -1297,6 +1297,18 @@ The plan (experimental; features.planning defaults off)
               maturity past raw, and is named by its identifier); with no --maturity it
               waits to be classified: its step asks an agent to read the file, fill the
               plan and propose it shaped, or leave it raw with idea set --classified
+  idea files [--json]                   plan files under the workspace root: Markdown in the root
+              and everything under plans/ (in any case), or what the plan.discoveryPaths
+              setting names; README, AGENTS, CLAUDE, CHANGELOG and their kind, _ templates,
+              assets/ and handoffs are left out, and a folder with assets/ is one plan.
+              Each reads new, imported, changed since import or ignored (by path and
+              content hash), and done when its status or folder says so. Lists only:
+              nothing is imported on its own
+  idea files import <path>... [--maturity M] [--horizon H] --person
+              import one or many listed plan files, all or none, each as an idea with its
+              original (a folder: every file in it) under Files; the person's
+  idea files ignore|unignore <path> --person
+              stop listing a plan file as new, or list it again; the person's
   idea set <ref> [--title T] [--brief T]
               the agent's edits; with --person also --maturity raw|exploring|shaped|dropped,
               --horizon H|none, --parent REF|none, --start D|none, --target D|none,
