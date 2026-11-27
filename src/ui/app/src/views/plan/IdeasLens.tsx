@@ -360,8 +360,9 @@ function ExploringCard({ plan, entry, column, columns, write, onOpen, selected, 
         {horizon ? <HorizonChip label={`${horizon.name}${horizon.date ? ` · ${dayLabel(horizon.date, false)}` : ""}`} /> : null}
         <span className="ms-auto flex items-center gap-1">
           {shape?.ready ? (
-            <Button size="sm" className="-my-1 h-7 px-2.5 text-label" aria-label={`Mark ${idea.title} shaped`} onClick={runItem(shape.item, write)} onKeyDown={(event) => event.stopPropagation()} data-plan-action="shape">
-              Mark shaped
+            // With an agent's proposal standing, the same Mark shaped accepts it, and says so.
+            <Button size="sm" className="-my-1 h-7 px-2.5 text-label" aria-label={`${idea.shapeProposal ? "Accept" : "Mark"} ${idea.title} shaped`} onClick={runItem(shape.item, write)} onKeyDown={(event) => event.stopPropagation()} data-plan-action="shape">
+              {idea.shapeProposal ? "Accept shaped" : "Mark shaped"}
             </Button>
           ) : null}
           <RowMenu idea={idea} column={column} columns={columns} write={write} />
