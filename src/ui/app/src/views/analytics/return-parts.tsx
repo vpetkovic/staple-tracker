@@ -8,7 +8,8 @@
 import { CircleDashed, Plus } from "lucide-react";
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
-import type { Billing, CostModel, CostRole, ReturnReport, RoleMatch } from "./proto-api";
+import type { Billing, CostModel, CostProfile, CostRole, ReturnReport, RoleMatch, Scenario, SpendLine } from "./proto-api";
+import { profileOf } from "./return-model";
 
 export interface ReturnProps {
   returns: ReturnReport | undefined;
@@ -21,36 +22,42 @@ export interface ReturnProps {
 
 // ---------------------------------------------------------------- edits (pure)
 
-const settle = (model: CostModel, ...paths: string[]): string[] => model.assumed.filter((path) => !paths.includes(path));
+/** Change the profile in use, leaving the other one alone; `settled` figures stop being assumptions. */
+function inProfile(model: CostModel, change: (profile: CostProfile) => Partial<CostProfile>, ...settled: string[]): CostModel {
+  const profile = profileOf(model);
+  return { ...model, profiles: { ...model.profiles, [model.scenario]: { ...profile, ...change(profile), assumed: profile.assumed.filter((path) => !settled.includes(path)) } } };
+}
 
 export const edits = {
-  scenario: (model: CostModel, scenario: CostModel["scenario"]): CostModel => ({ ...model, scenario }),
-  personRate: (model: CostModel, rate: number): CostModel => ({ ...model, person: { ...model.person, rate }, assumed: settle(model, "person.rate") }),
-  personHours: (model: CostModel, hoursPerActiveDay: number): CostModel => ({ ...model, person: { ...model.person, hoursPerActiveDay }, assumed: settle(model, "person.hoursPerActiveDay") }),
-  spendAmount: (model: CostModel, id: string, perMonth: number): CostModel => ({ ...model, spend: model.spend.map((line) => (line.id === id ? { ...line, perMonth } : line)), assumed: settle(model, "spend") }),
-  spendLabel: (model: CostModel, id: string, label: string): CostModel => ({ ...model, spend: model.spend.map((line) => (line.id === id ? { ...line, label } : line)) }),
-  spendAdd: (model: CostModel): CostModel => ({ ...model, spend: [...model.spend, { id: `spend-${Date.now().toString(36)}`, label: "Another subscription", perMonth: 0 }], assumed: settle(model, "spend") }),
-  spendRemove: (model: CostModel, id: string): CostModel => ({ ...model, spend: model.spend.filter((line) => line.id !== id), assumed: settle(model, "spend") }),
-  apiBill: (model: CostModel, apiPerMonth: number): CostModel => ({ ...model, apiPerMonth, assumed: settle(model, "api") }),
-  roleRate: (model: CostModel, id: string, rate: number): CostModel => ({ ...model, roles: model.roles.map((role) => (role.id === id ? { ...role, rate } : role)), assumed: settle(model, `roles.${id}.rate`) }),
+  /** Switch profile. Nothing is copied: each payer keeps its own figures. */
+  scenario: (model: CostModel, scenario: Scenario): CostModel => ({ ...model, scenario }),
+  personRate: (model: CostModel, rate: number): CostModel => inProfile(model, (profile) => ({ person: { ...profile.person, rate } }), "person.rate"),
+  personHours: (model: CostModel, hoursPerActiveDay: number): CostModel => inProfile(model, (profile) => ({ person: { ...profile.person, hoursPerActiveDay } }), "person.hoursPerActiveDay"),
+  spendLine: (model: CostModel, id: string, patch: Partial<SpendLine>): CostModel => inProfile(model, (profile) => ({ spend: profile.spend.map((line) => (line.id === id ? { ...line, ...patch } : line)) }), ...("label" in patch ? [] : ["spend"])),
+  spendAdd: (model: CostModel): CostModel => inProfile(model, (profile) => ({ spend: [...profile.spend, { id: `spend-${Date.now().toString(36)}`, label: "Subscription", perMonth: 0, quantity: 1 }] }), "spend"),
+  spendRemove: (model: CostModel, id: string): CostModel => inProfile(model, (profile) => ({ spend: profile.spend.filter((line) => line.id !== id) }), "spend"),
+  apiBill: (model: CostModel, apiPerMonth: number): CostModel => inProfile(model, () => ({ apiPerMonth }), "api"),
+  roleRate: (model: CostModel, id: string, rate: number): CostModel => inProfile(model, (profile) => ({ rates: { ...profile.rates, [id]: rate } }), `roles.${id}.rate`),
+  roleBilling: (model: CostModel, id: string, billing: Billing): CostModel => inProfile(model, (profile) => ({ billing: { ...profile.billing, [id]: billing } })),
+  // The role list and its rules are shared by both profiles: the work is the same whoever pays.
   roleTitle: (model: CostModel, id: string, title: string): CostModel => ({ ...model, roles: model.roles.map((role) => (role.id === id ? { ...role, title } : role)) }),
-  roleBilling: (model: CostModel, id: string, billing: Billing): CostModel => ({ ...model, roles: model.roles.map((role) => (role.id === id ? { ...role, billing } : role)) }),
-  roleMatch: (model: CostModel, id: string, match: RoleMatch): CostModel => ({ ...model, roles: model.roles.map((role) => (role.id === id ? { ...role, match } : role)), assumed: settle(model, "roles") }),
+  roleMatch: (model: CostModel, id: string, match: RoleMatch): CostModel => ({ ...model, roles: model.roles.map((role) => (role.id === id ? { ...role, match } : role)) }),
   /** A new role goes in ahead of the catch-all, which stays last. */
   roleAdd: (model: CostModel): CostModel => {
-    const role: CostRole = { id: `role-${Date.now().toString(36)}`, title: "New role", rate: model.roles[model.roles.length - 1]?.rate ?? 100, match: { labels: [], kinds: [], title: [], agent: [], workspaces: [] } };
-    return { ...model, roles: [...model.roles.slice(0, -1), role, ...model.roles.slice(-1)], assumed: settle(model, "roles") };
+    const role: CostRole = { id: `role-${Date.now().toString(36)}`, title: "New role", match: { labels: [], kinds: [], title: [], agent: [], workspaces: [] } };
+    return { ...model, roles: [...model.roles.slice(0, -1), role, ...model.roles.slice(-1)] };
   },
-  roleRemove: (model: CostModel, id: string): CostModel => ({ ...model, roles: model.roles.filter((role) => role.id !== id), assumed: settle(model, "roles") }),
+  roleRemove: (model: CostModel, id: string): CostModel => ({ ...model, roles: model.roles.filter((role) => role.id !== id) }),
 };
 
-/** What the still-default figures are called, for the notice that lists them. */
+/** What the still-default figures of the profile in use are called, for the notice that lists them. */
 export function assumedWords(model: CostModel, whose: string): string[] {
+  const { assumed, spend } = profileOf(model);
   const words: string[] = [];
-  if (model.assumed.includes("person.rate")) words.push(`${whose} hourly rate`);
-  if (model.assumed.includes("person.hoursPerActiveDay")) words.push(`${whose} hours a day`);
-  if (model.assumed.includes("spend")) words.push("AI subscriptions");
-  if (model.assumed.some((path) => path.startsWith("roles.") && path.endsWith(".rate"))) words.push("role rates");
+  if (assumed.includes("person.rate")) words.push(`${whose} hourly rate`);
+  if (assumed.includes("person.hoursPerActiveDay")) words.push(`${whose} hours a day`);
+  if (assumed.includes("spend") && spend.length > 0) words.push("AI subscriptions");
+  if (model.roles.some((role) => assumed.includes(`roles.${role.id}.rate`))) words.push("role rates");
   return words;
 }
 

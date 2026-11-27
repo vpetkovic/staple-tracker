@@ -18,7 +18,7 @@
  * Spend and directing time belong to the person, not to a workspace: a single-workspace view
  * takes the share of both that matches its share of agent time.
  */
-import type { Billing, CostModel, ReturnReport } from "./proto-api";
+import type { Billing, CostModel, CostProfile, ReturnReport } from "./proto-api";
 
 export interface RoleLine {
   roleId: string;
@@ -53,6 +53,8 @@ export interface ReturnResult {
   apiSpend: number;
   aiSpend: number;
   cost: number;
+  /** Spend of a kind that no role with agent time is billed by: counted in the total, shown as its own line. */
+  unallocated: Record<Billing, number>;
   /** Roles billed by API while no API bill is entered: the AI cost is understated. */
   apiBillMissing: boolean;
   share: number;
@@ -65,36 +67,50 @@ export interface ReturnResult {
 
 const FTE_HOURS_PER_WEEK = 40;
 
-export function billingOf(model: CostModel, role: { billing?: Billing }): Billing {
-  return role.billing ?? (model.scenario === "company" ? "api" : "subscription");
+export const DEFAULT_RATE = 100;
+
+/** The figures of the profile in use. */
+export function profileOf(model: CostModel): CostProfile {
+  return model.profiles[model.scenario];
+}
+export function rateOf(model: CostModel, roleId: string): number {
+  return profileOf(model).rates[roleId] ?? DEFAULT_RATE;
+}
+export function billingOf(model: CostModel, roleId: string): Billing {
+  return profileOf(model).billing[roleId] ?? (model.scenario === "company" ? "api" : "subscription");
+}
+/** A subscription line's monthly cost: its price × how many are paid for. */
+export function lineCost(line: { perMonth: number; quantity: number }): number {
+  return line.perMonth * Math.max(0, line.quantity ?? 1);
 }
 
 export function computeReturn(report: ReturnReport, model: CostModel): ReturnResult {
   const share = report.share ?? 1;
   const months = report.period.months;
-  const subscriptionSpend = model.spend.reduce((sum, line) => sum + line.perMonth, 0) * months * share;
-  const apiSpend = (model.apiPerMonth ?? 0) * months * share;
+  const profile = profileOf(model);
+  const subscriptionSpend = profile.spend.reduce((sum, line) => sum + lineCost(line), 0) * months * share;
+  const apiSpend = (profile.apiPerMonth ?? 0) * months * share;
   const base = model.roles.map((role) => {
     const hours = report.roles.find((row) => row.roleId === role.id);
-    return { role, billing: billingOf(model, role), measuredHours: hours?.measuredHours ?? 0, plannedHours: hours?.plannedHours ?? 0, tickets: hours?.tickets ?? 0, estimatedTickets: hours?.estimatedTickets ?? 0 };
+    return { role, rate: rateOf(model, role.id), billing: billingOf(model, role.id), measuredHours: hours?.measuredHours ?? 0, plannedHours: hours?.plannedHours ?? 0, tickets: hours?.tickets ?? 0, estimatedTickets: hours?.estimatedTickets ?? 0 };
   });
   const hoursBilled = (kind: Billing) => base.filter((row) => row.billing === kind).reduce((sum, row) => sum + row.measuredHours, 0);
   const pool: Record<Billing, { spend: number; hours: number }> = { subscription: { spend: subscriptionSpend, hours: hoursBilled("subscription") }, api: { spend: apiSpend, hours: hoursBilled("api") } };
-  const roles: RoleLine[] = base.map(({ role, billing, measuredHours, plannedHours, tickets, estimatedTickets }) => ({
+  const roles: RoleLine[] = base.map(({ role, rate, billing, measuredHours, plannedHours, tickets, estimatedTickets }) => ({
     roleId: role.id,
     title: role.title,
-    rate: role.rate,
+    rate,
     billing,
     measuredHours,
     plannedHours,
-    measuredValue: measuredHours * role.rate,
-    plannedValue: plannedHours * role.rate,
+    measuredValue: measuredHours * rate,
+    plannedValue: plannedHours * rate,
     aiCost: pool[billing].hours > 0 ? (pool[billing].spend * measuredHours) / pool[billing].hours : 0,
     tickets,
     estimatedTickets,
   }));
-  const directingHours = report.directing.activeDays * model.person.hoursPerActiveDay * share;
-  const personCost = directingHours * model.person.rate;
+  const directingHours = report.directing.activeDays * profile.person.hoursPerActiveDay * share;
+  const personCost = directingHours * profile.person.rate;
   const aiSpend = subscriptionSpend + apiSpend;
   const cost = aiSpend + personCost;
   const weeks = report.period.days / 7;
@@ -116,7 +132,8 @@ export function computeReturn(report: ReturnReport, model: CostModel): ReturnRes
     apiSpend,
     aiSpend,
     cost,
-    apiBillMissing: pool.api.hours > 0 && (model.apiPerMonth ?? 0) <= 0,
+    unallocated: { subscription: pool.subscription.hours > 0 ? 0 : subscriptionSpend, api: pool.api.hours > 0 ? 0 : apiSpend },
+    apiBillMissing: pool.api.hours > 0 && (profile.apiPerMonth ?? 0) <= 0,
     share,
     measured: side(measuredHours, roles.reduce((sum, role) => sum + role.measuredValue, 0)),
     planned: plannedHours > 0 ? side(plannedHours, roles.reduce((sum, role) => sum + role.plannedValue, 0)) : null,

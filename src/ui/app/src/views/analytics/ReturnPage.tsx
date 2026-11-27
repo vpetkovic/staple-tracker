@@ -21,10 +21,10 @@ import { HelpToggle, ShowDetails } from "@/components/plain/PlainCard";
 import { ProblemState } from "@/components/plain/States";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
-import { CostSetupDialog } from "./CostSetupDialog";
+import { CostSetupDialog, SCENARIOS } from "./CostSetupDialog";
 import type { CostModel, ReturnReport } from "./proto-api";
-import { AssumedTag, RoleDetail, assumedWords, coversWords, type ReturnProps } from "./return-parts";
-import { computeReturn, scenarioWords, type ReturnResult } from "./return-model";
+import { AssumedTag, RoleDetail, Segmented, assumedWords, coversWords, edits, type ReturnProps } from "./return-parts";
+import { computeReturn, profileOf, scenarioWords, type ReturnResult } from "./return-model";
 
 export function ReturnPage({ returns, model, error, onRetry, onChange, saving }: ReturnProps) {
   const [setup, setSetup] = useState(false);
@@ -33,7 +33,7 @@ export function ReturnPage({ returns, model, error, onRetry, onChange, saving }:
   const result = computeReturn(returns, model);
   return (
     <div className="flex flex-col gap-5" data-return>
-      <Answer returns={returns} model={model} result={result} onSetup={() => setSetup(true)} />
+      <Answer returns={returns} model={model} result={result} onChange={onChange} onSetup={() => setSetup(true)} />
       <Figures returns={returns} model={model} result={result} />
       <RoleByRole returns={returns} model={model} result={result} onChange={onChange} onSetup={() => setSetup(true)} />
       <ReturnMethod returns={returns} result={result} />
@@ -54,7 +54,7 @@ function verdictOf(result: ReturnResult): Verdict | null {
   return { tone: "risk", icon: OctagonAlert, word: "Cost more than it returned" };
 }
 
-function Answer({ returns, model, result, onSetup }: { returns: ReturnReport; model: CostModel; result: ReturnResult; onSetup: () => void }) {
+function Answer({ returns, model, result, onChange, onSetup }: { returns: ReturnReport; model: CostModel; result: ReturnResult; onChange: ReturnProps["onChange"]; onSetup: () => void }) {
   const money = (value: number) => formatMoney(value, model.currency);
   const words = scenarioWords(model.scenario);
   const low = result.measured;
@@ -70,7 +70,8 @@ function Answer({ returns, model, result, onSetup }: { returns: ReturnReport; mo
           Return on total cost · {formatDayRange(returns.period.from, returns.period.to)} · {scope}
         </p>
         <div className="flex items-center gap-2">
-          <span className="text-label text-muted-foreground">Who pays: {words.label.toLowerCase()}</span>
+          <span className="text-label text-muted-foreground max-sm:hidden">Profile</span>
+          <Segmented label="Profile: who pays" value={model.scenario} options={SCENARIOS} onChange={(scenario) => onChange(edits.scenario(model, scenario))} />
           <button type="button" onClick={onSetup} className="focus-ring relative inline-flex h-control-md min-h-0 items-center gap-1.5 rounded-md border bg-card px-2.5 text-body font-medium transition-colors before:absolute before:-inset-y-1 before:inset-x-0 before:content-[''] hover:bg-surface-hover max-md:h-[30px]" data-cost-setup>
             <Settings2 aria-hidden className="size-3.5 text-text-tertiary" />
             Cost setup
@@ -191,7 +192,8 @@ function RoleByRole({ returns, model, result, onChange, onSetup }: { returns: Re
   const words = scenarioWords(model.scenario);
   const high = result.planned;
   const [open, setOpen] = useState<string | null>(null);
-  const rateAssumed = model.assumed.includes("person.rate") || model.assumed.includes("person.hoursPerActiveDay");
+  const profile = profileOf(model);
+  const rateAssumed = profile.assumed.includes("person.rate") || profile.assumed.includes("person.hoursPerActiveDay");
   return (
     <section aria-label="Role by role" className="@container/roles rounded-xl border bg-card p-4" data-role-table>
       <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1">
@@ -225,7 +227,7 @@ function RoleByRole({ returns, model, result, onChange, onSetup }: { returns: Re
                 </div>
                 <Cell caption="Rate" className="@max-[760px]/roles:order-3">
                   <span className="font-medium">{model.currency}{role.rate}<span className="font-normal text-muted-foreground">/h</span></span>
-                  {model.assumed.includes(`roles.${role.roleId}.rate`) ? <AssumedDot /> : null}
+                  {profile.assumed.includes(`roles.${role.roleId}.rate`) ? <AssumedDot /> : null}
                 </Cell>
                 <Cell caption="To hire, by agent time" className="@max-[760px]/roles:order-4"><Pair hours={role.measuredHours} value={money(role.measuredValue)} /></Cell>
                 <Cell caption="To hire, by planned effort" className="@max-[760px]/roles:order-5"><Pair hours={role.plannedHours} value={high ? money(role.plannedValue) : "—"} /></Cell>
@@ -252,11 +254,11 @@ function RoleByRole({ returns, model, result, onChange, onSetup }: { returns: Re
             <div className="min-w-0">
               <p className="truncate text-body font-medium">{words.person}, directing the agents</p>
               <p className="truncate text-label text-muted-foreground">
-                {formatEffortHours(result.directingHours)}: {returns.directing.activeDays} days agents ran × {model.person.hoursPerActiveDay} h a day{result.share < 1 ? ` × ${formatPercent(result.share)} of agent time` : ""}
+                {formatEffortHours(result.directingHours)}: {returns.directing.activeDays} days agents ran × {profile.person.hoursPerActiveDay} h a day{result.share < 1 ? ` × ${formatPercent(result.share)} of agent time` : ""}
               </p>
             </div>
             <Cell caption="Rate" className="@max-[760px]/roles:order-3">
-              <span className="font-medium">{model.currency}{model.person.rate}<span className="font-normal text-muted-foreground">/h</span></span>
+              <span className="font-medium">{model.currency}{profile.person.rate}<span className="font-normal text-muted-foreground">/h</span></span>
               {rateAssumed ? <AssumedDot /> : null}
             </Cell>
             <span className="text-right text-muted-foreground @max-[760px]/roles:hidden">—</span>
@@ -265,6 +267,23 @@ function RoleByRole({ returns, model, result, onChange, onSetup }: { returns: Re
             <span className="@max-[760px]/roles:order-2" />
           </div>
         </li>
+        {(["subscription", "api"] as const).map((kind) =>
+          result.unallocated[kind] > 0 ? (
+            <li key={kind} className="border-b" data-unallocated={kind}>
+              <div className={cn(GRID, "py-2.5")}>
+                <div className="min-w-0">
+                  <p className="truncate text-body font-medium">{kind === "subscription" ? "Subscriptions" : "API bill"} no role is billed by</p>
+                  <p className="truncate text-label text-muted-foreground">Paid for in this profile, but every role with agent time is billed {kind === "subscription" ? "by API" : "by subscription"}.</p>
+                </div>
+                <span className="@max-[760px]/roles:hidden" />
+                <span className="text-right text-muted-foreground @max-[760px]/roles:hidden">—</span>
+                <span className="text-right text-muted-foreground @max-[760px]/roles:hidden">—</span>
+                <Cell caption="With AI" className="@max-[760px]/roles:order-6"><span className="font-medium">{money(result.unallocated[kind])}</span></Cell>
+                <span className="@max-[760px]/roles:order-2" />
+              </div>
+            </li>
+          ) : null,
+        )}
         <li>
           <div className={cn(GRID, "pt-2.5")}>
             <p className="text-body font-semibold">In total</p>

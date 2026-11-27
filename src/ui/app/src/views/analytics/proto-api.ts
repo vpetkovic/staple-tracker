@@ -126,26 +126,45 @@ export interface RoleMatch {
   workspaces: string[];
 }
 export type Billing = "subscription" | "api";
+export type Scenario = "solo" | "company";
+/** A role: who would have done the work, and the rule that sends tickets to it. Shared by both profiles. */
 export interface CostRole {
   id: string;
   title: string;
-  rate: number;
   match: RoleMatch;
-  /** How this role's agents are billed. Unset follows who pays: just me = subscription, a company = API. */
-  billing?: Billing;
 }
-export interface CostModel {
-  scenario: "solo" | "company";
-  currency: string;
+export interface SpendLine {
+  id: string;
+  label: string;
+  /** The price of ONE subscription a month. */
+  perMonth: number;
+  /** How many of them are paid for (seats). */
+  quantity: number;
+}
+/**
+ * One payer's figures. "Just me" and "A company" each keep their own, so setting up the company
+ * never disturbs your own numbers: the directing person's rate and hours, what each role costs to
+ * hire, how each role's agents are billed, the subscriptions and the API bill.
+ */
+export interface CostProfile {
   person: { rate: number; hoursPerActiveDay: number };
-  /** Flat monthly plans. */
-  spend: { id: string; label: string; perMonth: number }[];
+  /** Hourly rate per role id. */
+  rates: Record<string, number>;
+  /** How each role's agents are billed; a role not listed follows the profile (solo = subscription, company = API). */
+  billing: Record<string, Billing>;
+  spend: SpendLine[];
   /** The monthly API invoice, shared out over API-billed roles by their agent time. */
   apiPerMonth: number;
+  /** Figures still holding a shipped default, shown as assumptions until the person changes them. */
+  assumed: string[];
+}
+export interface CostModel {
+  /** The profile in use: who pays. */
+  scenario: Scenario;
+  currency: string;
   /** In match order; the last role takes everything no other role matched. */
   roles: CostRole[];
-  /** Fields still holding a shipped default, shown as assumptions until the person changes them. */
-  assumed: string[];
+  profiles: Record<Scenario, CostProfile>;
   updatedAt: string | null;
 }
 export interface RoleHours {

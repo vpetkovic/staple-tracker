@@ -20,7 +20,7 @@ import { StatTile } from "@/components/analytics/StatTile";
 import { Widget, type WidgetState } from "@/components/analytics/Widget";
 import { ShowDetails } from "@/components/plain/PlainCard";
 import type { AnalyticsReport, CostModel, ReturnReport, TrendBucket } from "./proto-api";
-import { computeReturn } from "./return-model";
+import { computeReturn, profileOf } from "./return-model";
 
 export interface OverviewProps {
   report: AnalyticsReport | undefined;
@@ -117,7 +117,7 @@ export function KpiRow({ report, returns, model, against, onOpenReturn, classNam
         loading={loading || returns === undefined}
         value={low !== null && high !== null ? `${formatMultiple(low).replace("×", "")}–${formatMultiple(high)}` : low !== null ? formatMultiple(low) : null}
         sentence={result ? <>Work returned for every 1 it cost, counted two ways.</> : null}
-        note={model && model.assumed.length > 0 ? "Default rates until you set yours" : undefined}
+        note={model && profileOf(model).assumed.length > 0 ? "Default rates until you set yours" : undefined}
         onOpen={onOpenReturn}
         openLabel="Open the return on AI spend"
         emptyText="Set rates and AI spend to see it"
