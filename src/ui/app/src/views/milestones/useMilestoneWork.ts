@@ -10,7 +10,8 @@
  *   with a Reload; any other error is the store's own sentence. A write's result IS the view,
  *   so the section is redrawn from it directly and the page fingerprint is bumped for the list.
  *
- * `ref` null reads nothing: a folded section that was never opened asks the server for nothing.
+ * `ref` null reads nothing: a folded section asks the server for nothing. A write in flight is
+ * not tied to the reads, and its failure is kept while `ref` is null, for when it reads again.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { personActor } from "@/detail/parts/person";
@@ -96,7 +97,12 @@ export function useMilestoneWork(
   const controller = useIssueActions(session.refresh, { workspaces: session.workspaces.map((w) => w.slug) });
   const milestoneIssue = issueRead.data && issueRead.data.issue.identifier === ref ? issueRead.data : null;
   useEffect(() => setWritten(null), [detail.data]);
+  // A failure and a written answer belong to their milestone: another one starts clean. A
+  // section that stops reading (`ref` null) keeps its failure for when it reads again.
+  const failureFor = useRef(ref);
   useEffect(() => {
+    if (ref === null || ref === failureFor.current) return;
+    failureFor.current = ref;
     setFailure(null);
     setWritten(null);
   }, [ref]);

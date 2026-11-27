@@ -4,8 +4,11 @@
  * when it is a horizon, and its work with the Add work line.
  *
  * The header renders from the list row alone, so a folded section asks the server for nothing
- * more. Its one-milestone reads (`useMilestoneWork`) start when it is unfolded, its `⋯` menu is
- * first opened, or it waits for an approval (its gate is the thing a person is asked to act on).
+ * more. Its one-milestone reads (`useMilestoneWork`) run only while something needs them: it is
+ * unfolded, its `⋯` menu (or the approval form the menu opened) is open, it waits for an approval
+ * (its gate is the thing a person is asked to act on), or one of its writes is in flight. Folded
+ * again, it reads nothing on a refresh. A write never depends on the reads: one that fails while
+ * the section is folded keeps its failure, shown when the section is next unfolded.
  *
  * The header's first line: the fold chevron, the glyph, the name (opens the drawer), the due
  * date with its calendar, then `Queued #n` or `Queue`, and `⋯`. The status control lives in the
@@ -165,10 +168,13 @@ export function OpenSection({
   sectionRef?: (element: HTMLElement | null) => void;
 }) {
   const { milestone } = row;
-  // Read once wanted, and keep reading: folding it again keeps what it shows ready.
-  const [wanted, setWanted] = useState(false);
-  if (!wanted && (!folded || milestone.status === "awaiting_approval")) setWanted(true);
-  const work = useMilestoneWork(workspace, wanted ? milestone.identifier : null, onAuthError, { startFolded: true, milestoneId: milestone.id });
+  // The menu or the approval form it opened is open, and one of its writes is in flight.
+  const [asking, setAsking] = useState(false);
+  const [writing, setWriting] = useState(false);
+  const reading = !folded || asking || writing || milestone.status === "awaiting_approval";
+  const work = useMilestoneWork(workspace, reading ? milestone.identifier : null, onAuthError, { startFolded: true, milestoneId: milestone.id });
+  const inFlight = work.busy || work.due.busy || (work.decision?.controller.busy ?? false);
+  if (inFlight !== writing) setWriting(inFlight);
   const queue = useSectionQueue(workspace, milestone.id, queueRevision);
   return (
     <SectionView
@@ -181,7 +187,7 @@ export function OpenSection({
       narrow={narrow}
       landed={landed}
       queue={queue}
-      onMenuOpen={() => setWanted(true)}
+      onAsking={setAsking}
       sectionRef={sectionRef}
     />
   );
@@ -198,7 +204,7 @@ export function SectionView({
   narrow,
   landed = false,
   queue,
-  onMenuOpen,
+  onAsking,
   sectionRef,
 }: {
   row: MilestoneListRow;
@@ -210,10 +216,14 @@ export function SectionView({
   narrow: boolean;
   landed?: boolean;
   queue: SectionQueue;
-  onMenuOpen?: () => void;
+  /** Its `⋯` menu, or the approval form the menu opened, is open (true) or closed again. */
+  onAsking?: (asking: boolean) => void;
   sectionRef?: (element: HTMLElement | null) => void;
 }) {
   const [requestOpen, setRequestOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const asking = menuOpen || requestOpen;
+  useEffect(() => onAsking?.(asking), [asking, onAsking]);
   const [dueOpen, setDueOpen] = useState(false);
   const sentinel = useRef<HTMLSpanElement>(null);
   const stuck = useStuck(sentinel);
@@ -299,7 +309,7 @@ export function SectionView({
               folded={folded}
               queued={queued}
               queue={queue}
-              onOpenMenu={onMenuOpen}
+              onOpenChange={setMenuOpen}
               onOpenDetails={() => work.onOpen("", milestone.identifier)}
               onChangeDue={() => setDueOpen(true)}
               onRequestApproval={() => setRequestOpen(true)}
@@ -332,7 +342,7 @@ function SectionMenu({
   folded,
   queued,
   queue,
-  onOpenMenu,
+  onOpenChange,
   onOpenDetails,
   onChangeDue,
   onRequestApproval,
@@ -345,7 +355,7 @@ function SectionMenu({
   folded: boolean;
   queued: boolean;
   queue: SectionQueue;
-  onOpenMenu?: () => void;
+  onOpenChange: (open: boolean) => void;
   onOpenDetails: () => void;
   onChangeDue: () => void;
   onRequestApproval: () => void;
@@ -353,6 +363,7 @@ function SectionMenu({
 }) {
   const [open, setOpen] = useState(false);
   useBackToClose(open, () => setOpen(false));
+  useEffect(() => onOpenChange(open), [open, onOpenChange]);
   // The due field and the approval form take the focus; giving it back to `⋯` would close them.
   const handingFocus = useRef(false);
   const handOver = (next: () => void) => () => {
@@ -362,10 +373,7 @@ function SectionMenu({
   return (
     <DropdownMenu
       open={open}
-      onOpenChange={(next) => {
-        if (next) onOpenMenu?.();
-        setOpen(next);
-      }}
+      onOpenChange={setOpen}
     >
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" size="icon" className={cn("size-7 text-text-tertiary @max-[760px]/ms:-my-2", TAP_28)} aria-label={`${title} options`} data-milestone-menu={identifier}>

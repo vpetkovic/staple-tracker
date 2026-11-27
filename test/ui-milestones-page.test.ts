@@ -365,6 +365,73 @@ describe.skipIf(Boolean(reason))("the Milestones page, pressed in a real browser
     await context.close();
   });
 
+  it("asks the server nothing for a folded section, also one read before, and two reads when it is unfolded", async () => {
+    const { page, context } = await open("");
+    /** The one-milestone reads, by the reference each names. */
+    const reads: string[] = [];
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      if (url.pathname === "/api/milestone" || url.pathname === "/api/issue") reads.push(`${url.pathname} ${url.searchParams.get("ref")}`);
+    });
+    // The page refreshes everything it reads after any of its writes: here the queue's, which is
+    // not one of the section's own. Queue a milestone, then take it off again.
+    const refresh = async (item: "queue" | "dequeue") => {
+      const listed = page.waitForRequest((request) => new URL(request.url()).pathname === "/api/milestones", { timeout: 6000 });
+      if (item === "queue") await section(page, refs.carried!).locator("[data-milestone-queue]").click();
+      else {
+        await section(page, refs.carried!).locator("[data-milestone-menu]").click();
+        await page.locator('[role=menu] [data-menu-item="dequeue"]').click();
+      }
+      await listed;
+      await page.waitForTimeout(800);
+    };
+    // A milestone waiting for approval reads while folded: its gate is shown.
+    const rows = await get<Array<{ milestone: { identifier: string; status: string; state: string } }>>(`/api/milestones?ws=${WS}`);
+    const waiting = new Set(rows.filter((row) => row.milestone.status === "awaiting_approval").map((row) => row.milestone.identifier));
+    const others = () => reads.filter((read) => !waiting.has(read.split(" ")[1]!));
+    // Read once, then folded again; then every section folded.
+    expect(await section(page, refs.plan!).getAttribute("data-milestone-folded")).toBeNull();
+    await section(page, refs.plan!).locator("[data-milestone-fold]").click();
+    await page.locator('[data-milestones-fold-all="collapse"]').click();
+    await page.waitForTimeout(300);
+    reads.length = 0;
+    await refresh("queue");
+    expect(others()).toEqual([]);
+    // Unfolding one reads that one milestone, once each.
+    await section(page, refs.order!).locator("[data-milestone-fold]").click();
+    await page.waitForTimeout(800);
+    expect(others().sort()).toEqual([`/api/issue ${refs.order}`, `/api/milestone ${refs.order}`]);
+    // Its menu reads it while open (the menu's Status needs it); the others stay quiet.
+    reads.length = 0;
+    await refresh("dequeue");
+    expect(others().filter((read) => !read.endsWith(` ${refs.order}`) && !read.endsWith(` ${refs.carried}`))).toEqual([]);
+    await context.close();
+  });
+
+  it("finishes a write the section was folded during, and shows its failure when it is unfolded", async () => {
+    const { page, context } = await open(refs.order!);
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let sent = 0;
+    await page.route("**/api/milestone/reorder", async (route) => {
+      sent++;
+      await held;
+      await route.fulfill({ status: 422, contentType: "application/json", body: JSON.stringify({ error: "Refused while folded.", message: "Refused while folded.", code: "validation", retryable: false }) });
+    });
+    const it_ = section(page, refs.order!);
+    await it_.locator(`[data-member-actions="${refs.first}"]`).click();
+    await page.locator('[role=menu] [data-menu-item="down"]').click();
+    await it_.locator("[data-milestone-fold]").click();
+    expect(await it_.getAttribute("data-milestone-folded")).toBe("");
+    release();
+    await page.waitForTimeout(800);
+    expect(sent).toBe(1);
+    await it_.locator("[data-milestone-fold]").click();
+    await page.waitForTimeout(800);
+    expect(await it_.locator("[data-guard-refusal]").innerText({ timeout: 3000 })).toContain("Refused while folded.");
+    await context.close();
+  });
+
   it("approves the milestone's gate from the page, signed by the person, and the status follows", async () => {
     const { page, context } = await open(refs.gated!);
     const gated = section(page, refs.gated!);
