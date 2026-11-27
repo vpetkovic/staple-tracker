@@ -5,7 +5,7 @@
  * store's answer. `queue-words.test.ts` pins them.
  */
 import type { SelectOption } from "@/components/ui/searchable-select";
-import { formatAgo, STALE_CLAIM_SECONDS } from "@/lib/claim";
+import { formatAgo, isStaleClaim } from "@/lib/claim";
 import type { EffectiveQueueRow, IssueKind, IssueRow, IssueStatus, QueueEntry, QueueView } from "@/lib/types";
 import { blockersOf } from "./queue-model";
 import { BUCKET_OF, type QueueBucket } from "./queue-summary";
@@ -117,8 +117,8 @@ export function rowState(row: EffectiveQueueRow): RowState {
     case "claimed": {
       const { holder, idle } = holderOf(row);
       const name = holder ?? "an agent";
-      // `isStaleClaim`'s threshold, applied to the detail's reading too when no live claim came.
-      const quiet = idle !== null && idle >= STALE_CLAIM_SECONDS ? `quiet ${formatAgo(idle)}` : undefined;
+      // The app's stale-claim rule, applied to the detail's reading too when no live claim came.
+      const quiet = idle !== null && isStaleClaim({ idleSeconds: idle }) ? `quiet ${formatAgo(idle)}` : undefined;
       return {
         tone: "active",
         words: `Working · ${name}${quiet ? ` · ${quiet}` : ""}`,
