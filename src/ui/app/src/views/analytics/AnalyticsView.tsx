@@ -10,10 +10,13 @@
  * On a phone the lenses and both filters live in the shell's header row, beside the page name,
  * and stay there while the page scrolls. Switching lens keeps each lens's own scroll position.
  *
- * The data comes from `proto-api.ts` until the engineering track's hooks land.
+ * Every lens reads the real routes for one query (`period.ts`, `toQuery`): the shell reads
+ * `/api/analytics` (`useAnalytics`) for the period picker and the empty state, and the Overview
+ * adds `/api/analytics/roi` (`useRoi`) for its Return tile. A new period or workspace keeps the
+ * previous figures on screen, dimmed, until the new ones land.
  */
 import { CalendarRange, Check, ChevronDown, Layers } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import "@/components/analytics/analytics.css";
 import { formatDayRange } from "@/components/analytics/format";
@@ -22,15 +25,16 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenu
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tabs } from "@/components/ui/tabs";
 import { DetailTabStrip } from "@/detail/tabs/DetailTabStrip";
+import type { AnalyticsQuery, AnalyticsReport } from "@/lib/analytics-api";
 import type { AuthError } from "@/lib/api";
-import { afterHistorySettles, replaceUrl } from "@/lib/back-to-close";
-import { useSession } from "@/lib/session";
-import { useResource } from "@/lib/useStaple";
+import { replaceUrl, whenHistoryIsFree } from "@/lib/back-to-close";
+import { useSession, type AnalyticsLanding } from "@/lib/session";
+import { useAnalytics, useRoi } from "@/lib/use-analytics";
 import { cn } from "@/lib/utils";
 import { EstimatesLens } from "./EstimatesLens";
 import { OverviewBoard } from "./OverviewBoard";
+import { answers, isEmptyScope } from "./overview-data";
 import { toQuery, type PeriodAsk, type PeriodPreset } from "./period";
-import { getAnalytics, getReturn } from "./proto-api";
 import { ReturnLens } from "./ReturnLens";
 
 export type Lens = "overview" | "return" | "estimates";
@@ -68,6 +72,22 @@ function readPeriod(): PeriodAsk {
 const periodKey = (period: PeriodAsk) => `${period.preset}:${period.from ?? ""}:${period.to ?? ""}`;
 
 /**
+ * The lens to open on: where a navigation asked Analytics to land (the old Estimates address, the
+ * palette's "Go to Estimates"), else the address's own `lens`, else the Overview.
+ */
+export function openingLens(search: string, landing: AnalyticsLanding | null): Lens {
+  if (landing) return landing.lens;
+  const value = new URLSearchParams(search).get("lens");
+  return LENSES.some((item) => item.id === value) ? (value as Lens) : "overview";
+}
+
+/** The workspace to open on: the landing's, else the address's, when this hub has it; otherwise every workspace. */
+export function openingWorkspace(search: string, landing: AnalyticsLanding | null, workspaces: readonly { slug: string }[], hub: boolean): string {
+  const value = landing ? landing.workspace : (new URLSearchParams(search).get("workspace") ?? "");
+  return hub && workspaces.some((workspace) => workspace.slug === value) ? value : "";
+}
+
+/**
  * The phone shell's slot beside the page name, or null on the desk. The shell draws the slot only
  * in its phone shape, and it can switch shape a moment after this view hears the same media
  * change, so the slot is looked up again whenever the shell's shape attribute changes.
@@ -89,15 +109,18 @@ function usePhoneHeaderSlot(): HTMLElement | null {
 export function AnalyticsView({ onAuthError }: { onAuthError: (error: AuthError) => void }) {
   const session = useSession();
   const hub = session.mode === "hub" && session.workspaces.length > 1;
-  const [lens, setLens] = useState<Lens>(() => {
-    const value = new URLSearchParams(window.location.search).get("lens");
-    return LENSES.some((item) => item.id === value) ? (value as Lens) : "overview";
-  });
+  const landing = session.analyticsLanding ?? null;
+  const [lens, setLens] = useState<Lens>(() => openingLens(window.location.search, landing));
   const [period, setPeriod] = useState<PeriodAsk>(readPeriod);
-  const [ws, setWs] = useState<string>(() => {
-    const value = new URLSearchParams(window.location.search).get("workspace") ?? "";
-    return hub && session.workspaces.some((workspace) => workspace.slug === value) ? value : "";
-  });
+  const [ws, setWs] = useState<string>(() => openingWorkspace(window.location.search, landing, session.workspaces, hub));
+  // A landing asked for while the page is already open (the palette's "Go to Estimates" from Analytics).
+  const landed = useRef(landing?.seq ?? 0);
+  useEffect(() => {
+    if (!landing || landing.seq === landed.current) return;
+    landed.current = landing.seq;
+    setLens(landing.lens);
+    setWs(openingWorkspace("", landing, session.workspaces, hub));
+  }, [landing, session.workspaces, hub]);
 
   useEffect(() => {
     try {
@@ -105,7 +128,8 @@ export function AnalyticsView({ onAuthError }: { onAuthError: (error: AuthError)
     } catch {
       /* best effort */
     }
-    afterHistorySettles(() => {
+    // After the shell has written its own address for this page (it may be arriving here now).
+    whenHistoryIsFree(() => {
       const url = new URL(window.location.href);
       if (url.searchParams.get("view") !== "analytics") return;
       url.searchParams.set("lens", lens);
@@ -118,17 +142,10 @@ export function AnalyticsView({ onAuthError }: { onAuthError: (error: AuthError)
   }, [lens, period, ws]);
 
   const key = periodKey(period);
-  // The same period and workspace, as the query the real routes take.
-  const query = toQuery(period, ws);
-  const report = useResource(useCallback(() => getAnalytics(ws, period), [ws, key]), [ws, key], onAuthError);
-  const returns = useResource(useCallback(() => getReturn(ws, period), [ws, key]), [ws, key], onAuthError);
-
-  // The Overview's Return tile reads the cost model; the Return lens owns editing it (ReturnLens).
-  const model = returns.data?.model ?? null;
-  const reloadReturns = returns.reload;
-  useEffect(() => {
-    if (lens === "overview") reloadReturns();
-  }, [lens, reloadReturns]);
+  // The same period and workspace, as the query the routes take. "Today" is read when the period changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const query = useMemo(() => toQuery(period, ws), [key, ws]);
+  const report = useAnalytics(query, onAuthError);
 
   // Each lens keeps its own place: switching away and back lands where you were.
   const scroller = useRef<HTMLDivElement>(null);
@@ -142,39 +159,31 @@ export function AnalyticsView({ onAuthError }: { onAuthError: (error: AuthError)
   }, [lens]);
 
   const slot = usePhoneHeaderSlot();
+  const hubMode = session.mode === "hub";
   const data = report.data;
-  const fresh = (asked: { preset: PeriodPreset; from: string; to: string } | undefined, scope: { kind: string; workspaces: { slug: string }[] } | undefined) =>
-    asked !== undefined && scope !== undefined && asked.preset === period.preset && (period.preset !== "custom" || (asked.from === period.from && asked.to === period.to)) && (ws === "" ? scope.kind === "all" : scope.workspaces[0]?.slug === ws);
-  const stale = data !== undefined && !fresh(data.period, data.scope);
-  const returnData = returns.data && fresh(returns.data.period, returns.data.scope) ? returns.data : undefined;
-  const days = data?.period.days ?? 0;
-  const against = data?.period.previous ? `vs prior ${days} days` : "";
+  const stale = data !== undefined && !answers(data, query, hubMode);
 
   const compact = slot !== null;
   const tabs = <DetailTabStrip sheet={compact} compact label="Analytics lens" items={LENSES} active={lens} />;
   const filters = (
     <>
       {hub ? <WorkspaceFilter value={ws} onChange={setWs} workspaces={session.workspaces} compact={compact} /> : null}
-      {lens === "estimates" ? null : <PeriodPicker value={period} onChange={setPeriod} compact={compact} resolved={data && !stale ? { from: data.period.from, to: data.period.to, first: data.period.firstActivity } : null} />}
+      {lens === "estimates" ? null : <PeriodPicker value={period} onChange={setPeriod} compact={compact} resolved={data && !stale ? { from: data.period.from, to: data.period.to } : null} />}
     </>
   );
 
-  let body: ReactNode;
-  if (lens === "estimates") {
-    body = <EstimatesLens workspace={ws} workspaces={session.workspaces} onChooseWorkspace={setWs} onAuthError={onAuthError} version={session.version} />;
-  } else if (report.error && !data) {
-    body = <ProblemState title="Analytics could not be loaded" message={report.error.message} action={<button type="button" onClick={report.reload} className="focus-ring min-h-0 rounded-md border px-2.5 py-1 text-label font-medium">Try again</button>} />;
-  } else if (data?.empty) {
-    body = (
-      <EmptyState title="Nothing to measure here yet">
-        Analytics fills in as tickets are created, claimed and finished. Finish a ticket with an agent and it shows up here.
-      </EmptyState>
+  const body: ReactNode =
+    lens === "estimates" ? (
+      <EstimatesLens workspace={ws} workspaces={session.workspaces} onChooseWorkspace={setWs} onAuthError={onAuthError} version={session.version} />
+    ) : (
+      <PageState report={data} error={report.error} stale={stale} onRetry={report.reload}>
+        {lens === "overview" ? (
+          <OverviewLens report={data} query={query} order={session.workspaces.map((workspace) => workspace.slug)} onAuthError={onAuthError} onOpenReturn={() => chooseLens("return")} onOpenTicket={session.open} />
+        ) : (
+          <ReturnLens workspace={ws} period={period} query={query} onAuthError={onAuthError} onOpenTicket={session.open} />
+        )}
+      </PageState>
     );
-  } else if (lens === "overview") {
-    body = <OverviewBoard report={data} returns={returnData} model={model} against={against} onOpenReturn={() => chooseLens("return")} onOpenTicket={(workspace, ref) => session.open(workspace, ref)} />;
-  } else {
-    body = <ReturnLens workspace={ws} period={period} query={query} onAuthError={onAuthError} onOpenTicket={(workspace, ref) => session.open(workspace, ref)} />;
-  }
 
   return (
     <Tabs value={lens} onValueChange={(value) => chooseLens(value as Lens)} className="h-full min-h-0 gap-0">
@@ -199,6 +208,35 @@ export function AnalyticsView({ onAuthError }: { onAuthError: (error: AuthError)
       </div>
     </Tabs>
   );
+}
+
+/**
+ * What the Overview and Return lenses show before their own content: a first read that failed
+ * (with Try again), or a scope where nothing has happened yet. Otherwise the lens, which draws its
+ * own loading and "nothing in this period" states.
+ */
+export function PageState({ report, error, stale, onRetry, children }: { report: AnalyticsReport | undefined; error: Error | undefined; stale: boolean; onRetry: () => void; children: ReactNode }) {
+  if (error && !report) {
+    return <ProblemState title="Analytics could not be loaded" message={error.message} action={<button type="button" onClick={onRetry} className="focus-ring min-h-0 rounded-md border px-2.5 py-1 text-label font-medium">Try again</button>} />;
+  }
+  if (report && !stale && isEmptyScope(report)) {
+    return (
+      <EmptyState title="Nothing to measure here yet">
+        Analytics fills in as tickets are created, claimed and finished. Finish a ticket with an agent and it shows up here.
+      </EmptyState>
+    );
+  }
+  return <>{children}</>;
+}
+
+/**
+ * The Overview with its Return tile: `/api/analytics/roi` is read only while the Overview is open,
+ * and read again each time it opens, so a rate changed on the Return lens shows here. Like the
+ * report, the previous answer stays on screen while a new period loads.
+ */
+function OverviewLens({ report, query, order, onAuthError, onOpenReturn, onOpenTicket }: { report: AnalyticsReport | undefined; query: AnalyticsQuery; order: readonly string[]; onAuthError: (error: AuthError) => void; onOpenReturn: () => void; onOpenTicket: (workspace: string, ref: string) => void }) {
+  const roi = useRoi(query, onAuthError);
+  return <OverviewBoard report={report} roi={roi.data ?? (roi.error ? null : undefined)} order={order} onOpenReturn={onOpenReturn} onOpenTicket={onOpenTicket} />;
 }
 
 const CONTROL = "focus-ring relative inline-flex h-control-md min-h-0 shrink-0 items-center gap-1.5 rounded-md border bg-card px-2.5 text-body font-medium transition-colors hover:bg-surface-hover before:absolute before:-inset-y-1 before:inset-x-0 before:content-['']";
@@ -233,7 +271,7 @@ function WorkspaceFilter({ value, onChange, workspaces, compact }: { value: stri
 }
 
 /** The period: presets as rows, and a custom range under them. */
-function PeriodPicker({ value, onChange, compact, resolved }: { value: PeriodAsk; onChange: (next: PeriodAsk) => void; compact: boolean; resolved: { from: string; to: string; first: string } | null }) {
+function PeriodPicker({ value, onChange, compact, resolved }: { value: PeriodAsk; onChange: (next: PeriodAsk) => void; compact: boolean; resolved: { from: string; to: string } | null }) {
   const [open, setOpen] = useState(false);
   const preset = PRESETS.find((item) => item.id === value.preset);
   const [from, setFrom] = useState(value.from ?? "");

@@ -87,6 +87,23 @@ export const FOOT_VIEWS: readonly ViewName[] = ["analytics"];
  */
 export const UNLISTED_VIEWS: readonly ViewName[] = ["calibration"];
 
+/** Analytics asked to open on one of its lenses by something other than its own tabs. `seq` tells one ask from the next. */
+export interface AnalyticsLanding {
+  lens: "estimates";
+  /** The workspace the figures are for; "" is every workspace. */
+  workspace: string;
+  seq: number;
+}
+
+/**
+ * WHERE A REQUEST FOR A VIEW LANDS. Estimates is a lens of Analytics: asking for the `calibration`
+ * view (its old address `?view=estimate-accuracy`, the palette's "Go to Estimates") opens Analytics
+ * on the Estimates lens for the same workspace. Every other view lands on itself, with no landing.
+ */
+export function viewLanding(view: ViewName, ws: string, seq: number): { view: ViewName; analytics: AnalyticsLanding | null } {
+  return view === "calibration" ? { view: "analytics", analytics: { lens: "estimates", workspace: ws, seq } } : { view, analytics: null };
+}
+
 export function isMachineView(view: ViewName): boolean {
   return MACHINE_VIEWS.includes(view);
 }
@@ -222,6 +239,13 @@ export interface StapleSession {
 
   view: ViewName;
   setView: (view: ViewName) => void;
+
+  /**
+   * Where the last navigation asked Analytics to open (`viewLanding`), or null. Set when the
+   * Estimates view was asked for, cleared by any other navigation; the Analytics view reads it
+   * when it opens and whenever it changes.
+   */
+  analyticsLanding?: AnalyticsLanding | null;
 
   /**
    * THE MILESTONE THE PAGE IS POINTED AT — R4c (STA-188).
