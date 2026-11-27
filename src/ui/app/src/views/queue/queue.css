@@ -17,6 +17,13 @@
   position: relative;
   height: 100%;
   overflow-y: auto;
+  /*
+   * The page scrolls down and never sideways. The touch hit areas of the controls at a row's
+   * right edge reach past the page's edge, and an `overflow-y: auto` box scrolls in x as well
+   * unless told otherwise: on a phone the whole list then slid left and right under a finger.
+   */
+  overflow-x: hidden;
+  overscroll-behavior-x: none;
   container: queue / inline-size;
   scroll-padding-top: 76px;
   outline: none;
@@ -483,7 +490,7 @@
   .q-strip > .q-sp { display: none; }
   .q-allstrip { padding-left: 12px; }
 
-  .q-add-compact { width: 32px; height: 32px; padding: 0; }
+  .q-add-compact { width: 28px; padding: 0; }
   .q-add-compact .q-add-word { display: none; }
 
   .q-row {
@@ -517,7 +524,9 @@
   .q-ref2 { display: inline; }
   .q-state .q-who { display: none; }
   .q-actions { grid-column: 3; grid-row: 1 / span 2; align-self: center; gap: 0; }
-  .q-more, .q-act { position: relative; width: 34px; height: 34px; padding: 0; justify-content: center; opacity: 1; }
+  /* Drawn at their desk size; a touch gets its 44px from the hit area at the end of this file. */
+  .q-more { opacity: 1; }
+  .q-act { width: 28px; padding: 0; justify-content: center; }
   .q-act .q-act-word { display: none; }
 
   .q-caption { grid-template-rows: auto; padding: 4px 2px 2px; }
@@ -543,7 +552,7 @@
     line-height: 21px;
   }
   .q-next .q-why { grid-column: 1; white-space: normal; }
-  .q-next .q-next-open { grid-column: 2; grid-row: 1 / span 3; align-self: center; height: 34px; }
+  .q-next .q-next-open { grid-column: 2; grid-row: 1 / span 3; align-self: center; }
   .q-sec[data-folded] .q-next {
     grid-template-columns: auto minmax(0, 1fr);
     grid-template-rows: auto;
@@ -563,7 +572,7 @@
  * Touch: at least a 44px hit area round every small control, drawn at its own size. The
  * house floor (theme-tokens.css) would stretch each to 44px tall; these rows provide the area.
  */
-.q-tag, .q-textbtn, .q-link, .q-handle, .q-more, .q-act, .q-chev, .q-fold, .q-next-title { min-height: 0; }
+.q-tag, .q-textbtn, .q-link, .q-handle, .q-more, .q-act, .q-chev, .q-fold, .q-next-title, .q-next-open, .q-add { min-height: 0; }
 @media (pointer: coarse) {
   .q-more, .q-act, .q-handle, .q-chev, .q-fold, .q-textbtn, .q-tag, .q-link, .q-next-open, .q-add, .q-band-head { position: relative; }
   /* Where the handle's area meets the fold arrow's, the handle wins: grabbing is the harder gesture. */

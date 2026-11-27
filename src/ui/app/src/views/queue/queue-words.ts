@@ -5,6 +5,7 @@
  * store's answer. `queue-words.test.ts` pins them.
  */
 import type { SelectOption } from "@/components/ui/searchable-select";
+import { formatAgo, STALE_CLAIM_SECONDS } from "@/lib/claim";
 import type { EffectiveQueueRow, IssueKind, IssueRow, IssueStatus, QueueEntry, QueueView } from "@/lib/types";
 import { blockersOf } from "./queue-model";
 import { BUCKET_OF, type QueueBucket } from "./queue-summary";
@@ -77,7 +78,7 @@ export interface RowState {
   /** A claim: who holds it, and its initials for the tile. */
   holder?: string;
   initials?: string;
-  /** A claim idle for over an hour: "quiet 8d". */
+  /** A claim gone quiet by the app's one rule (lib/claim.ts, the Tasks list's cue): "quiet 8d". */
   quiet?: string;
   /** Named blockers, each a link in the column. */
   blockers?: string[];
@@ -92,17 +93,6 @@ export function initials(name: string): string {
     .join("")
     .toUpperCase();
 }
-
-/** Seconds as the app's short age: 45s, 12m, 3h, 8d. */
-export function shortAge(seconds: number): string {
-  const s = Math.max(0, Math.floor(seconds));
-  if (s < 60) return `${s}s`;
-  if (s < 3600) return `${Math.floor(s / 60)}m`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h`;
-  return `${Math.floor(s / 86400)}d`;
-}
-
-const QUIET_AFTER_SECONDS = 3600;
 
 function holderOf(row: EffectiveQueueRow): { holder: string | null; idle: number | null } {
   const detail = row.detail ?? {};
@@ -133,7 +123,8 @@ export function rowState(row: EffectiveQueueRow): RowState {
     case "claimed": {
       const { holder, idle } = holderOf(row);
       const name = holder ?? "an agent";
-      const quiet = idle !== null && idle > QUIET_AFTER_SECONDS ? `quiet ${shortAge(idle)}` : undefined;
+      // `isStaleClaim`'s threshold, applied to the detail's reading too when no live claim came.
+      const quiet = idle !== null && idle >= STALE_CLAIM_SECONDS ? `quiet ${formatAgo(idle)}` : undefined;
       return {
         tone: "active",
         words: `Working · ${name}${quiet ? ` · ${quiet}` : ""}`,
@@ -155,7 +146,8 @@ export function rowState(row: EffectiveQueueRow): RowState {
     case "unavailable":
       return row.status === "in_review" ? { tone: "person", words: "In review" } : { tone: "waiting", words: reasonWithoutRef(row) };
     case "assigned_to_other_member":
-      return { tone: "waiting", words: "Another member's" };
+      // The store's sentence names the member: "STA-10 is assigned to marko, another member."
+      return { tone: "waiting", words: row.reason?.trim() || "Another member's" };
   }
 }
 

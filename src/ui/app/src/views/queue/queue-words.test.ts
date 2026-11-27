@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { IssueRow } from "@/lib/types";
+import { formatAgo, STALE_CLAIM_SECONDS } from "@/lib/claim";
 import { effective, entry } from "./fixtures";
 import {
   addableOptions,
@@ -25,6 +26,13 @@ describe("the state column", () => {
     expect(fresh.quiet).toBeUndefined();
     const quiet = rowState(effective({ identifier: "STA-2", eligibility: "claimed", detail: { heldBy: "fable", idleSeconds: 8 * 86400 + 5 } }));
     expect(quiet).toMatchObject({ words: "Working · fable · quiet 8d", quiet: "quiet 8d", initials: "F" });
+  });
+
+  it("calls a claim quiet when the Tasks list does, and words its age the same way", () => {
+    const idle = (idleSeconds: number) => rowState(effective({ identifier: "STA-2", eligibility: "claimed", detail: { heldBy: "fable", idleSeconds } })).quiet;
+    expect(idle(STALE_CLAIM_SECONDS - 1)).toBeUndefined();
+    expect(idle(STALE_CLAIM_SECONDS)).toBe(`quiet ${formatAgo(STALE_CLAIM_SECONDS)}`);
+    expect(idle(46 * 60)).toBe("quiet 46m");
   });
 
   it("prefers the live claim's holder and idle time over the detail", () => {
@@ -57,8 +65,10 @@ describe("the state column", () => {
     expect(rowState(other)).toEqual({ tone: "waiting", words: "In progress, which cannot be checked out" });
   });
 
-  it("calls another member's ticket theirs", () => {
-    expect(rowState(effective({ identifier: "STA-10", eligibility: "assigned_to_other_member" })).words).toBe("Another member's");
+  it("says the store's sentence for another member's ticket, which names the member", () => {
+    const row = effective({ identifier: "STA-10", eligibility: "assigned_to_other_member", reason: "STA-10 is assigned to marko, another member." });
+    expect(rowState(row)).toEqual({ tone: "waiting", words: "STA-10 is assigned to marko, another member." });
+    expect(rowState(effective({ identifier: "STA-11", eligibility: "assigned_to_other_member" })).words).toBe("Another member's");
   });
 
   it("drops the reference a store sentence opens with", () => {

@@ -29,7 +29,18 @@ function KindMark({ kind }: { kind: IssueKind }) {
   ) : null;
 }
 
-/** The meter, done → active → ready → waiting, in the app's progress palette. */
+/**
+ * The meter's colours: the app's progress palette, except waiting. Here waiting is the normal
+ * state of a sequenced plan, so it is a neutral grey, not the palette's blocked red.
+ */
+const METER_COLOR = {
+  done: PROGRESS_COLOR.done,
+  active: PROGRESS_COLOR.active,
+  ready: PROGRESS_COLOR.ready,
+  waiting: "var(--ds-gray-600)",
+} as const;
+
+/** The meter, done → active → ready → waiting. */
 export function Meter({ counts, small = false }: { counts: Counts; small?: boolean }) {
   const order = ["done", "active", "ready", "waiting"] as const;
   const total = order.reduce((sum, bucket) => sum + counts[bucket], 0);
@@ -42,7 +53,7 @@ export function Meter({ counts, small = false }: { counts: Counts; small?: boole
       {order
         .filter((bucket) => counts[bucket] > 0)
         .map((bucket) => (
-          <span key={bucket} data-segment={bucket} style={{ flexGrow: counts[bucket], background: PROGRESS_COLOR[bucket] }} />
+          <span key={bucket} data-segment={bucket} style={{ flexGrow: counts[bucket], background: METER_COLOR[bucket] }} />
         ))}
     </span>
   );

@@ -20,6 +20,8 @@ import { queueSummary } from "./queue-summary";
 import { whyNext } from "./queue-words";
 import { BandHead, ConflictBanner, NextRow, PageStrip, PolicyTag, QueueSkeleton, SectionHeader, Standing, type NextState } from "./QueueParts";
 import { SectionBody, type SectionBodyProps } from "./QueueSection";
+import { Meter } from "./QueueRow";
+import { PROGRESS_COLOR } from "@/views/progress-palette";
 import type { QueueWriteFailure } from "./use-workspace-queue";
 
 const noop = () => {};
@@ -97,6 +99,13 @@ describe("a plan entry", () => {
     expect(html).toContain('aria-label="Fold STA-66"');
     expect(html).toContain("3 tasks</span><span> · <b>1</b> ready");
     expect(html).toMatch(/class="q-meter q-meter-sm" role="img" aria-label="1 ready, 2 waiting"/);
+  });
+
+  it("draws the meter's waiting segment neutral grey, not the shared palette's alarm red", () => {
+    const meter = renderToStaticMarkup(<Meter counts={{ done: 1, active: 1, ready: 1, waiting: 1 }} />);
+    expect(meter).toContain('data-segment="waiting" style="flex-grow:1;background:var(--ds-gray-600)"');
+    expect(meter).not.toContain(PROGRESS_COLOR.waiting);
+    for (const bucket of ["done", "active", "ready"] as const) expect(meter).toContain(`data-segment="${bucket}" style="flex-grow:1;background:${PROGRESS_COLOR[bucket]}"`);
   });
 
   it("carries the entry's note under its row", () => {
