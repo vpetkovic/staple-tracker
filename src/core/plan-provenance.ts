@@ -173,14 +173,3 @@ export function sparkedIdeasOf(db: DatabaseSync, ticketId: string): SparkedIdea[
   }));
 }
 
-/** The provenance chip's words, as every surface prints them: `from I-STA-4 · row R2`. */
-export function scaffoldedFromWords(from: ScaffoldedFrom): string {
-  const idea = from.ideaNumber ?? from.identifier ?? "an idea";
-  return from.rowKey === null ? `from ${idea} · a removed row` : `from ${idea} · row ${from.rowKey}`;
-}
-
-/** A sparked idea's reference: its idea number, with its ticket number once promoted. */
-export function sparkedIdeaWords(idea: SparkedIdea): string {
-  const number = idea.ideaNumber ?? "idea";
-  return idea.identifier === null ? `${number}(${idea.maturity ?? "idea"})` : `${idea.identifier} · ${number}`;
-}

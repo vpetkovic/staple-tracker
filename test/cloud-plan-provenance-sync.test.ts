@@ -76,7 +76,7 @@ for (const fold of ["service", "tail"] as const) {
         [idea, "R1"],
         [idea, "R2"],
       ]);
-      expect(want.context[0]).toMatch(/Scaffolded from idea I-[A-Z]+-\d+, breakdown row R1\./);
+      expect(want.context[0]).toMatch(/Scaffolded from idea I-[A-Z]+-\d+, breakdown row R1, as numbered at scaffold/);
       expect(want.sparked.map((entry) => entry.id)).toEqual([sparked]);
       expect(want.sparkedBy?.title).toBe("Report screen");
       expect(want.origins).toEqual(["plan-row", "plan-row", "sparked"]);

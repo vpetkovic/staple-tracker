@@ -5,6 +5,7 @@
  */
 import { ArrowUpRight, Sparkles } from "lucide-react";
 import { StatusIcon } from "@/components/task-list";
+import { scaffoldedFromWords, sparkedIdeaWords } from "../../../../core/plan-provenance-words";
 import { useOptionalSession } from "@/lib/session";
 import { statusLabel } from "@/lib/settings";
 import type { IssueDetail, IssueRef, ScaffoldedFromRef, SparkedIdeaRef } from "@/lib/types";
@@ -14,11 +15,6 @@ import { ideaPlanHref } from "./PlannedIdeaLinks";
 
 const CHIP = "focus-ring inline-flex min-h-7 max-w-full min-w-0 items-center gap-1.5 rounded-[6px] border border-border bg-card px-2 py-[3px] text-label text-text-secondary hover:bg-surface-hover hover:text-foreground pointer-coarse:min-h-11";
 
-/** `from I-STA-4 · row R2`, as the CLI prints it too. */
-export function scaffoldedFromWords(from: ScaffoldedFromRef): string {
-  const idea = from.ideaNumber ?? from.identifier ?? "an idea";
-  return from.rowKey === null ? `from ${idea} · a removed row` : `from ${idea} · row ${from.rowKey}`;
-}
 
 /** The chip on a scaffolded ticket: the idea and row it came from, opening the idea in Plan. */
 export function ScaffoldedFromChip({ workspace, from }: { workspace: string; from: ScaffoldedFromRef }) {
@@ -69,10 +65,9 @@ export function ProvenanceChips({ detail, className }: { detail: IssueDetail; cl
   );
 }
 
-/** A sparked idea's reference: its idea number, with its ticket number once it is an epic. */
+/** A sparked idea's reference on the page: its idea number, with its ticket number once it is an epic (its maturity is a column of its own). */
 function sparkedRef(idea: SparkedIdeaRef): string {
-  const number = idea.ideaNumber ?? "Idea";
-  return idea.identifier === null ? number : `${idea.identifier} · ${number}`;
+  return idea.identifier === null ? (idea.ideaNumber ?? "Idea") : sparkedIdeaWords(idea);
 }
 
 /** The ideas a ticket's work sparked, each opening in Plan. */

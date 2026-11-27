@@ -7,7 +7,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { openDb } from "../src/core/db.js";
 import type { PlanPatch } from "../src/core/plan-sections.js";
-import { scaffoldedFromWords, SCAFFOLD_ORIGIN_KIND, SPARKED_ORIGIN_KIND, sparkedIdeaWords } from "../src/core/plan-provenance.js";
+import { SCAFFOLD_ORIGIN_KIND, SPARKED_ORIGIN_KIND } from "../src/core/plan-provenance.js";
+import { scaffoldedFromWords, sparkedIdeaWords } from "../src/core/plan-provenance-words.js";
 import type { PlanStore } from "../src/core/plan-store.js";
 import { migrateWorkspace } from "../src/core/schema.js";
 import { WorkspaceStore } from "../src/core/store.js";
@@ -75,7 +76,20 @@ describe("a scaffolded ticket's provenance", () => {
   it("names the idea number and the row in its context document", () => {
     const { number, tasks } = scaffolded();
     const body = store.getDocument(tasks.get("R2")!.id, "context").body;
-    expect(body).toContain(`Scaffolded from idea ${number}, breakdown row R2.`);
+    expect(body).toContain(`Scaffolded from idea ${number}, breakdown row R2, as numbered at scaffold; \`staple show\` names both as they stand now.`);
+  });
+
+  it("never writes a stand-in number into its context document: it names the row, and the read names the idea", () => {
+    const id = plan.capture({ title: "Collided", maturity: "shaped", plan: PLAN }, "vp", PERSON).id;
+    // Sync gave it a stand-in while another device's idea holds its number (`I-TST-1+7`).
+    const standIn = `${plan.ideaView(id).number}+7`;
+    store.db.prepare("UPDATE issues SET identifier = ? WHERE id = ?").run(standIn, id);
+    const made = plan.scaffold(id, plan.scaffoldPreview(id).fingerprint, "agent");
+    const task = store.getIssue(made.tasks.find((t) => t.key === "R1")!.existing!);
+    const body = store.getDocument(task.id, "context").body;
+    expect(body).not.toContain("+7");
+    expect(body).toContain("Scaffolded from breakdown row R1 of the idea, as numbered at scaffold;");
+    expect(store.context(task.id).scaffoldedFrom?.ideaId).toBe(id);
   });
 
   it("reads the row's key as the breakdown holds it now, and says when the row was removed", () => {
@@ -144,6 +158,7 @@ describe("an idea sparked by ticket work", () => {
     const horizon = plan.view().horizons[0]!;
     expect(refusal(() => plan.capture({ title: "Y", sparkedBy: horizon.id }, "agent"))).toContain("is a milestone, not a ticket");
     refusal(() => plan.capture({ title: "Z", sparkedBy: "TST-999" }, "agent"), "not_found");
+    expect(refusal(() => plan.capture({ title: "E", sparkedBy: "  " }, "agent"))).toContain("it was empty");
     expect(store.db.prepare("SELECT COUNT(*) AS n FROM issues").get()).toEqual(before);
   });
 });

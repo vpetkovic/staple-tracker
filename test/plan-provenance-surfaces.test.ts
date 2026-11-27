@@ -80,7 +80,7 @@ describe("a scaffolded ticket on every surface", () => {
     expect(agent.isError, JSON.stringify(agent)).toBeFalsy();
     const payload = toolPayload(agent) as { scaffoldedFrom: unknown; documents: Array<{ key: string; body: string }> };
     expect(payload.scaffoldedFrom).toEqual(terminal);
-    expect(payload.documents.find((doc) => doc.key === "context")!.body).toContain(`Scaffolded from idea ${idea.number}, breakdown row R2.`);
+    expect(payload.documents.find((doc) => doc.key === "context")!.body).toContain(`Scaffolded from idea ${idea.number}, breakdown row R2, as numbered at scaffold`);
     const page = await http(`/api/issue?ws=${WS}&ref=${second}`);
     expect(page.body.scaffoldedFrom).toEqual(terminal);
   });

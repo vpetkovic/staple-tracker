@@ -93,7 +93,7 @@ import { sharedLine, sharedStatus } from "./core/cloud/shared-status.js";
 import { readConnection } from "./core/cloud/connection.js";
 import { format } from "node:util";
 import { hideDraftIdentifiers, publicOutput } from "./core/plan.js";
-import { scaffoldedFromWords, sparkedIdeaWords } from "./core/plan-provenance.js";
+import { scaffoldedFromWords, sparkedIdeaWords } from "./core/plan-provenance-words.js";
 import { assertHandoffStatus, assertHandoffWorklog, worklogNudge } from "./core/worklog-standing.js";
 
 /**

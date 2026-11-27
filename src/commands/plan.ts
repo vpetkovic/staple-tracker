@@ -19,7 +19,7 @@ import { resolveWorkspace } from "../core/workspace.js";
 import { StapleError } from "../core/types.js";
 import { aKind } from "../core/plan.js";
 import { percentText } from "../core/plan-accounting.js";
-import { sparkedIdeaWords } from "../core/plan-provenance.js";
+import { sparkedIdeaWords } from "../core/plan-provenance-words.js";
 
 const COMMON = {
   db: { type: "string" },

@@ -1741,7 +1741,10 @@ export class PlanStore {
     const sections = mergeSections(emptySections(), patch);
     // A record captured here has no sub-idea yet, so its own rows are its breakdown.
     if (maturity === "shaped") assertShaped(subject, shapedGate(sections, extra.questions));
-    const sparkedBy = input.sparkedBy?.trim() ? this.sparkingTicket(input.sparkedBy) : null;
+    if (input.sparkedBy !== undefined && input.sparkedBy !== null && input.sparkedBy.trim() === "") {
+      throw new StapleError("validation", "sparkedBy names the ticket whose work sparked the idea; it was empty. Leave it out to capture an idea no ticket sparked.");
+    }
+    const sparkedBy = input.sparkedBy ? this.sparkingTicket(input.sparkedBy) : null;
     const id = this.store.journaled(() => {
       const ideaId = newId();
       const issue = this.store.createIssue(
@@ -2679,7 +2682,10 @@ const CONTEXT_EXCERPT = 2000;
  * what done means, what it waits on, and the constraints and scope it must respect.
  */
 function taskContextDocument(epicTitle: string, ideaNumber: string | null, sections: PlanSections, row: BreakdownRow, titles: ReadonlyMap<string, string>): string {
-  const from = ideaNumber === null ? `Scaffolded from breakdown row ${row.key} of the idea.` : `Scaffolded from idea ${ideaNumber}, breakdown row ${row.key}.`;
+  // A snapshot, written once: the number and key as they read at scaffold. A stand-in number
+  // (`I-STA-5+12`) is not one to keep; the ticket's provenance reads both as they stand now.
+  const number = ideaNumber !== null && isIdeaNumber(ideaNumber) && !ideaNumber.includes("+") ? ideaNumber : null;
+  const from = `${number === null ? `Scaffolded from breakdown row ${row.key} of the idea` : `Scaffolded from idea ${number}, breakdown row ${row.key}`}, as numbered at scaffold; \`staple show\` names both as they stand now.`;
   const parts = [`# ${taskTitle(row)}`, `Part of **${epicTitle}**. ${from} The epic's plan document holds the whole plan.`];
   if (sections.goal) parts.push(`## What the epic is for\n\n${sections.goal}`);
   const facts = [row.estimate ? `Estimate: ${row.estimate}` : null, row.owner ? `Owner: ${row.owner}` : null, row.notes ? `Notes: ${row.notes}` : null].filter(Boolean);
