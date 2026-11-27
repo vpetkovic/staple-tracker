@@ -58,6 +58,31 @@ describe("the rail's mode", () => {
     expect(railModeFor(createRailModeStore(storage).modes(), "wide")).toBe("full");
   });
 
+  it("keeps another tab's choice in the other size class when this one toggles", () => {
+    const storage = fakeStorage({});
+    const compactTab = createRailModeStore(storage);
+    const wideTab = createRailModeStore(storage);
+    compactTab.toggle("compact");
+    wideTab.toggle("wide");
+    expect(JSON.parse(storage.map.get(RAIL_MODE_STORAGE_KEY)!)).toEqual({ compact: "full", wide: "narrow" });
+    // Each tab flips what it shows, not what the other tab last wrote for its own class.
+    compactTab.toggle("compact");
+    expect(JSON.parse(storage.map.get(RAIL_MODE_STORAGE_KEY)!)).toEqual({ compact: "narrow", wide: "narrow" });
+    expect(railModeFor(createRailModeStore(storage).modes(), "wide")).toBe("narrow");
+  });
+
+  it("flips what this tab shows, even when another tab in the same size class chose since", () => {
+    const storage = fakeStorage({});
+    const first = createRailModeStore(storage);
+    const second = createRailModeStore(storage);
+    first.toggle("compact");
+    // The second tab still shows narrow: its toggle widens it, whatever the first one wrote.
+    expect(railModeFor(second.modes(), "compact")).toBe("narrow");
+    second.toggle("compact");
+    expect(railModeFor(second.modes(), "compact")).toBe("full");
+    expect(JSON.parse(storage.map.get(RAIL_MODE_STORAGE_KEY)!)).toEqual({ compact: "full" });
+  });
+
   it("works without storage, for the page's life", () => {
     const store = createRailModeStore(undefined);
     store.toggle("compact");
