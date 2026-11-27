@@ -38,6 +38,7 @@ function idea(id: string, extra: Partial<IdeaData> = {}): IdeaData {
     umbrella: false,
     carriedBy: "now",
     nextStep: null,
+    shapeProposal: null,
     progress: null,
     percent: null,
     actual: { start: null, end: null, forecastEnd: null },

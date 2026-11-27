@@ -40,6 +40,7 @@ export function WhereItStands({ record, write, scaffold, onJump }: { record: Ide
     <section aria-label="Where it stands" className="rounded-xl border bg-surface-sunken px-4 py-3.5" data-plan-standing={idea.state}>
       <Track idea={idea} />
       {idea.state === "raw" || idea.state === "exploring" ? <ShapeChecklist record={record} onJump={onJump} /> : null}
+      <Proposal idea={idea} write={write} />
       {idea.state === "shaped" ? <Shaped record={record} /> : null}
       {idea.state === "started" || idea.state === "shipped" ? <Underway record={record} onJump={onJump} /> : null}
       {idea.planIncomplete.length > 0 ? (
@@ -147,6 +148,41 @@ function ShapeChecklist({ record, onJump }: { record: IdeaDetailData; onJump: (i
         ))}
       </ul>
     </>
+  );
+}
+
+/**
+ * An agent's standing proposal that it is ready to be marked shaped: who proposed it, when and
+ * why, and the person's answer in one action. Accept is the offered Mark shaped, held back with
+ * its reason while the plan fails the gate; Dismiss sets the proposal aside.
+ */
+function Proposal({ idea, write }: { idea: IdeaData; write: PlanWrite }) {
+  const proposal = idea.shapeProposal;
+  if (!proposal) return null;
+  const shape = idea.actions.find((action) => action.id === "shape");
+  return (
+    <div className="mt-3 rounded-lg border bg-surface px-3 py-2.5" data-plan-proposal="">
+      <p className="m-0 text-body text-text-secondary">
+        <Flag tone="you" className="mr-2 align-[1px]">
+          proposed shaped
+        </Flag>
+        <span className="font-medium text-foreground">{proposal.by ?? "An agent"}</span> proposed it shaped on {dayLabel(proposal.at.slice(0, 10), false)}
+        {proposal.note ? <>: {proposal.note}</> : "."}
+      </p>
+      {shape?.disabledReason ? (
+        <p className="m-0 mt-1 text-label text-flag-todo" data-plan-proposal-held="">
+          {shape.disabledReason}
+        </p>
+      ) : null}
+      <div className="mt-2 flex flex-wrap gap-2">
+        <Button size="sm" disabled={!shape || Boolean(shape.disabledReason)} title={shape?.disabledReason} onClick={() => void write("update", { ref: idea.id, maturity: "shaped" })} data-plan-proposal-accept="">
+          Accept shaped
+        </Button>
+        <Button size="sm" variant="outline" onClick={() => void write("update", { ref: idea.id, dismissProposal: true })} data-plan-proposal-dismiss="">
+          Dismiss
+        </Button>
+      </div>
+    </div>
   );
 }
 

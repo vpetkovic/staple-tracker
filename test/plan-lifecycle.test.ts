@@ -23,8 +23,8 @@ import {
 describe("the idea table", () => {
   it("offers exactly the agreed actions in each state", () => {
     expect(IDEA_LIFECYCLE).toEqual({
-      raw: ["edit", "ask", "decide", "explore", "shape", "drop", "reparent", "reorder"],
-      exploring: ["edit", "ask", "decide", "shape", "drop", "schedule", "plan_dates", "reparent", "reorder", "adopt", "link_research", "unlink_research", "mark_delivered"],
+      raw: ["edit", "ask", "decide", "explore", "shape", "propose_shape", "dismiss_proposal", "drop", "reparent", "reorder", "link_research"],
+      exploring: ["edit", "ask", "decide", "shape", "propose_shape", "dismiss_proposal", "drop", "schedule", "plan_dates", "reparent", "reorder", "adopt", "link_research", "unlink_research", "mark_delivered"],
       shaped: ["edit", "ask", "decide", "unshape", "drop", "schedule", "plan_dates", "reparent", "reorder", "promote", "scaffold", "adopt", "link_research", "unlink_research", "mark_delivered"],
       started: ["edit", "ask", "decide", "schedule", "plan_dates", "reorder", "scaffold", "adopt", "unlink", "link_research", "unlink_research", "reset_baseline", "open_epic"],
       shipped: ["adopt", "link_research", "unlink_research", "open_epic"],
@@ -37,7 +37,7 @@ describe("the idea table", () => {
       .filter(([, rule]) => rule.who === "person")
       .map(([id]) => id)
       .sort();
-    expect(people).toEqual(["back_to_raw", "clear_delivered", "drop", "explore", "mark_delivered", "plan_dates", "reorder", "reparent", "reset_baseline", "restore", "schedule", "shape", "unshape"]);
+    expect(people).toEqual(["back_to_raw", "clear_delivered", "dismiss_proposal", "drop", "explore", "mark_delivered", "plan_dates", "reorder", "reparent", "reset_baseline", "restore", "schedule", "shape", "unshape"]);
   });
 
   it("offers going back to raw in no state", () => {
@@ -51,9 +51,11 @@ describe("the idea table", () => {
     expect(ideaOffered("shipped", false)).toEqual(["adopt", "link_research", "unlink_research", "open_epic"]);
   });
 
-  it("lets research be linked while exploring, shaped, started or shipped, never while raw or dropped", () => {
+  it("lets research be linked in every state but dropped, and unlinked from exploring on: linking it to a raw idea explores it", () => {
     for (const state of ["exploring", "shaped", "started", "shipped"] as const) expect(IDEA_LIFECYCLE[state], state).toEqual(expect.arrayContaining(["link_research", "unlink_research"]));
-    for (const state of ["raw", "dropped"] as const) expect(IDEA_LIFECYCLE[state], state).not.toContain("link_research");
+    expect(IDEA_LIFECYCLE.raw).toContain("link_research");
+    expect(IDEA_LIFECYCLE.raw).not.toContain("unlink_research");
+    expect(IDEA_LIFECYCLE.dropped).not.toContain("link_research");
     expect([IDEA_ACTIONS.link_research.who, IDEA_ACTIONS.unlink_research.who]).toEqual(["anyone", "anyone"]);
   });
 
@@ -62,13 +64,19 @@ describe("the idea table", () => {
     for (const state of ["exploring", "shaped", "started", "shipped"] as const) expect(IDEA_LIFECYCLE[state], state).toContain("adopt");
   });
 
-  it("gives a record that started while still exploring Mark shaped on top of the started row, and nothing else", () => {
-    expect(UNSHAPED_STARTED).toEqual(["shape"]);
-    expect(ideaOffered("started", false, "exploring")).toEqual([...IDEA_LIFECYCLE.started, "shape"]);
+  it("lets anyone propose a raw or exploring idea shaped, and only the person shape it or dismiss the proposal", () => {
+    for (const state of ["raw", "exploring"] as const) expect(IDEA_LIFECYCLE[state], state).toEqual(expect.arrayContaining(["shape", "propose_shape", "dismiss_proposal"]));
+    for (const state of ["shaped", "started", "shipped", "dropped"] as const) expect(IDEA_LIFECYCLE[state], state).not.toContain("propose_shape");
+    expect([IDEA_ACTIONS.propose_shape.who, IDEA_ACTIONS.shape.who, IDEA_ACTIONS.dismiss_proposal.who]).toEqual(["anyone", "person", "person"]);
+  });
+
+  it("gives a record that started while still exploring Mark shaped on top of the started row, with its proposal, and nothing else", () => {
+    expect(UNSHAPED_STARTED).toEqual(["shape", "propose_shape", "dismiss_proposal"]);
+    expect(ideaOffered("started", false, "exploring")).toEqual([...IDEA_LIFECYCLE.started, "shape", "propose_shape", "dismiss_proposal"]);
     expect(ideaOffered("started", false, "shaped")).toEqual(IDEA_LIFECYCLE.started);
     expect(ideaOffered("shipped", false, "exploring")).toEqual(IDEA_LIFECYCLE.shipped);
     expect(ideaOffered("exploring", false, "exploring")).toEqual(IDEA_LIFECYCLE.exploring);
-    expect(ideaLifecycleRefusal('the idea "X"', "started", "drop", false, "exploring").message).toContain("reset baseline to the plan or mark shaped.");
+    expect(ideaLifecycleRefusal('the idea "X"', "started", "drop", false, "exploring").message).toContain("reset baseline to the plan, mark shaped or propose shaped.");
   });
 
   it("lets the person mark an exploring or shaped idea delivered outside the tracker, and gives a marked record its edits and the clear", () => {
@@ -77,7 +85,7 @@ describe("the idea table", () => {
     for (const row of Object.values(IDEA_LIFECYCLE)) expect(row).not.toContain("clear_delivered");
     expect(DELIVERED_MARKED).toEqual(["edit", "ask", "decide", "clear_delivered"]);
     expect(ideaOffered("shipped", false, "shaped", true)).toEqual(["adopt", "link_research", "unlink_research", "open_epic", "edit", "ask", "decide", "clear_delivered"]);
-    expect(ideaOffered("started", false, "exploring", true)).toEqual([...IDEA_LIFECYCLE.started, "shape", "clear_delivered"]);
+    expect(ideaOffered("started", false, "exploring", true)).toEqual([...IDEA_LIFECYCLE.started, "shape", "propose_shape", "dismiss_proposal", "clear_delivered"]);
     expect(ideaOffered("shipped", false, "shaped", false)).toEqual(IDEA_LIFECYCLE.shipped);
     expect(ideaLifecycleRefusal('the idea "X"', "shipped", "schedule", false, "shaped", true).message).toBe(
       'The idea "X" is shipped; it cannot be scheduled. A shipped idea offers: adopt existing work, link research, unlink research, edit title and brief, ask a question, record a decision or clear the delivered mark.',
@@ -117,7 +125,7 @@ describe("the idea table", () => {
 
   it("refuses naming the state and what it offers", () => {
     expect(ideaLifecycleRefusal('the idea "X"', "raw", "promote").message).toBe(
-      'The idea "X" is raw; it cannot be promoted. A raw idea offers: edit title and brief, ask a question, record a decision, start exploring, mark shaped, drop, move under another idea or reorder.',
+      'The idea "X" is raw; it cannot be promoted. A raw idea offers: edit title and brief, ask a question, record a decision, start exploring, mark shaped, propose shaped, drop, move under another idea, reorder or link research.',
     );
   });
 });

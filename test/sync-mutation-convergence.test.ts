@@ -410,6 +410,14 @@ const SCENARIOS: readonly Scenario[] = [
     },
   },
   {
+    method: "PlanStore.noteDocumentWrite",
+    name: "explore a raw idea from a raw write of one of its plan sections",
+    prep: (w) => {
+      w.ids["Raw to explore"] = w.a.store.plan().capture({ title: "Raw to explore" }, "alice").id;
+    },
+    run: (w) => void w.a.store.putDocument(w.ids["Raw to explore"]!, "risks", "Lost devices.", { author: "alice" }),
+  },
+  {
     method: "PlanStore.upgradeRecords",
     name: "run the open-time upgrades: the old Later bucket and the idea numbers",
     prep: (w) => {

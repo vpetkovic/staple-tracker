@@ -5446,6 +5446,8 @@ export function startUiServer(options: UiOptions): UiHandle {
                 plan: optional<Record<string, unknown>>("plan") as never,
                 breakdownBase: optional<string>("breakdownBase"),
                 delivered: optional<{ on: string; note?: string | null } | null>("delivered"),
+                dismissProposal: optional<boolean>("dismissProposal"),
+                proposeShaped: optional<{ note?: string | null }>("proposeShaped"),
               },
               actor,
               person,

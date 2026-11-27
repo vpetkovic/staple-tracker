@@ -1,6 +1,6 @@
 /**
  * Idea blockers: one plan record waits on another, as a structured edge (design/plan.md,
- * "Dependencies between records"). One `plan_blockers` row each (migration 029).
+ * "Dependencies between records"). One `plan_blockers` row each (migration 030).
  *
  * On the wire each edge is one field of the blocked record's `milestone` entity,
  * `planBlocker.<blocker id>`, whose value is `true` and whose null removes it: the shape plan

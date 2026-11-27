@@ -196,8 +196,11 @@ describe("the plan on every surface", () => {
     expect(edited.idea.title).toBe("From MCP, renamed");
     expect(edited.questions).toEqual([{ text: "Who?", resolved: false }]);
     expect(edited.decisions).toHaveLength(1);
-    // Linking work is a shaped idea's: a raw one refuses it, naming its state.
-    const early = await mcpCall("start_idea", { ref: ref("From MCP"), adopt: "PLA-1" });
+    // Its question and decision made it more complete: the raw idea is exploring now, the agent's doing.
+    expect((edited as unknown as { idea: Idea }).idea).toMatchObject({ maturity: "exploring", state: "exploring" });
+    // Linking work is an exploring or shaped idea's: a raw one refuses it, naming its state.
+    const raw = toolPayload(await mcpCall("capture_idea", { title: "Still raw" })) as { idea?: { id: string }; id?: string };
+    const early = await mcpCall("start_idea", { ref: raw.idea?.id ?? raw.id!, adopt: "PLA-1" });
     expect(JSON.stringify(early.content)).toContain("is raw; it cannot be linked to work");
     const adopted = toolPayload(await mcpCall("start_idea", { ref: ref("From the page"), adopt: "PLA-1" })) as { idea: { idea: Idea }; promoted: null };
     expect(adopted.idea.idea).toMatchObject({ stage: "started", identifier: null, promoted: false });

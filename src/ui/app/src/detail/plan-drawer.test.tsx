@@ -70,6 +70,7 @@ function idea(state: keyof typeof OFFERED, patch: Partial<IdeaData> = {}): IdeaD
     rank: 1024,
     links: [],
     explorations: [],
+    shapeProposal: null,
     missingLinks: [],
     linkCount: 0,
     resolvedLinks: 0,

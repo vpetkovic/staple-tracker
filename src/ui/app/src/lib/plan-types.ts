@@ -163,6 +163,8 @@ export interface IdeaData {
   heldBy: IdeaHold | null;
   state: IdeaState;
   actions: OfferedAction[];
+  /** An agent's standing proposal that it is ready to be marked shaped: who, when and why. The person accepts it with Mark shaped. */
+  shapeProposal: { by: string | null; at: string; note: string | null } | null;
   /** What it needs next from planning while a horizon carries it; else null. */
   nextStep: PlanStepData | null;
   createdAt: string;

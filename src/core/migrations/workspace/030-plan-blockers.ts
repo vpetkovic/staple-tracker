@@ -2,7 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Migration } from "../types.js";
 
 /**
- * Version 29: one plan record waits on another (`design/plan.md`, "Dependencies between records").
+ * Version 30: one plan record waits on another (`design/plan.md`, "Dependencies between records").
  *
  * One table, one row per edge: `idea_id` is the record that waits, `blocker_id` the record it
  * waits on. The blocker is not a foreign key, as a link's issue is not (`plan_links`): a device
@@ -20,11 +20,11 @@ import type { Migration } from "../types.js";
  * ## What it costs
  *
  * Purely additive. As with every migration, the number is the `schema` every operation carries:
- * an older client refuses an operation page stamped 29 with `schema_ahead`, so no older build
+ * an older client refuses an operation page stamped 30 with `schema_ahead`, so no older build
  * drops an edge it cannot store.
  */
 export const migration: Migration = {
-  version: 29,
+  version: 30,
   name: "plan-blockers",
   up(db: DatabaseSync): void {
     db.exec(`

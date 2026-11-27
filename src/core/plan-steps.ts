@@ -57,6 +57,8 @@ export interface PlanStepInput {
   scheduled: boolean;
   state: IdeaState;
   maturity: Maturity;
+  /** An agent proposed it shaped and the proposal stands (`shape-proposal`). */
+  proposed?: boolean;
   /** It has own work: it was promoted, or links issues. */
   ownWork: boolean;
   /** Its questions neither resolved nor deferred. */
@@ -99,8 +101,23 @@ export function planStepOf(input: PlanStepInput): PlanStep | null {
     step(
       "brainstorm",
       "agent",
-      `Develop "${input.title}" and capture the result on the idea: its brief, questions (staple idea ask ${ref}), decisions and plan sections (staple idea plan ${ref}). Scheduling it and moving its maturity stay the person's.`,
+      `Develop "${input.title}" and capture the result on the idea: its brief, questions (staple idea ask ${ref}), decisions and plan sections (staple idea plan ${ref}). Writing any of these moves a raw idea to exploring; scheduling it and marking it shaped stay the person's (propose it shaped with staple idea propose ${ref} once it passes the gate).`,
     );
+  // A standing proposal is the person's to accept, once nothing holds it back: its questions first.
+  // A record that started while exploring takes one too: shaping it is still the person's.
+  if (input.proposed && (input.maturity === "raw" || input.maturity === "exploring")) {
+    if (input.openQuestions.length > 0) {
+      return step(
+        "answer_questions",
+        "person",
+        `Bring these questions on "${input.title}" to the person, and record each answer with staple idea resolve ${ref} <n> (or staple idea defer ${ref} <n> when the person leaves it open on purpose). Never mark it shaped yourself.`,
+        { questions: [...input.openQuestions] },
+      );
+    }
+    if (input.gate().length === 0) {
+      return step("mark_shaped", "person", `"${input.title}" was proposed shaped and passes the shaped gate: the person accepts it with Mark shaped, or dismisses the proposal. Accepting is theirs.`);
+    }
+  }
   if (input.maturity === "raw") return brainstorm();
   if (input.maturity === "exploring") {
     if (!input.scheduled && !input.ownWork) return brainstorm();

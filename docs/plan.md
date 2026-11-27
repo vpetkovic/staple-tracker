@@ -32,7 +32,7 @@ surface (the page, the CLI and the agent tools):
 stateDiagram-v2
     state "An idea" as idea {
         [*] --> raw: capture
-        raw --> exploring: start exploring (person)
+        raw --> exploring: start exploring (person), or any plan write (anyone)
         raw --> shaped: mark shaped (person)
         exploring --> shaped: mark shaped (person)
         shaped --> exploring: back to exploring (person)
@@ -55,14 +55,16 @@ stateDiagram-v2
         h_active --> h_shipped: all its work done, every idea on it shipped
     }
     note right of horizon
-        Shaping, scheduling and planned dates are the person's call
+        Shaping, scheduling and planned dates are the person's call;
+        an agent may propose shaped
     end note
 ```
 
 Steps marked (person) are the person's. Restoring a dropped idea can return it to raw,
 exploring or shaped: to raw only while it holds no horizon and no planned dates (a raw idea has
 neither), to shaped only when its plan passes the shaped gate. The Plan view restores to
-exploring. A horizon's state follows the work on it.
+exploring. An idea that was made more complete while raw (below) never reads raw again: restored to
+raw, it reads exploring. A horizon's state follows the work on it.
 
 ## 1. Turn it on
 
@@ -157,9 +159,24 @@ it to Exploring, or use its ⋯ menu. An exploring idea can reserve a horizon (i
 Ideas lens with a ◇ chip such as ◇ Next) and get planned dates. Ask questions, answer them,
 record decisions. Agents help here: they can add questions, answer them and fill in the plan.
 
+**Working on a raw idea explores it.** Whoever makes a raw idea more complete moves it to
+exploring, you or an agent: writing a plan section or a breakdown row, asking, answering or
+deferring a question, recording a decision, or linking research. Capturing it (an import
+included) and editing its title or brief do not. Nothing moves an idea to shaped on its own.
+
 An exploring card says what shaping still needs (**To shape:** …), how much of the plan is
 written (`7/10 written`, the required sections first on its meter), its open questions and the
 horizon it is aimed at. Once the plan passes the gate it offers **Mark shaped**.
+
+**An agent may propose shaped.** When the plan passes the gate, an agent can propose the idea
+shaped (`staple idea propose <ref> --note "why"`, or `update_idea` with `propose_shaped`). The
+idea's card and its panel then say **proposed shaped**, it shows under **Needs you**, and its
+panel says who proposed it, when and why. **Accept shaped** marks it shaped in one action (held to
+the gate, so it waits if the plan was emptied since); **Dismiss** sets the proposal aside. At the
+terminal: `staple idea set <ref> --maturity shaped --person` accepts it and
+`staple idea set <ref> --dismiss-proposal --person` dismisses it. Any maturity move you make, and
+marking it delivered outside the tracker, settles the proposal. A raw card that was proposed shows
+**Accept shaped** in place of **Explore**.
 
 ## 4. Shape it
 
@@ -356,8 +373,9 @@ Two alternatives:
 an idea is still being worked out is linked as exploration work: **Link research or a POC** under
 **Research and POCs** on the idea's Plan tab, `staple idea adopt <id> <issue> --research`, or
 `start_idea` with `research`. It shows in its own list on the idea (and under Connections), and it
-does not make the idea started, count toward its progress or dates, or join its horizon. An
-exploring, shaped, started or shipped idea can link and unlink research (`staple idea unlink`
+does not make the idea started, count toward its progress or dates, or join its horizon. A raw
+idea can link research too, which moves it to exploring. An exploring, shaped, started or shipped
+idea can link and unlink research (`staple idea unlink`
 removes either kind of link); a dropped idea keeps its research until it is restored, and one that
 holds research is restored to exploring or shaped, not raw. Linking an issue the other way moves it
 between the two lists.
@@ -521,6 +539,7 @@ and stop for you on the rest.
 | Exploring, with open questions | Answer the questions (deferred ones are left out) | You: the agent brings them to you and records your answers |
 | Exploring, the plan not written enough to shape | Write the plan sections the gate names | Agent |
 | Exploring, ready to shape | Mark it shaped | You |
+| Raw or exploring, proposed shaped by an agent and passing the gate | Accept the proposal (Mark shaped) or dismiss it | You |
 | Shaped, but edited since so it fails the gate | Fix the plan | Agent |
 | Shaped, no tickets, its planned start ahead, an idea it depends on not shipped, or an idea above it not shaped | Wait | Nobody yet |
 | Shaped, no tickets, its turn has come | Re-check the breakdown, then Scaffold (or Adopt) | Agent |
@@ -561,9 +580,10 @@ come back as they were.
 > Agents can capture raw ideas, edit titles and briefs, write plan sections and breakdown rows,
 > add, answer and defer questions, record decisions, adopt or unlink work, link research and POCs,
 > say which ideas an idea waits on (Blocked by), and scaffold or
-> promote an idea **you** marked shaped (preview first, then confirm).
+> promote an idea **you** marked shaped (preview first, then confirm). Their plan writes move a raw
+> idea to exploring, and they may propose an idea shaped for you to accept.
 >
-> Agents cannot move maturity, schedule ideas on horizons, set dates or order, re-parent ideas,
+> Agents cannot mark an idea shaped or move its maturity by hand, schedule ideas on horizons, set dates or order, re-parent ideas,
 > mark an idea delivered outside the tracker, reset baselines, create or change horizons, set a horizon's run setting, or turn planning on or
 > off. These need you, in the web UI or with `--person` on the CLI, which records the change
 > under your name. An agent that tries gets a `validation` refusal saying what it may do instead.
@@ -572,10 +592,10 @@ come back as they were.
 
 | State | Offers |
 |---|---|
-| Raw | Edit, ask, decide, start exploring, mark shaped, drop, move under another idea, reorder |
-| Exploring | The same, plus schedule on a horizon, plan dates, adopt existing work, link or unlink research and POCs, and mark delivered outside the tracker |
+| Raw | Edit, ask, decide, start exploring, mark shaped, propose shaped, drop, move under another idea, reorder, link research and POCs (which explores it); dismiss a proposal while one stands |
+| Exploring | The same, plus schedule on a horizon, plan dates, adopt existing work, unlink research and POCs, and mark delivered outside the tracker |
 | Shaped | Edit, schedule, plan dates, scaffold, promote, adopt, link or unlink research and POCs, mark delivered outside the tracker, back to exploring, drop |
-| Started | Re-plan, adopt more work, unlink work, link or unlink research and POCs, reset the baseline, open the epic; scaffold again only if it was scaffolded; mark shaped if it started while exploring |
+| Started | Re-plan, adopt more work, unlink work, link or unlink research and POCs, reset the baseline, open the epic; scaffold again only if it was scaffolded; mark shaped, propose shaped or dismiss a proposal if it started while exploring |
 | Shipped | Open the epic, link more work (open work reopens it), or link and unlink research. An idea that was never promoted takes no more edits, unless it was marked delivered outside the tracker: then it is still edited, and you can clear the mark. |
 | Dropped | Restore |
 | Horizon planned | Rename, date, reorder, run setting, remove |
@@ -595,6 +615,8 @@ what it offers.
 | `staple horizon ls` | `list_horizons` | Horizons in order, with their run setting and plan steps |
 | `staple idea new` | `capture_idea` | Capture a raw idea |
 | `staple idea set`, `ask`, `resolve`, `defer`, `decide` | `update_idea` | Edit an idea and its questions |
+| `staple idea propose [--note T]` | `update_idea` (`propose_shaped`) | Propose an idea shaped for the person to accept |
+| `staple idea set --maturity shaped --person`, `--dismiss-proposal --person` | | Accept or dismiss a proposal |
 | `staple idea set --delivered D [--note T] --person`, `--undelivered` | | Mark an idea delivered outside the tracker, or clear the mark |
 | `staple idea plan`, `task` | `update_idea` (`plan`) | Write plan sections and breakdown rows |
 | `staple idea import <plan.md>` | | Capture an idea from a plan file |

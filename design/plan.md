@@ -192,11 +192,11 @@ The draft rules still hold for a record still under a draft: in JSON it goes out
 `identifier: null, draft: true` (`hideDraftIdentifiers`), a draft in text as the idea's id
 (`draftsAsIds`).
 
-## Storage: eleven columns on `issues`, three tables, no new entity
+## Storage: twelve columns on `issues`, three tables, no new entity
 
-What an issue cannot already say lives in eleven nullable `issues` columns, eight added by workspace
+What an issue cannot already say lives in twelve nullable `issues` columns, eight added by workspace
 migration **020** (`020-plan-fields.ts`), one by **021** (`021-plan-delivered.ts`), one by
-**026** (`026-idea-numbers.ts`) and one by **028** (`028-plan-ticket-number.ts`), NULL on every row outside the plan, and three tables:
+**026** (`026-idea-numbers.ts`), one by **028** (`028-plan-ticket-number.ts`) and one by **029** (`029-plan-explored.ts`), NULL on every row outside the plan, and three tables:
 `plan_links` and `plan_rows` (synchronized, one field per link and per breakdown row) and
 `plan_members` (derived on each device, never sent).
 
@@ -210,6 +210,7 @@ migration **020** (`020-plan-fields.ts`), one by **021** (`021-plan-delivered.ts
 | `plan_run_mode` | horizon | its run setting: `work`, `goal`, `epic` or NULL |
 | `plan_delivered_on` | plan record | the day the person marked it delivered outside the tracker, `YYYY-MM-DD`, or NULL (below) |
 | `plan_idea_number` | promoted record | the idea number it kept when it was promoted, `I-<PREFIX>-<n>`; NULL on an unpromoted idea, which holds it as its identifier |
+| `plan_explored` | plan record | 1 once a write made it more complete while raw, never cleared; a raw record holding it reads `exploring` ([Maturity moves by enrichment](#maturity-moves-by-enrichment)) |
 
 A horizon's date is its milestone's `target_date`, and its goal is the milestone's acceptance
 criteria. An idea's brief, open questions, decisions and text and list plan sections are
@@ -342,8 +343,8 @@ whoever takes it sharpens it and removes the label.
 
 **A shaped plan edited since.** Agents may edit a shaped idea's plan, and an edit can leave it
 failing the gate: a cleared goal, an emptied breakdown, an added or reopened question, a removed
-row, an old revision restored. Its maturity stays, because maturity is the person's and no edit
-moves it as a side effect. The record says so instead (`planIncomplete`), shown as "shaped · plan
+row, an old revision restored. Its maturity stays, because shaping is the person's and no edit
+moves a record off shaped as a side effect. The record says so instead (`planIncomplete`), shown as "shaped · plan
 incomplete" with what it lacks in the drawer, on its Horizons row and in the For agents view; Scaffold and
 Promote are held back with that reason and refused at confirm, naming what is missing.
 
@@ -507,10 +508,10 @@ only a person's removal cancels one.
 
 | state | offers |
 |---|---|
-| raw | edit, ask, decide, explore, shape, drop, reparent, reorder |
-| exploring | edit, ask, decide, shape, drop, schedule, plan dates, reparent, reorder, adopt, mark delivered outside the tracker |
+| raw | edit, ask, decide, explore, shape, propose shaped, dismiss the proposal, drop, reparent, reorder, link research |
+| exploring | edit, ask, decide, shape, propose shaped, dismiss the proposal, drop, schedule, plan dates, reparent, reorder, adopt, link research, unlink research, mark delivered outside the tracker |
 | shaped | edit, ask, decide, back to exploring, drop, schedule, plan dates, reparent, reorder, promote, scaffold, adopt, mark delivered outside the tracker |
-| started | edit, ask, decide, schedule, plan dates, reorder, scaffold (only if it was scaffolded), adopt, unlink, reset baseline, open the epic; shape while its maturity is exploring |
+| started | edit, ask, decide, schedule, plan dates, reorder, scaffold (only if it was scaffolded), adopt, unlink, reset baseline, open the epic; shape, propose shaped and dismiss the proposal while its maturity is exploring |
 | shipped | adopt (linking more work: landed work keeps it shipped, open work reopens it), open the epic; a promoted record adds edit, ask, decide; a record marked delivered outside the tracker adds edit, ask, decide and clear the mark |
 | dropped | restore |
 | horizon planned | rename, date, reorder, run setting, remove (held back while it is queued) |
@@ -610,7 +611,9 @@ is, never whether it is allowed.
 
 An agent may capture raw ideas (title, brief, parent), edit titles, briefs and plan sections, add,
 answer and defer questions, add decisions, adopt work onto an exploring or shaped idea or unlink
-it, and promote or scaffold an idea the person has marked shaped. Maturity, horizon assignment, parent, planned dates, order, horizon
+it, link research, propose an idea shaped, and promote or scaffold an idea the person has marked
+shaped. Its plan writes move a raw idea to exploring ([below](#maturity-moves-by-enrichment)); that
+is the one maturity move that is not a steering write. Moving maturity by hand, horizon assignment, parent, planned dates, order, horizon
 definitions, dates and run settings, the baseline, the delivered-outside-the-tracker mark and the
 feature flag are the person's.
 
@@ -635,6 +638,55 @@ there at all (name, status, dates, goal or any field); a milestone made there is
 milestone, never a column; an idea's status never moves there; and an idea made there is captured
 raw, numberless, at the end of the plan, as `capture_idea` would make it. The plan layer's own
 writes pass `PlanInternal` after applying the person rule.
+
+## Maturity moves by enrichment
+
+Capture makes an idea raw. Any write that makes it more complete moves it from raw to exploring,
+whoever makes it (VP, 2026-11-27): a plan section (`update_idea` plan, `staple idea plan`, or a raw
+document write of a section key: `put_document`, `staple doc put`, a restore), a breakdown row, a
+question asked, answered or deferred, a decision, or research linked (`link_research`, which the
+raw row now offers). A capture, an import (`importPlan`, whatever plan, questions and decisions it
+brings) and an edit of the title or brief do not, and a write that changes nothing moves nothing.
+Nothing moves an idea to shaped on its own.
+
+**A flag, not a maturity write.** The move is `plan_explored = 1` (migration 029, the issue field
+`planExplored`), never a write of `plan_maturity`, which stays the person's. Every read of a
+record's maturity is one SQL expression, `MATURITY_READ` (`plan.ts`): `exploring` while
+`plan_maturity` is `raw` and the flag is set, otherwise `plan_maturity`. The plan store selects it
+as `plan_maturity` (`PLAN_COLUMNS`) and so does provenance, so no path reads the stored raw by
+mistake, and a device that made the move and one that received it by sync read the same. Because
+the flag only ever goes to the one value: two devices enriching one raw idea offline write the same
+value and raise no conflict; one that enriches it while the person shapes, drops or restores it on
+another touches a different field, so the person's maturity stands on every device, a fresh one
+included, under both folds, with no conflict (`test/plan-maturity-enrichment.test.ts`). An idea
+once explored never reads raw again: back to raw is refused as for any exploring idea, and a dropped
+one restored to raw reads exploring, so the restore is not held to what a raw idea may carry.
+
+**Where it is written.** `PlanStore.explore`, after the write it follows and in its transaction,
+read fresh so a write that also set the maturity is read as set: from `update` when a section or row
+changed, `addQuestion`, `resolveQuestion`, `deferQuestion`, `addDecision`, `adopt` with the
+exploration purpose, and `WorkspaceStore.putDocument` (through `noteDocumentWrite`) for a raw
+document write of a section, questions or decisions key. It records an `idea_explored` event with
+its cause.
+
+**Proposing shaped.** Shaping stays the person's; an agent may propose it. `propose_shape`
+(anyone's; raw, exploring, and a record started while exploring) is held to the shaped gate as the
+plan stands after the write that proposes it, and refused naming what is missing. The proposal is
+the `shape-proposal` document: its body the reason, its author and time who and when; a raw
+document write of the key is refused. It changes no maturity. While the record still offers Mark
+shaped, the view carries it as `shapeProposal { by, at, note }` (null otherwise), read for every
+record in one statement on the first view that asks; the Plan page's **Needs you** keeps it, its
+card and status line say *proposed shaped*, and the drawer's Where it stands names who, when and
+why with **Accept shaped** (the offered `shape`, held back with the gate's reason) and **Dismiss**
+(`dismiss_proposal`, the person's, offered only while a proposal stands). A carried record whose
+proposal passes the gate has the person's `mark_shaped` step whatever its maturity, after any open
+questions, a record started while exploring included. Any maturity move the person makes, the
+delivered mark (set or cleared) and a dismissal empty the document, so a proposal never outlives
+the answer; proposing and dismissing in one write is refused; a raw card that was proposed offers
+Accept shaped in place of Explore, since exploring it would settle the proposal; documents converge by revision, so two proposals (or a proposal and an
+answer) written offline settle to the one the log holds last, with no conflict. Surfaces:
+`staple idea propose <ref> [--note T]`, `update_idea` `propose_shaped`, and to answer it
+`staple idea set --maturity shaped|--dismiss-proposal --person` or the drawer.
 
 ## Guards: an idea never enters the tracker
 
@@ -789,7 +841,7 @@ Dependencies name its own rows, and a sub-idea naming a key only its ancestors' 
 nothing. The timeline draws no arrow between a record and its ancestor.
 
 **Sub-ideas and blockers.** A record can also be blocked by another plan record with a structured
-edge (`plan-blockers.ts`, migration 029): `staple idea block|unblock`, `update_idea`'s
+edge (`plan-blockers.ts`, migration 030): `staple idea block|unblock`, `update_idea`'s
 `add_blockers` and `remove_blockers`, the Plan tab's *Blocked by*, `/api/plan/blocker`. An edge is
 an edit (the state must offer one); it is refused for the record itself, an ancestor or descendant
 (the same cycle as above), a record outside the plan, and an edge that closes a loop, where a
@@ -855,7 +907,8 @@ its nearest scheduled ancestor's; [Accounting](#accounting)) that is not shipped
 
 | record | `need` | `who` | its instruction says, and it lists |
 |---|---|---|---|
-| raw, or exploring and scheduled on no horizon itself (a descendant the horizon carries) | `brainstorm` | agent | develop it and capture the result on the idea; scheduling and maturity stay the person's |
+| raw or exploring, proposed shaped, no open question and the gate met | `mark_shaped` | person | the person accepts the proposal with Mark shaped, or dismisses it |
+| raw, or exploring and scheduled on no horizon itself (a descendant the horizon carries) | `brainstorm` | agent | develop it and capture the result on the idea (which moves a raw one to exploring); scheduling and marking it shaped stay the person's, who may be sent a proposal |
 | exploring, with questions neither resolved nor deferred | `answer_questions` | person | bring these questions to the person and record each answer with resolve; never mark it shaped yourself. Lists `questions` |
 | exploring, no open question, the shaped gate not met | `write_plan` | agent | write what the gate names, then tell the person. Lists `missing` |
 | exploring, the gate met | `mark_shaped` | person | tell the person it is ready to be marked shaped |
@@ -1292,6 +1345,10 @@ What converges, under both folds, on a tail device and a freshly hydrated one:
   third, or closed before a device joined and reopened by an offline write, it ends open with no
   completion time anywhere. A person's cancel still conflicts with a derived close or reopen, and
   keeps its own timestamps while it does.
+- **Maturity moved by enrichment** is a flag that only goes one way: two devices exploring one idea
+  offline converge with no conflict, and a person's shape, drop or restore on one device stands over
+  an agent's enrichment on another, on a tail device and a fresh one alike. A shaped proposal is a
+  document and converges as documents do.
 - **A mark delivered outside the tracker** is one issue field and one document: a tail device and
   a fresh one read the same shipped record, day and note, and the same again once it is cleared.
 
@@ -1318,12 +1375,13 @@ What converges, under both folds, on a tail device and a freshly hydrated one:
 
 ## Surfaces
 
-- **CLI** `staple plan enable|show`, `staple idea ls|new|show|set|plan|task|promote|scaffold|import|convert|adopt|unlink|ask|resolve|defer|decide|reset-baseline`,
+- **CLI** `staple plan enable|show`, `staple idea ls|new|show|set|propose|plan|task|promote|scaffold|import|convert|adopt|unlink|ask|resolve|defer|decide|reset-baseline`,
   `staple horizon ls|new|set|mv|rm`, with `--person` for steering. An idea's ref is its id.
   `staple idea set <ref> --delivered YYYY-MM-DD [--note T] --person` marks it delivered outside
-  the tracker and `--undelivered` clears the mark.
+  the tracker and `--undelivered` clears the mark. `staple idea propose <ref> [--note T]` proposes
+  it shaped; `idea set --dismiss-proposal --person` dismisses the proposal.
 - **MCP** `list_ideas`, `get_idea`, `list_horizons` (reads); `capture_idea`, `update_idea` (also
-  `plan` sections, `breakdown_base` and `defer_question`; `delivered_on`, `delivered_note` and
+  `plan` sections, `breakdown_base`, `defer_question` and `propose_shaped`; `delivered_on`, `delivered_note` and
   `undelivered` only to refuse them), `start_idea` (promote in place, or with
   `adopt` link an existing issue; answers the promoted `{ id, identifier, kind }` or `null`),
   `unlink_idea`, `scaffold_idea` (preview without `confirm`; with it and the preview's
@@ -1363,6 +1421,7 @@ What converges, under both folds, on a tail device and a freshly hydrated one:
 | `test/plan-delivered.test.ts`, `test/cloud-plan-delivered-sync.test.ts` | a record delivered outside the tracker: shipped with no ticket and no number, never a member, queued, checked out or listed; late only when delivered after its line, never not started; offered in exploring and shaped only; its day required and not in the future; the person's alone, an agent told what to do instead; its edits and the clear; the note kept to the mark; reopened by open work linked since; refused with planning off and back when it is on; the same on a tail device and a fresh one under both folds |
 | `test/plan-surfaces.test.ts` | CLI, MCP and HTTP read one plan with no idea numbers and no draft shown on any surface, consume no number at capture, refuse the same agent writes, promote into the horizon's milestone, and let the person steer |
 | `test/plan-lifecycle.test.ts` | the table itself, pinned: every state's actions, who takes each, the promoted record's epic edits, Mark shaped on a record started while exploring, adopt from exploring on and never raw, back to raw offered nowhere, how a maturity change is named, the delivered mark in exploring and shaped and the marked record's edits and clear |
+| `test/plan-maturity-enrichment.test.ts` | maturity moves by enrichment: each plan write on a raw idea (section, row, question asked, answered or deferred, decision, research, a raw section document) explores it for an agent and the person alike; capture, import and title or brief edits do not; the shaped proposal is held to the gate, waits under Needs you, is accepted or dismissed only by the person; migration 029; and two devices converge with no conflict, the person's shape or drop standing over an agent's enrichment, on a tail and a fresh device under both folds |
 | `test/plan-lifecycle-surfaces.test.ts` | every idea (state, write) cell and every horizon (state, action) cell agrees with the table on HTTP, MCP and the CLI with and without `--person`; every payload carries exactly the table's row; a record started while exploring carries the started row and Mark shaped, and only the person shapes it; a record delivered outside the tracker carries the shipped row with its edits and the clear, the mark and the clear are the person's on every surface, and a mark without a day is refused before anything is written; every document and file write in every state |
 | `test/plan-own-state.test.ts` | with hand-written expectations: a parent's own state against its rollup; a sub-idea promoted on its own and re-parented by its parent's promotion; a promoted record edited as an epic once shipped; an exploring idea that adopts work reads started, keeps its maturity, offers Mark shaped, joins its horizon, keeps its baseline and stays out of the tracker; every document key, restore and file on a shipped, dropped or raw idea |
 | `test/plan-idea-blockers.test.ts`, `test/plan-idea-blockers-surfaces.test.ts`, `test/cloud-plan-blockers-sync.test.ts` | edges written, read and refused (itself, above or beneath, a loop, outside the plan) on every surface; text dependencies beside them; a shaped sub-idea scheduled on any horizon, held from Scaffold and Promote until every idea above is shaped and its blockers shipped, reading shaped · waiting on parent; plan steps waiting on parents and blockers, a parent's Scaffold leaving a held sub-idea; a parent gone back or dropped flagging the scaffolded tickets, nothing cancelled; under both folds edges added on two devices kept, the same edge agreed, add against remove a conflict, seeded and restored edges, and the flag read the same on every device with no conflict |

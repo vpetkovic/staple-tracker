@@ -55,8 +55,8 @@ function childWithWork(parent: string, done: boolean): { child: string; work: st
   return { child, work };
 }
 
-const RAW = ["edit", "ask", "decide", "explore", "shape", "drop", "reparent", "reorder"];
-const EXPLORING = ["edit", "ask", "decide", "shape", "drop", "schedule", "plan_dates", "reparent", "reorder", "adopt", "link_research", "unlink_research", "mark_delivered"];
+const RAW = ["edit", "ask", "decide", "explore", "shape", "propose_shape", "drop", "reparent", "reorder", "link_research"];
+const EXPLORING = ["edit", "ask", "decide", "shape", "propose_shape", "drop", "schedule", "plan_dates", "reparent", "reorder", "adopt", "link_research", "unlink_research", "mark_delivered"];
 const SHAPED = ["edit", "ask", "decide", "unshape", "drop", "schedule", "plan_dates", "reparent", "reorder", "promote", "scaffold", "adopt", "link_research", "unlink_research", "mark_delivered"];
 
 describe("a parent's own state is its own; its sub-ideas' work is a rollup", () => {
@@ -92,15 +92,17 @@ describe("a parent's own state is its own; its sub-ideas' work is a rollup", () 
     expect(plan.promote(parent, "vp", PERSON)).toMatchObject({ promoted: true, state: "started" });
   });
 
-  it("keeps a raw parent raw, and answerable, after a sub-idea's work lands", () => {
+  it("keeps a raw parent raw after a sub-idea's work lands, until its own plan grows: a question explores it", () => {
     const parent = idea("Raw parent", "raw");
     const { child } = childWithWork(parent, true);
     expect(plan.ideaView(child).state).toBe("shipped");
     const view = plan.ideaView(parent);
     expect(view).toMatchObject({ state: "raw", progress: 1, resolvedLinks: 1 });
     expect(view.actual.end).not.toBeNull();
-    expect(plan.addQuestion(parent, "What next?", "agent").questions).toEqual([{ text: "What next?", resolved: false }]);
     expect(plan.update(parent, { brief: "Still thinking" }, "agent").state).toBe("raw");
+    const asked = plan.addQuestion(parent, "What next?", "agent");
+    expect(asked.questions).toEqual([{ text: "What next?", resolved: false }]);
+    expect(asked.idea).toMatchObject({ state: "exploring", maturity: "exploring" });
   });
 
   it("keeps a dropped parent dropped, restorable, and leaves its sub-ideas' states alone", () => {
@@ -298,7 +300,7 @@ describe("an exploring idea adopts work", () => {
     const work = store.createIssue({ title: "Export endpoint" });
     expect(plan.adopt(ref, work.identifier, "agent")).toMatchObject({ maturity: "exploring", stage: "started", state: "started", links: [work.id] });
     // The started row, and Mark shaped on top of it: the maturity is still the person's to move.
-    expect(actionsOf(ref)).toEqual([...STARTED, "shape"]);
+    expect(actionsOf(ref)).toEqual([...STARTED, "shape", "propose_shape"]);
     plan.addQuestion(ref, "Which formats?", "agent");
     expect(plan.ideaView(ref).actions.find((action) => action.id === "shape")?.disabledReason).toContain("1 open question answered or deferred");
     plan.deferQuestion(ref, 1, "agent");

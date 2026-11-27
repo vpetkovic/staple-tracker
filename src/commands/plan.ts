@@ -147,6 +147,7 @@ function printDetail(detail: IdeaDetail): void {
   }
   for (const warning of detail.planWarnings) console.log(`  warning ${warning}`);
   for (const item of detail.plan.acceptance) console.log(`  accept ${item}`);
+  if (idea.shapeProposal) console.log(`proposed shaped by ${idea.shapeProposal.by ?? "someone"} ${idea.shapeProposal.at.slice(0, 10)}${idea.shapeProposal.note ? ` · ${idea.shapeProposal.note.split("\n")[0]}` : ""} · the person accepts with --maturity shaped --person, or --dismiss-proposal --person`);
   console.log(`offers   ${offeredLine(idea.actions)}`);
   if (idea.nextStep) console.log(`step     ${idea.nextStep.need} · ${idea.nextStep.who}: ${idea.nextStep.instruction}`);
 }
@@ -211,6 +212,7 @@ export function runIdeaCommand(rest: string[]): void {
       note: { type: "string" },
       undelivered: { type: "boolean" },
       research: { type: "boolean" },
+      "dismiss-proposal": { type: "boolean" },
     },
   });
   const [sub = "ls", first, ...others] = positionals;
@@ -261,7 +263,7 @@ export function runIdeaCommand(rest: string[]): void {
     case "set": {
       const ref = need(first, "an idea reference");
       if (values.delivered !== undefined && values.undelivered) throw new StapleError("validation", "staple idea set takes --delivered D or --undelivered, not both.");
-      if (values.note !== undefined && values.delivered === undefined) throw new StapleError("validation", "--note goes with --delivered D: it is the note kept with the mark.");
+      if (values.note !== undefined && values.delivered === undefined) throw new StapleError("validation", "--note goes with --delivered D: it is the note kept with the mark (or with staple idea propose, its reason).");
       plan.update(
         ref,
         {
@@ -274,10 +276,19 @@ export function runIdeaCommand(rest: string[]): void {
           plannedTarget: clearable(values.target),
           before: values.before === undefined ? undefined : values.before === "end" ? null : values.before,
           delivered: values.undelivered ? null : values.delivered === undefined ? undefined : { on: values.delivered, note: values.note ?? null },
+          ...(values["dismiss-proposal"] ? { dismissProposal: true } : {}),
         },
         actor,
         options,
       );
+      return show(ref);
+    }
+    case "propose": {
+      // Anyone's: the person accepts it with --maturity shaped --person, or dismisses it.
+      const ref = need(first, "an idea reference");
+      const target = need(values.maturity ?? others[0] ?? "shaped", "the maturity to propose");
+      if (target.trim().toLowerCase() !== "shaped") throw new StapleError("validation", `Only shaped is proposed: a write that makes a raw idea more complete moves it to exploring on its own. Got "${target}".`);
+      plan.update(ref, { proposeShaped: { note: values.note ?? null } }, actor, options);
       return show(ref);
     }
     case "promote": {
@@ -401,7 +412,7 @@ export function runIdeaCommand(rest: string[]): void {
       return;
     }
     default:
-      throw new StapleError("validation", `Unknown idea verb "${sub}". Use: ls, new, show, set, plan, task, promote, scaffold, import, convert, adopt, unlink, block, unblock, ask, resolve, defer, decide, reset-baseline`);
+      throw new StapleError("validation", `Unknown idea verb "${sub}". Use: ls, new, show, set, propose, plan, task, promote, scaffold, import, convert, adopt, unlink, block, unblock, ask, resolve, defer, decide, reset-baseline`);
   }
 }
 
