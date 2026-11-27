@@ -159,10 +159,13 @@ resolves and shows the number from. Scaffold promotes, so it keeps the number th
 **A kept number is a claim too.** One idea number names one record, held as an identifier or
 kept. A write that leaves it on two records (a record promoted before an offline capture of the
 same number reached the promoting device, or two devices numbering different sets of legacy
-records) is settled by the applier (`claimKeptIdeaNumbers`, `cloud/apply.ts`): a live identifier
-always keeps the number, and between two kept numbers the later claim in the log yields. Only the
-device that wrote the yielding kept number settles it, with a fresh idea number, an `update` of
-`planIdeaNumber` by `staple` and a system comment (`settleOne`, `claims.ts`).
+records) is settled by the applier (`claimKeptIdeaNumbers`, `cloud/apply.ts`) like any claim on a unique
+value: the earlier claim in the log keeps the number. An idea's claim is the write that gave it the
+number, a kept number's the write that kept it (the promotion), measured the same way on every
+device. Only the device that made the later claim settles it: a later idea is renumbered from the
+idea counter, a later kept number by an `update` of `planIdeaNumber` by `staple` with a system
+comment (`settleOne`, `claims.ts`). Every claim on an identifier is measured by the device's first
+write of that value (`ownValueClaimSeq`), never by its newest write of the field.
 
 **Promotion wins over a late idea number.** An idea number written onto a record that is no
 longer an idea (a device numbered a legacy idea before it heard it was promoted) is dropped on
