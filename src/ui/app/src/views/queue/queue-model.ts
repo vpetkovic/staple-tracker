@@ -11,8 +11,8 @@
  * wrote and `effective` is the resolver's answer — expansion, the unqueued band and the
  * eligibility ladder are all `store.queue().effectiveQueue()`'s work, and design/queue.md is
  * explicit that one function computes them for every surface. This module only JOINS the
- * two lists the server sent (which effective row came out of which plan row), turns the
- * numbers into labels, and does the move arithmetic a reorder needs before it is sent.
+ * two lists the server sent (which effective row came out of which plan row) and does the
+ * move arithmetic a reorder needs before it is sent.
  *
  * The one thing that looks like a derivation is `nextEligible`, and it is not a second
  * resolver: with no actor the resolver's next item IS the first `eligible` row of
@@ -25,76 +25,15 @@ import type {
   EffectiveQueueRow,
   Issue,
   IssueRow,
-  QueueEligibility,
   QueueEntry,
   QueueView,
 } from "@/lib/types";
 
-// ---------- eligibility, without colour ----------
-
-/**
- * One glyph and one word per eligibility, so a state is legible with no colour at all
- * (WCAG 1.4.1). Text glyphs on purpose, for the reason `milestones-model.ts` gives: they
- * survive a static-markup test and a pasted terminal screenshot alike. `⊘` and `◇` are the
- * same marks the milestone risk line uses for blocked and gated — one vocabulary.
- */
-export const ELIGIBILITY_PRESENTATION: Readonly<Record<QueueEligibility, { glyph: string; label: string }>> = {
-  eligible: { glyph: "○", label: "Eligible" },
-  claimed: { glyph: "◐", label: "Claimed" },
-  unavailable: { glyph: "–", label: "Unavailable" },
-  blocked: { glyph: "⊘", label: "Blocked" },
-  gated: { glyph: "◇", label: "Gated" },
-  resolved: { glyph: "✓", label: "Resolved" },
-  // Only on a pickup answer in a shared workspace; the plan listing never carries it.
-  assigned_to_other_member: { glyph: "@", label: "Another member's" },
-};
-
-/**
- * The sentence under a row that is not pickable, and null for one that is.
- *
- * The store writes the sentence (`reason`) and this never rewords it — the queue's
- * explanation of a refusal has to be the same sentence on every surface. The fallback to
- * the bare word is for a row whose `reason` is null although it is not eligible, which the
- * server does not send today; rendering the eligibility is still more honest than a blank.
- */
-export function reasonLabel(row: EffectiveQueueRow): string | null {
-  if (row.eligibility === "eligible") return null;
-  return row.reason ?? ELIGIBILITY_PRESENTATION[row.eligibility].label;
-}
-
-// ---------- the two numbers ----------
-
-/**
- * THE ONE NUMBER A ROW PRINTS: its place in the order an agent is handed.
- *
- * Null for a container, which has no such place. Null also for a row in the unqueued band —
- * it HAS a position, but printing it would put the plan's scale on rows that are not in the
- * plan, and the section those rows live in already says what they are. This is the whole of
- * the numbering after the redesign: one scale, on the rows it describes.
- *
- * It replaces `effectivePositionLabel`, which printed up to three numbers per row
- * (`#12 · from plan #4`) across two scales. "From plan" is gone entirely: the row is drawn
- * UNDERNEATH the plan row it came from, so position answers provenance and a label that
- * repeated it was answering a question the shape answers better.
- */
-export function rowOrdinal(row: EffectiveQueueRow | null): number | null {
-  if (row === null || row.unqueued) return null;
-  // A RESOLVED row keeps its place in the plan and loses its number. The ordinal is a
-  // pickup queue position — an answer to "when do I get handed this" — and finished work is
-  // never handed to anybody. It still renders, dimmed and in order, so the plan reads whole;
-  // it just stops advertising a turn it will not take. Without this the list numbers a done
-  // row `9` between a `5` and a `10`, which is a queue position that can never come up.
-  if (row.eligibility === "resolved") return null;
-  return row.position;
-}
-
 /**
  * The blockers named in an effective row's `detail`, local and cross-workspace alike.
  *
- * The STORE wrote them and this never re-derives them — `reasonLabel` above makes the same
- * promise about the sentence. What this adds is that the rail can render them as rows you
- * can OPEN, which a sentence cannot; the sentence still says it in words for anyone reading
- * the row rather than the rail.
+ * The STORE wrote them and this never re-derives them. What this adds is that the page can
+ * render them as links you can follow, which a sentence cannot.
  *
  * Shape-checked rather than cast: `detail` is `Record<string, unknown>` on the wire, and a
  * payload that ever stops carrying these should render nothing rather than throw.
@@ -116,9 +55,6 @@ export function blockersOf(row: EffectiveQueueRow | null): string[] {
 }
 
 // ---------- the plan, joined to its expansion ----------
-
-/** How many expanded descendants a queued container shows before it says how many are left. */
-export const EXPANSION_PREVIEW_LIMIT = 5;
 
 /** How many rows of the unqueued band the preview shows before it says how many are left. */
 export const UNQUEUED_PREVIEW_LIMIT = 10;

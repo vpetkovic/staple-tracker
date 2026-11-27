@@ -168,15 +168,18 @@ async function holdRereads(page: Page): Promise<void> {
   });
 }
 
-const moveButton = (page: Page, ref: string, control: "up" | "down") =>
-  page.locator(`[data-reorder-row="${ref}"] [data-reorder-control="${control}"]`);
+/** Move a plan entry one place with Alt and an arrow on its row, the page's keyboard reorder. */
+async function moveKey(page: Page, ref: string, direction: "up" | "down"): Promise<void> {
+  await page.locator(`[data-queue-entry="${ref}"]`).focus();
+  await page.keyboard.press(direction === "up" ? "Alt+ArrowUp" : "Alt+ArrowDown");
+}
 
-async function press(page: Page, ref: string, control: "up" | "down"): Promise<void> {
+async function press(page: Page, ref: string, direction: "up" | "down"): Promise<void> {
   const answered = page.waitForResponse((response) => response.url().includes("/api/queue/reorder"));
-  await moveButton(page, ref, control).click();
+  await moveKey(page, ref, direction);
   await answered;
-  // The answer is drawn on the next render; the controls come back once `busy` clears.
-  await expect.poll(() => moveButton(page, ref, control === "up" ? "down" : "up").isDisabled()).toBe(false);
+  // The answer is drawn on the next render; the handles come back once `busy` clears.
+  await expect.poll(() => page.locator("[data-queue-handle][aria-disabled]").count()).toBe(0);
 }
 
 describe.skipIf(Boolean(reason))("the queue page through a write", () => {
@@ -210,14 +213,34 @@ describe.skipIf(Boolean(reason))("the queue page through a write", () => {
     }
   });
 
+  for (const [key, ref, expected, words] of [
+    ["Alt+Home", () => second, () => [second, finished, epic, first], () => `${second} is now 1 of 4`],
+    ["Alt+End", () => finished, () => [epic, first, second, finished], () => `${finished} is now 4 of 4`],
+  ] as const) {
+    it(`moves the focused entry to the ${key === "Alt+Home" ? "first" : "last"} place with ${key}, and says so`, async () => {
+      setOrder([finished, epic, first, second]);
+      const { page, context, errors } = await openQueue();
+      try {
+        const answered = page.waitForResponse((response) => response.url().includes("/api/queue/reorder"));
+        await page.locator(`[data-queue-entry="${ref()}"]`).focus();
+        await page.keyboard.press(key);
+        expect((await answered).status()).toBe(200);
+        expect(plan().order).toEqual(expected());
+        await expect.poll(() => page.locator("[data-queue-announce]").innerText()).toBe(words());
+        expect(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.queueEntry)).toBe(ref());
+        expect(errors).toEqual([]);
+      } finally {
+        await context.close();
+      }
+    });
+  }
+
   it("does not move the epic when Alt and an arrow are pressed on a row nested under it", async () => {
     setOrder([finished, epic, first, second]);
     const before = plan();
     const { page, context, errors } = await openQueue();
     try {
-      const nested = page
-        .getByRole("listbox", { name: `What ${epic} expands to` })
-        .locator(`[role="option"][data-identifier="${children[0]}"]`);
+      const nested = page.locator(`[data-queue-expansion="${epic}"] [role="listitem"][data-identifier="${children[0]}"]`);
       await nested.waitFor();
       await nested.focus();
       await page.keyboard.press("Alt+ArrowDown");
@@ -285,7 +308,7 @@ describe.skipIf(Boolean(reason))("the queue page through a write", () => {
         route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "busy", message: "The server is busy." }) }),
       );
       const answered = page.waitForResponse((response) => response.url().includes("/api/queue/reorder"));
-      await moveButton(page, first, "down").click();
+      await moveKey(page, first, "down");
       expect((await answered).status()).toBe(409);
       await page.getByText("The server is busy.").waitFor({ timeout: 5_000 });
       expect(await page.locator("[data-queue-conflict]").count()).toBe(0);

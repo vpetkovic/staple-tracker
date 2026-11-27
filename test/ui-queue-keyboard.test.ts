@@ -3,9 +3,9 @@
  * A QUEUE ROW OPENS FROM THE KEYBOARD, in a real browser against the real server and the
  * built app.
  *
- * The queue's nested lists (what a queued epic expands to, and the work that is not in the
- * plan) are listboxes of `role="option"` rows with a roving tab stop. Enter and Space open
- * the focused row's details, as they do in the task list, and Space does not scroll the
+ * The queue's rows nested under the plan (what a queued epic expands to, and the work after
+ * the plan) are `role="listitem"` rows under the page's one roving tab stop. Enter and Space
+ * open the focused row's details, as they do in the task list, and Space does not scroll the
  * page. A key pressed on a control inside the row (its `⋯` menu) belongs to that control.
  *
  * SKIPPED, SAYING WHY, when there is no built bundle or no Chromium for `playwright-core`
@@ -68,9 +68,10 @@ beforeAll(async () => {
   const ws = initWorkspace({ global: true, slug: "keys" });
   const container = ws.store.createIssue({ title: "Checkout rework", kind: "epic" });
   epic = container.identifier;
-  children = ["Price the basket", "Take the payment"].map(
-    (title) => ws.store.createChild(container.id, { title }).identifier,
-  );
+  const made = ["Price the basket", "Take the payment"].map((title) => ws.store.createChild(container.id, { title }));
+  children = made.map((child) => child.identifier);
+  // The payment waits on the basket: its state column links to the basket's row.
+  ws.store.setBlockedBy(made[1]!.identifier, [made[0]!.identifier], "tester");
   ws.store.createIssue({ title: "Write the release notes" });
   ws.store.createIssue({ title: "Tidy the settings page" });
   ws.store.queue().enqueue(epic, {}, "tester");
@@ -108,6 +109,8 @@ async function openQueue(device: typeof DESK | typeof PHONE): Promise<{ page: Pa
 }
 
 const detail = (page: Page) => page.locator("[data-detail-overlay]");
+/** What the queued epic expands to: its tasks, under its plan entry. */
+const expansion = (page: Page) => page.locator(`[data-queue-expansion="${epic}"]`);
 const openedIssue = (page: Page) => new URL(page.url()).searchParams.get("issue");
 const keysSeen = (page: Page) =>
   page.evaluate(() => (window as unknown as { keys: { key: string; prevented: boolean }[] }).keys);
@@ -119,8 +122,7 @@ describe.skipIf(Boolean(reason))("a queue row opens from the keyboard", () => {
       it(`opens the focused row of a queued epic's expansion with ${name} on ${device}`, async () => {
         const { page, context, errors } = await openQueue(options);
         try {
-          const list = page.getByRole("listbox", { name: `What ${epic} expands to` });
-          const second = list.locator(`[role="option"][data-identifier="${children[1]}"]`);
+          const second = expansion(page).locator(`[role="listitem"][data-identifier="${children[1]}"]`);
           await second.waitFor();
           expect(await detail(page).count()).toBe(0);
           await second.focus();
@@ -140,8 +142,7 @@ describe.skipIf(Boolean(reason))("a queue row opens from the keyboard", () => {
     const { page, context, errors } = await openQueue(DESK);
     try {
       await page.locator("[data-queue-unqueued-toggle]").click();
-      const list = page.getByRole("listbox", { name: "Work that is not in the plan" });
-      const options = list.getByRole("option");
+      const options = page.locator('[data-queue-unqueued="true"]').getByRole("listitem");
       await options.nth(1).waitFor();
       await options.first().focus();
       await page.keyboard.press("ArrowDown");
@@ -159,8 +160,7 @@ describe.skipIf(Boolean(reason))("a queue row opens from the keyboard", () => {
   it("leaves Enter on the row's own menu button to the menu", async () => {
     const { page, context } = await openQueue(DESK);
     try {
-      const list = page.getByRole("listbox", { name: `What ${epic} expands to` });
-      const trigger = list.getByRole("button", { name: `Actions for ${children[0]}` });
+      const trigger = expansion(page).getByRole("button", { name: `Actions for ${children[0]}` });
       await trigger.waitFor();
       await trigger.focus();
       await page.keyboard.press("Enter");
@@ -168,6 +168,74 @@ describe.skipIf(Boolean(reason))("a queue row opens from the keyboard", () => {
       await page.waitForTimeout(300);
       expect(await detail(page).count()).toBe(0);
       expect(openedIssue(page)).toBeNull();
+    } finally {
+      await context.close();
+    }
+  });
+});
+
+describe.skipIf(Boolean(reason))("a Waiting on link in the state column", () => {
+  const row = (page: Page, ref: string) => expansion(page).locator(`[role="listitem"][data-identifier="${ref}"]`);
+  const focused = (page: Page) =>
+    page.evaluate(() => {
+      const active = document.activeElement as HTMLElement | null;
+      return { row: active?.dataset.identifier ?? null, jump: active?.dataset.queueJump ?? null, listitem: active?.getAttribute("role") === "listitem" };
+    });
+
+  it("focuses the row it names when clicked", async () => {
+    const { page, context, errors } = await openQueue(DESK);
+    try {
+      await row(page, children[1]!).locator(`[data-queue-jump="${children[0]}"]`).click();
+      await expect.poll(() => focused(page)).toEqual({ row: children[0], jump: null, listitem: true });
+      expect(openedIssue(page)).toBeNull();
+      expect(errors).toEqual([]);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("is reached with Tab from its row, and Enter on it focuses the row it names without opening a task", async () => {
+    const { page, context, errors } = await openQueue(DESK);
+    try {
+      await row(page, children[1]!).focus();
+      await page.keyboard.press("Tab");
+      expect(await focused(page)).toEqual({ row: null, jump: children[0], listitem: false });
+      await page.keyboard.press("Enter");
+      await expect.poll(() => focused(page)).toEqual({ row: children[0], jump: null, listitem: true });
+      await page.waitForTimeout(300);
+      expect(await detail(page).count()).toBe(0);
+      expect(openedIssue(page)).toBeNull();
+      expect(errors).toEqual([]);
+    } finally {
+      await context.close();
+    }
+  });
+});
+
+describe.skipIf(Boolean(reason))("the queue page on a phone", () => {
+  /**
+   * The controls at a row's right edge carry touch hit areas that reach past the page. A box
+   * that scrolls down scrolls sideways too unless it says otherwise, and on a phone the whole
+   * list then slid left and right under a finger. Nothing is wider than the page either, so
+   * content that really overflows fails here even where the scroller would hide it.
+   */
+  it("scrolls down and never sideways", async () => {
+    const { page, context } = await openQueue(PHONE);
+    try {
+      await expansion(page).getByRole("listitem").first().waitFor();
+      const pans = await page.evaluate(() => {
+        const canPan = (box: Element) =>
+          box.scrollWidth > box.clientWidth && /auto|scroll/.test(getComputedStyle(box).overflowX);
+        const board = document.querySelector("[data-queue-board]");
+        return { board: board === null ? null : canPan(board), page: canPan(document.documentElement) };
+      });
+      expect(pans).toEqual({ board: false, page: false });
+      const widths = await page.evaluate(() => {
+        const box = (element: Element | null) => (element === null ? null : { scroll: element.scrollWidth, client: element.clientWidth });
+        return { board: box(document.querySelector("[data-queue-board]")), page: box(document.documentElement) };
+      });
+      expect(widths.board!.scroll).toBeLessThanOrEqual(widths.board!.client);
+      expect(widths.page!.scroll).toBeLessThanOrEqual(widths.page!.client);
     } finally {
       await context.close();
     }
