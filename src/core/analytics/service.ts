@@ -69,13 +69,37 @@ export function readRoi(input: {
   const share = hubRows === scopeRows ? 1 : hub.agentHours > 0 ? scoped.agentHours / hub.agentHours : 0;
   const days = resolved.window.days;
   const profile = activeProfile(costModel);
-  // Each entry is the person's or the team's whole bill; a single workspace carries its share of it.
-  const aiEntries = profile.entries.map((entry) => ({ entry, cost: aiSpendFor([entry], days) * share }));
+  const aiEntries = profile.entries.map((entry) => ({ entry, cost: aiSpendFor([entry], days) }));
+  /**
+   * Which roles worked here, and the share of each one's own spend this scope carries: the
+   * role's agent-hours here over its agent-hours on the hub, or its finished tickets when it
+   * has no hours anywhere (imported history). A role that did nothing here is absent and
+   * carries none of its spend (VP: a role the team did not hire costs nothing).
+   */
+  const byResolved = (tallies: typeof scoped): Map<string, { hours: number; tickets: number }> => {
+    const out = new Map<string, { hours: number; tickets: number }>();
+    for (const [id, tally] of tallies.measured) {
+      const key = roles.role(id).id;
+      const held = out.get(key) ?? { hours: 0, tickets: 0 };
+      held.hours += tally.hours;
+      held.tickets += tally.tickets;
+      out.set(key, held);
+    }
+    return out;
+  };
+  const scopeWork = byResolved(scoped);
+  const hubWork = hubRows === scopeRows ? scopeWork : byResolved(hub);
+  const roleShares = new Map<string, number>();
+  for (const [id, work] of scopeWork) {
+    if (work.hours <= 0 && work.tickets <= 0) continue;
+    const onHub = hubWork.get(id) ?? work;
+    roleShares.set(id, hubRows === scopeRows ? 1 : onHub.hours > 0 ? work.hours / onHub.hours : onHub.tickets > 0 ? work.tickets / onHub.tickets : 0);
+  }
   const aiSpendHub = aiSpendFor(profile.entries, days);
   const hoursPerActiveDay = profile.director.hoursPerActiveDay;
   const directorHoursHub = hub.activeDays * hoursPerActiveDay;
   const lens = (name: "measured" | "planned") =>
-    roi({ lens: name, byRole: scoped[name], aiEntries, directorHours: directorHoursHub * share, model: costModel });
+    roi({ lens: name, byRole: scoped[name], aiEntries, roleShares, sharedShare: share, directorHours: directorHoursHub * share, model: costModel });
   const { fallbacks } = roles;
   const caveats: Caveat[] = [...report.caveats];
   const defaults = COST_MODEL_PARTS.filter((part) => input.model.source[part] === "default").length;
@@ -137,6 +161,9 @@ export function readRoiTickets(input: {
     limit,
     tickets: tickets.slice(0, limit).map((ticket) => ({
       workspace: ticket.workspace,
+      prefix: ticket.prefix,
+      kind: ticket.kind,
+      labels: ticket.labels,
       identifier: ticket.identifier,
       title: ticket.title,
       type: ticket.type,

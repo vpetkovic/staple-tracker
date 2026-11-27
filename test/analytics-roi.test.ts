@@ -109,16 +109,38 @@ describe("each spend line lands whole where it is assigned", () => {
     expect(roi.planned.byRole.find((role) => role.roleId === "writer")).toMatchObject({ tickets: 1, estimatedTickets: 0, aiCost: expect.closeTo(300, 6) });
   });
 
-  it("charges a single workspace its share of every line, so workspaces add up to the hub", () => {
+  it("charges a single workspace each role's lines by that role's own work, so workspaces add up to the hub", () => {
     const onAlpha = roiFor(scopeOf(alpha), "2026-09-01", "2026-09-30");
     const onBeta = roiFor(scopeOf(beta), "2026-09-01", "2026-09-30");
     expect(onAlpha.basis.share).toBeCloseTo(0.5);
     expect(onAlpha.measured.aiCost + onBeta.measured.aiCost).toBeCloseTo(450);
-    // Alpha's writer did not run there, yet carries half the writer's seats: assigned spend is the role's, wherever it worked.
-    expect(onAlpha.measured.byRole.find((role) => role.roleId === "writer")!.aiCost).toBeCloseTo(150);
+    // The writer worked only in beta: beta carries all of the writer's seats, alpha none, and
+    // alpha lists the writer as absent. Shared spend splits by overall agent-hours.
+    expect(onAlpha.measured.byRole.find((role) => role.roleId === "writer")).toMatchObject({ present: false, share: 0, aiCost: 0 });
+    expect(onBeta.measured.byRole.find((role) => role.roleId === "writer")).toMatchObject({ present: true, share: 1, aiCost: expect.closeTo(300, 6) });
+    expect(onAlpha.measured.sharedAiCost).toBeCloseTo(75);
     for (const roi of [onAlpha, onBeta]) {
       expect(roi.measured.byRole.reduce((sum, role) => sum + role.aiCost, 0) + roi.measured.sharedAiCost).toBeCloseTo(roi.measured.aiCost);
     }
+  });
+});
+
+describe("a role with finished tickets but no agent time", () => {
+  it("is present, and carries its lines by its share of those tickets", () => {
+    const closed = (on: HomeCandidate, title: string): void => {
+      vi.setSystemTime(Date.parse("2026-09-10T10:00:00.000Z"));
+      const id = on.store.createIssue({ title }).id;
+      vi.setSystemTime(Date.parse("2026-09-10T12:00:00.000Z"));
+      on.store.updateIssue(id, { status: "done" }, "person");
+    };
+    closed(alpha, "Docs for the importer");
+    closed(beta, "Docs for the exporter");
+    closed(beta, "Docs for the scheduler");
+    save({ solo: { ...PROFILE, entries: [{ id: "writer-seats", label: "Writer seats", monthlyAmount: 300, roleId: "writer", from: "2026-09", to: null }] } });
+    const writer = roiFor(scopeOf(alpha), "2026-09-01", "2026-09-30").measured.byRole.find((role) => role.roleId === "writer")!;
+    expect(writer).toMatchObject({ present: true, hours: 0, tickets: 1 });
+    expect(writer.share).toBeCloseTo(1 / 3);
+    expect(writer.aiCost).toBeCloseTo(100);
   });
 });
 

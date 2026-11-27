@@ -217,6 +217,7 @@ describe("the cost model over HTTP", () => {
     const tickets = await http(`/api/analytics/roi/tickets?scope=alpha&roleId=writer&${QUERY}`);
     expect(tickets.status).toBe(200);
     expect(tickets.body).toMatchObject({ roleId: "writer", total: 2, limit: 200, otherAgentHours: 0 });
+    expect(tickets.body.tickets[0]).toMatchObject({ workspace: "alpha", prefix: "ALP", kind: "task", labels: [] });
     expect(tickets.body.tickets.map((t: { title: string; reason: { code: string } }) => [t.title, t.reason.code])).toEqual([
       ["Build 0", "rule"],
       ["Build 1", "rule"],

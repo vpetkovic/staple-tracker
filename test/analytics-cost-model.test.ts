@@ -220,6 +220,8 @@ describe("the ROI", () => {
     }
     return out;
   };
+  /** The hub: every listed role that worked is present at share 1. */
+  const onHub = (...ids: string[]) => ({ roleShares: new Map(ids.map((id) => [id, 1])), sharedShare: 1 });
   const line = (id: string, cost: number, over: Partial<AiSpendEntry> = {}) => ({
     entry: { id, label: id, monthlyAmount: cost, from: "2026-09", to: null, ...over } as AiSpendEntry,
     cost,
@@ -227,7 +229,7 @@ describe("the ROI", () => {
 
   it("reproduces the shaping discussion's measured-lens figures (0.73×)", () => {
     // VP's numbers: $70/h, $17,000/month for 2.5 months, 256 h directing, 633 measured agent-hours.
-    const result = roi({ lens: "measured", byRole: byRole({ engineering: 633 }), aiEntries: [line("api", 42_500, { kind: "api" })], directorHours: 256, model });
+    const result = roi({ lens: "measured", byRole: byRole({ engineering: 633 }), aiEntries: [line("api", 42_500, { kind: "api" })], ...onHub("eng"), directorHours: 256, model });
     expect(result.value).toBeCloseTo(44_310);
     expect(result.totalCost).toBeCloseTo(42_500 + 17_920);
     expect(result.returnOnTotalCost).toBeCloseTo(44_310 / 60_420, 6);
@@ -240,6 +242,7 @@ describe("the ROI", () => {
       lens: "planned",
       byRole: byRole({ engineering: 10, design: 5, documentation: 4 }, { eng: 3, writer: 1 }),
       aiEntries: [line("eng-seats", 300, { quantity: 3, roleId: "eng" }), line("writer-api", 40, { kind: "api", roleId: "writer" }), line("team", 60), line("gone", 10, { roleId: "nobody" })],
+      ...onHub("eng", "writer"),
       directorHours: 0,
       model,
     });
@@ -253,6 +256,8 @@ describe("the ROI", () => {
         types: ["engineering", "design"],
         tickets: 3,
         estimatedTickets: 0,
+        present: true,
+        share: 1,
         aiCost: 300,
         aiEntries: [{ id: "eng-seats", label: "eng-seats", kind: "subscription", monthlyAmount: 300, quantity: 3, cost: 300 }],
       },
@@ -265,6 +270,8 @@ describe("the ROI", () => {
         types: ["documentation"],
         tickets: 1,
         estimatedTickets: 0,
+        present: true,
+        share: 1,
         aiCost: 40,
         aiEntries: [{ id: "writer-api", label: "writer-api", kind: "api", monthlyAmount: 40, quantity: null, cost: 40 }],
       },
@@ -274,27 +281,47 @@ describe("the ROI", () => {
     expect(result).toMatchObject({ valueHours: 19, value: 1250, aiCost: 410, sharedAiCost: 70, totalCost: 410 });
   });
 
-  it("gives a role a row for the spend assigned to it even when it did not run", () => {
-    const result = roi({ lens: "measured", byRole: byRole({ engineering: 2 }), aiEntries: [line("writer-seat", 25, { roleId: "writer" })], directorHours: 0, model });
-    expect(result.byRole.map((role) => [role.roleId, role.hours, role.aiCost])).toEqual([
-      ["eng", 2, 0],
-      ["writer", 0, 25],
+  it("charges nothing for a role that did no work in the scope, but still shows its lines", () => {
+    const result = roi({ lens: "measured", byRole: byRole({ engineering: 2 }), aiEntries: [line("writer-seat", 25, { roleId: "writer" })], ...onHub("eng"), directorHours: 0, model });
+    expect(result.byRole.map((role) => [role.roleId, role.present, role.share, role.aiCost])).toEqual([
+      ["eng", true, 1, 0],
+      ["writer", false, 0, 0],
     ]);
+    expect(result.byRole[1]!.aiEntries).toEqual([expect.objectContaining({ id: "writer-seat", cost: 0 })]);
+    expect(result.aiCost).toBe(0);
+  });
+
+  it("charges each role's lines at that role's own share, and shared lines at the scope's", () => {
+    const result = roi({
+      lens: "measured",
+      byRole: byRole({ engineering: 2, documentation: 1 }),
+      aiEntries: [line("eng-seat", 100, { roleId: "eng" }), line("writer-seat", 100, { roleId: "writer" }), line("team", 100)],
+      roleShares: new Map([["eng", 0.25], ["writer", 1]]),
+      sharedShare: 0.5,
+      directorHours: 0,
+      model,
+    });
+    expect(result.byRole.map((role) => [role.roleId, role.share, role.aiCost])).toEqual([
+      ["eng", 0.25, 25],
+      ["writer", 1, 100],
+    ]);
+    expect(result.sharedAiCost).toBe(50);
+    expect(result.aiCost).toBe(175);
   });
 
   it("prices with the profile in use and nothing from the other", () => {
     const company: CostModel = { ...model, scenario: { ...model.scenario, mode: "company" } };
     expect(activeProfile(company)).toBe(company.company);
-    const result = roi({ lens: "measured", byRole: byRole({ engineering: 10 }), aiEntries: [], directorHours: 5, model: company });
+    const result = roi({ lens: "measured", byRole: byRole({ engineering: 10 }), aiEntries: [], ...onHub("eng"), directorHours: 5, model: company });
     expect(result.value).toBe(1500);
     expect(result.director).toEqual({ hours: 5, hourlyRate: 90, cost: 450 });
     // A role the profile sets no rate for is priced at the default rate.
     const unset: CostModel = { ...company, company: { ...company.company, rates: {} } };
-    expect(roi({ lens: "measured", byRole: byRole({ engineering: 1 }), aiEntries: [], directorHours: 0, model: unset }).byRole[0]!.hourlyRate).toBe(100);
+    expect(roi({ lens: "measured", byRole: byRole({ engineering: 1 }), aiEntries: [], ...onHub("eng"), directorHours: 0, model: unset }).byRole[0]!.hourlyRate).toBe(100);
   });
 
   it("answers null, not infinity, when there is no cost or no hours", () => {
-    const result = roi({ lens: "measured", byRole: new Map(), aiEntries: [], directorHours: 0, model });
+    const result = roi({ lens: "measured", byRole: new Map(), aiEntries: [], ...onHub(), directorHours: 0, model });
     expect(result).toMatchObject({ value: 0, totalCost: 0, sharedAiCost: 0, returnOnTotalCost: null, returnOnAiSpend: null, breakEvenRate: null });
   });
 
@@ -304,7 +331,7 @@ describe("the ROI", () => {
     const ruled: CostModel = { ...model, roleMapping: { ...model.roleMapping, rules: [{ title: "qa", roleId: "qa" }] } };
     expect(resolveRoles(ruled).fallbacks).toEqual([{ type: null, rule: 0, missingRoleId: "qa", usedRoleId: "eng" }]);
     const tally = new Map([["gone", { hours: 2, types: new Set(["documentation" as const]), tickets: 1, estimatedTickets: null }]]);
-    expect(roi({ lens: "measured", byRole: tally, aiEntries: [], directorHours: 0, model: orphaned }).value).toBe(140);
+    expect(roi({ lens: "measured", byRole: tally, aiEntries: [], ...onHub("eng"), directorHours: 0, model: orphaned }).value).toBe(140);
   });
 });
 

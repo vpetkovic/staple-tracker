@@ -476,7 +476,7 @@ export interface RoiAiEntry {
   readonly kind: SpendKind;
   readonly monthlyAmount: number;
   readonly quantity: number | null;
-  /** Prorated over the period by day, and times `basis.share` for a single workspace. */
+  /** Prorated over the period by day, times the role's `share` (or `basis.share` on the shared row). */
   readonly cost: number;
 }
 
@@ -491,7 +491,19 @@ export interface RoiRoleValue {
   readonly tickets: number;
   /** Planned lens: of those, the ones whose estimate counts ("47 h estimated on 15 of the 20 tickets"). Null on the measured lens. */
   readonly estimatedTickets: number | null;
-  /** The sum of the spend entries assigned to this role. Nothing is split between roles. */
+  /**
+   * True when the role did work in the scope and period (agent-hours, or a finished ticket).
+   * The page lists only present roles; an absent role's entries cost 0 here (VP: a role the
+   * team did not hire is not included in the cost).
+   */
+  readonly present: boolean;
+  /**
+   * The share of this role's entries the scope carries: 1 on the hub; on one workspace, the
+   * role's agent-hours there over its agent-hours on the hub (finished tickets when it has no
+   * hours anywhere); 0 when absent. Shared entries and the director's time use `basis.share`.
+   */
+  readonly share: number;
+  /** The sum of the spend entries assigned to this role, each times `share`. Nothing is split between roles. */
   readonly aiCost: number;
   readonly aiEntries: readonly RoiAiEntry[];
 }
@@ -500,7 +512,7 @@ export interface RoiLens {
   readonly lens: "measured" | "planned";
   readonly valueHours: number;
   readonly value: number;
-  /** Roles with hours or tickets under this lens, and every role a spend entry is assigned to. */
+  /** Roles with hours or tickets under this lens, and every role a spend entry is assigned to (`present` says which did work). */
   readonly byRole: readonly RoiRoleValue[];
   /** Every entry's cost: the roles' `aiCost` plus `sharedAiCost`. */
   readonly aiCost: number;
@@ -545,7 +557,11 @@ export interface RoiResponse {
 
 /** One done ticket that landed on a role, and why. */
 export interface RoiTicket {
+  /** The workspace slug, and its identifier prefix. */
   readonly workspace: string;
+  readonly prefix: string;
+  readonly kind: string;
+  readonly labels: readonly string[];
   readonly identifier: string;
   readonly title: string;
   readonly type: AgentTypeId;

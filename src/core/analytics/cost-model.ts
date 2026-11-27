@@ -421,7 +421,19 @@ export interface RoleValue {
   readonly tickets: number;
   /** Planned lens: of those, the ones whose estimate counts. Null on the measured lens. */
   readonly estimatedTickets: number | null;
-  /** The sum of the spend entries assigned to this role. */
+  /**
+   * True when the role did work in the scope and period: it has agent-hours or caught a
+   * finished ticket. VP's ruling (2026-11-26): a role the team did not need does not cost
+   * anything, so an absent role's entries cost 0 here.
+   */
+  readonly present: boolean;
+  /**
+   * The share of this role's entries this scope carries: 1 on the hub; on one workspace, the
+   * role's agent-hours there over its agent-hours on the hub (its finished tickets when it has
+   * no hours anywhere); 0 when absent.
+   */
+  readonly share: number;
+  /** The sum of the spend entries assigned to this role, times `share`. Nothing is split between roles. */
   readonly aiCost: number;
   readonly aiEntries: readonly AiEntryCost[];
 }
@@ -513,8 +525,12 @@ export function roi(input: {
   readonly lens: "measured" | "planned";
   /** Hours by role id. A role id the list does not hold is priced at the first role (see `resolveRoles`). */
   readonly byRole: ReadonlyMap<string, RoleTally>;
-  /** Every spend entry of the active profile with its cost for this scope and period. */
+  /** Every spend entry of the profile in use with its cost over the period, before any share. */
   readonly aiEntries: ReadonlyArray<{ readonly entry: AiSpendEntry; readonly cost: number }>;
+  /** The roles present in the scope, by (resolved) role id, each with the share of its own entries the scope carries. */
+  readonly roleShares: ReadonlyMap<string, number>;
+  /** The share of the team's shared entries (and of the director's time) the scope carries. */
+  readonly sharedShare: number;
   readonly directorHours: number;
   readonly model: CostModel;
 }): RoiResult {
@@ -538,12 +554,13 @@ export function roi(input: {
     held.tickets += tally.tickets;
     if (held.estimatedTickets !== null) held.estimatedTickets += tally.estimatedTickets ?? 0;
   }
-  // Each entry lands whole on the role it names (that role gets a row even if it did not run), or on the shared row.
+  // Each entry lands whole on the role it names, at that role's share (0 for a role that did no
+  // work here, which still gets a row so its lines can be shown), or on the shared row.
   const sharedAiEntries: AiEntryCost[] = [];
+  const shareOf = (id: string): number => input.roleShares.get(id) ?? 0;
   for (const { entry, cost } of input.aiEntries) {
-    const line = entryCost(entry, cost);
-    if (typeof entry.roleId === "string" && roles.has(entry.roleId)) hold(entry.roleId).aiEntries.push(line);
-    else sharedAiEntries.push(line);
+    if (typeof entry.roleId === "string" && roles.has(entry.roleId)) hold(entry.roleId).aiEntries.push(entryCost(entry, cost * shareOf(entry.roleId)));
+    else sharedAiEntries.push(entryCost(entry, cost * input.sharedShare));
   }
   const sum = (lines: readonly AiEntryCost[]): number => lines.reduce((total, line) => total + line.cost, 0);
   const byRole: RoleValue[] = [...merged.values()]
@@ -556,6 +573,8 @@ export function roi(input: {
       types: AGENT_TYPES.filter((type) => types.has(type)),
       tickets,
       estimatedTickets,
+      present: input.roleShares.has(role.id),
+      share: shareOf(role.id),
       aiCost: sum(aiEntries),
       aiEntries,
     }))

@@ -966,6 +966,9 @@ export function analyticsReport(
 /** One done ticket priced at a role (`RoiTicket` before rounding). */
 export interface PricedTicket {
   readonly workspace: string;
+  readonly prefix: string;
+  readonly kind: string;
+  readonly labels: readonly string[];
   readonly identifier: string;
   readonly title: string;
   readonly type: AgentType;
@@ -1034,6 +1037,9 @@ export function roleTallies(workspaces: readonly WorkspaceRows[], resolved: Reso
     }
     upsert(tickets, id, () => []).push({
       workspace: issue.workspace,
+      prefix: issue.prefix,
+      kind: issue.kind,
+      labels: issue.labels,
       identifier: issue.identifier,
       title: issue.title,
       type: pricing.type,
