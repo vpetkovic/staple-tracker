@@ -693,18 +693,31 @@ export function App() {
   }, [planningResolved, planningEnabled]);
 
   /**
-   * An address naming a workspace this hub does not have (a link from another machine, a
-   * workspace unregistered since) lands on All workspaces rather than on an error.
+   * A workspace this hub does not have (named by a link from another machine, or unregistered
+   * while the page was on it) gives way to All workspaces rather than to an error; a single
+   * workspace's page names none. Only the workspace changes. The filters on screen, stored
+   * under the workspace being left (an address that names a view seeds them there), move with
+   * the page, or All workspaces' remembered filters would replace them; with none stored, the
+   * remembered ones answer. A milestone focus or a run of a workspace that is gone goes, as on
+   * a switch (`afterWorkspaceSwitch`).
    */
   const knownWorkspaces = bootstrap.data?.workspaces;
   const hubMode = bootstrap.data?.mode === "hub";
   useEffect(() => {
     if (!knownWorkspaces || ws === "") return;
-    if (!hubMode || !knownWorkspaces.some((workspace) => workspace.slug === ws)) {
-      correcting.current = true;
-      setWsState("");
+    const known = knownWorkspaces.some((workspace) => workspace.slug === ws);
+    if (hubMode && known) return;
+    correcting.current = true;
+    setFilterPrefs((current) => {
+      const { [sortScopeKey(ws, view)]: shown, ...rest } = current;
+      return shown ? withFiltersForScope(rest, sortScopeKey("", view), shown) : current;
+    });
+    if (!known) {
+      setMilestoneFocus(null);
+      setRun(null);
     }
-  }, [knownWorkspaces, hubMode, ws]);
+    setWsState("");
+  }, [knownWorkspaces, hubMode, ws, view]);
 
   const open = useCallback((workspace: string, ref: string) => setSelection({ workspace, ref }), []);
   const pin = useCallback(

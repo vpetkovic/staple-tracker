@@ -185,6 +185,7 @@ describe("the cost model over HTTP", () => {
     ]);
     expect(roi.body.planned.byRole).toEqual([expect.objectContaining({ roleId: "writer", hours: 4, tickets: 2, estimatedTickets: 2 })]);
     // Alpha ran 2 of the hub's 3 agent-hours: it carries two thirds of a week of $300/month and of 2 active days × 8 h.
+    expect(roi.body.definitions).toMatchObject({ attemptCapHours: 12, fteHoursPerWeek: 40 });
     expect(roi.body.basis).toMatchObject({ share: 2 / 3, scopeAgentHours: 2, hubAgentHours: 3, activeDaysHub: 1, hoursPerActiveDay: 8, directorHoursHub: 8 });
     expect(roi.body.basis.aiSpendHub).toBeCloseTo(70);
     // The plan is shared by the team: its line is on the shared row.

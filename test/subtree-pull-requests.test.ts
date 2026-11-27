@@ -14,6 +14,7 @@ import { initWorkspace } from "../src/core/workspace.js";
 const dirs: string[] = [];
 const previous = process.env.STAPLE_HOME;
 afterEach(() => {
+  vi.useRealTimers();
   for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
   dirs.length = 0;
   if (previous === undefined) delete process.env.STAPLE_HOME;
@@ -33,6 +34,15 @@ function setup() {
   dirs.push(home);
   process.env.STAPLE_HOME = home;
   const { store } = initWorkspace({ global: true, slug: "subtree-prs" });
+  // Each ticket is made a second after the last, so "children by creation" is a real order and
+  // not the tie two tickets made in one millisecond would leave to their ids.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  let clock = Date.parse("2026-11-27T00:00:00.000Z");
+  const createIssue = store.createIssue.bind(store);
+  store.createIssue = (input, internal) => {
+    vi.setSystemTime((clock += 1000));
+    return createIssue(input, internal);
+  };
   const links = store.externalLinks();
   const link = (ref: string, id: number, state?: string) => links.link(ref, pr(id, state), "ada");
   return { store, link };
@@ -106,6 +116,22 @@ describe("a parent's subtree pull requests", () => {
     const quiet = store.createIssue({ title: "Quiet" });
     store.createIssue({ title: "Child", parent: quiet.id });
     expect(subtreePullRequests(store, quiet.id)).toEqual([]);
+    store.db.close();
+  });
+
+  it("breaks a tie between children made in the same millisecond by id, the same on every device", () => {
+    const { store, link } = setup();
+    const epic = store.createIssue({ title: "Epic" });
+    // Made first but with the larger id: a local-insertion tie-break (rowid) would put it first.
+    const first = store.createIssue({ title: "First", parent: epic.id }, { id: "ffffffff-0000-4000-8000-000000000000" });
+    const second = store.createIssue({ title: "Second", parent: epic.id }, { id: "00000000-0000-4000-8000-000000000000" });
+    store.db.prepare("UPDATE issues SET created_at = ? WHERE parent_id = ?").run("2026-11-27T12:00:00.000Z", epic.id);
+    link(first.identifier, 60);
+    link(second.identifier, 61);
+    expect(keysOf(subtreePullRequests(store, epic.id))).toEqual([
+      ["team/repo#61", false, [second.identifier]],
+      ["team/repo#60", false, [first.identifier]],
+    ]);
     store.db.close();
   });
 
