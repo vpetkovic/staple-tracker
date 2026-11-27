@@ -252,8 +252,9 @@ describe("a section's work", () => {
   });
 
   it("starts every row with its chevron, its status glyph and its title, with no position number, priority or kind glyph before them", () => {
-    const html = body(loaded());
-    for (const identifier of ["STA-146", "STA-66", "STA-67"]) {
+    const withBug = view({ ...data, members: [...data.members, member({ identifier: "STA-9", kind: "bug", position: 3 })] });
+    const html = body(work(withBug, { issues, now: NOW }));
+    for (const identifier of ["STA-146", "STA-66", "STA-67", "STA-9"]) {
       const line = rowOf_(html, identifier);
       const cell = line.slice(line.indexOf("data-work-cell"));
       const chevron = cell.search(/data-work-chevron|data-work-chevron-spacer/);
@@ -279,6 +280,9 @@ describe("a section's work", () => {
     // The note: one quiet truncated line, the whole of it in its title, inside the row.
     expect(line).toMatch(/data-member-note=""[^>]*title="found in the October run, see the log"|title="found in the October run, see the log"[^>]*data-member-note=""/);
     expect(line).toMatch(/class="[^"]*truncate[^"]*"[^>]*data-member-note|data-member-note=""[^>]*class="[^"]*truncate/);
+    // From 760px it is on the title's own line, in the work cell, after the identifier.
+    const cell = line.slice(line.indexOf("data-work-cell"), line.indexOf("data-work-progress"));
+    expect(cell.indexOf("data-member-note")).toBeGreaterThan(cell.indexOf("data-work-id"));
     // An epic and a task say no kind word.
     expect(rowOf_(html, "STA-66")).not.toContain("data-work-kind");
     expect(rowOf_(html, "STA-146")).not.toContain("data-work-kind");
