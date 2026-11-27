@@ -132,8 +132,9 @@ ticket number it does for this one, with no new mechanism:
   `freshIdentifier`), with the system comment; a conflict record and its resolution as for tickets;
 - every move is remembered (`identifier-moves.ts`): the old number keeps resolving here, and the
   write guard asks about it;
-- a joining workspace moves its ideas into the repository's idea namespace, never its tickets'
-  (`cloud/seed.ts`).
+- a joining workspace moves its ideas, and the numbers its promoted records kept, into the
+  repository's idea namespace and clear of every idea number the repository holds or kept, never
+  into its tickets' (`cloud/seed.ts`), each with a system comment.
 
 It never parses as a ticket ref (`IDENTIFIER_RE` is `^[A-Z]+-\d+$`; `I-STA-12` has two dashes), and
 consumes nothing from the ticket counter. Its own counter is `meta.next_idea_number`, a local
@@ -154,6 +155,25 @@ promotion) and `IdeaView.number` is the idea number. Refusals name an idea by ti
 `update`, and `recordIdentifierMove` keeps the idea number as an alias. The alias is this device's
 only (`meta`); the column is what a device that receives the promotion, or hydrates long after it,
 resolves and shows the number from. Scaffold promotes, so it keeps the number the same way.
+
+**A kept number is a claim too.** One idea number names one record, held as an identifier or
+kept. A write that leaves it on two records (a record promoted before an offline capture of the
+same number reached the promoting device, or two devices numbering different sets of legacy
+records) is settled by the applier (`claimKeptIdeaNumbers`, `cloud/apply.ts`): a live identifier
+always keeps the number, and between two kept numbers the later claim in the log yields. Only the
+device that wrote the yielding kept number settles it, with a fresh idea number, an `update` of
+`planIdeaNumber` by `staple` and a system comment (`settleOne`, `claims.ts`).
+
+**Promotion wins over a late idea number.** An idea number written onto a record that is no
+longer an idea (a device numbered a legacy idea before it heard it was promoted) is dropped on
+apply, and a promotion's ticket number arriving on a record this device later gave an idea number
+is applied. When the promoting device sees the late idea number sit after its promotion in the log,
+it states the ticket number again (`ticketNumber` settlement), so the service's fold and a device
+that hydrates read the ticket number.
+
+**With planning off** a promoted record says nothing of its kept number (`Issue.ideaNumber` is
+left out), and neither the kept number nor an idea number's alias resolves or matches a search.
+Nothing is deleted.
 
 **Ideas from before.** An idea an earlier build left under a draft identifier (`~` and its id's
 hex) or a ticket number, and a promoted record with no kept number, are numbered in creation order
