@@ -15,7 +15,8 @@
  *     this, never a name: `design/timing-semantics.md` ("Orchestration") explains why an
  *     identity like `fxi-orchestrator` that checks out a ticket is doing the ticket's work.
  *  2. The person's own rules, in their order: a match on agent name (a `*` glob), workspace
- *     prefix, ticket kind or ticket label.
+ *     prefix, ticket kind, ticket label or a title word. A rule sets the type, or names a role
+ *     directly (then the type below is still derived, for the per-type figures).
  *  3. A ticket label naming the work (`design`, `ux`, `docs`, `research`, …).
  *  4. A token of the agent's name naming the work (`design`, `docs`, `writer` is NOT one: on
  *     the maintainers' tracker `*-writer` agents write specs, which is engineering).
@@ -34,7 +35,12 @@ export function isAgentType(value: unknown): value is AgentType {
   return typeof value === "string" && (AGENT_TYPES as readonly string[]).includes(value);
 }
 
-/** A person's rule. Every field given must match; at least one is required. */
+/**
+ * A person's rule. Every matcher given must match, and at least one is required. A rule
+ * either sets the TYPE (which the mapping then prices) or names a ROLE directly, for a role
+ * no agent type stands for (a QA engineer, a DevOps engineer): exactly one of `type` and
+ * `roleId`.
+ */
 export interface AgentTypeRule {
   /** Agent name, case-insensitive, `*` matching any run of characters. */
   readonly agent?: string;
@@ -42,7 +48,10 @@ export interface AgentTypeRule {
   readonly workspace?: string;
   readonly kind?: string;
   readonly label?: string;
-  readonly type: AgentType;
+  /** A whole word (or several, in order) of the ticket title, case-insensitive. */
+  readonly title?: string;
+  readonly type?: AgentType;
+  readonly roleId?: string;
 }
 
 export type AgentTypeReasonCode = "orchestrator_lane" | "rule" | "label" | "agent_name" | "title" | "kind" | "default";
@@ -100,20 +109,47 @@ export function globMatches(glob: string, value: string): boolean {
   return new RegExp(`^${source}$`).test(value.toLowerCase());
 }
 
+/** True when `phrase`'s words appear in `tokens` consecutively. */
+function hasPhrase(tokens: readonly string[], phrase: string): boolean {
+  const words = tokensOf(phrase);
+  if (words.length === 0) return false;
+  for (let start = 0; start + words.length <= tokens.length; start += 1) {
+    if (words.every((word, offset) => tokens[start + offset] === word)) return true;
+  }
+  return false;
+}
+
 function ruleMatches(rule: AgentTypeRule, input: AgentTypeInput): boolean {
   if (rule.agent !== undefined && !globMatches(rule.agent, input.agent)) return false;
+  if (rule.title !== undefined && !hasPhrase(tokensOf(input.title), rule.title)) return false;
   if (rule.workspace !== undefined && rule.workspace.trim().toUpperCase() !== input.workspace.toUpperCase()) return false;
   if (rule.kind !== undefined && rule.kind !== input.kind) return false;
   if (rule.label !== undefined && !input.labels.some((label) => label.toLowerCase() === rule.label!.toLowerCase())) return false;
   return true;
 }
 
+/** What an attempt is priced as: its type, a role a rule named directly (or null), and the rule that decided. */
+export interface AgentTypeResult {
+  readonly type: AgentType;
+  /** Set when a person's rule names a role: the attempt is priced at it whatever its type maps to. */
+  readonly roleId: string | null;
+  readonly reason: AgentTypeReason;
+}
+
 /** The type of one attempt's work, and the rule that decided it. */
-export function deriveAgentType(input: AgentTypeInput, rules: readonly AgentTypeRule[] = []): { type: AgentType; reason: AgentTypeReason } {
-  if (input.role === "orchestrator") return { type: "orchestration", reason: { code: "orchestrator_lane", detail: null } };
+export function deriveAgentType(input: AgentTypeInput, rules: readonly AgentTypeRule[] = []): AgentTypeResult {
+  if (input.role === "orchestrator") return { type: "orchestration", roleId: null, reason: { code: "orchestrator_lane", detail: null } };
   for (const [index, rule] of rules.entries()) {
-    if (ruleMatches(rule, input)) return { type: rule.type, reason: { code: "rule", detail: String(index) } };
+    if (!ruleMatches(rule, input)) continue;
+    const reason: AgentTypeReason = { code: "rule", detail: String(index) };
+    if (rule.roleId !== undefined) return { type: automaticType(input).type, roleId: rule.roleId, reason };
+    if (rule.type !== undefined) return { type: rule.type, roleId: null, reason };
   }
+  return { ...automaticType(input), roleId: null };
+}
+
+/** Rules 3 to 7 of the module comment: what the attempt's own data says. */
+function automaticType(input: AgentTypeInput): { type: AgentType; reason: AgentTypeReason } {
   for (const label of input.labels) {
     const type = labelType(label);
     if (type !== null) return { type, reason: { code: "label", detail: label } };

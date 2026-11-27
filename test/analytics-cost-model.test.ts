@@ -32,25 +32,26 @@ const input = (over: Partial<AgentTypeInput>): AgentTypeInput => ({
 
 describe("agent type derivation", () => {
   it("reads free-form names and titles the way their work was", () => {
-    expect(deriveAgentType(input({ agent: "autopilot" }))).toEqual({ type: "engineering", reason: { code: "default", detail: null } });
+    expect(deriveAgentType(input({ agent: "autopilot" }))).toEqual({ type: "engineering", roleId: null, reason: { code: "default", detail: null } });
     expect(deriveAgentType(input({ agent: "fable-r1a", title: "R1a: ship and install a schema-6 runtime" })).type).toBe("engineering");
     expect(deriveAgentType(input({ agent: "sta222-writer", kind: "spike", title: "S1.1: define active wall review blocked and orchestration time" }))).toEqual({
       type: "research",
+      roleId: null,
       reason: { code: "kind", detail: "spike" },
     });
-    expect(deriveAgentType(input({ agent: "d4-docs", title: "D4: tell the npx story" }))).toEqual({ type: "documentation", reason: { code: "agent_name", detail: "docs" } });
-    expect(deriveAgentType(input({ agent: "claude-design-skill" }))).toEqual({ type: "design", reason: { code: "agent_name", detail: "design" } });
-    expect(deriveAgentType(input({ agent: "PlanBuilder", title: "Redesign the Plan view and idea drawer" }))).toEqual({ type: "design", reason: { code: "title", detail: "redesign" } });
-    expect(deriveAgentType(input({ title: "Docs, README and website refresh" }))).toEqual({ type: "documentation", reason: { code: "title", detail: "docs" } });
+    expect(deriveAgentType(input({ agent: "d4-docs", title: "D4: tell the npx story" }))).toEqual({ type: "documentation", roleId: null, reason: { code: "agent_name", detail: "docs" } });
+    expect(deriveAgentType(input({ agent: "claude-design-skill" }))).toEqual({ type: "design", roleId: null, reason: { code: "agent_name", detail: "design" } });
+    expect(deriveAgentType(input({ agent: "PlanBuilder", title: "Redesign the Plan view and idea drawer" }))).toEqual({ type: "design", roleId: null, reason: { code: "title", detail: "redesign" } });
+    expect(deriveAgentType(input({ title: "Docs, README and website refresh" }))).toEqual({ type: "documentation", roleId: null, reason: { code: "title", detail: "docs" } });
   });
 
   it("decides orchestration by the lane, never by a name", () => {
     expect(deriveAgentType(input({ agent: "fxi-orchestrator" })).type).toBe("engineering");
-    expect(deriveAgentType(input({ agent: "anyone", role: "orchestrator" }))).toEqual({ type: "orchestration", reason: { code: "orchestrator_lane", detail: null } });
+    expect(deriveAgentType(input({ agent: "anyone", role: "orchestrator" }))).toEqual({ type: "orchestration", roleId: null, reason: { code: "orchestrator_lane", detail: null } });
   });
 
   it("reads a label before the agent name and the title", () => {
-    expect(deriveAgentType(input({ agent: "d4-docs", labels: ["clickup-mirrored", "area:design"] }))).toEqual({ type: "design", reason: { code: "label", detail: "area:design" } });
+    expect(deriveAgentType(input({ agent: "d4-docs", labels: ["clickup-mirrored", "area:design"] }))).toEqual({ type: "design", roleId: null, reason: { code: "label", detail: "area:design" } });
     // `frontend` names no kind of work: frontend engineering is engineering.
     expect(deriveAgentType(input({ labels: ["frontend", "p2"] })).type).toBe("engineering");
   });
@@ -60,10 +61,23 @@ describe("agent type derivation", () => {
       { agent: "fable-*", workspace: "sta", type: "design" as const },
       { kind: "chore", type: "documentation" as const },
     ];
-    expect(deriveAgentType(input({ agent: "Fable-R7B", labels: ["docs"] }), rules)).toEqual({ type: "design", reason: { code: "rule", detail: "0" } });
+    expect(deriveAgentType(input({ agent: "Fable-R7B", labels: ["docs"] }), rules)).toEqual({ type: "design", roleId: null, reason: { code: "rule", detail: "0" } });
     expect(deriveAgentType(input({ agent: "fable-r7b", workspace: "EXE" }), rules).type).toBe("engineering");
-    expect(deriveAgentType(input({ kind: "chore" }), rules)).toEqual({ type: "documentation", reason: { code: "rule", detail: "1" } });
+    expect(deriveAgentType(input({ kind: "chore" }), rules)).toEqual({ type: "documentation", roleId: null, reason: { code: "rule", detail: "1" } });
     expect(deriveAgentType(input({ agent: "x", role: "orchestrator" }), rules).type).toBe("orchestration");
+  });
+
+  it("matches a title word or phrase, and can name a role while the type stays derived", () => {
+    const rules = [
+      { title: "release notes", roleId: "release-manager" },
+      { title: "qa", roleId: "qa-engineer" },
+      { title: "landing", type: "design" as const },
+    ];
+    expect(deriveAgentType(input({ title: "Write the Release Notes for 0.3" }), rules)).toEqual({ type: "engineering", roleId: "release-manager", reason: { code: "rule", detail: "0" } });
+    expect(deriveAgentType(input({ title: "Docs: notes on the release" }), rules)).toEqual({ type: "documentation", roleId: null, reason: { code: "title", detail: "docs" } });
+    expect(deriveAgentType(input({ title: "QA pass over the import" }), rules).roleId).toBe("qa-engineer");
+    // A whole word only: "quality" does not contain the word "qa", "landings" is not "landing".
+    expect(deriveAgentType(input({ title: "quality pass over landings" }), rules)).toEqual({ type: "engineering", roleId: null, reason: { code: "default", detail: null } });
   });
 
   it("matches a glob on the whole name, case-insensitively, with regex characters literal", () => {
@@ -99,6 +113,9 @@ describe("cost model validation", () => {
     expect(costModelPartProblem("roleMapping", { types: { ...types, qa: "x" }, rules: [], savedAt: null })).toMatch(/not an agent type/);
     expect(costModelPartProblem("roleMapping", { types, rules: [{ type: "design" }], savedAt: null })).toMatch(/at least one/);
     expect(costModelPartProblem("roleMapping", { types, rules: [{ agent: "x", type: "qa" }], savedAt: null })).toMatch(/type must be one of/);
+    expect(costModelPartProblem("roleMapping", { types, rules: [{ agent: "x", type: "design", roleId: "qa" }], savedAt: null })).toMatch(/exactly one/);
+    expect(costModelPartProblem("roleMapping", { types, rules: [{ title: "qa", roleId: "Q A" }], savedAt: null })).toMatch(/roleId/);
+    expect(costModelPartProblem("roleMapping", { types, rules: [{ title: "qa", roleId: "qa" }], savedAt: null })).toBeNull();
   });
 
   it("refuses a bad scenario and bad spend entries", () => {
@@ -109,6 +126,14 @@ describe("cost model validation", () => {
     expect(costModelPartProblem("aiSpend", { entries: [{ ...entry, from: "2026-13" }], savedAt: null })).toMatch(/from/);
     expect(costModelPartProblem("aiSpend", { entries: [{ ...entry, to: "2026-08" }], savedAt: null })).toMatch(/before it starts/);
     expect(costModelPartProblem("aiSpend", { entries: [entry, entry], savedAt: null })).toMatch(/twice/);
+  });
+
+  it("ships three roles, prices orchestration as engineering, and lists every default figure as assumed", () => {
+    expect(DEFAULT_COST_MODEL.roles.roles.map((role) => role.id)).toEqual(["software-engineer", "design-engineer", "technical-writer"]);
+    expect(DEFAULT_COST_MODEL.roleMapping.types.orchestration).toBe("software-engineer");
+    expect(DEFAULT_COST_MODEL.scenario.assumed).toEqual(["director.hourlyRate", "director.hoursPerActiveDay"]);
+    expect(DEFAULT_COST_MODEL.aiSpend.assumed).toEqual(["entries.ai-plan.monthlyAmount"]);
+    expect(costModelPartProblem("scenario", { ...DEFAULT_COST_MODEL.scenario, assumed: [7] })).toMatch(/assumed/);
   });
 
   it("reads the newest save across the parts, and null for all defaults", () => {
@@ -147,11 +172,23 @@ describe("the ROI", () => {
     roleMapping: { types: { engineering: "eng", design: "eng", documentation: "writer", research: "eng", orchestration: "eng" }, rules: [], savedAt: null },
     scenario: { mode: "solo", currency: "USD", director: { title: "You", hourlyRate: 70, hoursPerActiveDay: 8 }, savedAt: null },
   };
-  const none = { engineering: 0, design: 0, documentation: 0, research: 0, orchestration: 0 };
+  type Hours = Partial<Record<"engineering" | "design" | "documentation" | "research" | "orchestration", number>>;
+  /** Hours by type, each type priced at its mapped role, as the metrics read tallies them. */
+  const byRole = (hoursByType: Hours, tickets: Record<string, number> = {}) => {
+    const out = new Map<string, { hours: number; types: Set<any>; tickets: number; plannedTickets: number | null }>();
+    for (const [type, value] of Object.entries(hoursByType)) {
+      const id = model.roleMapping.types[type as keyof Hours];
+      const held = out.get(id) ?? { hours: 0, types: new Set(), tickets: tickets[id] ?? 0, plannedTickets: null };
+      held.hours += value!;
+      held.types.add(type);
+      out.set(id, held);
+    }
+    return out;
+  };
 
   it("reproduces the shaping discussion's measured-lens figures (0.73×)", () => {
     // VP's numbers: $70/h, $17,000/month for 2.5 months, 256 h directing, 633 measured agent-hours.
-    const result = roi({ lens: "measured", hoursByType: { ...none, engineering: 633 }, aiCost: 17_000 * 2.5, directorHours: 256, model });
+    const result = roi({ lens: "measured", byRole: byRole({ engineering: 633 }), aiCost: 17_000 * 2.5, directorHours: 256, model });
     expect(result.value).toBeCloseTo(44_310);
     expect(result.totalCost).toBeCloseTo(42_500 + 17_920);
     expect(result.returnOnTotalCost).toBeCloseTo(44_310 / 60_420, 6);
@@ -160,23 +197,26 @@ describe("the ROI", () => {
   });
 
   it("prices each agent type at its role and folds types that share a role", () => {
-    const result = roi({ lens: "planned", hoursByType: { ...none, engineering: 10, design: 5, documentation: 4 }, aiCost: 100, directorHours: 0, model });
+    const result = roi({ lens: "planned", byRole: byRole({ engineering: 10, design: 5, documentation: 4 }, { eng: 3, writer: 1 }), aiCost: 100, directorHours: 0, model });
     expect(result.byRole).toEqual([
-      { roleId: "eng", title: "Engineer", hourlyRate: 70, hours: 15, value: 1050, types: ["engineering", "design"] },
-      { roleId: "writer", title: "Writer", hourlyRate: 50, hours: 4, value: 200, types: ["documentation"] },
+      { roleId: "eng", title: "Engineer", hourlyRate: 70, hours: 15, value: 1050, types: ["engineering", "design"], tickets: 3, plannedTickets: 0 },
+      { roleId: "writer", title: "Writer", hourlyRate: 50, hours: 4, value: 200, types: ["documentation"], tickets: 1, plannedTickets: 0 },
     ]);
     expect(result).toMatchObject({ valueHours: 19, value: 1250, totalCost: 100, net: 1150, returnOnTotalCost: 12.5, returnOnAiSpend: 12.5, outputMultiplier: null });
   });
 
   it("answers null, not infinity, when there is no cost or no hours", () => {
-    const result = roi({ lens: "measured", hoursByType: none, aiCost: 0, directorHours: 0, model });
+    const result = roi({ lens: "measured", byRole: new Map(), aiCost: 0, directorHours: 0, model });
     expect(result).toMatchObject({ value: 0, totalCost: 0, returnOnTotalCost: null, returnOnAiSpend: null, breakEvenRate: null });
   });
 
   it("prices a type whose role was removed at the first role, and says so", () => {
     const orphaned: CostModel = { ...model, roleMapping: { ...model.roleMapping, types: { ...model.roleMapping.types, documentation: "gone" } } };
-    expect(resolveRoles(orphaned).fallbacks).toEqual([{ type: "documentation", missingRoleId: "gone", usedRoleId: "eng" }]);
-    expect(roi({ lens: "measured", hoursByType: { ...none, documentation: 2 }, aiCost: 0, directorHours: 0, model: orphaned }).value).toBe(140);
+    expect(resolveRoles(orphaned).fallbacks).toEqual([{ type: "documentation", rule: null, missingRoleId: "gone", usedRoleId: "eng" }]);
+    const ruled: CostModel = { ...model, roleMapping: { ...model.roleMapping, rules: [{ title: "qa", roleId: "qa" }] } };
+    expect(resolveRoles(ruled).fallbacks).toEqual([{ type: null, rule: 0, missingRoleId: "qa", usedRoleId: "eng" }]);
+    const tally = new Map([["gone", { hours: 2, types: new Set(["documentation" as const]), tickets: 1, plannedTickets: null }]]);
+    expect(roi({ lens: "measured", byRole: tally, aiCost: 0, directorHours: 0, model: orphaned }).value).toBe(140);
   });
 });
 

@@ -55,7 +55,7 @@ import type {
   WorkspaceRow,
 } from "./contract.js";
 import { daysBetween, eachDate, isDateKey, nextDate, Zone } from "./local-time.js";
-import type { AnalyticsAttempt, AnalyticsIssue, WorkspaceRows } from "./rows.js";
+import type { AnalyticsAttempt, AnalyticsIssue, RecordRows, WorkspaceRows } from "./rows.js";
 
 export const ANALYTICS_DEFINITIONS: AnalyticsDefinitions = Object.freeze({
   attemptCapHours: 12,
@@ -124,6 +124,8 @@ interface ScopedAttempt extends AnalyticsAttempt {
   /** Effort with the per-attempt cap applied. */
   readonly cappedSeconds: number;
   readonly type: AgentType;
+  /** A role a person's rule named for this attempt, or null (priced by its type's mapping). */
+  readonly roleId: string | null;
   readonly reason: AgentTypeReason;
 }
 
@@ -137,6 +139,7 @@ interface Scope {
   readonly slugs: readonly string[];
   readonly prefixes: ReadonlyMap<string, string>;
   readonly rules: readonly AgentTypeRule[];
+  readonly record: readonly (RecordRows & { readonly workspace: string })[];
 }
 
 /** Issues are keyed by workspace and id, since two workspaces can hold the same uuid only by accident, but can. */
@@ -159,7 +162,7 @@ function indexScope(workspaces: readonly WorkspaceRows[], rules: readonly AgentT
     }
     for (const attempt of workspace.attempts) {
       const issue = byKey.get(keyOf(workspace.slug, attempt.issueId));
-      const { type, reason } = deriveAgentType(
+      const { type, roleId, reason } = deriveAgentType(
         {
           agent: attempt.agent,
           role: attempt.role,
@@ -178,6 +181,7 @@ function indexScope(workspaces: readonly WorkspaceRows[], rules: readonly AgentT
         endMs: Math.max(ms(attempt.endAt), ms(attempt.startedAt)),
         cappedSeconds: Math.min(attempt.effortSeconds, cap),
         type,
+        roleId,
         reason,
       });
     }
@@ -209,7 +213,10 @@ function indexScope(workspaces: readonly WorkspaceRows[], rules: readonly AgentT
       parent = byKey.get(key)?.parentId ?? null;
     }
   }
-  return { issues, attempts, byKey, children, attemptsOf, hasEstimatedDescendant, slugs: workspaces.map((w) => w.slug), prefixes: new Map(workspaces.map((w) => [w.slug, w.prefix])), rules };
+  return { issues, attempts, byKey, children, attemptsOf, hasEstimatedDescendant, slugs: workspaces.map((w) => w.slug), prefixes: new Map(workspaces.map((w) => [w.slug, w.prefix])),
+    rules,
+    record: workspaces.map((w) => ({ workspace: w.slug, ...(w.record ?? { comments: [], documents: [], files: [] }) })),
+  };
 }
 
 function descendantsOf(scope: Scope, issue: ScopedIssue): ScopedIssue[] {
@@ -635,7 +642,7 @@ function computeWindow(scope: Scope, window: Window, zone: Zone): WindowFigures 
     increment(row.agents, attempt.agent);
   }
   for (const issue of planned) {
-    const type = plannedTypeOf(scope, issue, scope.rules);
+    const type = ticketPricing(scope, issue).type;
     const row = typeRow(type);
     row.plannedSeconds += issue.estimatedSeconds!;
     row.plannedTickets += 1;
@@ -678,6 +685,35 @@ function computeWindow(scope: Scope, window: Window, zone: Zone): WindowFigures 
       };
     })
     .sort((a, b) => b.attempts - a.attempts || a.name.localeCompare(b.name));
+
+  // ---- the paper trail
+  const keyCounts: Record<string, number> = {};
+  let comments = 0;
+  let documents = 0;
+  let files = 0;
+  let fileBytes = 0;
+  for (const held of scope.record) {
+    for (const at of held.comments) if (within(at, window)) comments += 1;
+    for (const document of held.documents) {
+      if (!within(document.createdAt, window)) continue;
+      documents += 1;
+      increment(keyCounts, document.key);
+    }
+    for (const file of held.files) {
+      if (!within(file.createdAt, window)) continue;
+      files += 1;
+      fileBytes += file.size;
+    }
+  }
+  const record = {
+    comments,
+    documents,
+    files,
+    fileBytes,
+    byDocumentKey: Object.entries(keyCounts)
+      .sort(([a, x], [b, y]) => y - x || a.localeCompare(b))
+      .map(([key, count]) => ({ key, count })),
+  };
 
   // ---- caveats
   const caveats: Caveat[] = [];
@@ -768,6 +804,7 @@ function computeWindow(scope: Scope, window: Window, zone: Zone): WindowFigures 
       sprints,
       agentTypes,
       agents,
+      record,
     },
   };
 }
@@ -776,16 +813,25 @@ function round2OrNull(value: number | null): number | null {
   return value === null ? null : round2(value);
 }
 
+/** How a ticket is priced: the attempt that did most of its work decides, else its own data. */
+interface TicketPricing {
+  readonly type: AgentType;
+  readonly roleId: string | null;
+  readonly reason: AgentTypeReason;
+}
+
 /**
- * The type a planned ticket's hours are priced as: the type of the attempt that did most of
- * its work, or, for a ticket no agent worked, the type its own kind, labels and title give.
+ * The type (and any role a rule named) a done ticket is priced as: those of the attempt that
+ * did most of its work, or, for a ticket no agent worked, what its own kind, labels and title
+ * give under the same rules.
  */
-export function plannedTypeOf(scope: Pick<Scope, "attemptsOf">, issue: ScopedIssue, rules: readonly AgentTypeRule[] = []): AgentType {
+function ticketPricing(scope: Pick<Scope, "attemptsOf" | "rules">, issue: ScopedIssue): TicketPricing {
   const attempts = scope.attemptsOf.get(keyOf(issue.workspace, issue.id)) ?? [];
   if (attempts.length > 0) {
-    return attempts.reduce((top, attempt) => (attempt.effortSeconds > top.effortSeconds ? attempt : top), attempts[0]!).type;
+    const main = attempts.reduce((top, attempt) => (attempt.effortSeconds > top.effortSeconds ? attempt : top), attempts[0]!);
+    return { type: main.type, roleId: main.roleId, reason: main.reason };
   }
-  return deriveAgentType({ agent: "", role: "worker", workspace: issue.prefix, kind: issue.kind, labels: issue.labels, title: issue.title }, rules).type;
+  return deriveAgentType({ agent: "", role: "worker", workspace: issue.prefix, kind: issue.kind, labels: issue.labels, title: issue.title }, scope.rules);
 }
 
 function seriesOf(window: Window, daily: readonly DayFigures[], bucket: Bucket): SeriesPoint[] {
@@ -892,23 +938,88 @@ export function analyticsReport(
   };
 }
 
+/** One done ticket priced at a role (`RoiTicket` before rounding). */
+export interface PricedTicket {
+  readonly workspace: string;
+  readonly identifier: string;
+  readonly title: string;
+  readonly type: AgentType;
+  readonly reason: AgentTypeReason;
+  readonly plannedSeconds: number | null;
+  readonly agentSeconds: number;
+}
+
+export interface RoleTallies {
+  readonly measured: Map<string, { hours: number; types: Set<AgentType>; tickets: number; plannedTickets: null }>;
+  readonly planned: Map<string, { hours: number; types: Set<AgentType>; tickets: number; plannedTickets: number }>;
+  /** The done tickets priced at each role, most agent-hours first. */
+  readonly tickets: Map<string, PricedTicket[]>;
+  /** Measured hours priced at each role on tickets not done in the window. */
+  readonly otherHours: Map<string, number>;
+  readonly agentHours: number;
+  readonly activeDays: number;
+}
+
 /**
- * Hours by agent type for one window, both lenses: the ROI read's input. Measured: capped
- * agent-hours of the attempts that ran, by the attempt's type. Planned: planned hours of the
- * tickets done, by `plannedTypeOf`.
+ * The ROI read's input for one window: hours and tickets by the role they are priced at.
+ *
+ * Measured: the capped agent-hours of the attempts that ran, each priced at the role a rule
+ * named for it or its type's role. Planned: the planned hours of the tickets done, each priced
+ * by `ticketPricing`. `roleOf` is the mapping (a role id per type).
  */
-export function hoursByType(
-  workspaces: readonly WorkspaceRows[],
-  resolved: ResolvedPeriod,
-  rules: readonly AgentTypeRule[],
-): { measured: Record<AgentType, number>; planned: Record<AgentType, number>; agentHours: number; activeDays: number } {
+export function roleTallies(workspaces: readonly WorkspaceRows[], resolved: ResolvedPeriod, rules: readonly AgentTypeRule[], roleOf: (type: AgentType) => string): RoleTallies {
   const scope = indexScope(workspaces, rules);
-  const figures = computeWindow(scope, resolved.window, resolved.zone);
-  const measured = Object.fromEntries(AGENT_TYPES.map((type) => [type, 0])) as Record<AgentType, number>;
-  const planned = Object.fromEntries(AGENT_TYPES.map((type) => [type, 0])) as Record<AgentType, number>;
-  for (const row of figures.report.agentTypes) {
-    measured[row.type] = row.agentHours;
-    planned[row.type] = row.plannedHours;
+  const window = resolved.window;
+  const measured: RoleTallies["measured"] = new Map();
+  const planned: RoleTallies["planned"] = new Map();
+  const tickets: RoleTallies["tickets"] = new Map();
+  const otherHours: RoleTallies["otherHours"] = new Map();
+  const measuredOf = (id: string) => {
+    const held = measured.get(id) ?? { hours: 0, types: new Set<AgentType>(), tickets: 0, plannedTickets: null };
+    measured.set(id, held);
+    return held;
+  };
+  const plannedOf = (id: string) => {
+    const held = planned.get(id) ?? { hours: 0, types: new Set<AgentType>(), tickets: 0, plannedTickets: 0 };
+    planned.set(id, held);
+    return held;
+  };
+  const done = scope.issues.filter((issue) => isWork(issue) && issue.category === "done" && within(issue.completedAt, window));
+  const doneKeys = new Set(done.map((issue) => keyOf(issue.workspace, issue.id)));
+  for (const attempt of scope.attempts) {
+    if (!runsWithin(attempt, window.startMs, window.endMs)) continue;
+    const id = attempt.roleId ?? roleOf(attempt.type);
+    const seconds = cappedWithin(attempt, window.startMs, window.endMs);
+    const held = measuredOf(id);
+    held.hours += hours(seconds);
+    held.types.add(attempt.type);
+    if (!doneKeys.has(keyOf(attempt.workspace, attempt.issueId))) otherHours.set(id, (otherHours.get(id) ?? 0) + hours(seconds));
   }
-  return { measured, planned, agentHours: figures.headline.agentHours, activeDays: figures.report.capacity.activeDays };
+  for (const issue of done) {
+    const pricing = ticketPricing(scope, issue);
+    const id = pricing.roleId ?? roleOf(pricing.type);
+    const counted = issue.estimatedSeconds !== null && issue.estimatedSeconds > 0 && !scope.hasEstimatedDescendant.has(keyOf(issue.workspace, issue.id));
+    measuredOf(id).tickets += 1;
+    const plan = plannedOf(id);
+    plan.tickets += 1;
+    plan.types.add(pricing.type);
+    if (counted) {
+      plan.hours += hours(issue.estimatedSeconds!);
+      plan.plannedTickets += 1;
+    }
+    const list = tickets.get(id) ?? [];
+    list.push({
+      workspace: issue.workspace,
+      identifier: issue.identifier,
+      title: issue.title,
+      type: pricing.type,
+      reason: pricing.reason,
+      plannedSeconds: counted ? issue.estimatedSeconds : null,
+      agentSeconds: (scope.attemptsOf.get(keyOf(issue.workspace, issue.id)) ?? []).reduce((sum, attempt) => sum + attempt.cappedSeconds, 0),
+    });
+    tickets.set(id, list);
+  }
+  for (const list of tickets.values()) list.sort((a, b) => b.agentSeconds - a.agentSeconds || a.identifier.localeCompare(b.identifier));
+  const figures = computeWindow(scope, window, resolved.zone);
+  return { measured, planned, tickets, otherHours, agentHours: figures.headline.agentHours, activeDays: figures.report.capacity.activeDays };
 }

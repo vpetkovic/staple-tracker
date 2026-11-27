@@ -63,11 +63,22 @@ export interface AnalyticsAttempt {
   readonly provenance: string;
 }
 
+/** The paper trail: what was written down beside the work, each with the instant it was written. */
+export interface RecordRows {
+  /** `createdAt` of every comment not deleted. */
+  readonly comments: readonly string[];
+  /** Each document, with the instant its first revision was written. */
+  readonly documents: ReadonlyArray<{ readonly key: string; readonly createdAt: string }>;
+  readonly files: ReadonlyArray<{ readonly createdAt: string; readonly size: number }>;
+}
+
 export interface WorkspaceRows {
   readonly slug: string;
   readonly prefix: string;
   readonly issues: readonly AnalyticsIssue[];
   readonly attempts: readonly AnalyticsAttempt[];
+  /** Absent on a fixture that does not need it; read as empty. */
+  readonly record?: RecordRows;
 }
 
 interface IssueRow {
@@ -158,5 +169,16 @@ export function readWorkspaceRows(db: DatabaseSync, workspace: { slug: string; p
     }
   }
   attempts.sort((a, b) => (a.startedAt < b.startedAt ? -1 : a.startedAt > b.startedAt ? 1 : a.id < b.id ? -1 : 1));
-  return { slug: workspace.slug, prefix: workspace.prefix, issues, attempts };
+  const record: RecordRows = {
+    comments: (db.prepare("SELECT created_at AS at FROM comments WHERE deleted_at IS NULL").all() as Array<{ at: string }>).map((row) => row.at),
+    documents: db
+      .prepare(
+        `SELECT d.key AS key, MIN(r.created_at) AS createdAt
+           FROM documents d JOIN document_revisions r ON r.issue_id = d.issue_id AND r.key = d.key
+          GROUP BY d.issue_id, d.key`,
+      )
+      .all() as Array<{ key: string; createdAt: string }>,
+    files: db.prepare("SELECT created_at AS createdAt, size FROM attachments").all() as Array<{ createdAt: string; size: number }>,
+  };
+  return { slug: workspace.slug, prefix: workspace.prefix, issues, attempts, record };
 }

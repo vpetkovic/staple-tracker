@@ -5,9 +5,9 @@
  */
 import type { DatabaseSync } from "node:sqlite";
 import type { AgentTypeRule } from "./agent-type.js";
-import type { AnalyticsReport, AnalyticsWorkspaceRef, Caveat, CostModelResponse, RoiResponse } from "./contract.js";
+import type { AnalyticsReport, AnalyticsWorkspaceRef, Caveat, CostModelResponse, RoiResponse, RoiTicketsResponse } from "./contract.js";
 import { COST_MODEL_PARTS, aiSpendFor, resolveRoles, roi, type CostModel } from "./cost-model.js";
-import { analyticsReport, hoursByType, resolvePeriod, type AnalyticsQuery } from "./metrics.js";
+import { analyticsReport, resolvePeriod, roleTallies, type AnalyticsQuery } from "./metrics.js";
 import { readWorkspaceRows, type WorkspaceRows } from "./rows.js";
 
 /** One workspace the scope covers, opened. */
@@ -57,15 +57,17 @@ export function readRoi(input: {
   const hubRows = input.scope === input.hub ? scopeRows : rowsOf(input.hub);
   const report = analyticsReport(scopeRows, { kind: input.scope.kind, workspaces: input.scope.refs }, { ...input.query, rules });
   const resolved = resolvePeriod(scopeRows, input.query);
-  const scoped = hoursByType(scopeRows, resolved, rules);
-  const hub = hubRows === scopeRows ? scoped : hoursByType(hubRows, resolved, rules);
+  const roles = resolveRoles(costModel);
+  const roleOf = (type: Parameters<typeof roles.roleOf>[0]) => costModel.roleMapping.types[type];
+  const scoped = roleTallies(scopeRows, resolved, rules, roleOf);
+  const hub = hubRows === scopeRows ? scoped : roleTallies(hubRows, resolved, rules, roleOf);
   const share = input.scope.kind === "hub" || hubRows === scopeRows ? 1 : hub.agentHours > 0 ? scoped.agentHours / hub.agentHours : 0;
   const aiSpendHub = aiSpendFor(costModel.aiSpend, resolved.window.days);
   const hoursPerActiveDay = costModel.scenario.director.hoursPerActiveDay;
   const directorHoursHub = hub.activeDays * hoursPerActiveDay;
   const lens = (name: "measured" | "planned") =>
-    roi({ lens: name, hoursByType: scoped[name], aiCost: aiSpendHub * share, directorHours: directorHoursHub * share, model: costModel });
-  const { fallbacks } = resolveRoles(costModel);
+    roi({ lens: name, byRole: scoped[name], aiCost: aiSpendHub * share, directorHours: directorHoursHub * share, model: costModel });
+  const { fallbacks } = roles;
   const caveats: Caveat[] = [...report.caveats];
   const defaults = COST_MODEL_PARTS.filter((part) => input.model.source[part] === "default").length;
   if (defaults > 0) caveats.push({ code: "default_cost_model", count: defaults, of: COST_MODEL_PARTS.length });
@@ -91,5 +93,45 @@ export function readRoi(input: {
     agentTypes: report.agentTypes,
     fallbacks,
     caveats,
+  };
+}
+
+/** The tickets behind one role row (`RoiTicketsResponse`), at most `limit` of them. */
+export function readRoiTickets(input: {
+  readonly scope: AnalyticsScope;
+  readonly query: Omit<AnalyticsQuery, "rules">;
+  readonly model: CostModelResponse;
+  readonly roleId: string;
+  readonly limit?: number;
+}): RoiTicketsResponse {
+  const costModel = input.model.model as CostModel;
+  const rows = rowsOf(input.scope);
+  const resolved = resolvePeriod(rows, input.query);
+  const roles = resolveRoles(costModel);
+  // Price unknown role ids the way the ROI does, so the list behind a row is the row's.
+  const priced = (id: string): string => roles.role(id).id;
+  const tallies = roleTallies(rows, resolved, costModel.roleMapping.rules, (type) => costModel.roleMapping.types[type]);
+  const limit = Math.max(1, Math.min(input.limit ?? 200, 200));
+  const tickets = [...tallies.tickets.entries()]
+    .filter(([id]) => priced(id) === input.roleId)
+    .flatMap(([, list]) => list)
+    .sort((a, b) => b.agentSeconds - a.agentSeconds || a.identifier.localeCompare(b.identifier));
+  const other = [...tallies.otherHours.entries()].filter(([id]) => priced(id) === input.roleId).reduce((sum, [, value]) => sum + value, 0);
+  const round2 = (value: number): number => Math.round(value * 100) / 100;
+  return {
+    roleId: input.roleId,
+    period: resolved.period,
+    total: tickets.length,
+    limit,
+    tickets: tickets.slice(0, limit).map((ticket) => ({
+      workspace: ticket.workspace,
+      identifier: ticket.identifier,
+      title: ticket.title,
+      type: ticket.type,
+      reason: { code: ticket.reason.code, detail: ticket.reason.detail },
+      plannedHours: ticket.plannedSeconds === null ? null : round2(ticket.plannedSeconds / 3600),
+      agentHours: round2(ticket.agentSeconds / 3600),
+    })),
+    otherAgentHours: round2(other),
   };
 }

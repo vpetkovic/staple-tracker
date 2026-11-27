@@ -274,6 +274,17 @@ export interface AgentRow {
   readonly mixed: boolean;
 }
 
+/** The paper trail beside the work, counted in the period by each row's own timestamp. */
+export interface RecordSection {
+  readonly comments: number;
+  /** Documents whose first revision was written in the period. */
+  readonly documents: number;
+  readonly files: number;
+  readonly fileBytes: number;
+  /** Documents by key (`plan`, `worklog`, `context`, …), most first. */
+  readonly byDocumentKey: readonly { readonly key: string; readonly count: number }[];
+}
+
 export type CaveatCode =
   | "no_model"
   | "reconstructed"
@@ -316,6 +327,7 @@ export interface AnalyticsReport {
   readonly sprints: readonly SprintRow[];
   readonly agentTypes: readonly AgentTypeRow[];
   readonly agents: readonly AgentRow[];
+  readonly record: RecordSection;
   readonly caveats: readonly Caveat[];
 }
 
@@ -327,25 +339,44 @@ export interface CostRole {
   readonly hourlyRate: number;
 }
 
+/** A person's rule: every matcher given must match (at least one); exactly one of `type` and `roleId`. */
 export interface CostTypeRule {
+  /** Agent name glob, `*` wildcards, case-insensitive. */
   readonly agent?: string;
+  /** Workspace prefix. */
   readonly workspace?: string;
   readonly kind?: string;
   readonly label?: string;
-  readonly type: AgentTypeId;
+  /** A whole word (or words, in order) of the ticket title, case-insensitive. */
+  readonly title?: string;
+  readonly type?: AgentTypeId;
+  readonly roleId?: string;
 }
 
+/**
+ * Every part carries `assumed`: the ids of the figures still at their shipped default
+ * (`roles.<id>.hourlyRate`, `director.hourlyRate`, `director.hoursPerActiveDay`,
+ * `entries.<id>.monthlyAmount`). The server fills it for an unsaved part; the page drops an id
+ * when the person changes that figure, and sends the rest back on save.
+ */
 export interface CostModelValue {
-  readonly roles: { readonly roles: readonly CostRole[]; readonly savedAt: string | null };
-  readonly roleMapping: { readonly types: Readonly<Record<AgentTypeId, string>>; readonly rules: readonly CostTypeRule[]; readonly savedAt: string | null };
+  readonly roles: { readonly roles: readonly CostRole[]; readonly assumed: readonly string[]; readonly savedAt: string | null };
+  readonly roleMapping: {
+    readonly types: Readonly<Record<AgentTypeId, string>>;
+    readonly rules: readonly CostTypeRule[];
+    readonly assumed: readonly string[];
+    readonly savedAt: string | null;
+  };
   readonly scenario: {
     readonly mode: "solo" | "company";
     readonly currency: string;
     readonly director: { readonly title: string; readonly hourlyRate: number; readonly hoursPerActiveDay: number };
+    readonly assumed: readonly string[];
     readonly savedAt: string | null;
   };
   readonly aiSpend: {
     readonly entries: readonly { readonly id: string; readonly label: string; readonly monthlyAmount: number; readonly from: string; readonly to: string | null }[];
+    readonly assumed: readonly string[];
     readonly savedAt: string | null;
   };
 }
@@ -378,10 +409,10 @@ export interface CostModelResponse {
 export interface CostModelWrite {
   /** The workspace to save in. Required when there is no home yet; when given and different, the whole model moves there. */
   readonly home?: string;
-  readonly roles?: { readonly roles: readonly CostRole[] };
-  readonly roleMapping?: { readonly types: Readonly<Record<AgentTypeId, string>>; readonly rules: readonly CostTypeRule[] };
-  readonly scenario?: Omit<CostModelValue["scenario"], "savedAt">;
-  readonly aiSpend?: { readonly entries: CostModelValue["aiSpend"]["entries"] };
+  readonly roles?: { readonly roles: readonly CostRole[]; readonly assumed?: readonly string[] };
+  readonly roleMapping?: { readonly types: Readonly<Record<AgentTypeId, string>>; readonly rules: readonly CostTypeRule[]; readonly assumed?: readonly string[] };
+  readonly scenario?: Omit<CostModelValue["scenario"], "savedAt" | "assumed"> & { readonly assumed?: readonly string[] };
+  readonly aiSpend?: { readonly entries: CostModelValue["aiSpend"]["entries"]; readonly assumed?: readonly string[] };
   /** Return these parts to their defaults (a reset is journaled as a delete). */
   readonly reset?: readonly CostModelPartId[];
 }
@@ -393,6 +424,10 @@ export interface RoiRoleValue {
   readonly hours: number;
   readonly value: number;
   readonly types: readonly AgentTypeId[];
+  /** Done tickets in the period that landed on this role. */
+  readonly tickets: number;
+  /** Planned lens: of those, the ones whose estimate counts. Null on the measured lens. */
+  readonly plannedTickets: number | null;
 }
 
 export interface RoiLens {
@@ -432,6 +467,32 @@ export interface RoiResponse {
     readonly hubAgentHours: number;
   };
   readonly agentTypes: readonly AgentTypeRow[];
-  readonly fallbacks: readonly { readonly type: AgentTypeId; readonly missingRoleId: string; readonly usedRoleId: string }[];
+  /** A role the mapping (`type`) or a rule (`rule`, its index) names that the role list lacks, priced at `usedRoleId`. */
+  readonly fallbacks: readonly { readonly type: AgentTypeId | null; readonly rule: number | null; readonly missingRoleId: string; readonly usedRoleId: string }[];
   readonly caveats: readonly Caveat[];
+}
+
+/** One done ticket that landed on a role, and why. */
+export interface RoiTicket {
+  readonly workspace: string;
+  readonly identifier: string;
+  readonly title: string;
+  readonly type: AgentTypeId;
+  readonly reason: { readonly code: AgentTypeReasonId; readonly detail: string | null };
+  /** Its own estimate when the planned lens counts it; null otherwise. */
+  readonly plannedHours: number | null;
+  /** Agent-hours of its own attempts, all time, each capped. */
+  readonly agentHours: number;
+}
+
+/** `GET /api/analytics/roi/tickets?roleId=…`: the done tickets in the period priced at one role, most agent-hours first. */
+export interface RoiTicketsResponse {
+  readonly roleId: string;
+  readonly period: AnalyticsPeriod;
+  /** Every such ticket; `tickets` holds the first `limit` of them. */
+  readonly total: number;
+  readonly limit: number;
+  readonly tickets: readonly RoiTicket[];
+  /** Measured hours priced at this role on tickets NOT done in the period (still open, or done outside it). */
+  readonly otherAgentHours: number;
 }

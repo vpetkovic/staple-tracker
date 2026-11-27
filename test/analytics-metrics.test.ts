@@ -12,7 +12,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { analyticsReport, lowerQuantile, type AnalyticsQuery } from "../src/core/analytics/metrics.js";
+import { analyticsReport, lowerQuantile, resolvePeriod, roleTallies, type AnalyticsQuery } from "../src/core/analytics/metrics.js";
 import { readWorkspaceRows, type AnalyticsAttempt, type AnalyticsIssue, type WorkspaceRows } from "../src/core/analytics/rows.js";
 import type { AnalyticsReport } from "../src/core/analytics/contract.js";
 import { openDb } from "../src/core/db.js";
@@ -284,6 +284,67 @@ describe("a hub", () => {
     ]);
     expect(report.series[0]!.byWorkspace).toEqual({ one: { done: 1, agentHours: 2 }, two: { done: 2, agentHours: 0 } });
     expect(caveat(report, "workspace_unavailable")).toEqual({ code: "workspace_unavailable", count: 1, of: 3 });
+  });
+});
+
+describe("the paper trail", () => {
+  it("counts comments, documents by key and files written inside the period", () => {
+    const rows: WorkspaceRows = {
+      ...ws("w", []),
+      record: {
+        comments: ["2026-09-01T10:00:00.000Z", "2026-09-01T11:00:00.000Z", "2026-08-31T23:00:00.000Z"],
+        documents: [
+          { key: "plan", createdAt: "2026-09-01T10:00:00.000Z" },
+          { key: "worklog", createdAt: "2026-09-01T10:00:00.000Z" },
+          { key: "plan", createdAt: "2026-09-01T12:00:00.000Z" },
+          { key: "context", createdAt: "2026-08-01T12:00:00.000Z" },
+        ],
+        files: [
+          { createdAt: "2026-09-01T10:00:00.000Z", size: 1000 },
+          { createdAt: "2026-09-02T10:00:00.000Z", size: 5 },
+        ],
+      },
+    };
+    expect(read([rows], { from: "2026-09-01", to: "2026-09-01" }).record).toEqual({
+      comments: 2,
+      documents: 3,
+      files: 1,
+      fileBytes: 1000,
+      byDocumentKey: [
+        { key: "plan", count: 2 },
+        { key: "worklog", count: 1 },
+      ],
+    });
+  });
+});
+
+describe("hours and tickets by the role they are priced at", () => {
+  const roleOf = (type: string): string => (type === "documentation" ? "writer" : "engineer");
+  const rows = ws(
+    "w",
+    [
+      issue({ id: "docs", title: "Docs for the API", estimatedSeconds: 3 * H }),
+      issue({ id: "qa", title: "QA pass over the import", estimatedSeconds: 1 * H }),
+      issue({ id: "open", status: "in_progress", category: "active", completedAt: null }),
+      issue({ id: "bare", title: "Closed with no agent", estimatedSeconds: 2 * H }),
+    ],
+    [attempt("docs"), attempt("qa"), attempt("open", { agent: "docs-writer" })],
+  );
+
+  it("prices measured hours by attempt and planned hours by ticket, a rule's role included", () => {
+    const resolved = resolvePeriod([rows], { now: "2026-09-30T12:00:00.000Z", from: "2026-09-01", to: "2026-09-01" });
+    const tallies = roleTallies([rows], resolved, [{ title: "qa", roleId: "qa-engineer" }], roleOf);
+    expect(Object.fromEntries([...tallies.measured].map(([id, t]) => [id, [t.hours, t.tickets]]))).toEqual({ writer: [4, 1], "qa-engineer": [2, 1], engineer: [0, 1] });
+    expect(Object.fromEntries([...tallies.planned].map(([id, t]) => [id, [t.hours, t.tickets, t.plannedTickets]]))).toEqual({
+      writer: [3, 1, 1],
+      "qa-engineer": [1, 1, 1],
+      engineer: [2, 1, 1],
+    });
+    // The open ticket's attempt was typed `documentation` by its agent's name: 2 h priced at writer, on no done ticket.
+    expect(tallies.otherHours.get("writer")).toBe(2);
+    expect(tallies.tickets.get("qa-engineer")).toEqual([
+      expect.objectContaining({ identifier: expect.any(String), title: "QA pass over the import", type: "engineering", reason: { code: "rule", detail: "0" }, plannedSeconds: 3600, agentSeconds: 7200 }),
+    ]);
   });
 });
 

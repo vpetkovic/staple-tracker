@@ -18,8 +18,10 @@
  * ## Defaults are assumptions
  *
  * Every part has a default so the page is useful before anyone configures it, and every
- * default carries `savedAt: null`. That null is the one fact a surface needs to say "assumed"
- * rather than present a made-up rate as a fact; a saved part carries the instant it was saved.
+ * default carries `savedAt: null`. Beyond that, each part lists in `assumed` the figures still
+ * at their shipped default (`director.hourlyRate`, `roles.<id>.hourlyRate`, …): the server
+ * fills it for an unsaved part, and the page drops an id when the person changes that figure
+ * and saves the rest. So changing one rate never silently blesses "8 hours a day".
  *
  * ## Validation is the registry's
  *
@@ -47,8 +49,12 @@ export interface Role {
   readonly hourlyRate: number;
 }
 
+/** Figure ids still at their shipped default (see the module comment). */
+export type Assumed = readonly string[];
+
 export interface RolesValue {
   readonly roles: readonly Role[];
+  readonly assumed?: Assumed;
   readonly savedAt: string | null;
 }
 
@@ -56,6 +62,7 @@ export interface RoleMappingValue {
   /** The role each agent type stands in for, by role id. Every agent type is present. */
   readonly types: Readonly<Record<AgentType, string>>;
   readonly rules: readonly AgentTypeRule[];
+  readonly assumed?: Assumed;
   readonly savedAt: string | null;
 }
 
@@ -74,6 +81,7 @@ export interface ScenarioValue {
     /** Staple does not record a person's time, so it is estimated per day agents ran. */
     readonly hoursPerActiveDay: number;
   };
+  readonly assumed?: Assumed;
   readonly savedAt: string | null;
 }
 
@@ -89,6 +97,7 @@ export interface AiSpendEntry {
 
 export interface AiSpendValue {
   readonly entries: readonly AiSpendEntry[];
+  readonly assumed?: Assumed;
   readonly savedAt: string | null;
 }
 
@@ -106,8 +115,8 @@ export const DEFAULT_ROLES: RolesValue = Object.freeze({
     Object.freeze({ id: "software-engineer", title: "Software Engineer", hourlyRate: 100 }),
     Object.freeze({ id: "design-engineer", title: "Design Engineer", hourlyRate: 95 }),
     Object.freeze({ id: "technical-writer", title: "Technical Writer", hourlyRate: 70 }),
-    Object.freeze({ id: "engineering-manager", title: "Engineering Manager", hourlyRate: 120 }),
   ]),
+  assumed: Object.freeze(["roles.software-engineer.hourlyRate", "roles.design-engineer.hourlyRate", "roles.technical-writer.hourlyRate"]),
   savedAt: null,
 });
 
@@ -117,9 +126,11 @@ export const DEFAULT_ROLE_MAPPING: RoleMappingValue = Object.freeze({
     design: "design-engineer",
     documentation: "technical-writer",
     research: "software-engineer",
-    orchestration: "engineering-manager",
+    // No attempt is in the orchestrator lane today, so a manager role would open at 0 h.
+    orchestration: "software-engineer",
   }),
   rules: Object.freeze([]),
+  assumed: Object.freeze([]),
   savedAt: null,
 });
 
@@ -127,11 +138,13 @@ export const DEFAULT_SCENARIO: ScenarioValue = Object.freeze({
   mode: "solo",
   currency: "USD",
   director: Object.freeze({ title: "You", hourlyRate: 100, hoursPerActiveDay: 8 }),
+  assumed: Object.freeze(["director.hourlyRate", "director.hoursPerActiveDay"]),
   savedAt: null,
 });
 
 export const DEFAULT_AI_SPEND: AiSpendValue = Object.freeze({
   entries: Object.freeze([Object.freeze({ id: "ai-plan", label: "AI subscriptions", monthlyAmount: 200, from: "2000-01", to: null })]),
+  assumed: Object.freeze(["entries.ai-plan.monthlyAmount"]),
   savedAt: null,
 });
 
@@ -164,12 +177,17 @@ function unknownField(value: Record<string, unknown>, allowed: readonly string[]
 }
 
 function savedAtProblem(value: Record<string, unknown>): string | null {
+  if (value.assumed !== undefined) {
+    if (!Array.isArray(value.assumed) || value.assumed.length > 200 || !value.assumed.every((id) => isText(id, 160))) {
+      return "assumed must be a list of at most 200 figure ids";
+    }
+  }
   return value.savedAt === null || isInstant(value.savedAt) ? null : "savedAt must be an ISO-8601 instant or null";
 }
 
 function rolesProblem(value: unknown): string | null {
   if (!isObject(value)) return "an object {roles, savedAt}";
-  const extra = unknownField(value, ["roles", "savedAt"], "the role list");
+  const extra = unknownField(value, ["roles", "assumed", "savedAt"], "the role list");
   if (extra) return extra;
   if (!Array.isArray(value.roles) || value.roles.length === 0 || value.roles.length > MAX_ROLES) return `roles must list 1 to ${MAX_ROLES} roles`;
   const seen = new Set<string>();
@@ -189,18 +207,20 @@ function rolesProblem(value: unknown): string | null {
 function ruleProblem(rule: unknown, index: number): string | null {
   const where = `rule ${index + 1}`;
   if (!isObject(rule)) return `${where} must be an object`;
-  const extra = unknownField(rule, ["agent", "workspace", "kind", "label", "type"], where);
+  const extra = unknownField(rule, ["agent", "workspace", "kind", "label", "title", "type", "roleId"], where);
   if (extra) return extra;
-  if (!isAgentType(rule.type)) return `${where}'s type must be one of ${AGENT_TYPES.join(", ")}`;
-  const matchers = ["agent", "workspace", "kind", "label"].filter((field) => rule[field] !== undefined);
-  if (matchers.length === 0) return `${where} must match on at least one of agent, workspace, kind or label`;
+  if ((rule.type === undefined) === (rule.roleId === undefined)) return `${where} must set exactly one of type and roleId`;
+  if (rule.type !== undefined && !isAgentType(rule.type)) return `${where}'s type must be one of ${AGENT_TYPES.join(", ")}`;
+  if (rule.roleId !== undefined && (typeof rule.roleId !== "string" || !ROLE_ID.test(rule.roleId))) return `${where}'s roleId must name a role id`;
+  const matchers = ["agent", "workspace", "kind", "label", "title"].filter((field) => rule[field] !== undefined);
+  if (matchers.length === 0) return `${where} must match on at least one of agent, workspace, kind, label or title`;
   for (const field of matchers) if (!isText(rule[field], 120)) return `${where}'s ${field} must be text of at most 120 characters`;
   return null;
 }
 
 function roleMappingProblem(value: unknown): string | null {
   if (!isObject(value)) return "an object {types, rules, savedAt}";
-  const extra = unknownField(value, ["types", "rules", "savedAt"], "the role mapping");
+  const extra = unknownField(value, ["types", "rules", "assumed", "savedAt"], "the role mapping");
   if (extra) return extra;
   if (!isObject(value.types)) return "types must map every agent type to a role id";
   const typeExtra = Object.keys(value.types).find((key) => !isAgentType(key));
@@ -219,7 +239,7 @@ function roleMappingProblem(value: unknown): string | null {
 
 function scenarioProblem(value: unknown): string | null {
   if (!isObject(value)) return "an object {mode, currency, director, savedAt}";
-  const extra = unknownField(value, ["mode", "currency", "director", "savedAt"], "the scenario");
+  const extra = unknownField(value, ["mode", "currency", "director", "assumed", "savedAt"], "the scenario");
   if (extra) return extra;
   if (typeof value.mode !== "string" || !(SCENARIO_MODES as readonly string[]).includes(value.mode)) return `mode must be one of ${SCENARIO_MODES.join(", ")}`;
   if (typeof value.currency !== "string" || !CURRENCY.test(value.currency)) return "currency must be a three-letter ISO 4217 code such as USD";
@@ -235,7 +255,7 @@ function scenarioProblem(value: unknown): string | null {
 
 function aiSpendProblem(value: unknown): string | null {
   if (!isObject(value)) return "an object {entries, savedAt}";
-  const extra = unknownField(value, ["entries", "savedAt"], "the AI spend");
+  const extra = unknownField(value, ["entries", "assumed", "savedAt"], "the AI spend");
   if (extra) return extra;
   if (!Array.isArray(value.entries) || value.entries.length > MAX_SPEND_ENTRIES) return `entries must be a list of at most ${MAX_SPEND_ENTRIES}`;
   const seen = new Set<string>();
@@ -310,6 +330,10 @@ export interface RoleValue {
   readonly value: number;
   /** The agent types whose hours landed on this role. */
   readonly types: readonly AgentType[];
+  /** Done tickets in the period that landed on this role. */
+  readonly tickets: number;
+  /** Planned lens: of those, the ones whose estimate counts. Null on the measured lens. */
+  readonly plannedTickets: number | null;
 }
 
 /** The ROI under one lens. Every input is echoed so a surface can print the formula. */
@@ -336,20 +360,24 @@ export interface RoiResult {
   readonly outputMultiplier: number | null;
 }
 
-/** Agent types whose mapping names a role the role list does not hold, and the role used instead. */
+/** A role the mapping or a rule names that the role list does not hold, and the role used instead. */
 export interface MappingFallback {
-  readonly type: AgentType;
+  /** The agent type whose mapping names it, or null for a rule. */
+  readonly type: AgentType | null;
+  /** The rule's index, or null for the mapping. */
+  readonly rule: number | null;
   readonly missingRoleId: string;
   readonly usedRoleId: string;
 }
 
 /**
- * The role each agent type is priced at. A mapping can name a role that is not in the list:
- * the two are separate settings and sync separately, so a role deleted on one device can
- * still be named by a mapping saved on another. That type is priced at the first role and
- * reported, never dropped (dropping it would silently undercount the value).
+ * The role each agent type and each role-naming rule is priced at. Either can name a role
+ * that is not in the list: the list and the mapping are separate settings and sync
+ * separately, so a role deleted on one device can still be named by a mapping saved on
+ * another. That one is priced at the first role and reported, never dropped (dropping it would
+ * silently undercount the value).
  */
-export function resolveRoles(model: CostModel): { roleOf: (type: AgentType) => Role; fallbacks: MappingFallback[] } {
+export function resolveRoles(model: CostModel): { roleOf: (type: AgentType) => Role; role: (id: string) => Role; fallbacks: MappingFallback[] } {
   const roles = new Map(model.roles.roles.map((role) => [role.id, role]));
   const first = model.roles.roles[0]!;
   const fallbacks: MappingFallback[] = [];
@@ -357,36 +385,55 @@ export function resolveRoles(model: CostModel): { roleOf: (type: AgentType) => R
   for (const type of AGENT_TYPES) {
     const wanted = model.roleMapping.types[type];
     const role = roles.get(wanted);
-    if (role) resolved.set(type, role);
-    else {
-      resolved.set(type, first);
-      fallbacks.push({ type, missingRoleId: wanted, usedRoleId: first.id });
-    }
+    resolved.set(type, role ?? first);
+    if (!role) fallbacks.push({ type, rule: null, missingRoleId: wanted, usedRoleId: first.id });
   }
-  return { roleOf: (type) => resolved.get(type)!, fallbacks };
+  for (const [index, rule] of model.roleMapping.rules.entries()) {
+    if (rule.roleId !== undefined && !roles.has(rule.roleId)) fallbacks.push({ type: null, rule: index, missingRoleId: rule.roleId, usedRoleId: first.id });
+  }
+  return { roleOf: (type) => resolved.get(type)!, role: (id) => roles.get(id) ?? first, fallbacks };
+}
+
+/** What one role collected under one lens, before pricing. Keyed by the role id it was priced to. */
+export interface RoleTally {
+  readonly hours: number;
+  readonly types: ReadonlySet<AgentType>;
+  readonly tickets: number;
+  readonly plannedTickets: number | null;
 }
 
 export function roi(input: {
   readonly lens: "measured" | "planned";
-  readonly hoursByType: Readonly<Record<AgentType, number>>;
+  /** Hours by role id. A role id the list does not hold is priced at the first role (see `resolveRoles`). */
+  readonly byRole: ReadonlyMap<string, RoleTally>;
   readonly aiCost: number;
   readonly directorHours: number;
   readonly model: CostModel;
 }): RoiResult {
-  const { roleOf } = resolveRoles(input.model);
-  const byRoleId = new Map<string, { role: Role; hours: number; types: AgentType[] }>();
-  for (const type of AGENT_TYPES) {
-    const hours = input.hoursByType[type] ?? 0;
-    if (hours <= 0) continue;
-    const role = roleOf(type);
-    const held = byRoleId.get(role.id) ?? { role, hours: 0, types: [] };
-    held.hours += hours;
-    held.types.push(type);
-    byRoleId.set(role.id, held);
+  const { role: roleById } = resolveRoles(input.model);
+  const merged = new Map<string, { role: Role; hours: number; types: Set<AgentType>; tickets: number; plannedTickets: number | null }>();
+  for (const [id, tally] of input.byRole) {
+    if (tally.hours <= 0 && tally.tickets === 0) continue;
+    const role = roleById(id);
+    const held = merged.get(role.id) ?? { role, hours: 0, types: new Set<AgentType>(), tickets: 0, plannedTickets: input.lens === "planned" ? 0 : null };
+    held.hours += tally.hours;
+    for (const type of tally.types) held.types.add(type);
+    held.tickets += tally.tickets;
+    if (held.plannedTickets !== null) held.plannedTickets += tally.plannedTickets ?? 0;
+    merged.set(role.id, held);
   }
-  const byRole: RoleValue[] = [...byRoleId.values()]
-    .map(({ role, hours, types }) => ({ roleId: role.id, title: role.title, hourlyRate: role.hourlyRate, hours, value: hours * role.hourlyRate, types }))
-    .sort((a, b) => b.value - a.value || a.roleId.localeCompare(b.roleId));
+  const byRole: RoleValue[] = [...merged.values()]
+    .map(({ role, hours, types, tickets, plannedTickets }) => ({
+      roleId: role.id,
+      title: role.title,
+      hourlyRate: role.hourlyRate,
+      hours,
+      value: hours * role.hourlyRate,
+      types: AGENT_TYPES.filter((type) => types.has(type)),
+      tickets,
+      plannedTickets,
+    }))
+    .sort((a, b) => b.value - a.value || b.hours - a.hours || a.roleId.localeCompare(b.roleId));
   const valueHours = byRole.reduce((sum, role) => sum + role.hours, 0);
   const value = byRole.reduce((sum, role) => sum + role.value, 0);
   const rate = input.model.scenario.director.hourlyRate;
