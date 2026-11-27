@@ -1726,7 +1726,9 @@ function main() {
       // Led by the kind glyph, like the rows below it (STA-185): the detail header is
       // the one line of this surface a reader scans, and it should carry the same mark
       // the list carried for the same ticket.
-      console.log(`${kindGlyph(i.kind)} ${i.identifier} · ${i.title}`);
+      // A promoted idea's kept number sits beside its ticket number (`idea-numbers.ts`).
+      const kept = i.ideaNumber !== undefined && i.ideaNumber !== i.identifier ? ` · ${i.ideaNumber}` : "";
+      console.log(`${kindGlyph(i.kind)} ${i.identifier}${kept} · ${i.title}`);
       // `kind` is unconditional here — unlike `line()`, which suppresses the
       // default. This is the detail surface: "it is a task" is a fact somebody
       // asked for by name, and leaving it out would make its absence ambiguous
