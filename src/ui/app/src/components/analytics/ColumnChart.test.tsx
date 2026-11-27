@@ -109,10 +109,10 @@ describe("stepSlot: what a key does to the active slot", () => {
 
 describe("slotReadout: the sentence the live region says", () => {
   it("lists every series value first, then the total", () => {
-    expect(slotReadout("Nov 3", [{ label: "Staple", value: "6 h" }, { label: "Docs", value: "2 h" }], { label: "Total", value: "8 h" })).toBe("Nov 3: 6 h Staple, 2 h Docs; 8 h Total");
+    expect(slotReadout({ title: "Nov 3", rows: [{ label: "Staple", value: "6 h" }, { label: "Docs", value: "2 h" }], total: { label: "Total", value: "8 h" } })).toBe("Nov 3: 6 h Staple, 2 h Docs; 8 h Total");
   });
   it("says a lone series by its value, as the title already names it", () => {
-    expect(slotReadout("Nov 3", [{ label: "Agents at once", value: "3 agents" }])).toBe("Nov 3: 3 agents");
+    expect(slotReadout({ title: "Nov 3", rows: [{ label: "Agents at once", value: "3 agents" }] })).toBe("Nov 3: 3 agents");
   });
 });
 

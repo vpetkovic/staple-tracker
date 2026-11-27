@@ -28,7 +28,9 @@ Rules every widget keeps:
   (`before:absolute before:-inset-…`).
 - **Forced colours.** Marks are background fills, so each mark carries `data-mark` and keeps its own
   colour; tracks (`data-track`) get a system-colour outline, gridlines (`data-gridline`) are drawn
-  in `GrayText`, and the active slot or cell (`data-active`) gets a `Highlight` outline.
+  in `GrayText`, and the active slot or cell (`data-active`) gets a `Highlight` outline. The rules
+  apply only inside a widget's root (`data-chart`, `data-sparkline`), because other components use
+  the same attributes. A new widget puts `data-chart` on its root.
 - **Reduced motion.** Skeletons stop pulsing and nothing moves on hover.
 
 Tests sit beside each module: `<Module>.test.tsx` renders markup and pins the data contract;

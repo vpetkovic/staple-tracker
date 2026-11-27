@@ -133,7 +133,7 @@ export function ColumnChart({
           </div>
           <p id={hintId} className="sr-only">Use the left and right arrow keys to read each column.</p>
           <p aria-live="polite" className="sr-only" data-chart-readout>
-            {readout ? slotReadout(readout.title, readout.rows, readout.total) : ""}
+            {readout ? slotReadout(readout) : ""}
           </p>
           <div aria-hidden className="relative mt-1.5 h-3.5 text-caption text-text-tertiary">
             {points.map((point, index) =>
@@ -167,7 +167,7 @@ export function stepSlot(active: number | null, key: string, count: number): num
 }
 
 /** The readout in one sentence for the live region: "Nov 4: 12 h Staple, 3 h Docs; 15 h Total". */
-export function slotReadout(title: string, rows: readonly { label: string; value: string }[], total?: { label: string; value: string }): string {
+export function slotReadout({ title, rows, total }: { title: string; rows: readonly { label: string; value: string }[]; total?: { label: string; value: string } }): string {
   const parts = rows.length === 1 && !total ? rows[0]!.value : rows.map((row) => `${row.value} ${row.label}`).join(", ");
   return `${title}: ${parts}${total ? `; ${total.value} ${total.label}` : ""}`;
 }

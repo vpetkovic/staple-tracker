@@ -55,6 +55,8 @@ function Fixture() {
         <ReturnRange low={{ value: 0.8, label: "low" }} high={{ value: 3.4, label: "high" }} />
         <ReturnRange low={{ value: 2.1, label: "low" }} high={{ value: 2.4, label: "high" }} compact />
       </Widget>
+      {/* Another component's marks, outside any chart: the widgets' forced-colours rules leave it alone. */}
+      <div data-outsider data-mark="other" data-active="" style={{ height: 8, background: "rgb(200, 0, 0)" }} />
       <Widget title="Bursts">
         <BurstCards bursts={[{ from: "2026-11-02", to: "2026-11-06", days: 5, ticketsDone: 84, agentHours: 96, bestDay: { day: "2026-11-04", count: 41 }, features: [{ title: "Analytics page", closed: 6, children: 8 }] }]} />
       </Widget>

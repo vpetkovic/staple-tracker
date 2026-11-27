@@ -188,6 +188,21 @@ describe.skipIf(Boolean(reason))("the column chart from the keyboard", () => {
   });
 });
 
+describe.skipIf(Boolean(reason))("the column chart on a touch screen", () => {
+  it("keeps the readout of a tapped slot until the reader taps elsewhere", async () => {
+    await withPage(TOUCH, async (page) => {
+      const readout = page.locator("[data-chart-readout]");
+      await page.locator('[data-slot-index="2"]').tap();
+      expect(await page.locator("[data-chart-tooltip]").count()).toBe(1);
+      expect(await readout.textContent()).toBe("Nov 3: 6 h Staple, 2 h Docs; 8 h Total");
+      await page.locator('[data-slot-index="0"]').tap();
+      expect(await readout.textContent()).toBe("Nov 1: 2 h Staple; 2 h Total");
+      await page.getByText("Agents worked 14 hours.").tap();
+      expect(await page.locator("[data-chart-tooltip]").count()).toBe(0);
+    });
+  });
+});
+
 describe.skipIf(Boolean(reason))("the heatmap from the keyboard", () => {
   it("moves the active cell with the arrows, Home and End, says it in the readout, and Escape clears", async () => {
     await withPage(DESK, async (page) => {
@@ -355,6 +370,9 @@ describe.skipIf(Boolean(reason))("forced colours", () => {
         canvas: getComputedStyle(document.body).backgroundColor,
         // A fill that is not a mark: the UA repaints it, which is what the marks are kept from.
         sunken: style('[data-slot="skeleton"]').backgroundColor,
+        // Another component's data-mark and data-active outside any chart.
+        outsider: style("[data-outsider]").backgroundColor,
+        outsiderOutline: style("[data-outsider]").outlineStyle,
       };
     });
 
@@ -378,6 +396,9 @@ describe.skipIf(Boolean(reason))("forced colours", () => {
       // Repainted as Canvas a gridline would vanish into the page; it is drawn in GrayText.
       expect(forced.gridline).not.toBe(forced.canvas);
       expect(forced.gridline).not.toBe("rgba(0, 0, 0, 0)");
+      // The rules stop at the widgets' roots.
+      expect(forced.outsider).not.toBe(normal?.outsider);
+      expect(forced.outsiderOutline).toBe("none");
     });
   });
 
@@ -409,13 +430,15 @@ describe.skipIf(Boolean(reason))("reduced motion", () => {
       expect(moving.skeletons).toHaveLength(5);
       expect(moving.skeletons.every((name) => name !== "none")).toBe(true);
       expect(moving.arrowTransition).not.toBe("0s");
+      await page.getByRole("button", { name: "Open the Return lens" }).hover();
+      await expect.poll(() => page.locator('[aria-label="Open the Return lens"] svg').first().evaluate((element) => getComputedStyle(element).translate)).not.toBe("none");
     });
     await withPage({ ...DESK, reducedMotion: "reduce" }, async (page) => {
       const still = await motion(page);
       expect(still.skeletons.every((name) => name === "none")).toBe(true);
       expect(still.arrowTransition).toBe("0s");
       await page.getByRole("button", { name: "Open the Return lens" }).hover();
-      expect(await page.locator('[aria-label="Open the Return lens"] svg').first().evaluate((element) => getComputedStyle(element).transform)).toBe("none");
+      expect(await page.locator('[aria-label="Open the Return lens"] svg').first().evaluate((element) => getComputedStyle(element).translate)).toBe("none");
     });
   });
 });
