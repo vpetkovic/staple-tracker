@@ -11,60 +11,71 @@
  *               company buys for that role (seats of a plan, or an API bill). Anything company-wide
  *               is shared.
  *
- * Roles are not typed in. Staple reads them from the tickets in the scope on screen, so the dialog
- * lists the roles that work was found for, each with its ticket count; a role with no tickets here
- * is folded away and costs nothing in this scope.
+ * The roles listed first are the ones the work in the scope on screen was found for, each with
+ * its ticket count; a role with no tickets here is folded away and costs nothing in this scope.
  *
- * A change is saved as it is made and the page behind recomputes at once. Figures still at their
- * shipped default wear the "assumed" mark until they are changed.
+ * Each change is one save of the parts it touches (`cost-edits.ts`), and the foot says how it
+ * went and where the model is kept. The figures behind follow once the server has priced it.
+ * Figures still at their shipped default wear the "assumed" mark until they are changed.
  */
 import { X } from "lucide-react";
-import type { ReactNode } from "react";
-import { cn } from "@/lib/utils";
+import { useState, type ReactNode } from "react";
 import { formatEffortHours, formatMoney } from "@/components/analytics/format";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { resetCostModel, type CostModel, type ReturnReport, type Scenario, type SpendLine } from "./proto-api";
-import { AddButton, AmountField, AssumedTag, IconButton, SaveState, Segmented, TextField, edits, type ReturnProps } from "./return-parts";
-import { lineCost, profileOf, rateOf, scenarioWords, type ReturnResult } from "./return-model";
+import type { AiSpendEntryValue, CostRole, ProfileId } from "@/lib/analytics-api";
+import { cn } from "@/lib/utils";
+import { costEdits, moveHome, newId, resetProfiles } from "./cost-edits";
+import { AddButton, AmountField, AssumedTag, IconButton, Segmented, TextField, type CostApi, type SaveStatus } from "./return-parts";
+import { activeProfile, catchAllRole, currencySymbol, entryDates, isAssumed, monthlyOf, scenarioWords, type ReturnView } from "./return-model";
 
-export const SCENARIOS: readonly { id: Scenario; label: string }[] = [
+export const SCENARIOS: readonly { id: ProfileId; label: string }[] = [
   { id: "solo", label: "Just me" },
   { id: "company", label: "A company" },
 ];
 
-export function CostSetupDialog({ open, onOpenChange, returns, model, result, onChange, saving }: { open: boolean; onOpenChange: (open: boolean) => void; returns: ReturnReport; model: CostModel; result: ReturnResult; onChange: ReturnProps["onChange"]; saving: ReturnProps["saving"] }) {
-  const words = scenarioWords(model.scenario);
-  const solo = model.scenario === "solo";
-  const profile = profileOf(model);
-  const money = (value: number) => formatMoney(value, model.currency);
-  const known = new Set(model.roles.map((role) => role.id));
-  const shared = profile.spend.filter((line) => line.roleId === null || !known.has(line.roleId));
-  const monthly = profile.spend.reduce((sum, line) => sum + lineCost(line), 0);
-  const lineOf = (roleId: string) => result.roles.find((role) => role.roleId === roleId);
-  const found = model.roles.filter((role) => lineOf(role.id)?.present);
-  const missing = model.roles.filter((role) => !lineOf(role.id)?.present);
-  const scope = returns.scope.kind === "all" ? "the work on this computer" : (returns.scope.workspaces[0]?.name ?? "this workspace");
-  const lastId = model.roles[model.roles.length - 1]?.id;
+export function CostSetupDialog({ open, onOpenChange, view, cost }: { open: boolean; onOpenChange: (open: boolean) => void; view: ReturnView; cost: CostApi }) {
+  const model = cost.model;
+  const mode = model.scenario.mode;
+  const words = scenarioWords(mode);
+  const solo = mode === "solo";
+  const profile = activeProfile(model);
+  const sign = currencySymbol(model.scenario.currency);
+  const money = (value: number) => formatMoney(value, sign);
+  const known = new Set(model.roles.roles.map((role) => role.id));
+  const shared = profile.entries.filter((entry) => entry.roleId === null || !known.has(entry.roleId));
+  const monthly = profile.entries.reduce((sum, entry) => sum + monthlyOf(entry), 0);
+  const lineOf = (roleId: string) => view.all.find((role) => role.roleId === roleId);
+  const found = model.roles.roles.filter((role) => lineOf(role.id)?.present);
+  const missing = model.roles.roles.filter((role) => !lineOf(role.id)?.present);
+  const scope = view.hub ? "the work on this computer" : view.scope;
+  const home = catchAllRole(model);
+  const assumedRates = model.roles.roles.some((role) => isAssumed(model, `roles.${role.id}.hourlyRate`));
 
-  const roleCard = (role: CostModel["roles"][number]) => {
+  const roleCard = (role: CostRole) => {
     const line = lineOf(role.id);
     return (
       <li key={role.id} className="flex flex-col gap-2.5 rounded-lg border p-3" data-role-setup={role.id}>
         <div className="grid grid-cols-[minmax(0,1fr)_7rem_1.5rem] items-end gap-2">
           <div className="min-w-0">
             <span className="mb-1 block text-label text-muted-foreground tabular-nums">{line?.present ? `${line.tickets.toLocaleString("en-US")} tickets were this role's work` : "No tickets here"}</span>
-            <TextField label="Role title" value={role.title} onCommit={(title) => onChange(edits.roleTitle(model, role.id, title))} className="w-full font-medium" />
+            <TextField label="Role title" value={role.title} onCommit={(title) => cost.apply(costEdits.roleTitle(model, role.id, title))} className="w-full font-medium" problem={cost.problem(`roles.${role.id}.title`)} />
           </div>
-          <AmountField label="To hire, an hour" prefix={model.currency} suffix="/h" value={rateOf(model, role.id)} onCommit={(rate) => onChange(edits.roleRate(model, role.id, rate))} />
-          {role.id === lastId ? <span /> : <IconButton label={`Remove ${role.title}`} onClick={() => onChange(edits.roleRemove(model, role.id), { rematch: true })} className="mb-1"><X aria-hidden className="size-3.5" /></IconButton>}
+          <AmountField label="To hire, an hour" prefix={sign} suffix="/h" value={profile.rates[role.id] ?? 100} onCommit={(rate) => cost.apply(costEdits.roleRate(model, role.id, rate))} problem={cost.problem(`roles.${role.id}.hourlyRate`)} />
+          {role.id === home ? (
+            <span />
+          ) : (
+            <IconButton label={`Remove ${role.title}`} onClick={() => cost.apply(costEdits.roleRemove(model, role.id))} className="mb-1">
+              <X aria-hidden className="size-3.5" />
+            </IconButton>
+          )}
         </div>
         <SpendLines
           heading={`AI that does the ${role.title} work`}
           empty={solo ? "Covered by your own plans above, unless you add one just for this role." : "No AI cost assigned to this role yet."}
-          lines={profile.spend.filter((item) => item.roleId === role.id)}
+          entries={profile.entries.filter((entry) => entry.roleId === role.id)}
           roleId={role.id}
-          model={model}
-          onChange={onChange}
+          cost={cost}
+          sign={sign}
           quiet={solo}
         />
       </li>
@@ -76,11 +87,11 @@ export function CostSetupDialog({ open, onOpenChange, returns, model, result, on
     <Section
       key="plans"
       title={solo ? "Your AI plans" : "AI shared by the whole team"}
-      assumed={profile.assumed.includes("spend") && shared.length > 0}
+      assumed={shared.some((entry) => isAssumed(model, `entries.${entry.id}.monthlyAmount`))}
       hint={solo ? "What you pay for AI yourself: each plan, its price, and how many of it you have. One person's plans serve every role, so they are counted once and not divided between roles." : "Plans or bills that are not for one role, such as a company-wide subscription. Counted once, not divided between roles."}
     >
       <div className={cn("rounded-lg border p-3", !solo && "border-dashed")} data-role-setup="shared">
-        <SpendLines heading={solo ? "Your AI plans" : "Shared AI"} empty={solo ? "No plan entered yet." : "Nothing shared."} lines={shared} roleId={null} model={model} onChange={onChange} />
+        <SpendLines heading={solo ? "Your AI plans" : "Shared AI"} empty={solo ? "No plan entered yet." : "Nothing shared."} entries={shared} roleId={null} cost={cost} sign={sign} />
       </div>
     </Section>
   );
@@ -88,7 +99,7 @@ export function CostSetupDialog({ open, onOpenChange, returns, model, result, on
     <Section
       key="team"
       title={solo ? "The team these tickets would need" : "The team"}
-      assumed={model.roles.some((role) => profile.assumed.includes(`roles.${role.id}.rate`))}
+      assumed={assumedRates}
       hint={
         solo
           ? `Staple reads the roles from the tickets of ${scope}: you would need these people to do the same work without AI. Set what each would cost an hour.`
@@ -106,13 +117,15 @@ export function CostSetupDialog({ open, onOpenChange, returns, model, result, on
         </details>
       ) : null}
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-        <AddButton onClick={() => onChange(edits.roleAdd(model), { rematch: true })}>Recognize another role</AddButton>
+        <AddButton onClick={() => cost.apply(costEdits.roleAdd(model, newId("role")))}>Recognize another role</AddButton>
         <p className="text-body">
           <span className="text-muted-foreground">All AI spend in this profile </span>
           <span className="font-semibold tabular-nums" data-ai-monthly>{money(monthly)} a month</span>
         </p>
       </div>
-      <p className="text-label text-pretty text-muted-foreground">Which tickets belong to a role is set on the role&apos;s own page (labels, title words, agent names), where you can see what it caught. An API bill is the figure on your provider&apos;s invoice: Staple does not record token use yet, so it cannot price API usage itself.</p>
+      <p className="text-label text-pretty text-muted-foreground">
+        Which tickets belong to a role is set on the role&apos;s own page (kinds of agent work, labels, title words, agent names), where you can see what it caught. Removing a role gives its kinds of work to {model.roles.roles.find((role) => role.id === home)?.title ?? "the engineering role"}. An API bill is the figure on your provider&apos;s invoice: Staple does not record token use yet, so it cannot price API usage itself.
+      </p>
     </Section>
   );
 
@@ -129,25 +142,29 @@ export function CostSetupDialog({ open, onOpenChange, returns, model, result, on
           </div>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5" data-profile-switch>
             <span className="text-label font-medium">Profile</span>
-            <Segmented label="Profile" value={model.scenario} options={SCENARIOS} onChange={(scenario) => onChange(edits.scenario(model, scenario))} />
+            <Segmented label="Profile" value={mode} options={SCENARIOS} onChange={(next) => cost.apply(costEdits.scenario(model, next))} />
             <span className="min-w-0 flex-1 basis-48 text-label text-pretty text-muted-foreground">
               {solo ? "One person: you direct the agents and pay for your own AI plans." : "A company: it pays an employee to direct the agents, and buys AI for the people in each role."} Each profile keeps its own figures.
             </span>
           </div>
         </DialogHeader>
-        <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-5 py-4 max-sm:px-4" data-profile={model.scenario}>
-          <Section title={words.person} assumed={profile.assumed.includes("person.rate") || profile.assumed.includes("person.hoursPerActiveDay")} hint={`${words.personHint} Agents ran on ${returns.directing.activeDays} days in this period, which makes ${formatEffortHours(result.directingHours)} and ${money(result.personCost)}.`}>
+        <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-5 py-4 max-sm:px-4" data-profile={mode}>
+          <Section
+            title={words.person}
+            assumed={isAssumed(model, "director.hourlyRate") || isAssumed(model, "director.hoursPerActiveDay")}
+            hint={`${words.personHint} Agents ran on ${view.director.activeDays} days in this period, which makes ${formatEffortHours(view.director.hours)} and ${formatMoney(view.director.cost, view.sign)}.`}
+          >
             <div className="grid grid-cols-2 gap-3">
-              <AmountField label={words.rateLabel} prefix={model.currency} suffix="/h" value={profile.person.rate} onCommit={(rate) => onChange(edits.personRate(model, rate))} />
-              <AmountField label="Hours a day directing agents" suffix="h" max={24} value={profile.person.hoursPerActiveDay} onCommit={(hours) => onChange(edits.personHours(model, hours))} />
+              <AmountField label={words.rateLabel} prefix={sign} suffix="/h" value={profile.director.hourlyRate} onCommit={(rate) => cost.apply(costEdits.directorRate(model, rate))} problem={cost.problem("director.hourlyRate")} />
+              <AmountField label="Hours a day directing agents" suffix="h" max={24} value={profile.director.hoursPerActiveDay} onCommit={(hours) => cost.apply(costEdits.directorHours(model, hours))} problem={cost.problem("director.hoursPerActiveDay")} />
             </div>
           </Section>
           {solo ? [plans, team] : [team, plans]}
         </div>
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t px-5 py-3 max-sm:px-4 max-sm:pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-          <SaveState saving={saving} className="min-w-0 flex-1 basis-56" />
+          <SavedWhere cost={cost} className="min-w-0 flex-1 basis-56" />
           <div className="flex items-center gap-2">
-            <button type="button" onClick={() => void resetCostModel().then((fresh) => onChange(fresh, { rematch: true }))} className="focus-ring h-control-md min-h-0 rounded-md px-2.5 text-body text-muted-foreground hover:bg-surface-hover hover:text-foreground">
+            <button type="button" onClick={() => cost.apply(resetProfiles())} className="focus-ring h-control-md min-h-0 rounded-md px-2.5 text-body text-muted-foreground hover:bg-surface-hover hover:text-foreground">
               Reset both profiles
             </button>
             <button type="button" onClick={() => onOpenChange(false)} className="focus-ring h-control-md min-h-0 rounded-md bg-primary px-3 text-body font-medium text-primary-foreground">
@@ -160,34 +177,107 @@ export function CostSetupDialog({ open, onOpenChange, returns, model, result, on
   );
 }
 
+/** How the latest save went, in a sentence. */
+export function saveWords(save: SaveStatus): string | null {
+  if (save.state === "saving") return "Saving…";
+  if (save.state !== "failed") return null;
+  if (save.reason === "conflict") return "Not saved: two devices changed these figures differently. Choose which to keep in Settings, Cloud, Conflicts, then change it again.";
+  if (save.reason === "validation") return `Not saved: ${save.message}`;
+  return `Not saved: ${save.message.replace(/\.$/, "")}. Check the connection and change it again.`;
+}
+
+/** Where the model is kept, as the foot says it. */
+export function homeWords(home: CostApi["response"]["home"], saved: boolean): string {
+  if (home.slug === null) return home.suggested ? `Not saved yet. Your first change is saved with ${home.suggested}.` : "Not saved yet.";
+  if (saved) return home.synced ? `Saved with ${home.slug}, and it follows you to your other devices.` : `Saved on this computer only, with ${home.slug}.`;
+  return home.synced ? `Kept with ${home.slug}, and it follows you to your other devices.` : `Kept on this computer only, with ${home.slug}.`;
+}
+
+/** The foot: how the save went, where the model lives, a way to move it, and any older copies the next save gathers. */
+function SavedWhere({ cost, className }: { cost: CostApi; className?: string }) {
+  const [moving, setMoving] = useState(false);
+  const { home } = cost.response;
+  const status = saveWords(cost.save);
+  const others = cost.workspaces.filter((workspace) => workspace.slug !== home.slug);
+  return (
+    <div className={cn("flex flex-col gap-1", className)} data-saved-where>
+      <p role="status" className={cn("text-label text-pretty text-muted-foreground", cost.save.state === "failed" && "text-[var(--plain-risk-fg)]")} data-save-state={cost.save.state}>
+        {status ?? homeWords(home, cost.save.state === "saved")}
+        {home.slug !== null && others.length > 0 && cost.save.state !== "saving" ? (
+          moving ? (
+            <select
+              aria-label="Move the cost setup to another workspace"
+              value=""
+              onChange={(event) => {
+                if (event.target.value) cost.apply(moveHome(event.target.value));
+                setMoving(false);
+              }}
+              onBlur={() => setMoving(false)}
+              autoFocus
+              className="ml-1.5 h-6 min-h-0 rounded-md border bg-card px-1.5 text-label text-foreground"
+              data-home-move
+            >
+              <option value="">Move to…</option>
+              {others.map((workspace) => (
+                <option key={workspace.slug} value={workspace.slug}>
+                  {workspace.slug}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <button type="button" onClick={() => setMoving(true)} className="focus-ring relative ml-1.5 inline min-h-0 rounded-sm font-medium text-foreground underline decoration-dotted underline-offset-2 before:absolute before:-inset-y-1.5 before:inset-x-0 before:content-['']" data-home-move-open>
+              Move
+            </button>
+          )
+        ) : null}
+      </p>
+      {home.others.length > 0 ? (
+        <p className="text-label text-pretty text-muted-foreground" data-home-others>
+          An older copy of some figures is still with {home.others.map((other) => other.slug).join(", ")}; the next save gathers {home.others.length === 1 ? "it" : "them"} into {home.slug}.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 /** The AI lines of one role (or the shared ones): a subscription is a price × how many, an API bill is a monthly amount. */
-function SpendLines({ heading, empty, lines, roleId, model, onChange, quiet = false }: { heading: string; empty: string; lines: readonly SpendLine[]; roleId: string | null; model: CostModel; onChange: ReturnProps["onChange"]; /** The add buttons say they are for this role only. */ quiet?: boolean }) {
-  const money = (value: number) => formatMoney(value, model.currency);
+function SpendLines({ heading, empty, entries, roleId, cost, sign, quiet = false }: { heading: string; empty: string; entries: readonly AiSpendEntryValue[]; roleId: string | null; cost: CostApi; sign: string; /** The add buttons say they are for this role only. */ quiet?: boolean }) {
+  const model = cost.model;
   return (
     <div className="flex flex-col gap-2" data-spend-lines={roleId ?? "shared"}>
       <p className="sr-only">{heading}</p>
-      {lines.length > 0 ? (
+      {entries.length > 0 ? (
         <ul className="flex flex-col gap-2">
-          {lines.map((line) => (
-            <li key={line.id} className="grid grid-cols-[minmax(0,1fr)_6.5rem_4.25rem_4.75rem_1.5rem] items-center gap-2 max-sm:grid-cols-[minmax(0,1fr)_4.25rem_1.5rem]" data-spend-line={line.kind}>
-              <TextField label={line.kind === "api" ? "What this API bill is" : "What this subscription is"} value={line.label} onCommit={(label) => onChange(edits.spendLine(model, line.id, { label }))} className="w-full max-sm:col-span-3" />
-              <AmountField hideLabel label={line.kind === "api" ? `${line.label}, the bill a month` : `${line.label}, price of one a month`} prefix={model.currency} suffix="/mo" max={100_000_000} value={line.perMonth} onCommit={(perMonth) => onChange(edits.spendLine(model, line.id, { perMonth }))} />
-              {line.kind === "api" ? (
-                <span className="text-center text-label text-muted-foreground">API bill</span>
-              ) : (
-                <AmountField hideLabel label={`${line.label}, how many`} prefix="×" max={100000} value={line.quantity} onCommit={(quantity) => onChange(edits.spendLine(model, line.id, { quantity: Math.round(quantity) }))} />
-              )}
-              <span className="text-right text-body font-medium whitespace-nowrap tabular-nums max-sm:hidden">{money(lineCost(line))}/mo</span>
-              <IconButton label={`Remove ${line.label}`} onClick={() => onChange(edits.spendRemove(model, line.id))}><X aria-hidden className="size-3.5" /></IconButton>
-            </li>
-          ))}
+          {entries.map((entry) => {
+            const dates = entryDates(entry);
+            const problem = cost.problem(`entries.${entry.id}.label`) ?? cost.problem(`entries.${entry.id}.monthlyAmount`) ?? cost.problem(`entries.${entry.id}.quantity`) ?? cost.problem(`entries.${entry.id}`);
+            return (
+              <li key={entry.id} className="flex flex-col gap-1" data-spend-line={entry.kind} data-entry={entry.id}>
+                <div className="grid grid-cols-[minmax(0,1fr)_6.5rem_4.25rem_4.75rem_1.5rem] items-center gap-2 max-sm:grid-cols-[minmax(0,1fr)_4.25rem_1.5rem]">
+                  <TextField label={entry.kind === "api" ? "What this API bill is" : "What this subscription is"} value={entry.label} onCommit={(label) => cost.apply(costEdits.entry(model, entry.id, { label }))} className="w-full max-sm:col-span-3" />
+                  <AmountField hideLabel label={entry.kind === "api" ? `${entry.label}, the bill a month` : `${entry.label}, price of one a month`} prefix={sign} suffix="/mo" max={100_000_000} value={entry.monthlyAmount} onCommit={(monthlyAmount) => cost.apply(costEdits.entry(model, entry.id, { monthlyAmount }))} />
+                  {entry.kind === "api" ? (
+                    <span className="text-center text-label text-muted-foreground">API bill</span>
+                  ) : (
+                    <AmountField hideLabel label={`${entry.label}, how many`} prefix="×" max={100000} value={entry.quantity ?? 1} onCommit={(quantity) => cost.apply(costEdits.entry(model, entry.id, { quantity: Math.round(quantity) }))} />
+                  )}
+                  <span className="text-right text-body font-medium whitespace-nowrap tabular-nums max-sm:hidden">{formatMoney(monthlyOf(entry), sign)}/mo</span>
+                  <IconButton label={`Remove ${entry.label}`} onClick={() => cost.apply(costEdits.entryRemove(model, entry.id))}>
+                    <X aria-hidden className="size-3.5" />
+                  </IconButton>
+                </div>
+                {dates ? <p className="text-label text-muted-foreground" data-entry-dates>Counted {dates}. Dates are not changed here.</p> : null}
+                {problem ? <p role="alert" className="text-label text-pretty text-[var(--plain-risk-fg)]" data-field-problem>{problem}</p> : null}
+              </li>
+            );
+          })}
         </ul>
       ) : (
         <p className="text-label text-muted-foreground italic">{empty}</p>
       )}
       <div className="flex flex-wrap gap-x-4 gap-y-1">
-        <AddButton onClick={() => onChange(edits.spendAdd(model, roleId, "subscription"))}>{quiet ? "Subscription for this role only" : "Subscription"}</AddButton>
-        <AddButton onClick={() => onChange(edits.spendAdd(model, roleId, "api"))}>{quiet ? "API bill for this role only" : "API bill"}</AddButton>
+        <AddButton onClick={() => cost.apply(costEdits.entryAdd(model, roleId, "subscription", newId("entry")))}>{quiet ? "Subscription for this role only" : "Subscription"}</AddButton>
+        <AddButton onClick={() => cost.apply(costEdits.entryAdd(model, roleId, "api", newId("entry")))}>{quiet ? "API bill for this role only" : "API bill"}</AddButton>
       </div>
     </div>
   );
@@ -207,3 +297,4 @@ function Section({ title, hint, assumed = false, children }: { title: string; hi
     </section>
   );
 }
+
