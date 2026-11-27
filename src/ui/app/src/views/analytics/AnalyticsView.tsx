@@ -29,8 +29,9 @@ import { useResource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
 import { EstimatesLens } from "./EstimatesLens";
 import { OverviewBoard } from "./OverviewBoard";
-import { getAnalytics, getReturn, saveCostModel, type CostModel, type PeriodAsk, type PeriodPreset } from "./proto-api";
-import { ReturnPage } from "./ReturnPage";
+import { toQuery, type PeriodAsk, type PeriodPreset } from "./period";
+import { getAnalytics, getReturn } from "./proto-api";
+import { ReturnLens } from "./ReturnLens";
 
 export type Lens = "overview" | "return" | "estimates";
 
@@ -117,29 +118,17 @@ export function AnalyticsView({ onAuthError }: { onAuthError: (error: AuthError)
   }, [lens, period, ws]);
 
   const key = periodKey(period);
+  // The same period and workspace, as the query the real routes take.
+  const query = toQuery(period, ws);
   const report = useResource(useCallback(() => getAnalytics(ws, period), [ws, key]), [ws, key], onAuthError);
   const returns = useResource(useCallback(() => getReturn(ws, period), [ws, key]), [ws, key], onAuthError);
 
-  // The cost model is the person's: an edit shows at once and is saved behind it.
-  const [draft, setDraft] = useState<CostModel | null>(null);
-  const [saving, setSaving] = useState<"idle" | "saving" | "saved" | "failed">("idle");
-  const model = draft ?? returns.data?.model ?? null;
+  // The Overview's Return tile reads the cost model; the Return lens owns editing it (ReturnLens).
+  const model = returns.data?.model ?? null;
   const reloadReturns = returns.reload;
-  const changeModel = useCallback(
-    (next: CostModel, options: { rematch?: boolean } = {}) => {
-      setDraft(next);
-      setSaving("saving");
-      saveCostModel(next).then(
-        () => {
-          setSaving("saved");
-          // A change to what a role covers moves hours between roles: only the server can redo that.
-          if (options.rematch) reloadReturns();
-        },
-        () => setSaving("failed"),
-      );
-    },
-    [reloadReturns],
-  );
+  useEffect(() => {
+    if (lens === "overview") reloadReturns();
+  }, [lens, reloadReturns]);
 
   // Each lens keeps its own place: switching away and back lands where you were.
   const scroller = useRef<HTMLDivElement>(null);
@@ -184,7 +173,7 @@ export function AnalyticsView({ onAuthError }: { onAuthError: (error: AuthError)
   } else if (lens === "overview") {
     body = <OverviewBoard report={data} returns={returnData} model={model} against={against} onOpenReturn={() => chooseLens("return")} onOpenTicket={(workspace, ref) => session.open(workspace, ref)} />;
   } else {
-    body = <ReturnPage returns={returnData} model={model} error={returns.error} onRetry={returns.reload} onChange={changeModel} saving={saving} onOpenTicket={(workspace, ref) => session.open(workspace, ref)} />;
+    body = <ReturnLens workspace={ws} period={period} query={query} onAuthError={onAuthError} onOpenTicket={(workspace, ref) => session.open(workspace, ref)} />;
   }
 
   return (

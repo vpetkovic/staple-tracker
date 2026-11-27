@@ -4,13 +4,9 @@
  * engineering track as the starting point for the `api-contract`. The real API client and hooks
  * (owned by engineering) replace this file; the views read nothing else from it.
  */
-export type PeriodPreset = "7d" | "30d" | "90d" | "ytd" | "all" | "custom";
-/** What the page asks for: a preset, or `custom` with both days. */
-export interface PeriodAsk {
-  preset: PeriodPreset;
-  from?: string;
-  to?: string;
-}
+import type { PeriodAsk, PeriodPreset } from "./period";
+
+export type { PeriodAsk, PeriodPreset };
 
 /** A figure and the same figure for the period before (null when there is no period before). */
 export interface Measure {
