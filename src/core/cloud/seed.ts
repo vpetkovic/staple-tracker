@@ -97,7 +97,8 @@ export interface SeedItem {
 
 /** A display key a local entity gave up because the repository already used it. */
 export interface SeedRename extends SeedItem {
-  readonly field: "identifier" | "slug";
+  /** `planIdeaNumber`: the idea number a promoted record kept (`idea-numbers.ts`). */
+  readonly field: "identifier" | "slug" | "planIdeaNumber";
   readonly from: string;
   readonly to: string;
 }
@@ -837,6 +838,8 @@ function inventory(db: DatabaseSync, now: string, skipped: SeedSkipped[]): Local
 /** The unique display keys and dedup tokens the repository's live entities hold. */
 interface Claims {
   readonly identifiers: Map<string, string>;
+  /** The idea numbers the repository's promoted records kept (`idea-numbers.ts`), each to its record. */
+  readonly keptIdeaNumbers: Map<string, string>;
   readonly issueKeys: Map<string, string>;
   readonly origins: Map<string, string>;
   readonly slugs: Map<string, string>;
@@ -846,6 +849,7 @@ interface Claims {
 function claimsOf(index: SurveyIndex): Claims {
   const claims: Claims = {
     identifiers: new Map(),
+    keptIdeaNumbers: new Map(),
     issueKeys: new Map(),
     origins: new Map(),
     slugs: new Map(),
@@ -855,6 +859,8 @@ function claimsOf(index: SurveyIndex): Claims {
     const s = issue.state;
     const identifier = str(s.identifier);
     if (identifier) claims.identifiers.set(identifier, issue.entityId);
+    const kept = str(field(s, "planIdeaNumber"));
+    if (kept) claims.keptIdeaNumbers.set(kept, issue.entityId);
     const key = str(field(s, "idempotencyKey"));
     if (key) claims.issueKeys.set(key, issue.entityId);
     const originKind = str(field(s, "originKind"));
@@ -930,11 +936,33 @@ function adoptRepositoryPrefix(
   }
   const ideas = issues.filter((issue) => isIdeaNumber(issue.identifier) && !issue.identifier.startsWith(`I-${to}-`));
   ideas.sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
+  const ideaNote = db.prepare(`INSERT INTO comments (id, issue_id, author, author_type, body, created_at) VALUES (?, ?, 'staple', 'system', ?, ?)`);
+  const noteIdeaMove = (issueId: string, was: string, moved: string): void => {
+    ideaNote.run(
+      newId(),
+      issueId,
+      `Its idea number moved from ${was} to ${moved} when the workspace it was created in joined repository ` +
+        `${repositoryId}, whose ideas are numbered I-${to}-N. A reference to ${was} made in that workspace before ${now} means this record.`,
+      now,
+    );
+  };
   for (const issue of ideas) {
     highestIdea += 1;
     const moved = formatIdeaNumber(to, highestIdea);
     moveIdentifier(db, issue.id, moved, now);
+    noteIdeaMove(issue.id, issue.identifier, moved);
     renamed.push({ entity: "issue", entityId: issue.id, label: moved, field: "identifier", from: issue.identifier, to: moved });
+  }
+  // And the number a promoted record kept, in the same namespace, so the hub finds it by the repository's prefix.
+  const keptElsewhere = db
+    .prepare("SELECT id, identifier, plan_idea_number FROM issues WHERE plan_idea_number IS NOT NULL AND plan_idea_number NOT LIKE ? ORDER BY created_at, id")
+    .all(`I-${to}-%`) as Array<{ id: string; identifier: string; plan_idea_number: string }>;
+  for (const record of keptElsewhere) {
+    highestIdea += 1;
+    const moved = formatIdeaNumber(to, highestIdea);
+    db.prepare("UPDATE issues SET plan_idea_number = ? WHERE id = ?").run(moved, record.id);
+    noteIdeaMove(record.id, record.plan_idea_number, moved);
+    renamed.push({ entity: "issue", entityId: record.id, label: record.identifier, field: "planIdeaNumber", from: record.plan_idea_number, to: moved });
   }
   if (highestIdea > 0) {
     db.prepare(
@@ -1014,11 +1042,12 @@ function yieldToRepository(
 
   const issues = db
     .prepare(
-      "SELECT id, identifier, idempotency_key, origin_kind, origin_id, status, created_at FROM issues",
+      "SELECT id, identifier, idempotency_key, origin_kind, origin_id, status, created_at, plan_idea_number FROM issues",
     )
     .all() as Array<{
     id: string;
     identifier: string;
+    plan_idea_number: string | null;
     idempotency_key: string | null;
     origin_kind: string;
     origin_id: string | null;
@@ -1029,14 +1058,39 @@ function yieldToRepository(
   const renumber: typeof issues = [];
   for (const issue of issues) {
     if (!willSeed("issue", issue.id)) continue;
-    const holder = claims.identifiers.get(issue.identifier);
+    /**
+     * An idea number names one record, held as an identifier or kept by a promoted record: a local
+     * one the repository holds either way is the local side's to give up (`idea-numbers.ts`).
+     */
+    const ideaHolder = (number: string): string | undefined => {
+      const live = claims.identifiers.get(number);
+      if (live !== undefined && live !== issue.id) return live;
+      const kept = claims.keptIdeaNumbers.get(number);
+      return kept !== undefined && kept !== issue.id ? kept : undefined;
+    };
+    if (issue.plan_idea_number !== null && ideaHolder(issue.plan_idea_number) !== undefined) {
+      for (const number of [...claims.identifiers.keys(), ...claims.keptIdeaNumbers.keys()]) advanceIdeaPast(db, number);
+      const from = issue.plan_idea_number;
+      const to = nextIdeaNumber(db, parseIdeaNumber(from)?.prefix ?? localPrefix(db) ?? "WS");
+      db.prepare("UPDATE issues SET plan_idea_number = ?, updated_at = ? WHERE id = ?").run(to, now, issue.id);
+      db.prepare(`INSERT INTO comments (id, issue_id, author, author_type, body, created_at) VALUES (?, ?, 'staple', 'system', ?, ?)`).run(
+        newId(),
+        issue.id,
+        `Its idea number moved from ${from} to ${to} when the workspace it was created in joined repository ${repositoryId}, ` +
+          `which already had a record numbered ${from}. A reference to ${from} made in that workspace before ${now} means this record; ` +
+          `anywhere else, ${from} is the repository's.`,
+        now,
+      );
+      report.renamed.push({ entity: "issue", entityId: issue.id, label: issue.identifier, field: "planIdeaNumber", from, to });
+    }
+    const holder = isIdeaNumber(issue.identifier) ? ideaHolder(issue.identifier) : claims.identifiers.get(issue.identifier);
     if (holder !== undefined && holder !== issue.id) {
       /**
        * An idea whose number the repository already uses takes the next idea number, never a
        * ticket's (`idea-numbers.ts`), with the same note and the same heal as a ticket's.
        */
       if (isIdeaNumber(issue.identifier)) {
-        for (const identifier of claims.identifiers.keys()) advanceIdeaPast(db, identifier);
+        for (const identifier of [...claims.identifiers.keys(), ...claims.keptIdeaNumbers.keys()]) advanceIdeaPast(db, identifier);
         const prefix = parseIdeaNumber(issue.identifier.replace(/\+\d+$/, ""))!.prefix;
         const to = nextIdeaNumber(db, prefix);
         moveIdentifier(db, issue.id, to, now);
@@ -1054,7 +1108,7 @@ function yieldToRepository(
           now,
         );
         report.renamed.push({ entity: "issue", entityId: issue.id, label: to, field: "identifier", from: issue.identifier, to });
-        if (mode === "heal") {
+        if (mode === "heal" && claims.identifiers.get(issue.identifier) === holder) {
           moveIdentifier(db, holder, issue.identifier, now);
           db.prepare(
             `UPDATE sync_conflicts SET resolved_at = ?, resolved_by = 'staple', resolution = ?

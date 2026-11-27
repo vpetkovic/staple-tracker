@@ -182,7 +182,7 @@ describe("Scaffold on every surface", () => {
     writeFileSync(file, "# PLAN-7 — Checkout\n\n## Goal\n\nShip it.\n\n## Task breakdown\n\n| # | Task | Est. |\n|---|---|---|\n| 7.1 | Spike | 3h |\n\n## Acceptance criteria\n\n- Works\n");
     const result = await cli("idea", "import", file);
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toMatch(/^imported PLAN-7 — Checkout \(idea [0-9a-f-]{36}\): 1 task, 4\/10 sections/);
+    expect(result.stdout).toMatch(/^imported PLAN-7 — Checkout \(idea I-[A-Z]+-\d+\): 1 task, 4\/10 sections/);
   });
 });
 

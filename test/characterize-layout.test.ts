@@ -169,10 +169,10 @@ describe("a fresh repo-local `staple init`", () => {
       // 016-milestone-goals, to "17" by 017-derived-status, to "18" by
       // 018-attachments, to "19" by 019-instruction-documents, to "20" by 020-plan-fields and to
       // "21" by 021-plan-delivered, then "22" by 022-external-links, "23" by 023, "24" by
-      // 024-ticket-branch and "25" by 025-attempt-heartbeats; the TEXT
+      // 024-ticket-branch, "25" by 025-attempt-heartbeats and "26" by 026-idea-numbers; the TEXT
       // typing is the characterization, the number
       // just tracks the migration list.
-      { key: "schema_version", value: "25" },
+      { key: "schema_version", value: "26" },
       { key: "slug", value: "metarepo" },
     ]);
   }, 30_000);
@@ -209,6 +209,8 @@ describe("a fresh repo-local `staple init`", () => {
       "index:issues_live_origin_uq",
       "index:issues_normalized_title_open_idx",
       "index:issues_parent_idx",
+      // 026-idea-numbers: the number a promoted idea keeps, looked up by reference.
+      "index:issues_plan_idea_number",
       // 020-plan-fields: the partial index that says planning is on.
       "index:issues_plan_ranked_idx",
       // 009-projects: the partial index over `issues.project_id`, indexed only
@@ -518,7 +520,7 @@ describe("global workspaces", () => {
       { key: "prefix", value: "SOL" },
       // WORKSPACE_SCHEMA_VERSION — 25 since 025-attempt-heartbeats. The hub beside it
       // is still 8; the two databases version independently.
-      { key: "schema_version", value: "25" },
+      { key: "schema_version", value: "26" },
       { key: "slug", value: "solo" },
     ]);
   }, 30_000);

@@ -38,7 +38,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Journal, SyncEntity } from "../journal.js";
 import { moveIdentifier } from "../identifier-moves.js";
-import { nextIdeaNumber, parseIdeaNumber } from "../idea-numbers.js";
+import { isIdeaNumber, nextIdeaNumber, parseIdeaNumber } from "../idea-numbers.js";
 import { newId } from "../ids.js";
 import { nowIso } from "../types.js";
 
@@ -48,7 +48,8 @@ export interface OwedSettlement {
   readonly entityId: string;
   /** `status` and `kind`: an issue moved off a status or kind that was removed (`vocabulary-targets.ts`). */
   /** `parentId`: an issue detached from a parent loop two devices' moves made (`breakParentLoop`, `apply.ts`). */
-  readonly field: "identifier" | "slug" | "idempotencyKey" | "originId" | "status" | "kind" | "edges" | "revision" | "parentId";
+  /** `planIdeaNumber`: a promoted record's kept idea number another record holds; `ticketNumber`: a promotion's number an idea number was written over (`apply.ts`). */
+  readonly field: "identifier" | "slug" | "idempotencyKey" | "originId" | "status" | "kind" | "edges" | "revision" | "parentId" | "planIdeaNumber" | "ticketNumber";
   /** The value it gave up. */
   readonly from: string;
 }
@@ -254,6 +255,35 @@ function settleOne(db: DatabaseSync, journal: Journal, item: OwedSettlement): bo
       payload: { issueId: item.entityId, author: "staple", authorType: "system", body, createdAt: at },
       actor: "staple",
     });
+    return true;
+  }
+
+  /**
+   * A promoted record of this device's kept an idea number another record holds (`apply.ts`,
+   * `claimKeptIdeaNumbers`): its kept number moves to one this device never handed out, said in
+   * a comment every device receives. Not when it has moved since.
+   */
+  if (item.entity === "issue" && item.field === "planIdeaNumber") {
+    const row = db.prepare("SELECT plan_idea_number FROM issues WHERE id = ?").get(item.entityId) as { plan_idea_number: string | null } | undefined;
+    const parsed = parseIdeaNumber(item.from);
+    if (!row || row.plan_idea_number !== item.from || !parsed) return false;
+    const to = nextIdeaNumber(db, parsed.prefix);
+    db.prepare("UPDATE issues SET plan_idea_number = ? WHERE id = ?").run(to, item.entityId);
+    record("issue", "update", { planIdeaNumber: to });
+    const commentId = newId();
+    const body =
+      `Its idea number moved from ${item.from} to ${to}: another record took ${item.from} on another device ` +
+      `before this one's promotion reached it, and an idea number names one record. A reference to ${item.from} ` +
+      `made before ${at} on the device that promoted this record means this one.`;
+    db.prepare(`INSERT INTO comments (id, issue_id, author, author_type, body, created_at) VALUES (?, ?, 'staple', 'system', ?, ?)`).run(commentId, item.entityId, body, at);
+    journal.record({ entity: "comment", entityId: commentId, verb: "create", payload: { issueId: item.entityId, author: "staple", authorType: "system", body, createdAt: at }, actor: "staple" });
+    return true;
+  }
+  /** A promotion of this device's that an idea number was written over (`apply.ts`): its ticket number, stated again. */
+  if (item.entity === "issue" && item.field === "ticketNumber") {
+    const row = db.prepare("SELECT identifier FROM issues WHERE id = ?").get(item.entityId) as { identifier: string } | undefined;
+    if (!row || isIdeaNumber(row.identifier) || row.identifier.startsWith("~")) return false;
+    record("issue", "update", { identifier: row.identifier });
     return true;
   }
 

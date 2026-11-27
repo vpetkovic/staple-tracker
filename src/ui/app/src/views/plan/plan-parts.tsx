@@ -132,10 +132,6 @@ const FLAGS: Record<FlagTone, { words: string; className: string }> = {
 };
 
 /**
- * A filled tag for what needs attention, and only that: late, not started, needs you and waiting
- * for your approval. It always says it in words; the tint repeats it.
- */
-/**
  * A record's permanent idea number (`I-STA-12`), quiet beside its title the way a ticket's number
  * sits beside a task's; a promoted record shows its ticket number with it. Nothing for a record an
  * earlier build left unnumbered.
@@ -150,6 +146,10 @@ export function IdeaNumber({ idea, className }: { idea: Pick<IdeaData, "number" 
   );
 }
 
+/**
+ * A filled tag for what needs attention, and only that: late, not started, needs you and waiting
+ * for your approval. It always says it in words; the tint repeats it.
+ */
 export function Flag({ tone, children, className, ...data }: { tone: FlagTone; children?: ReactNode; className?: string } & Record<`data-${string}`, string | number | undefined>) {
   const flag = FLAGS[tone];
   return (

@@ -28,7 +28,7 @@ import { usePhoneHeaderSlot } from "@/lib/phone-header-slot";
 import { afterHistorySettles, replaceUrl } from "@/lib/back-to-close";
 import { personActor } from "@/detail/parts/person";
 import { getPlan, planWrite, type AuthError } from "@/lib/api";
-import type { IdeaData, PlanData } from "@/lib/plan-types";
+import { namesIdeaNumber, type IdeaData, type PlanData } from "@/lib/plan-types";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
 import { useSession } from "@/lib/session";
 import { useResource } from "@/lib/useStaple";
@@ -164,8 +164,7 @@ function WorkspacePlan({ workspace, onAuthError }: { workspace: string; onAuthEr
     const horizon = plan.horizons.find((candidate) => candidate.id === id);
     session.open(workspace, idea?.identifier ?? idea?.number ?? horizon?.identifier ?? id);
   };
-  const wanted = session.selection?.ref.toUpperCase() ?? null;
-  const selected = session.selection && session.selection.workspace === workspace ? (plan.ideas.find((idea) => idea.id === session.selection!.ref || idea.identifier === session.selection!.ref || (idea.number !== null && idea.number === wanted))?.id ?? null) : null;
+  const selected = session.selection && session.selection.workspace === workspace ? (plan.ideas.find((idea) => idea.id === session.selection!.ref || idea.identifier === session.selection!.ref || namesIdeaNumber(idea, session.selection!.ref))?.id ?? null) : null;
   const text = session.filters.text;
   const setText = (next: string) => session.setFilters({ ...session.filters, text: next });
   // A fold is remembered with the rest; a horizon that is gone takes its fold with it. It ends the

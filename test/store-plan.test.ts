@@ -6,7 +6,7 @@
  */
 import { beforeEach, describe, expect, it } from "vitest";
 import { openDb } from "../src/core/db.js";
-import { formerHolders, pendingIdentifierMoves } from "../src/core/identifier-moves.js";
+import { formerHolders, moveIdentifier, pendingIdentifierMoves } from "../src/core/identifier-moves.js";
 import { parseIdentifier } from "../src/core/ids.js";
 import { MILESTONE_KIND } from "../src/core/milestones.js";
 import { IDEA_KIND, PLAN_KINDS_MISSING_MESSAGE } from "../src/core/plan.js";
@@ -249,6 +249,30 @@ describe("identity: an idea holds its own number, I-<PREFIX>-<n>, and no ticket 
     store.db.prepare("UPDATE issues SET identifier = 'I-77' WHERE id = ?").run(id);
     store.plan().upgradeRecords();
     expect(store.getIssue(id).identifier).toBe("I-TST-2");
+  });
+
+  it("refuses a write through a number another idea moved off less than a day ago, in every spelling, I-<n> included", () => {
+    const x = idea("Moved off");
+    const y = idea("Moved onto");
+    moveIdentifier(store.db, x, "I-TST-9");
+    moveIdentifier(store.db, y, "I-TST-1");
+    for (const ref of ["I-TST-1", "i-tst-1", "I-1", "i-1"]) expect(() => store.writeTarget(ref), ref).toThrow(/less than a day ago/);
+    expect(store.writeTarget(y).id).toBe(y);
+  });
+
+  it("says nothing of a promoted record's idea number while planning is off, and finds nothing by it", () => {
+    const id = idea("Promoted, then planning off");
+    const ticket = plan.promote(id, "vp", PERSON).identifier!;
+    expect(store.getIssue(ticket).ideaNumber).toBe("I-TST-1");
+    store.setSetting("features.planning", false, "vp", { via: "settings" });
+    expect("ideaNumber" in store.getIssue(ticket)).toBe(false);
+    expect(store.listIssues({ includeResolved: true }).find((issue) => issue.id === id)).not.toHaveProperty("ideaNumber");
+    expect(() => store.getIssue("I-TST-1")).toThrow(/No issue matches/);
+    expect(store.listIssues({ q: "I-TST-1" }).map((issue) => issue.id)).not.toContain(id);
+    // Nothing is deleted: planning on again, it is there.
+    store.setSetting("features.planning", true, "vp", { via: "settings" });
+    expect(store.getIssue("I-TST-1").id).toBe(id);
+    expect(store.listIssues({ q: "I-TST-1" }).map((issue) => issue.id)).toContain(id);
   });
 
   it("numbers nothing while planning is off, and hides nothing it numbered once turned off", () => {

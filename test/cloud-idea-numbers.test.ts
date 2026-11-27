@@ -10,7 +10,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { FakeSyncServer } from "./fixtures/fake-sync-server.js";
 import { Fleet, type Machine } from "./fixtures/sync-machines.js";
 import { READY_PLAN } from "./fixtures/plan-ready.js";
+import { join } from "node:path";
 import { Hub } from "../src/core/hub.js";
+import { openWorkspace } from "../src/core/open.js";
 
 const REPO = "5eed0000-0000-4000-8000-0000000001e4";
 const PERSON = { person: { via: "plan_view" } } as const;
@@ -137,6 +139,199 @@ describe("a promoted idea on another device", () => {
       }
       // Nobody hands I-TRA-1 or I-TRA-2 out again, though no idea holds I-TRA-1 as its identifier any more.
       expect(fresh.store.getIssue(fresh.store.plan().capture({ title: "Fresh capture" }, "agent").id).identifier).toBe("I-TRA-3");
+    });
+  }
+});
+
+/** One idea number names one record on every device, held as an identifier or kept by a promoted one. */
+function expectEachNumberOnce(m: Machine): void {
+  const held = (m.db.prepare("SELECT identifier AS n FROM issues WHERE identifier GLOB 'I-*' UNION ALL SELECT plan_idea_number AS n FROM issues WHERE plan_idea_number IS NOT NULL").all() as Array<{ n: string }>).map((r) => r.n);
+  expect(new Set(held).size, held.join(", ")).toBe(held.length);
+}
+
+describe("a record promoted before its offline capture reached the other device", () => {
+  for (const fold of FOLDS) {
+    for (const how of ["promote", "scaffold"] as const) {
+      it(`gives up its kept number to the idea that holds it, on every device (${how}, ${fold} fold)`, async () => {
+        const fleet = setup(fold);
+        const a = fleet.machine("a");
+        a.store.plan().enable("vp", { person: { via: "settings" } });
+        await a.sync();
+        const b = fleet.machine("b");
+        await b.sync();
+
+        a.use();
+        const x = a.store.plan().capture({ title: "X on A", maturity: "shaped", plan: READY_PLAN }, "vp", PERSON).id;
+        if (how === "promote") a.store.plan().promote(x, "vp", PERSON);
+        else a.store.plan().scaffold(x, a.store.plan().scaffoldPreview(x).fingerprint, "vp", PERSON);
+        b.use();
+        const y = b.store.plan().capture({ title: "Y on B" }, "agent").id;
+        // B's capture reaches the log first.
+        await b.sync();
+        await rounds([a, b], 6);
+        const fresh = fleet.machine("fresh");
+        await fresh.sync();
+        for (const m of [a, b, fresh]) {
+          m.use();
+          expect(ideas(m)).toEqual(ideas(a));
+          expectEachNumberOnce(m);
+          expect(m.store.getIssue("I-TRA-1").id).toBe(y);
+          const kept = m.store.getIssue(x).ideaNumber!;
+          expect(kept).toMatch(/^I-TRA-\d+$/);
+          expect(kept).not.toBe("I-TRA-1");
+          expect(m.store.getIssue(kept).id).toBe(x);
+          expect(open(m)).toEqual([]);
+        }
+      });
+    }
+  }
+});
+
+describe("a legacy idea numbered on one device while another promoted it", () => {
+  for (const fold of FOLDS) {
+    it(`keeps the promotion's ticket number on every device (${fold} fold)`, async () => {
+      const fleet = setup(fold);
+      const a = fleet.machine("a");
+      a.store.plan().enable("vp", { person: { via: "settings" } });
+      const l = a.store.plan().capture({ title: "Legacy", maturity: "shaped", plan: READY_PLAN }, "vp", PERSON).id;
+      // What an earlier build left: a draft identifier, sent while planning was off.
+      const draft = `~${l.replace(/-/g, "")}`;
+      a.db.prepare("UPDATE issues SET identifier = ? WHERE id = ?").run(draft, l);
+      a.db.prepare("UPDATE sync_outbox SET payload = json_set(payload, '$.identifier', ?) WHERE entity_id = ? AND verb = 'create'").run(draft, l);
+      a.store.setSetting("features.planning", false, "vp", { via: "settings" });
+      await a.sync();
+      const b = fleet.machine("b");
+      await b.sync();
+
+      // Planning on again on both; each numbers the legacy idea before hearing of the other, and B promotes it.
+      a.use();
+      a.store.plan().enable("vp", { person: { via: "settings" } });
+      b.use();
+      b.store.setSetting("features.planning", true, "vp", { via: "settings" });
+      const ticket = b.store.plan().promote(l, "vp", PERSON).identifier!;
+      expect(ticket).toMatch(/^TRA-\d+$/);
+      await b.sync();
+      await rounds([a, b], 6);
+      const fresh = fleet.machine("fresh");
+      await fresh.sync();
+      for (const m of [a, b, fresh]) {
+        m.use();
+        const issue = m.store.getIssue(l);
+        expect(issue.identifier).toBe(ticket);
+        expect(issue.kind).not.toBe("idea");
+        expect(issue.ideaNumber).toMatch(/^I-TRA-\d+$/);
+        expect(m.store.getIssue(ticket).id).toBe(l);
+        expectEachNumberOnce(m);
+        expect(open(m)).toEqual([]);
+      }
+    });
+  }
+});
+
+describe("two devices number different sets of legacy records", () => {
+  for (const fold of FOLDS) {
+    it(`never leave one number on two records (${fold} fold)`, async () => {
+      const fleet = setup(fold);
+      const a = fleet.machine("a");
+      a.store.plan().enable("vp", { person: { via: "settings" } });
+      const p = a.store.plan().capture({ title: "P promoted", maturity: "shaped", plan: READY_PLAN }, "vp", PERSON).id;
+      a.store.plan().promote(p, "vp", PERSON);
+      const l1 = a.store.plan().capture({ title: "L1" }, "vp", PERSON).id;
+      // An earlier build's state: P kept no number, L1 a draft; sent with planning off.
+      a.db.prepare("UPDATE issues SET plan_idea_number = NULL WHERE id = ?").run(p);
+      a.db.prepare("UPDATE sync_outbox SET payload = json_remove(payload, '$.planIdeaNumber') WHERE entity_id = ?").run(p);
+      const draft = `~${l1.replace(/-/g, "")}`;
+      a.db.prepare("UPDATE issues SET identifier = ? WHERE id = ?").run(draft, l1);
+      a.db.prepare("UPDATE sync_outbox SET payload = json_set(payload, '$.identifier', ?) WHERE entity_id = ? AND verb = 'create'").run(draft, l1);
+      a.store.setSetting("features.planning", false, "vp", { via: "settings" });
+      await a.sync();
+      const b = fleet.machine("b");
+      await b.sync();
+      // Both number offline. B alone also holds an older legacy draft, L0, which shifts every number it gives.
+      a.use();
+      a.db.prepare("DELETE FROM meta WHERE key = 'next_idea_number'").run();
+      a.store.plan().enable("vp", { person: { via: "settings" } });
+      b.use();
+      b.store.setSetting("features.planning", true, "vp", { via: "settings" });
+      const l0 = b.store.plan().capture({ title: "L0 on B" }, "vp", PERSON).id;
+      // Put B back in the legacy state, its numbering unsent, then number all three at once.
+      b.db.prepare("DELETE FROM sync_outbox WHERE actor = 'staple' AND acknowledged_seq IS NULL").run();
+      b.db.prepare("UPDATE issues SET plan_idea_number = NULL WHERE id = ?").run(p);
+      for (const id of [l0, l1]) b.db.prepare("UPDATE issues SET identifier = ? WHERE id = ?").run(`~${id.replace(/-/g, "")}`, id);
+      b.db.prepare("UPDATE sync_outbox SET payload = json_set(payload, '$.identifier', ?) WHERE entity_id = ? AND verb = 'create'").run(`~${l0.replace(/-/g, "")}`, l0);
+      b.db.prepare("UPDATE issues SET created_at = '2026-01-01T00:00:00.000Z' WHERE id = ?").run(l0);
+      b.db.prepare("DELETE FROM meta WHERE key = 'next_idea_number'").run();
+      b.store.plan().upgradeRecords();
+      expect([b.store.getIssue(l0).identifier, b.store.getIssue(p).ideaNumber, b.store.getIssue(l1).identifier]).toEqual(["I-TRA-1", "I-TRA-2", "I-TRA-3"]);
+      a.use();
+      // A's P lands on B's L0, and A's L1 on B's P: one number, two records, until they settle.
+      expect([a.store.getIssue(p).ideaNumber, a.store.getIssue(l1).identifier]).toEqual(["I-TRA-1", "I-TRA-2"]);
+      b.use();
+      await b.sync();
+      await rounds([a, b], 6);
+      const fresh = fleet.machine("fresh");
+      await fresh.sync();
+      for (const m of [a, b, fresh]) {
+        m.use();
+        expect(ideas(m)).toEqual(ideas(a));
+        expectEachNumberOnce(m);
+        expect(m.store.getIssue(p).ideaNumber).toMatch(/^I-TRA-\d+$/);
+        expect(open(m)).toEqual([]);
+      }
+    });
+  }
+});
+
+describe("a workspace that numbered ideas before it joined a repository", () => {
+  /** B's workspace, made before it connected: an idea and a promoted record that kept a number. */
+  function offlineWorkspace(fleet: Fleet, slug: string): { prepared: { home: string; dir: string }; b0: string; b1: string } {
+    const prepared = fleet.prepare("b", { slug });
+    process.env.STAPLE_HOME = prepared.home;
+    const ws = openWorkspace(join(prepared.dir, ".staple", "staple.db"));
+    ws.store.setSetting("features.planning", true, "vp", { via: "settings" });
+    const b0 = ws.store.plan().capture({ title: "B0 promoted offline", maturity: "shaped", plan: READY_PLAN }, "vp", PERSON).id;
+    ws.store.plan().promote(b0, "vp", PERSON);
+    const b1 = ws.store.plan().capture({ title: "B1 idea offline" }, "vp", PERSON).id;
+    ws.store.db.close();
+    return { prepared, b0, b1 };
+  }
+
+  async function repository(fleet: Fleet): Promise<Machine> {
+    const a = fleet.machine("a");
+    a.store.plan().enable("vp", { person: { via: "settings" } });
+    a.store.plan().capture({ title: "A1 idea" }, "vp", PERSON);
+    const a2 = a.store.plan().capture({ title: "A2 promoted", maturity: "shaped", plan: READY_PLAN }, "vp", PERSON).id;
+    a.store.plan().promote(a2, "vp", PERSON);
+    await a.sync();
+    return a;
+  }
+
+  for (const slug of ["tracker", "other"]) {
+    it(`moves its idea numbers and kept numbers clear of the repository's, in the repository's namespace (${slug})`, async () => {
+      const fleet = setup("service");
+      const a = await repository(fleet);
+      const { prepared, b0, b1 } = offlineWorkspace(fleet, slug);
+      const b = fleet.connect("b", prepared);
+      await b.sync();
+      await rounds([a, b], 3);
+      const fresh = fleet.machine("fresh");
+      await fresh.sync();
+      for (const m of [a, b, fresh]) {
+        m.use();
+        expect(ideas(m)).toEqual(ideas(a));
+        expectEachNumberOnce(m);
+        for (const number of (m.db.prepare("SELECT identifier AS n FROM issues WHERE identifier GLOB 'I-*' UNION ALL SELECT plan_idea_number FROM issues WHERE plan_idea_number IS NOT NULL").all() as Array<{ n: string }>).map((r) => r.n)) {
+          expect(number).toMatch(/^I-TRA-\d+$/);
+        }
+        expect(open(m)).toEqual([]);
+      }
+      b.use();
+      // Each moved record says so, and its new number finds it.
+      for (const id of [b0, b1]) {
+        const issue = b.store.getIssue(id);
+        expect(b.store.getIssue(issue.ideaNumber!).id).toBe(id);
+        expect(b.store.listComments(id).some((comment) => comment.authorType === "system" && /idea number moved|Renumbered/.test(comment.body))).toBe(true);
+      }
     });
   }
 });

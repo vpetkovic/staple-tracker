@@ -57,6 +57,7 @@ import type { IssueStatus } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
+import { namesIdeaNumber } from "@/lib/plan-types";
 import {
   buildCommands,
   filterCommands,
@@ -109,7 +110,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const plan = useResource(loadPlan, [selectedWs, session.version], () => undefined);
   const planRecord = useMemo(() => {
     if (!selected || !plan.data?.enabled) return null;
-    return plan.data.ideas.find((idea) => idea.id === selected.ref || idea.identifier === selected.ref || idea.number === selected.ref.toUpperCase()) ?? null;
+    return plan.data.ideas.find((idea) => idea.id === selected.ref || idea.identifier === selected.ref || namesIdeaNumber(idea, selected.ref)) ?? null;
   }, [plan.data, selected]);
   const selectedStatus = useMemo<IssueStatus | null>(() => {
     if (!selected) return null;
