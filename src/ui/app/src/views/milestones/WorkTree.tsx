@@ -112,7 +112,7 @@ export function nextUpRows(next: string | null, rows: readonly MemberListRow[], 
  * page's column widths.
  */
 const GRID =
-  "grid grid-cols-[minmax(0,1fr)_36px] items-center gap-x-2 px-3 @min-[760px]/tree:grid-cols-[minmax(0,1fr)_150px_240px_28px] @min-[760px]/tree:gap-x-4 @min-[760px]/tree:px-4 @min-[1040px]/tree:grid-cols-[minmax(0,1fr)_150px_250px_120px_28px]";
+  "grid grid-cols-[minmax(0,1fr)_36px] items-center gap-x-2 px-3 @min-[760px]/tree:grid-cols-[minmax(0,1fr)_130px_200px_28px] @min-[760px]/tree:gap-x-4 @min-[760px]/tree:px-4 @min-[1040px]/tree:grid-cols-[minmax(0,1fr)_150px_250px_140px_28px]";
 const LINE = "relative min-h-9 cursor-pointer border-b border-border/60 outline-none hover:bg-surface-hover focus-ring-inset";
 /** One level of depth: Plan's 18px guide with its hairline. */
 const GUIDE = "relative -my-[7px] w-[18px] shrink-0 self-stretch before:absolute before:-top-px before:-bottom-px before:left-2 before:w-px before:bg-border @max-[760px]/tree:hidden";
@@ -121,7 +121,7 @@ const HIDDEN_KEY = "\u0000hidden-done";
 
 export type WorkTreeProps = Pick<
   MilestoneWork,
-  "view" | "members" | "now" | "busy" | "failure" | "hiddenDone" | "onShowDone" | "onMove" | "onRemove" | "onToggle" | "onOpen" | "onReload" | "onDismissFailure"
+  "view" | "members" | "now" | "busy" | "failure" | "hiddenDone" | "finishedShown" | "onShowDone" | "onMove" | "onRemove" | "onToggle" | "onOpen" | "onReload" | "onDismissFailure"
 >;
 
 /** A write that went wrong: the conflict with Reload, or the store's sentence. */
@@ -250,7 +250,9 @@ export function WorkTree({ work }: { work: WorkTreeProps }) {
             role="row"
             aria-level={1}
             tabIndex={focus.activeKey === HIDDEN_KEY ? 0 : -1}
+            aria-expanded={work.finishedShown}
             data-hidden-done={work.hiddenDone}
+            data-finished-shown={work.finishedShown ? "" : undefined}
             data-show-done=""
             onFocus={(event) => {
               if (event.target === event.currentTarget) focus.set(HIDDEN_KEY);
@@ -260,10 +262,11 @@ export function WorkTree({ work }: { work: WorkTreeProps }) {
             className={cn(GRID, LINE)}
           >
             <div role="gridcell" className="col-span-full flex min-w-0 items-center gap-2 py-[7px] text-label text-text-tertiary">
-              <ChevronRight aria-hidden className="size-[18px] shrink-0 p-0.5" />
+              {work.finishedShown ? <ChevronDown aria-hidden className="size-[18px] shrink-0 p-0.5" /> : <ChevronRight aria-hidden className="size-[18px] shrink-0 p-0.5" />}
               <ShippedCheck label="" className="size-3.5 shrink-0 [&_svg]:size-2.5" />
+              {/* The line's own switch: this milestone's finished rows in place, for the visit. */}
               <span className="min-w-0 truncate">
-                {work.hiddenDone} finished hidden · <span className="text-text-secondary underline-offset-2 hover:underline">show</span>
+                {work.hiddenDone} finished {work.finishedShown ? "shown" : "hidden"} · <span className="text-text-secondary underline-offset-2 hover:underline">{work.finishedShown ? "hide" : "show"}</span>
               </span>
             </div>
           </div>

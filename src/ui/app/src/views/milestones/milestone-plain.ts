@@ -316,9 +316,14 @@ export function progressDetailSentence(
     .join(" ");
 }
 
-/** What an agent would take next from this milestone. */
+/**
+ * What an agent would take next from this milestone, and how much of the whole queue is ahead
+ * of it. `next.position` is the ticket's place in the workspace's pickup order, not in this
+ * milestone: said as a number it read as "the next item is fifteenth", so it is said as what
+ * is ahead.
+ */
 export function nextSentence(next: MilestoneNext | null): string {
-  return next
-    ? `Next up: ${next.identifier}, number ${next.position} in the pickup order.`
-    : "Nothing here can be picked up right now.";
+  if (!next) return "Nothing here can be picked up right now.";
+  const ahead = next.position - 1;
+  return `Next up: ${next.identifier}, ${ahead <= 0 ? "first in the queue" : `${ahead} ahead of it in the queue`}.`;
 }

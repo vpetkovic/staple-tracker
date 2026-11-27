@@ -136,6 +136,7 @@ export function work(data: MilestoneView | null, over: Partial<MilestoneWork> & 
     now: new Date("2026-09-04T12:00:00.000Z"),
     members: data ? memberListRows(data, issues, workspace) : [],
     hiddenDone: 0,
+    finishedShown: false,
     onShowDone: noop,
     busy: false,
     failure: null,

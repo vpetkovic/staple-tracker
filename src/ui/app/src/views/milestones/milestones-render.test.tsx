@@ -101,7 +101,7 @@ describe("a section's header", () => {
     expect(html).not.toContain('data-plan-flag="late"');
     expect(html).toContain("45%");
     expect(html).toMatch(/data-milestone-flag="blocked"[^>]*>2 blocked</);
-    expect(text(html)).toContain("5 of 11 tasks finished. 2 are blocked: 1 waits on other tasks, 1 on a person. Next up: STA-67, number 4 in the pickup order.");
+    expect(text(html)).toContain("5 of 11 tasks finished. 2 are blocked: 1 waits on other tasks, 1 on a person. Next up: STA-67, 3 ahead of it in the queue.");
     // No status pill: the status is in the `⋯` menu.
     expect(html).not.toContain("data-milestone-status");
     expect(html).not.toContain("status-chip");
@@ -385,6 +385,11 @@ describe("a section's work", () => {
     expect(line).toContain("data-shipped-check");
     expect(text(line)).toContain("9 finished hidden · show");
     expect(html.indexOf("data-hidden-done")).toBeGreaterThan(html.lastIndexOf("data-member-row"));
+    expect(html).toMatch(/aria-expanded="false"[^>]*data-hidden-done="9"/);
+    // Shown in place: the same line, the same count, now the way back.
+    const shown = body(loaded({ hiddenDone: 9, finishedShown: true }));
+    expect(text(shown.slice(shown.indexOf("data-hidden-done")))).toContain("9 finished shown · hide");
+    expect(shown).toMatch(/aria-expanded="true"[^>]*data-hidden-done="9"[^>]*data-finished-shown=""/);
   });
 
   it("says the members are finished, and offers them, when Done hides every one", () => {

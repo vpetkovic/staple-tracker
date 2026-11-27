@@ -17,7 +17,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { personActor } from "@/detail/parts/person";
 import { useIssueActions, type IssueActionsController } from "@/detail/IssueActions";
 import { addMilestoneMember, getIssue, getMilestone, isRevisionConflict, removeMilestoneMember, reorderMilestoneMembers, type AuthError } from "@/lib/api";
-import { passesDone, withShowDone } from "@/lib/filters";
+import { passesDone } from "@/lib/filters";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
 import { useSession } from "@/lib/session";
 import type { IssueDetail, IssueRow, MilestoneView as MilestoneViewData } from "@/lib/types";
@@ -39,8 +39,13 @@ export interface MilestoneWork {
   error: Error | undefined;
   now: Date;
   members: readonly MemberListRow[];
-  /** Rows the Done toggle hides, and how to show them (`HiddenDoneNotice`). */
+  /**
+   * The finished rows the Done toggle hides in this milestone, whether its finished line is
+   * showing them in place for this visit (`finishedShown`), and the line's own switch. The
+   * switch is this milestone's alone: it does not move the app-wide Done toggle.
+   */
   hiddenDone: number;
+  finishedShown: boolean;
   onShowDone: () => void;
   /** A write is in flight: the section's controls are disabled. */
   busy: boolean;
@@ -138,12 +143,15 @@ export function useMilestoneWork(
     () => (session.issues.data ?? []).filter((row) => !workspace || row.workspace === workspace),
     [session.issues.data, workspace],
   );
-  const doneGate = useCallback((row: IssueRow) => showAll || passesDone(row, filters), [filters, showAll]);
+  const [finishedShown, setFinishedShown] = useState(false);
+  // What the Done toggle alone would hide: the finished line's count, shown or not.
+  const toggleGate = useCallback((row: IssueRow) => showAll || passesDone(row, filters), [filters, showAll]);
+  const doneGate = useCallback((row: IssueRow) => finishedShown || toggleGate(row), [finishedShown, toggleGate]);
   const members = useMemo(
     () => (view ? memberListRows(view, wsIssues, workspace, { visible: doneGate, collapsed }) : []),
     [view, wsIssues, workspace, doneGate, collapsed],
   );
-  const hiddenDone = useMemo(() => (view ? hiddenMemberCount(view, wsIssues, workspace, doneGate) : 0), [view, wsIssues, workspace, doneGate]);
+  const hiddenDone = useMemo(() => (view ? hiddenMemberCount(view, wsIssues, workspace, toggleGate) : 0), [view, wsIssues, workspace, toggleGate]);
 
   const write = useCallback(
     async (run: () => Promise<MilestoneViewData>) => {
@@ -224,7 +232,7 @@ export function useMilestoneWork(
     (rowWorkspace: string, identifier: string) => session.open(rowWorkspace || workspace, identifier),
     [session, workspace],
   );
-  const onShowDone = useCallback(() => session.setFilters(withShowDone(session.filters, true)), [session]);
+  const onShowDone = useCallback(() => setFinishedShown((shown) => !shown), []);
 
   return {
     view,
@@ -232,6 +240,7 @@ export function useMilestoneWork(
     now,
     members,
     hiddenDone,
+    finishedShown,
     onShowDone,
     busy,
     failure,

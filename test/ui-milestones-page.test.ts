@@ -304,6 +304,24 @@ describe.skipIf(Boolean(reason))("the Milestones page, pressed in a real browser
     await context.close();
   });
 
+  it("shows a milestone's finished rows in place from its own line, for that milestone only, without moving the Done toggle", async () => {
+    const { page, context } = await open(refs.plan!);
+    await unfoldEpic(page, refs.plan!, refs.epic!);
+    const line = section(page, refs.plan!).locator("[data-show-done]");
+    expect(await line.innerText()).toMatch(/2 finished hidden · show/);
+    expect(await line.getAttribute("aria-expanded")).toBe("false");
+    await line.click();
+    await expect.poll(() => membersOf(page, refs.plan!)).toEqual(expect.arrayContaining([refs.epic, refs.open, refs.cancelled, refs.done]));
+    // The line stays, says what it now does, and the count is the same one.
+    expect(await line.innerText()).toMatch(/2 finished shown · hide/);
+    expect(await line.getAttribute("aria-expanded")).toBe("true");
+    // The app-wide toggle did not move: the address still hides Done, and so does another milestone.
+    expect(new URL(page.url()).searchParams.get("done")).toBeNull();
+    await line.click();
+    await expect.poll(() => membersOf(page, refs.plan!)).toEqual([refs.epic, refs.open]);
+    await context.close();
+  });
+
   it("hides finished rows while Done is hidden and shows them on the toggle; finished milestones stay on the shelf", async () => {
     const { page, context } = await open(refs.plan!);
     await unfoldEpic(page, refs.plan!, refs.epic!);

@@ -131,11 +131,19 @@ Under the header:
   itself when the milestone waits for your approval or all its work is finished.
 - **Plan**, on a horizon only, unfolds the horizon's ideas. **Open in Plan** goes
   to the Horizons lens.
-- **Work, in order** lists the members with their position. Move one with
-  **Move up** and **Move down** at the end of its row, its **⋯** menu, or Alt-↑
-  and Alt-↓; remove it from the same menu. **Add work** takes a reference and an
-  optional note. If someone else reordered the milestone first, the page says so
-  and **Reload** shows their order.
+- **Work, in order** lists the members in the order agents take them: the first
+  open row is first. The ticket the queue takes next is marked **next up**. Each
+  row shows its progress or status, what it waits on or who is working on it,
+  and the note it was added with. Unfold an epic with its chevron. Move a member
+  from its **⋯** menu (up, down, to the top, to the bottom) or with Alt-↑ and
+  Alt-↓, and remove it from the same menu. If someone else reordered the
+  milestone first, the page says so and **Reload** shows their order.
+- The last line of the work says how many finished rows are hidden. Click it to
+  show that milestone's finished work in place, and again to hide it. The **Done**
+  toggle in the top bar is not changed by it.
+
+**Add work**, in the milestone's header beside **Queue**, takes a reference and an
+optional note. On a phone it is in the milestone's **⋯** menu.
 
 Finished and cancelled milestones wait on the **Finished** line at the end;
 click it to list them, and a milestone's chevron to read its goal and work. They

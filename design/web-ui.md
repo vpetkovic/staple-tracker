@@ -635,7 +635,7 @@ your approval*, *2 blocked* and *behind* (the pace check's verdict). An overdue
 milestone gets no flag: the red date and the red glyph already say it. The third
 line is one sentence of facts: *2 of 10 tasks finished.*, what waits (*3 are
 blocked: 2 wait on other tasks, 1 on a person.*), the cancelled tasks the count
-leaves out, and *Next up: STA-67, number 4 in the pickup order.*
+leaves out, and *Next up: STA-67, 3 ahead of it in the queue.* (*first in the queue* when nothing is ahead: the number is the ticket's place in the whole pickup order, so it is said as what is ahead rather than as a rank that reads like a place in this milestone)
 
 The header draws from the list row alone, so a folded section asks the server
 for nothing more. The one-milestone reads (`views/milestones/useMilestoneWork.ts`:
@@ -695,32 +695,62 @@ planning on, gets a second line like the Goal line: *Plan*, *17 ideas* and an
 **Open in Plan** link to the Horizons lens. It unfolds the horizon's summary and
 outline in place (`HorizonPlanTree`), and starts folded.
 
-**The work.** A sunken strip, *Work, in order*, with the item count at its right,
-then the members (`views/milestones/WorkTree.tsx`) flush to the section's edges,
-drawn with the Tasks list's own row (`TaskRowLine`). The row follows the tree's
-own width, not the window's: the desk row from 680px, the wide column set from
-900px, the compact row below. Each direct member carries its position number,
-its true place in the order even when Done hides an earlier member. Each starts
-as one line; an epic shows its own count and rollup, and its chevron unfolds its
-children, which follow it read-only: membership never rewrites hierarchy and
-neither does this list. A member added with a note shows the note on its own
-line under it. Done hidden hides the same rows here as in the Tasks list: a
-hidden row's open children take its place, each with its parent's chip, and the
-first of them carries the hidden member's controls. The list ends with *3
-finished items hidden* and a **Show done** button; when every member is finished
-and hidden it says so instead of calling the milestone empty
-(`views/milestones/HiddenDone.tsx`). A milestone with no members says *Nothing
-is in this milestone yet. Add an epic or a task.*
+**The work.** The members (`views/milestones/WorkTree.tsx`) are drawn in the
+Plan outline's grammar, so a horizon's ideas and a milestone's tickets read as
+one kind of tree: Plan's grid and column widths by the tree's own width, its
+18px depth guides and chevron, a 14px status glyph, its hairlines and its
+two-line form under 760px. It does not render the Tasks list's row; it reuses
+that row's parts for what a cell says (the status glyph, the parent rollup, the
+dependency, claim and pull request cues, the who badge, the date). A sunken
+strip names the columns: *Work, in order* with the item count, *Progress*, *Now*
+and, from 1040px, *Updated*. Every row starts chevron, glyph, title at one x for
+its depth: there are no leading priority bars and no kind icon slot, because a
+slot only some kinds fill left ragged gaps. After the title, quietly: the
+identifier, the kind as a word when it is not a task or an epic, the *next up*
+flag and the member's note. *Progress* is the rollup bar and count for a row
+with children and the status in words for a leaf; *Now* is what stands in the
+way or who is on it; *Updated* carries the priority, the assignee and the date.
+Each member starts as one line and its chevron unfolds its children, which
+follow it read-only: membership never rewrites hierarchy and neither does this
+list.
 
-**Editing the work.** At each member's end, *Move up* and *Move down* show on
-hover and focus from a desk, and `⋯` is always there: *Open details*, *Move
-STA-67 up*, *Move STA-67 down* and *Remove STA-67 from this milestone*, each
-naming the member. The keyboard is the Tasks list's: the arrows, Home and End
-move between rows, Enter and Space open the task, right and left unfold and fold
-an epic, and Alt-↑ / Alt-↓ move a member. A click on a row opens the task; the
-controls stop their clicks. *Add work* is one quiet line at the end that opens a
-reference field and an optional note in place, with **Add** and **Done**; Escape
-closes it. Writes go to `POST /api/milestone/add`, `/remove` and `/reorder`,
+**The order has no numbers.** The rows are in the order work is taken in, which
+is the member order the queue expands, so a number added nothing and, with Done
+hiding earlier members, read as gaps (1, 4, 7). The one place that matters at a
+glance is marked instead: the ticket the queue takes next, and the member that
+holds it, carry a *next up* flag. A direct member's exact place is in its menu
+(*2 of 3 in the order*) and in `aria-posinset` / `aria-setsize`, and a move is
+announced (*Moved to 2 of 3*).
+
+**The note** a member was added with sits on the member's own line after the
+identifier, quiet and truncated, whole in its `title`. It takes only the room the
+title leaves. As a second line under some rows it made rows different heights;
+on hover alone it would be lost on a phone and when scanning, which is when it
+is useful.
+
+**Finished work.** Done hidden hides the same rows here as in the Tasks list: a
+hidden row's open children take its place, each saying which parent it is in,
+and the first of them carries the hidden member's controls. One line at the end
+of the tree, drawn as Plan draws its gathered shipped line, says *9 finished
+hidden · show*. It is that milestone's own switch: it shows its finished rows in
+place for the visit and then reads *9 finished shown · hide*; it does not move
+the app-wide Done toggle, and it is the only count of them. When every member
+is finished and hidden the section says so instead of calling the milestone
+empty (`views/milestones/HiddenDone.tsx`). A milestone with no members says
+*Nothing is in this milestone yet. Add an epic or a task.*
+
+**Editing the work.** A row's `⋯` (shown on hover and focus from 760px, always
+on a touch screen) opens on the member's place, then *Open details*, *Move up*,
+*Move down*, *Move to top*, *Move to bottom* and *Remove from this milestone*.
+There are no arrow buttons on the row: they repeated the menu. The keyboard is
+the Tasks list's: the arrows, Home and End move between rows, Enter and Space
+open the task, right and left unfold and fold an epic, and Alt-↑ / Alt-↓ move a
+member. A click on a row opens the task; the controls stop their clicks. **Add
+work** is a button in the section's header, left of Queue, that opens a popover
+with a reference field, an optional note and **Add**; Enter adds and keeps it
+open for the next one, a refused add keeps what was typed and says why, and
+Escape closes it. It works on a folded section without unfolding it. Under 760px
+it is *Add work* in the section's menu. Writes go to `POST /api/milestone/add`, `/remove` and `/reorder`,
 each carrying the view's `revision` as `baseRevision`; the store refuses a stale
 one with `revision_conflict` and the section shows *Member order changed
 elsewhere.* with the store's sentence and a **Reload**, because the fix is to

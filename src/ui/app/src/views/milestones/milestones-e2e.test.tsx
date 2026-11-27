@@ -173,7 +173,7 @@ describe("the page draws what the server sent", () => {
     const section = sectionOf(html, refs.october!);
     expect(section).toContain("25%");
     expect(section).toContain("1 of 4 tasks finished.");
-    expect(section).toContain(`Next up: ${october.next!.identifier}, number ${october.next!.position} in the pickup order.`);
+    expect(section).toContain(`Next up: ${october.next!.identifier}, ${october.next!.position === 1 ? "first in the queue" : `${october.next!.position - 1} ahead of it in the queue`}.`);
     expect(section).toContain(plainDue(october.milestone.targetDate, october.milestone.state, new Date()));
     // October has its own queue row; the header names its place.
     expect(section).toContain(`Queued #${october.milestone.planPosition}`);
