@@ -460,6 +460,26 @@ const SCENARIOS: readonly Scenario[] = [
   { method: "PlanStore.resolveQuestion", name: "resolve a question", run: (w) => void w.a.store.plan().resolveQuestion(w.ids["Idea"]!, 1, "alice") },
   { method: "PlanStore.deferQuestion", name: "defer a question", prep: (w) => void w.a.store.plan().addQuestion(w.ids["Idea"]!, "Later?", "alice"), run: (w) => void w.a.store.plan().deferQuestion(w.ids["Idea"]!, 2, "alice") },
   { method: "PlanStore.addDecision", name: "record a decision", run: (w) => void w.a.store.plan().addDecision(w.ids["Idea"]!, "Metric only", "alice") },
+  {
+    method: "PlanStore.block",
+    name: "block an idea on another",
+    prep: (w) => {
+      const plan = w.a.store.plan();
+      w.ids["Blocked idea"] = plan.capture({ title: "Blocked idea", maturity: "exploring" }, "alice", { person: { via: "test" } }).id;
+      w.ids["Blocker idea"] = plan.capture({ title: "Blocker idea", maturity: "exploring" }, "alice", { person: { via: "test" } }).id;
+    },
+    run: (w) => void w.a.store.plan().block(w.ids["Blocked idea"]!, w.ids["Blocker idea"]!, "alice"),
+  },
+  {
+    method: "PlanStore.unblock",
+    name: "unblock an idea",
+    prep: (w) => {
+      const plan = w.a.store.plan();
+      w.ids["Lifted blocker"] = plan.capture({ title: "Lifted blocker", maturity: "exploring" }, "alice", { person: { via: "test" } }).id;
+      plan.block(w.ids["Blocked idea"]!, w.ids["Lifted blocker"]!, "alice");
+    },
+    run: (w) => void w.a.store.plan().unblock(w.ids["Blocked idea"]!, w.ids["Lifted blocker"]!, "alice"),
+  },
   { method: "PlanStore.promote", name: "promote an idea in place", run: (w) => void w.a.store.plan().promote(w.ids["Idea"]!, "alice", { person: { via: "test" } }) },
   {
     method: "PlanStore.importPlan",
