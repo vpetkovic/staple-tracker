@@ -149,7 +149,8 @@ export function PlanFilesDialog({
           editing === null ? (
             <p className="m-0 text-label text-text-secondary" data-plan-files-paths>
               Looking in <span className="font-mono text-foreground">{view.paths.join(", ") || "nowhere"}</span>{" "}
-              <button type="button" className="focus-ring rounded-sm font-medium text-foreground underline underline-offset-2" onClick={() => setEditing(pathsText(view.paths))} data-plan-files-paths-edit>
+              {/* Links inside a line of text keep the line's height on touch (min-h-0): the house 44px floor would break the line. */}
+              <button type="button" className="focus-ring min-h-0 rounded-sm font-medium text-foreground underline underline-offset-2" onClick={() => setEditing(pathsText(view.paths))} data-plan-files-paths-edit>
                 Change
               </button>
             </p>
@@ -296,7 +297,7 @@ export function PlanFileRow({
               <span className="whitespace-nowrap">
                 {notes.length > 0 ? <span aria-hidden className="mr-1.5">·</span> : null}
                 {file.changedSinceImport ? "changed since imported as " : "imported as "}
-                <button type="button" className="focus-ring rounded-sm font-medium text-foreground underline underline-offset-2" onClick={() => onOpenIdea(file.idea!.id)} data-plan-file-idea>
+                <button type="button" className="focus-ring min-h-0 rounded-sm font-medium text-foreground underline underline-offset-2" onClick={() => onOpenIdea(file.idea!.id)} data-plan-file-idea>
                   {ideaName(file.idea)}
                 </button>
               </span>
@@ -309,7 +310,7 @@ export function PlanFileRow({
                 {file.alsoImportedAs.map((idea, index) => (
                   <span key={idea.id}>
                     {index > 0 ? ", " : null}
-                    <button type="button" className="focus-ring rounded-sm font-medium text-foreground underline underline-offset-2" onClick={() => onOpenIdea(idea.id)}>
+                    <button type="button" className="focus-ring min-h-0 rounded-sm font-medium text-foreground underline underline-offset-2" onClick={() => onOpenIdea(idea.id)}>
                       {ideaName(idea)}
                     </button>
                   </span>
