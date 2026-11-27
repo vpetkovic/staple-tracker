@@ -197,7 +197,9 @@ staple milestone criterion APP-7 1 --met --evidence APP-4
 Guide: [Planning](plan.md). Experimental and off by default: these commands refuse until a
 person sets `features.planning` to true. Ideas and horizons sit above the tracker: they are never queued,
 checked out or listed by `ls`. Maturity, horizons, dates and the baseline are the person's and
-need `--person`, which records the change under `humanName`.
+need `--person`, which records the change under `humanName`. Writing a raw idea's plan sections,
+task rows, questions, decisions or research moves it to exploring, whoever writes them; capture,
+import and title or brief edits do not.
 
 | Command | What it does |
 |---|---|
@@ -206,14 +208,15 @@ need `--person`, which records the change under `humanName`.
 | `staple idea ls` | Ideas with their idea number, stage, horizon and progress. `--maturity M`, `--horizon H` filter. An idea has no ticket number until it is promoted; it has an idea number, `I-<PREFIX>-<n>`, from capture on, kept once promoted. Every `<ref>` takes it (`I-STA-12`, any case, or `I-12` in its own workspace), the ticket number once promoted, or the id. |
 | `staple idea new <title>` | Capture a raw idea. `--brief T`, `--parent REF`, `--sparked-by TICKET` (the ticket whose work turned it up: `idea show` prints it, and `staple show` of the ticket lists the idea under `sparked:`). |
 | `staple idea show <ref>` | Stage, planned and actual windows, baseline, brief, questions, decisions and links; the ticket that sparked it, and once it is an epic the ideas it sparked. |
-| `staple idea set <ref>` | `--title`, `--brief`; with `--person` also `--maturity`, `--horizon H\|none`, `--parent REF\|none`, `--start D\|none`, `--target D\|none`, `--before REF\|end`, and `--delivered D [--note T]` (delivered outside the tracker on day D: it reads shipped with no ticket) or `--undelivered`. |
+| `staple idea set <ref>` | `--title`, `--brief`; with `--person` also `--maturity`, `--horizon H\|none`, `--parent REF\|none`, `--start D\|none`, `--target D\|none`, `--before REF\|end`, and `--delivered D [--note T]` (delivered outside the tracker on day D: it reads shipped with no ticket) or `--undelivered`. `--maturity shaped --person` accepts a proposal; `--dismiss-proposal --person` sets it aside. |
+| `staple idea propose <ref> [--note T]` | Propose a raw or exploring idea shaped, for the person to accept; anyone's, held to the shaped gate. `idea show` prints `proposed shaped by …` and the Plan view lists it under Needs you. It never shapes the idea. |
 | `staple idea promote <ref>` | The idea becomes an epic on the same record and takes its ticket number; its idea number stays with it and still resolves. An agent may promote only a shaped idea. |
 | `staple idea scaffold <ref> [--confirm FP]` | Without `--confirm`, the preview: the epic and every task it would make from the breakdown (estimate, blockers, acceptance, a context page each), what holds it back, and its fingerprint. `--confirm FP` makes exactly that preview, and is refused when the plan changed since. A retry makes only what is missing. Each task keeps the idea and row it came from: `staple show` prints `from I-STA-n · row K`, `--json` carries it as `scaffoldedFrom`, and its context page names both. |
 | `staple idea plan <ref>` | Write plan sections: `--goal`, `--context`, `--acceptance`…, `--dependency`…, `--out-of-scope`, `--risks`, `--source`…. |
 | `staple idea task <ref> add\|set\|rm <key>` | One breakdown row: title, `--estimate`, `--depends`, `--acceptance`, `--owner`, `--notes`. |
 | `staple idea import <plan.md>` | Capture an idea from a plan file, with `--parent`, `--horizon`, `--maturity`; prints what it kept in Context instead of its section. |
 | `staple idea defer <ref> <n>` | Leave question `n` open on purpose; it no longer holds shaping back. |
-| `staple idea adopt <ref> <issue> [--research]` / `unlink` | Link existing work, or remove a link (work or research). `--research` links the issue as research or a POC: it shows in the idea's own research list and does not start the idea or count toward its progress or horizon. |
+| `staple idea adopt <ref> <issue> [--research]` / `unlink` | Link existing work, or remove a link (work or research). `--research` links the issue as research or a POC: it shows in the idea's own research list and does not start the idea or count toward its progress or horizon. A raw idea takes research too, which moves it to exploring. |
 | `staple idea ask` / `resolve <ref> <n>` / `decide` | Add a question, resolve question `n`, record a decision. |
 | `staple idea reset-baseline <ref> --person` | The current planned window becomes the baseline. |
 | `staple horizon new <name> --person` | Add a horizon; `--date D` makes it a release line. `set`, `mv --before H\|--end` and `rm` likewise need `--person`. |

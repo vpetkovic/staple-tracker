@@ -59,8 +59,10 @@ and an instruction. The `horizon-plan` instruction on its tickets says the same:
 2. With no ticket left, take the first step whose `who` is `agent`
    (`brainstorm`, `write_plan`, `fix_plan` or `scaffold`) and do what it says.
 3. Stop for the person on the rest: carry an `answer_questions` step's questions
-   to them and record each answer; tell them when a `mark_shaped` idea is ready.
-   Maturity, schedules and dates stay theirs.
+   to them and record each answer; tell them when a `mark_shaped` idea is ready,
+   or propose it shaped (`staple idea propose`) so it waits under Needs you.
+   Writing a raw idea's plan, questions or decisions moves it to exploring on its
+   own; marking it shaped, schedules and dates stay theirs.
 4. A `wait` step is nobody's yet. Never scaffold a waiting idea, and never
    scaffold every shaped idea you see: scaffold only a `scaffold` step, after
    re-checking its breakdown against what has landed.
