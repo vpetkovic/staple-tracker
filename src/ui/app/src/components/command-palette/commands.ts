@@ -13,8 +13,9 @@
  */
 import { planActionItems, type OfferedPlanAction } from "../../detail/plain-actions";
 import { HANDOFF_RISKS, handoffRiskOf, type HandoffRisk } from "../../lib/filters";
-import { VIEWS, selectionTarget, viewLabel, viewUsesIssueFilters, type Selection, type ViewName } from "../../lib/session";
+import { selectionTarget, viewLabel, viewUsesIssueFilters, type Selection, type ViewName } from "../../lib/session";
 import { SEED_SETTINGS } from "../../lib/settings";
+import { NAV_GROUPS } from "../nav/nav-model";
 import {
   type IssueRow,
   type IssueStatus,
@@ -272,6 +273,9 @@ function issueCount(count: number): string {
  * Every non-issue command, in natural order. Ordering for display is a separate
  * concern — see `orderCommands`.
  */
+/** Every view in the navigation's order: the rail's zones, top to bottom (`NAV_GROUPS`). */
+const NAV_ORDER: readonly ViewName[] = NAV_GROUPS.flatMap((group) => group.items.map((entry) => entry.view));
+
 /** Words the pages were once called, so muscle memory still finds them in the palette. */
 const FORMER_VIEW_NAMES: Partial<Record<ViewName, string>> = {
   attention: "attention",
@@ -378,7 +382,9 @@ export function buildCommands(context: PaletteContext): PaletteCommand[] {
     });
   }
 
-  for (const view of VIEWS) {
+  // In the navigation's order (the rail top to bottom), so the palette lists the views where
+  // the reader already finds them.
+  for (const view of NAV_ORDER) {
     if (view === context.view || (view === "plan" && context.planningEnabled !== true)) continue;
     // The label is the rail's word for the view ("Tasks"); the internal value stays in
     // the keywords so a reader who still types "tree" finds it.
