@@ -94,6 +94,32 @@ export function ownClaimSeq(db: DatabaseSync, entity: string, entityId: string, 
 }
 
 /**
+ * Where this device's own claim on the VALUE a record holds sits in the log: its first write of
+ * that value to any of `fields`, by its acknowledged seq (`Infinity` unsent). Null when this
+ * device never wrote that value there.
+ *
+ * {@link ownClaimSeq} answers for the newest write of the field, whatever it wrote; for a unique
+ * value that reads a device's write of ANOTHER value as its claim on this one. Measured: a device
+ * that gave a legacy idea its idea number after another device promoted it read that write as
+ * its own claim on the promotion's ticket number, and moved the epic off it for its own task.
+ */
+export function ownValueClaimSeq(db: DatabaseSync, entityId: string, value: string, fields: readonly string[] = ["identifier"]): number | null {
+  const rows = db
+    .prepare(`SELECT payload, acknowledged_seq FROM sync_outbox WHERE entity = 'issue' AND entity_id = ? ORDER BY client_seq`)
+    .all(entityId) as Array<{ payload: string; acknowledged_seq: number | null }>;
+  for (const row of rows) {
+    let payload: Record<string, unknown>;
+    try {
+      payload = JSON.parse(row.payload) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    if (fields.some((field) => payload[field] === value)) return row.acknowledged_seq ?? Number.POSITIVE_INFINITY;
+  }
+  return null;
+}
+
+/**
  * Where this device's own claim on an issue's live external origin sits in the log.
  *
  * An issue claims a live origin when it is written with one — created with it, or given
@@ -264,16 +290,26 @@ function settleOne(db: DatabaseSync, journal: Journal, item: OwedSettlement): bo
    * a comment every device receives. Not when it has moved since.
    */
   if (item.entity === "issue" && item.field === "planIdeaNumber") {
+    /**
+     * What it keeps NOW, while another record still holds it: one apply can queue this record's
+     * settlement for one number and then hand it another that collides too, and only one
+     * settlement per record is queued.
+     */
     const row = db.prepare("SELECT plan_idea_number FROM issues WHERE id = ?").get(item.entityId) as { plan_idea_number: string | null } | undefined;
-    const parsed = parseIdeaNumber(item.from);
-    if (!row || row.plan_idea_number !== item.from || !parsed) return false;
+    const kept = row?.plan_idea_number ?? null;
+    const parsed = kept === null ? null : parseIdeaNumber(kept);
+    if (kept === null || !parsed) return false;
+    const held =
+      db.prepare("SELECT 1 AS hit FROM issues WHERE (identifier = ? OR plan_idea_number = ?) AND id <> ?").get(kept, kept, item.entityId) !== undefined;
+    if (!held) return false;
+    const from = kept;
     const to = nextIdeaNumber(db, parsed.prefix);
     db.prepare("UPDATE issues SET plan_idea_number = ? WHERE id = ?").run(to, item.entityId);
     record("issue", "update", { planIdeaNumber: to });
     const commentId = newId();
     const body =
-      `Its idea number moved from ${item.from} to ${to}: another record took ${item.from} on another device ` +
-      `before this one's promotion reached it, and an idea number names one record. A reference to ${item.from} ` +
+      `Its idea number moved from ${from} to ${to}: another record took ${from} on another device ` +
+      `before this one's promotion reached it, and an idea number names one record. A reference to ${from} ` +
       `made before ${at} on the device that promoted this record means this one.`;
     db.prepare(`INSERT INTO comments (id, issue_id, author, author_type, body, created_at) VALUES (?, ?, 'staple', 'system', ?, ?)`).run(commentId, item.entityId, body, at);
     journal.record({ entity: "comment", entityId: commentId, verb: "create", payload: { issueId: item.entityId, author: "staple", authorType: "system", body, createdAt: at }, actor: "staple" });

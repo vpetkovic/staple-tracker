@@ -151,8 +151,8 @@ function expectEachNumberOnce(m: Machine): void {
 
 describe("a record promoted before its offline capture reached the other device", () => {
   for (const fold of FOLDS) {
-    for (const how of ["promote", "scaffold"] as const) {
-      it(`gives up its kept number to the idea that holds it, on every device (${how}, ${fold} fold)`, async () => {
+    for (const how of ["promote", "scaffold"] as const) for (const first of ["b", "a"] as const) {
+      it(`leaves the number with the earlier claim and moves the other, on every device (${how}, ${first} pushes first, ${fold} fold)`, async () => {
         const fleet = setup(fold);
         const a = fleet.machine("a");
         a.store.plan().enable("vp", { person: { via: "settings" } });
@@ -166,8 +166,12 @@ describe("a record promoted before its offline capture reached the other device"
         else a.store.plan().scaffold(x, a.store.plan().scaffoldPreview(x).fingerprint, "vp", PERSON);
         b.use();
         const y = b.store.plan().capture({ title: "Y on B" }, "agent").id;
-        // B's capture reaches the log first.
-        await b.sync();
+        // One device's capture reaches the log first.
+        if (first === "b") await b.sync();
+        else {
+          a.use();
+          await a.sync();
+        }
         await rounds([a, b], 6);
         const fresh = fleet.machine("fresh");
         await fresh.sync();
@@ -175,11 +179,14 @@ describe("a record promoted before its offline capture reached the other device"
           m.use();
           expect(ideas(m)).toEqual(ideas(a));
           expectEachNumberOnce(m);
-          expect(m.store.getIssue("I-TRA-1").id).toBe(y);
+          // The earlier claim keeps I-TRA-1 (as identifier or kept); the later one moves, and nothing holds no number.
+          expect(m.store.getIssue("I-TRA-1").id).toBe(first === "b" ? y : x);
           const kept = m.store.getIssue(x).ideaNumber!;
           expect(kept).toMatch(/^I-TRA-\d+$/);
-          expect(kept).not.toBe("I-TRA-1");
           expect(m.store.getIssue(kept).id).toBe(x);
+          expect(m.store.getIssue(m.store.getIssue(y).identifier).id).toBe(y);
+          expect(m.store.getIssue(y).identifier).toMatch(first === "b" ? /^I-TRA-1$/ : /^I-TRA-\d+$/);
+          if (first === "a") expect(kept).toBe("I-TRA-1");
           expect(open(m)).toEqual([]);
         }
       });
@@ -229,8 +236,8 @@ describe("a legacy idea numbered on one device while another promoted it", () =>
 });
 
 describe("two devices number different sets of legacy records", () => {
-  for (const fold of FOLDS) {
-    it(`never leave one number on two records (${fold} fold)`, async () => {
+  for (const fold of FOLDS) for (const first of ["b", "a"] as const) {
+    it(`never leave one number on two records (${first} pushes first, ${fold} fold)`, async () => {
       const fleet = setup(fold);
       const a = fleet.machine("a");
       a.store.plan().enable("vp", { person: { via: "settings" } });
@@ -266,8 +273,9 @@ describe("two devices number different sets of legacy records", () => {
       a.use();
       // A's P lands on B's L0, and A's L1 on B's P: one number, two records, until they settle.
       expect([a.store.getIssue(p).ideaNumber, a.store.getIssue(l1).identifier]).toEqual(["I-TRA-1", "I-TRA-2"]);
-      b.use();
-      await b.sync();
+      const pusher = first === "b" ? b : a;
+      pusher.use();
+      await pusher.sync();
       await rounds([a, b], 6);
       const fresh = fleet.machine("fresh");
       await fresh.sync();
@@ -331,6 +339,124 @@ describe("a workspace that numbered ideas before it joined a repository", () => 
         const issue = b.store.getIssue(id);
         expect(b.store.getIssue(issue.ideaNumber!).id).toBe(id);
         expect(b.store.listComments(id).some((comment) => comment.authorType === "system" && /idea number moved|Renumbered/.test(comment.body))).toBe(true);
+      }
+    });
+  }
+});
+
+describe("a legacy idea promoted on one device while another numbered it and made a ticket offline", () => {
+  for (const fold of FOLDS) {
+    it(`keeps the epic on its ticket number, the earlier claim, and moves the later ticket (${fold} fold)`, async () => {
+      const fleet = setup(fold);
+      const a = fleet.machine("a");
+      a.store.plan().enable("vp", { person: { via: "settings" } });
+      const l = a.store.plan().capture({ title: "Legacy", maturity: "shaped", plan: READY_PLAN }, "vp", PERSON).id;
+      const draft = `~${l.replace(/-/g, "")}`;
+      a.db.prepare("UPDATE issues SET identifier = ? WHERE id = ?").run(draft, l);
+      a.db.prepare("UPDATE sync_outbox SET payload = json_set(payload, '$.identifier', ?) WHERE entity_id = ? AND verb = 'create'").run(draft, l);
+      a.store.setSetting("features.planning", false, "vp", { via: "settings" });
+      await a.sync();
+      const b = fleet.machine("b");
+      await b.sync();
+
+      // A, offline: a ticket, then planning on, which numbers the legacy idea. B: planning on, and it promotes it.
+      a.use();
+      const task = a.store.createIssue({ title: "Task on A" });
+      a.store.plan().enable("vp", { person: { via: "settings" } });
+      b.use();
+      b.store.setSetting("features.planning", true, "vp", { via: "settings" });
+      const ticket = b.store.plan().promote(l, "vp", PERSON).identifier!;
+      expect(task.identifier).toBe(ticket);
+      await b.sync();
+      await rounds([a, b], 6);
+      const fresh = fleet.machine("fresh");
+      await fresh.sync();
+      for (const m of [a, b, fresh]) {
+        m.use();
+        expect(m.store.getIssue(l).identifier).toBe(ticket);
+        expect(m.store.getIssue(ticket).id).toBe(l);
+        expect(m.store.getIssue(task.id).identifier).not.toBe(ticket);
+        expectEachNumberOnce(m);
+        expect(open(m)).toEqual([]);
+      }
+    });
+  }
+});
+
+describe("two devices each number a legacy record only they hold, around one they share", () => {
+  for (const fold of FOLDS) for (const first of ["a", "b"] as const) {
+    it(`settle the shared record's kept number once the dust settles (${first} pushes first, ${fold} fold)`, async () => {
+      const fleet = setup(fold);
+      const a = fleet.machine("a");
+      a.store.plan().enable("vp", { person: { via: "settings" } });
+      const p = a.store.plan().capture({ title: "P shared", maturity: "shaped", plan: READY_PLAN }, "vp", PERSON).id;
+      a.store.plan().promote(p, "vp", PERSON);
+      await a.sync();
+      const b = fleet.machine("b");
+      await b.sync();
+      // Each device, offline: an idea of its own, then the legacy state an earlier build left, numbered in creation order.
+      const legacy = (m: Machine, title: string, createdAt: string): string => {
+        m.use();
+        const own = m.store.plan().capture({ title }, "vp", PERSON).id;
+        m.db.prepare("DELETE FROM sync_outbox WHERE acknowledged_seq IS NULL AND entity_id IN (?, ?) AND verb <> 'create'").run(own, p);
+        m.db.prepare("UPDATE issues SET identifier = ?, created_at = ? WHERE id = ?").run(`~${own.replace(/-/g, "")}`, createdAt, own);
+        m.db.prepare("UPDATE sync_outbox SET payload = json_set(payload, '$.identifier', ?) WHERE entity_id = ? AND verb = 'create'").run(`~${own.replace(/-/g, "")}`, own);
+        m.db.prepare("UPDATE issues SET plan_idea_number = NULL WHERE id = ?").run(p);
+        m.db.prepare("DELETE FROM meta WHERE key = 'next_idea_number'").run();
+        m.store.plan().upgradeRecords();
+        return own;
+      };
+      const la = legacy(a, "L_A newer", "2099-01-01T00:00:00.000Z");
+      const lb = legacy(b, "L_B older", "2000-01-01T00:00:00.000Z");
+      a.use();
+      expect([a.store.getIssue(p).ideaNumber, a.store.getIssue(la).identifier]).toEqual(["I-TRA-1", "I-TRA-2"]);
+      b.use();
+      expect([b.store.getIssue(lb).identifier, b.store.getIssue(p).ideaNumber]).toEqual(["I-TRA-1", "I-TRA-2"]);
+
+      const pusher = first === "a" ? a : b;
+      pusher.use();
+      await pusher.sync();
+      await rounds([a, b], 8);
+      const fresh = fleet.machine("fresh");
+      await fresh.sync();
+      for (const m of [a, b, fresh]) {
+        m.use();
+        expect(ideas(m)).toEqual(ideas(a));
+        expectEachNumberOnce(m);
+        expect(open(m)).toEqual([]);
+      }
+    });
+  }
+});
+
+describe("two devices each promote their own offline capture of one number", () => {
+  for (const fold of FOLDS) for (const first of ["a", "b"] as const) {
+    it(`leave the number with the earlier claim only (${first} pushes first, ${fold} fold)`, async () => {
+      const fleet = setup(fold);
+      const a = fleet.machine("a");
+      a.store.plan().enable("vp", { person: { via: "settings" } });
+      await a.sync();
+      const b = fleet.machine("b");
+      await b.sync();
+      a.use();
+      const x = a.store.plan().capture({ title: "X on A", maturity: "shaped", plan: READY_PLAN }, "vp", PERSON).id;
+      a.store.plan().promote(x, "vp", PERSON);
+      b.use();
+      const y = b.store.plan().capture({ title: "Y on B", maturity: "shaped", plan: READY_PLAN }, "vp", PERSON).id;
+      b.store.plan().promote(y, "vp", PERSON);
+      const pusher = first === "a" ? a : b;
+      pusher.use();
+      await pusher.sync();
+      await rounds([a, b], 6);
+      const fresh = fleet.machine("fresh");
+      await fresh.sync();
+      for (const m of [a, b, fresh]) {
+        m.use();
+        expect(ideas(m)).toEqual(ideas(a));
+        expectEachNumberOnce(m);
+        // The first in the log keeps I-TRA-1; only the other moves.
+        expect(m.store.getIssue("I-TRA-1").id).toBe(first === "a" ? x : y);
+        expect(open(m)).toEqual([]);
       }
     });
   }
