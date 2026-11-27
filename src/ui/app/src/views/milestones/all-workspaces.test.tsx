@@ -66,15 +66,12 @@ describe("every workspace's milestones, grouped", () => {
     expect(all.failed).toEqual([]);
   });
 
-  it("can leave finished ones out and count them, though the page lists every one", () => {
+  it("lists finished ones with the rest: the page puts them on each group's Finished shelf", () => {
     const done = row("STA-9");
     done.milestone.state = "done";
-    const results = [{ workspace: "staple", ok: true as const, rows: [row("STA-1"), done], effective: [] }];
-    expect(groupAllMilestones(results, false)).toMatchObject({ hiddenFinished: 1 });
-    expect(groupAllMilestones(results, false).groups[0]!.rows.map((r) => r.milestone.identifier)).toEqual(["STA-1"]);
-    // All finished and hidden: no group at all, and the count the empty page states.
-    expect(groupAllMilestones([{ workspace: "staple", ok: true, rows: [done] }], false)).toMatchObject({ groups: [], hiddenFinished: 1 });
-    expect(groupAllMilestones(results, true).groups[0]!.rows).toHaveLength(2);
+    expect(groupAllMilestones([{ workspace: "staple", ok: true, rows: [row("STA-1"), done], effective: [] }]).groups[0]!.rows.map((r) => r.milestone.identifier)).toEqual(["STA-1", "STA-9"]);
+    // A workspace whose milestones are all finished is still a group.
+    expect(groupAllMilestones([{ workspace: "staple", ok: true, rows: [done] }]).groups.map((group) => group.workspace)).toEqual(["staple"]);
   });
 
   it("keeps a real failure visible under its workspace instead of hiding it", () => {
@@ -140,7 +137,7 @@ const finished = (identifier: string, closedAt: string) => row(identifier, { sta
 /** The page as it draws `results`, every milestone listed whatever the Done toggle says. */
 function page(results: WorkspaceMilestonesResult[], wrap: (node: ReactNode) => ReactNode = (node) => node): string {
   return renderToStaticMarkup(
-    <SessionContext.Provider value={fakeSession({ mode: "hub", ws: "" })}>{wrap(<AllWorkspacesOutline all={groupAllMilestones(results, true)} now={NOW} onOpen={() => {}} />)}</SessionContext.Provider>,
+    <SessionContext.Provider value={fakeSession({ mode: "hub", ws: "" })}>{wrap(<AllWorkspacesOutline all={groupAllMilestones(results)} now={NOW} onOpen={() => {}} />)}</SessionContext.Provider>,
   );
 }
 

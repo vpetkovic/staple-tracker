@@ -29,7 +29,7 @@ import type { EffectiveQueueRow, MilestoneListRow } from "@/lib/types";
 import { useElementWidth } from "@/views/plan/plan-parts";
 import { TAP_TEXT } from "./milestone-parts";
 import { FinishedLine, OpenSection } from "./MilestoneSection";
-import { isFinishedMilestone, selectedMilestone } from "./milestones-model";
+import { isFinishedMilestone } from "./milestones-model";
 import { foldAllAction, loadMilestonesMemory, MILESTONES_NARROW, saveMilestonesMemory, sectionFolded, withAllFolded, type MilestonesMemory } from "./milestones-memory";
 import { AddMilestoneRow, createMilestone, MilestonesToolbar } from "./MilestonesToolbar";
 
@@ -48,7 +48,7 @@ export function outlineGroups<T extends Pick<MilestoneListRow, "milestone">>(sor
 
 /** Where a focus lands: an open section, a finished line, or nowhere this list carries. */
 export function landingOf(focus: string | null, groups: { open: readonly Pick<MilestoneListRow, "milestone">[]; finished: readonly Pick<MilestoneListRow, "milestone">[] }): { kind: "open" | "finished" | "missing"; identifier: string } | null {
-  const identifier = selectedMilestone({ focus, listed: groups.open, fillPane: false });
+  const identifier = focus;
   if (!identifier) return null;
   if (groups.open.some((row) => row.milestone.identifier === identifier)) return { kind: "open", identifier };
   if (groups.finished.some((row) => row.milestone.identifier === identifier)) return { kind: "finished", identifier };

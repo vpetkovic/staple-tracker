@@ -81,7 +81,7 @@ export function AllWorkspacesMilestones({
   const slugs = workspaces.map((workspace) => workspace.slug).join("\n");
   const load = useCallback(() => readAllMilestones(slugs.split("\n").map((slug) => ({ slug })), true), [slugs]);
   const resource = useResource(load, [slugs, session.version], onAuthError);
-  const all = useMemo(() => (resource.data ? groupAllMilestones(resource.data, true) : null), [resource.data]);
+  const all = useMemo(() => (resource.data ? groupAllMilestones(resource.data) : null), [resource.data]);
   const open = (workspace: string, ref: string) => openMilestoneIn(session, workspace, ref);
 
   if (resource.error) {

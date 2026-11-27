@@ -40,7 +40,7 @@ export const TAP_20 = "relative @max-[760px]/ms:before:absolute @max-[760px]/ms:
 /** A 28px icon control: a 36px tap at every width (a work row's `⋯`, the section's `⋯`). */
 export const TAP_28 = "relative min-h-0 before:absolute before:-inset-1 before:content-['']";
 /** A 28px text button: a 32px tap under 760px. */
-export const TAP_TEXT = "relative h-7 min-h-0 @max-[760px]/ms:before:absolute @max-[760px]/ms:before:-inset-y-0.5 @max-[760px]/ms:before:inset-x-0 @max-[760px]/ms:before:content-['']";
+export const TAP_TEXT = "relative h-7 min-h-0 @max-[760px]/ms:before:absolute @max-[760px]/ms:before:-inset-y-[3px] @max-[760px]/ms:before:inset-x-0 @max-[760px]/ms:before:content-['']";
 
 /** The milestone's state as a 14px picture: a ring filled to the server's percent, red once overdue, the check when done, a dotted struck ring when cancelled. */
 export function MilestoneGlyph({ state, percent, className }: { state: MilestoneState; percent: number | null; className?: string }) {
