@@ -352,6 +352,8 @@ describe("read from a real workspace", () => {
     at(600);
     const rows = readWorkspaceRows(store.db, { slug: "test", prefix: "TST" });
     expect(rows.attempts).toEqual([expect.objectContaining({ standing: "open", effortSeconds: 1800, model: null })]);
+    // The span ends at the comment, so a later period does not see the attempt still running.
+    expect(rows.attempts[0]!.endAt).toBe(new Date(T0 + 30 * 60_000).toISOString());
     const report = read([rows], { from: "2026-09-01", to: "2026-09-01", now: new Date(T0 + 600 * 60_000).toISOString() });
     expect(report.capacity.agentHours).toBe(0.5);
     expect(caveat(report, "open_attempts")).toEqual({ code: "open_attempts", count: 1, of: 1 });
