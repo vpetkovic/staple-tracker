@@ -23,10 +23,14 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileS
 import { dirname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Hub, describeAbsentRow, notifyHubResolvedSafe } from "../core/hub.js";
+import { readAnalytics, readRoi, readRoiTickets, type AnalyticsScope } from "../core/analytics/service.js";
+import { readCostModel, writeCostModel, type HomeCandidate } from "../core/analytics/home.js";
+import type { CostModelWrite } from "../core/analytics/contract.js";
 import { openWorkspace, resolveWorkspace } from "../core/workspace.js";
 import {
   StapleError,
   errorEnvelope,
+  nowIso,
   type IssuePriority,
   type IssueStatus,
   type ProjectKind,
@@ -732,6 +736,17 @@ function resolveAsset(pathname: string): string | null {
  */
 export const KEEP_ALIVE_MS = 65_000;
 
+/**
+ * The workspaces a write route asks the post-write sync trigger to sync, recorded once the
+ * route knows where it wrote. Keyed by the response, so it lives exactly as long as the
+ * request; `undefined` in the list means the default workspace.
+ */
+const SYNC_TARGETS = new WeakMap<ServerResponse, readonly (string | undefined)[]>();
+
+function syncTargets(res: ServerResponse, targets: readonly (string | undefined)[]): void {
+  SYNC_TARGETS.set(res, targets);
+}
+
 export function startUiServer(options: UiOptions): UiHandle {
   const stores = new Map<string, StoreHandle>();
 
@@ -827,6 +842,62 @@ export function startUiServer(options: UiOptions): UiHandle {
     if (!options.hub) return [handleFor()];
     handleFor(); // populate cache
     return [...stores.values()];
+  }
+
+  /**
+   * The workspaces an Analytics read covers (`scope` on `/api/analytics*`): one named
+   * workspace, or `hub` (the default in hub mode) for every workspace this machine's hub
+   * registers. A registered workspace that cannot be opened is still named, `available:
+   * false`, so the page can say its figures are missing rather than silently smaller.
+   */
+  function analyticsScope(wanted: string | null): AnalyticsScope {
+    const one = (handle: StoreHandle): AnalyticsScope => ({
+      kind: "workspace",
+      sources: [{ slug: handle.slug, prefix: handle.prefix, db: handle.store.db }],
+      refs: [{ slug: handle.slug, prefix: handle.prefix, available: true }],
+    });
+    if (!options.hub) return one(handleFor());
+    if (wanted !== null && wanted !== "" && wanted !== "hub") return one(handleFor(wanted));
+    const hub = Hub.open();
+    let entries: Array<{ slug: string; prefix: string; available: boolean }>;
+    try {
+      entries = hub.list();
+    } finally {
+      hub.close();
+    }
+    handleFor(); // opens every available workspace into the cache
+    const opened = entries.map((entry) => ({ entry, handle: entry.available ? stores.get(entry.slug) : undefined }));
+    return {
+      kind: "hub",
+      sources: opened.flatMap(({ handle }) => (handle ? [{ slug: handle.slug, prefix: handle.prefix, db: handle.store.db }] : [])),
+      refs: opened.map(({ entry, handle }) => ({ slug: entry.slug, prefix: entry.prefix, available: handle !== undefined })),
+    };
+  }
+
+  /** Every open workspace that could hold the cost model: the hub's available ones, or the one. */
+  function costModelCandidates(): HomeCandidate[] {
+    return allHandles().map((handle) => ({ slug: handle.slug, prefix: handle.prefix, store: handle.store }));
+  }
+
+  /** The workspace an Analytics scope is about, for the cost model's suggested home; null for the hub. */
+  function scopeSlugOf(scope: AnalyticsScope): string | null {
+    return scope.kind === "workspace" ? (scope.refs[0]?.slug ?? null) : null;
+  }
+
+  /** The one cost model, as a read about `scope` sees it. */
+  function costModelFor(scope: AnalyticsScope) {
+    return readCostModel(costModelCandidates(), scopeSlugOf(scope));
+  }
+
+  /** The period part of an Analytics query string. */
+  function analyticsQuery(query: URLSearchParams) {
+    return {
+      from: query.get("from") ?? undefined,
+      to: query.get("to") ?? undefined,
+      tz: query.get("tz") ?? undefined,
+      bucket: query.get("bucket") ?? undefined,
+      now: nowIso(),
+    };
   }
 
   function json(res: ServerResponse, status: number, payload: unknown, headers: Record<string, string> = {}): void {
@@ -1800,7 +1871,7 @@ export function startUiServer(options: UiOptions): UiHandle {
           url.pathname === BUDGET_REFRESH_ROUTE ||
           url.pathname === "/api/budget/forget"
             ? ["POST"]
-            : url.pathname === "/api/settings"
+            : url.pathname === "/api/settings" || url.pathname === "/api/analytics/cost-model"
               ? ["GET", "POST"]
               : ["GET"];
         const allow = expected.join(", ");
@@ -1845,13 +1916,17 @@ export function startUiServer(options: UiOptions): UiHandle {
          * sync to carry, and firing one on `disconnect` in particular would be a
          * request made in the act of stopping.
          *
-         * KNOWN LIMIT, stated rather than hidden: the workspace is read from the
-         * query string because the body has not been parsed yet and cannot be read
-         * twice. In single-workspace mode — every connected repository today —
-         * that is exact. In hub mode a write that named its workspace only in the
-         * body triggers the default workspace instead; the named one still syncs
-         * on its session tick. Fixing it properly means threading the resolved
-         * handle out of the route, which is not a thin registration.
+         * Which workspace: the ones the route recorded with `syncTargets` once it
+         * knew where it wrote (the Analytics cost model, written to its home), else
+         * the `ws` query parameter.
+         *
+         * KNOWN LIMIT, stated rather than hidden: a route that records nothing has
+         * its workspace read from the query string, because the body has not been
+         * parsed yet when this is registered. In single-workspace mode, every
+         * connected repository today, that is exact. In hub mode a write that named
+         * its workspace only in the body triggers the default workspace instead; the
+         * named one still syncs on its session tick. Such a route fixes it for itself
+         * by calling `syncTargets`.
          */
         if (
           req.method === "POST" &&
@@ -1867,7 +1942,9 @@ export function startUiServer(options: UiOptions): UiHandle {
         ) {
           const ws = url.searchParams.get("ws") ?? undefined;
           res.once("finish", () => {
-            if (res.statusCode >= 200 && res.statusCode < 300) autoSync.postWrite(ws);
+            if (res.statusCode < 200 || res.statusCode >= 300) return;
+            const recorded = SYNC_TARGETS.get(res);
+            for (const target of recorded ?? [ws]) autoSync.postWrite(target);
           });
         }
       }
@@ -4395,6 +4472,74 @@ export function startUiServer(options: UiOptions): UiHandle {
       }
 
       /**
+       * The Analytics page's metrics (`src/core/analytics/contract.ts`, `AnalyticsReport`): one
+       * workspace or the hub, over `from`..`to` in `tz`. Read-only, replicated data only, so
+       * two devices holding the same workspaces answer the same.
+       */
+      if (url.pathname === "/api/analytics") {
+        const scope = analyticsScope(url.searchParams.get("scope"));
+        // The person's agent-type rules come from the one cost model, wherever it is saved.
+        const rules = costModelFor(scope).model.roleMapping.rules;
+        json(res, 200, readAnalytics(scope, analyticsQuery(url.searchParams), rules));
+        return;
+      }
+
+      /**
+       * The cost model (`src/core/analytics/home.ts`): one model, saved as four workspace
+       * settings in its home workspace, read by every Analytics view. GET reads it, with each
+       * part's provenance and where it is saved; POST saves parts, resets them or moves the
+       * model, then triggers the sync of each workspace it wrote.
+       */
+      if (url.pathname === "/api/analytics/cost-model") {
+        const scope = analyticsScope(url.searchParams.get("scope"));
+        if (req.method === "POST") {
+          const body = await readBody(req);
+          if (body === null || typeof body !== "object" || Array.isArray(body)) throw new StapleError("validation", "The cost model write must be a JSON object.");
+          const { response, written } = writeCostModel(costModelCandidates(), body as unknown as CostModelWrite, {
+            scopeSlug: scopeSlugOf(scope),
+            actor: bodyActor(body),
+            now: nowIso(),
+          });
+          syncTargets(res, options.hub ? written : [undefined]);
+          json(res, 200, response);
+          return;
+        }
+        json(res, 200, costModelFor(scope));
+        return;
+      }
+
+      /**
+       * The ROI (`RoiResponse`): the scope's value under both lenses against its share of the
+       * hub's AI spend and directing time, priced with the one cost model.
+       */
+      if (url.pathname === "/api/analytics/roi") {
+        const scope = analyticsScope(url.searchParams.get("scope"));
+        const hub = scope.kind === "hub" || !options.hub ? scope : analyticsScope("hub");
+        json(res, 200, readRoi({ scope, hub, query: analyticsQuery(url.searchParams), model: costModelFor(scope) }));
+        return;
+      }
+
+      /** The done tickets behind one ROI role row, so a wrong guess can be seen and corrected. */
+      if (url.pathname === "/api/analytics/roi/tickets") {
+        const scope = analyticsScope(url.searchParams.get("scope"));
+        const roleId = url.searchParams.get("roleId") ?? "";
+        if (roleId === "") throw new StapleError("validation", "roleId names the role whose tickets to list.");
+        const limit = url.searchParams.get("limit");
+        json(
+          res,
+          200,
+          readRoiTickets({
+            scope,
+            query: analyticsQuery(url.searchParams),
+            model: costModelFor(scope),
+            roleId,
+            limit: limit === null ? undefined : Number(limit),
+          }),
+        );
+        return;
+      }
+
+      /**
        * `staple forecast` / MCP `forecast`: the completion forecast of `ref` and, apart from it,
        * the budget forecast of that work on this machine, from the one store method both call.
        * `reserve` is a percent (`20` or `20%`), `account` one account, `model` pins the model.
@@ -4734,8 +4879,10 @@ export function startUiServer(options: UiOptions): UiHandle {
             },
             /**
              * THE REGISTRY (R6a, STA-176): every category and every typed setting
-             * definition, so the shell enumerates its navigation from this and a
-             * new setting reaches the page without a client change. `values` are
+             * definition the Settings screen edits, so the shell enumerates its
+             * navigation from this and a new setting reaches the page without a
+             * client change. A `page` category (the Analytics cost model) is edited on
+             * its own page and left out, though its values are in `values`. `values` are
              * this workspace's effective values with provenance; `unknownKeys`
              * are stored keys this build has no definition for — preserved,
              * reported, never rewritten. `global` is the machine's config.json,

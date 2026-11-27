@@ -1,0 +1,187 @@
+/**
+ * Which kind of human work an agent's attempt stands in for: its AGENT TYPE.
+ *
+ * The ROI page prices agent time at the rate of the person who would otherwise have done the
+ * work, so each attempt needs a type (engineering, design, documentation, research,
+ * orchestration) that the cost model maps to a role. Nothing records a type today:
+ * `attempts.role` is `worker` on every real attempt, agent names are free-form
+ * (`autopilot`, `sta223-lifecycle`, `fable-r1a`), and most attempts name no model. So the type
+ * is DERIVED, deterministically, from what an attempt does carry, and every derivation says
+ * which rule produced it so a person can see why and override it.
+ *
+ * ## The rules, first match wins
+ *
+ *  1. The orchestrator lane (`role: orchestrator`) is orchestration. Only the lane decides
+ *     this, never a name: `design/timing-semantics.md` ("Orchestration") explains why an
+ *     identity like `fxi-orchestrator` that checks out a ticket is doing the ticket's work.
+ *  2. The person's own rules, in their order: a match on agent name (a `*` glob), workspace
+ *     prefix, ticket kind, ticket label or a title word. A rule sets the type, or names a role
+ *     directly (then the type below is still derived, for the per-type figures).
+ *  3. A ticket label naming the work (`design`, `ux`, `docs`, `research`, …).
+ *  4. A token of the agent's name naming the work (`design`, `docs`, `writer` is NOT one: on
+ *     the maintainers' tracker `*-writer` agents write specs, which is engineering).
+ *  5. A word of the ticket title naming the work (`redesign`, `docs`, `documentation`, …).
+ *  6. The ticket kind: a `spike` is research.
+ *  7. Otherwise engineering.
+ *
+ * The model and harness are deliberately not rules: which model ran says nothing about what
+ * kind of work it did (a Fable session on the maintainers' tracker shipped schema migrations).
+ */
+
+export const AGENT_TYPES = ["engineering", "design", "documentation", "research", "orchestration"] as const;
+export type AgentType = (typeof AGENT_TYPES)[number];
+
+export function isAgentType(value: unknown): value is AgentType {
+  return typeof value === "string" && (AGENT_TYPES as readonly string[]).includes(value);
+}
+
+/**
+ * A person's rule. Every matcher given must match, and at least one is required. A rule
+ * either sets the TYPE (which the mapping then prices) or names a ROLE directly, for a role
+ * no agent type stands for (a QA engineer, a DevOps engineer): exactly one of `type` and
+ * `roleId`.
+ */
+export interface AgentTypeRule {
+  /** Agent name, case-insensitive, `*` matching any run of characters. */
+  readonly agent?: string;
+  /** Workspace identifier prefix (`STA`), case-insensitive. */
+  readonly workspace?: string;
+  readonly kind?: string;
+  readonly label?: string;
+  /** A whole word (or several, in order) of the ticket title, case-insensitive. */
+  readonly title?: string;
+  readonly type?: AgentType;
+  readonly roleId?: string;
+}
+
+export type AgentTypeReasonCode = "orchestrator_lane" | "rule" | "label" | "agent_name" | "title" | "kind" | "default";
+
+export interface AgentTypeReason {
+  readonly code: AgentTypeReasonCode;
+  /** What matched: the label, the name token, the title word, the kind; the rule's index for `rule`. */
+  readonly detail: string | null;
+}
+
+export interface AgentTypeInput {
+  readonly agent: string;
+  readonly role: string;
+  readonly workspace: string;
+  readonly kind: string;
+  readonly labels: readonly string[];
+  readonly title: string;
+}
+
+/** Words that name a kind of work, in the order they are tried. */
+const VOCABULARY: ReadonlyArray<readonly [AgentType, readonly string[]]> = [
+  ["design", ["design", "designer", "redesign", "ux", "ui-design", "mockup", "mockups", "wireframe", "wireframes", "visual"]],
+  ["documentation", ["docs", "doc", "documentation", "readme", "changelog", "tech-writer", "techwriter", "copywriting"]],
+  ["research", ["research", "spike", "investigation", "investigate"]],
+];
+
+/** Label spellings are looser than title words: `area:design`, `type/docs` and `design-system` all count. */
+function labelType(label: string): AgentType | null {
+  const tokens = label.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  for (const [type, words] of VOCABULARY) if (tokens.some((token) => words.includes(token))) return type;
+  return null;
+}
+
+function tokensOf(text: string): string[] {
+  return text.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+}
+
+/** The first vocabulary word among `tokens`, by vocabulary order. */
+function wordType(tokens: readonly string[]): { type: AgentType; word: string } | null {
+  for (const [type, words] of VOCABULARY) {
+    const word = tokens.find((token) => words.includes(token));
+    if (word !== undefined) return { type, word };
+  }
+  return null;
+}
+
+/**
+ * A `*` glob as a whole-string, case-insensitive match.
+ *
+ * Matched by the two-pointer wildcard walk, never a regular expression: rules are typed by a
+ * person and synced to every device, and `*a*a*a…b` compiled to `.*a.*a…b` backtracks
+ * exponentially, which froze the server for minutes on one Analytics read. This walk is
+ * O(glob × value) whatever the pattern.
+ */
+export function globMatches(glob: string, value: string): boolean {
+  const pattern = glob.trim().toLowerCase();
+  const text = value.toLowerCase();
+  let p = 0;
+  let t = 0;
+  let star = -1;
+  let resume = 0;
+  while (t < text.length) {
+    if (p < pattern.length && pattern[p] === "*") {
+      star = p;
+      p += 1;
+      resume = t;
+    } else if (p < pattern.length && pattern[p] === text[t]) {
+      p += 1;
+      t += 1;
+    } else if (star >= 0) {
+      p = star + 1;
+      resume += 1;
+      t = resume;
+    } else {
+      return false;
+    }
+  }
+  while (p < pattern.length && pattern[p] === "*") p += 1;
+  return p === pattern.length;
+}
+
+/** True when `phrase`'s words appear in `tokens` consecutively. */
+function hasPhrase(tokens: readonly string[], phrase: string): boolean {
+  const words = tokensOf(phrase);
+  if (words.length === 0) return false;
+  for (let start = 0; start + words.length <= tokens.length; start += 1) {
+    if (words.every((word, offset) => tokens[start + offset] === word)) return true;
+  }
+  return false;
+}
+
+function ruleMatches(rule: AgentTypeRule, input: AgentTypeInput): boolean {
+  if (rule.agent !== undefined && !globMatches(rule.agent, input.agent)) return false;
+  if (rule.title !== undefined && !hasPhrase(tokensOf(input.title), rule.title)) return false;
+  if (rule.workspace !== undefined && rule.workspace.trim().toUpperCase() !== input.workspace.toUpperCase()) return false;
+  if (rule.kind !== undefined && rule.kind !== input.kind) return false;
+  if (rule.label !== undefined && !input.labels.some((label) => label.toLowerCase() === rule.label!.toLowerCase())) return false;
+  return true;
+}
+
+/** What an attempt is priced as: its type, a role a rule named directly (or null), and the rule that decided. */
+export interface AgentTypeResult {
+  readonly type: AgentType;
+  /** Set when a person's rule names a role: the attempt is priced at it whatever its type maps to. */
+  readonly roleId: string | null;
+  readonly reason: AgentTypeReason;
+}
+
+/** The type of one attempt's work, and the rule that decided it. */
+export function deriveAgentType(input: AgentTypeInput, rules: readonly AgentTypeRule[] = []): AgentTypeResult {
+  if (input.role === "orchestrator") return { type: "orchestration", roleId: null, reason: { code: "orchestrator_lane", detail: null } };
+  for (const [index, rule] of rules.entries()) {
+    if (!ruleMatches(rule, input)) continue;
+    const reason: AgentTypeReason = { code: "rule", detail: String(index) };
+    if (rule.roleId !== undefined) return { type: automaticType(input).type, roleId: rule.roleId, reason };
+    if (rule.type !== undefined) return { type: rule.type, roleId: null, reason };
+  }
+  return { ...automaticType(input), roleId: null };
+}
+
+/** Rules 3 to 7 of the module comment: what the attempt's own data says. */
+function automaticType(input: AgentTypeInput): { type: AgentType; reason: AgentTypeReason } {
+  for (const label of input.labels) {
+    const type = labelType(label);
+    if (type !== null) return { type, reason: { code: "label", detail: label } };
+  }
+  const named = wordType(tokensOf(input.agent));
+  if (named !== null) return { type: named.type, reason: { code: "agent_name", detail: named.word } };
+  const titled = wordType(tokensOf(input.title));
+  if (titled !== null) return { type: titled.type, reason: { code: "title", detail: titled.word } };
+  if (input.kind === "spike") return { type: "research", reason: { code: "kind", detail: "spike" } };
+  return { type: "engineering", reason: { code: "default", detail: null } };
+}
