@@ -112,6 +112,8 @@ async function withPage(options: BrowserContextOptions, run: (page: Page) => Pro
   }
 }
 
+/** Two animation frames: every event the last input sent has run, and React has drawn its result. */
+const settled = (page: Page) => page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
 const events = (page: Page) => page.evaluate(() => (window as unknown as { widgetEvents: string[] }).widgetEvents);
 const keys = (page: Page) => page.evaluate(() => (window as unknown as { keys: { key: string; prevented: boolean }[] }).keys);
 
@@ -192,14 +194,36 @@ describe.skipIf(Boolean(reason))("the column chart on a touch screen", () => {
   it("keeps the readout of a tapped slot until the reader taps elsewhere", async () => {
     await withPage(TOUCH, async (page) => {
       const readout = page.locator("[data-chart-readout]");
-      // A tap re-renders asynchronously: wait for each state instead of reading it once.
+      // A tap ends with the touch pointer leaving the plot (pointerup, then pointerout and
+      // pointerleave). Read each state only after that has run and React has drawn it, so a
+      // readout the leave clears is caught every time rather than by chance.
       await page.locator('[data-slot-index="2"]').tap();
-      await expect.poll(() => page.locator("[data-chart-tooltip]").count()).toBe(1);
-      await expect.poll(() => readout.textContent()).toBe("Nov 3: 6 h Staple, 2 h Docs; 8 h Total");
+      await settled(page);
+      expect(await page.locator("[data-chart-tooltip]").count()).toBe(1);
+      expect(await readout.textContent()).toBe("Nov 3: 6 h Staple, 2 h Docs; 8 h Total");
       await page.locator('[data-slot-index="0"]').tap();
-      await expect.poll(() => readout.textContent()).toBe("Nov 1: 2 h Staple; 2 h Total");
+      await settled(page);
+      expect(await readout.textContent()).toBe("Nov 1: 2 h Staple; 2 h Total");
       await page.getByText("Agents worked 14 hours.").tap();
-      await expect.poll(() => page.locator("[data-chart-tooltip]").count()).toBe(0);
+      await settled(page);
+      expect(await page.locator("[data-chart-tooltip]").count()).toBe(0);
+    });
+  });
+});
+
+describe.skipIf(Boolean(reason))("the heatmap on a touch screen", () => {
+  it("keeps the readout of a tapped cell until the reader taps elsewhere", async () => {
+    await withPage(TOUCH, async (page) => {
+      const readout = page.locator('[data-chart="heatmap"] [aria-live="polite"]');
+      const active = page.locator('[data-chart="heatmap"] [data-active]');
+      await page.locator('[data-chart="heatmap"] [data-mark]').first().tap();
+      await settled(page);
+      expect(await active.count()).toBe(1);
+      expect(await readout.innerText()).toBe("0 tickets · Mon 12 am");
+      await page.getByText("Agents worked 14 hours.").tap();
+      await settled(page);
+      expect(await active.count()).toBe(0);
+      expect(await readout.innerText()).toBe("Busiest hour: 10 tickets");
     });
   });
 });
