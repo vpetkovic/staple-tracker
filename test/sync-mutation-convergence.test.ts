@@ -495,6 +495,22 @@ const SCENARIOS: readonly Scenario[] = [
     run: (w) => void w.a.store.promoteInPlace(w.ids["Bare idea"]!, "task", "alice"),
   },
   {
+    method: "PlanStore.convertTicket",
+    name: "convert a misfiled ticket and its child into ideas, leaving its tracker parent",
+    prep: (w) => {
+      issue(w, "Misfiled parent", { kind: "epic" });
+      issue(w, "Misfiled", { parent: w.ids["Misfiled parent"]! });
+      issue(w, "Misfiled child", { parent: w.ids["Misfiled"]! });
+    },
+    run: (w) => void w.a.store.plan().convertTicket(w.ids["Misfiled"]!, "alice"),
+  },
+  {
+    method: "WorkspaceStore.convertToIdea",
+    name: "number and re-kind a ticket as an idea on its own record",
+    prep: (w) => void issue(w, "Bare ticket"),
+    run: (w) => void w.a.store.convertToIdea(w.ids["Bare ticket"]!, 999_424, "alice"),
+  },
+  {
     method: "PlanStore.adopt",
     name: "adopt existing work",
     prep: (w) => void issue(w, "Adoptable"),

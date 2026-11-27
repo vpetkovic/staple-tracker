@@ -211,10 +211,10 @@ describe("a fresh repo-local `staple init`", () => {
       "index:issues_parent_idx",
       // 026-idea-numbers: the number a promoted idea keeps, looked up by reference.
       "index:issues_plan_idea_number",
-      // 028-plan-ticket-number: the ticket number a converted idea keeps, looked up by reference.
-      "index:issues_plan_ticket_number",
       // 020-plan-fields: the partial index that says planning is on.
       "index:issues_plan_ranked_idx",
+      // 028-plan-ticket-number: the ticket number a converted idea keeps, looked up by reference.
+      "index:issues_plan_ticket_number",
       // 009-projects: the partial index over `issues.project_id`, indexed only
       // over the rows that carry a project.
       "index:issues_project_idx",
