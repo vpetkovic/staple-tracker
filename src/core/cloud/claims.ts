@@ -38,6 +38,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Journal, SyncEntity } from "../journal.js";
 import { moveIdentifier } from "../identifier-moves.js";
+import { nextIdeaNumber, parseIdeaNumber } from "../idea-numbers.js";
 import { newId } from "../ids.js";
 import { nowIso } from "../types.js";
 
@@ -368,6 +369,9 @@ export function closeSettledIdentifierConflicts(db: DatabaseSync): number {
  */
 function freshIdentifier(db: DatabaseSync, given: string): string {
   const base = given.replace(/\+\d+$/, "");
+  // An idea's number gives way to another idea number, from the idea counter (`idea-numbers.ts`).
+  const idea = parseIdeaNumber(base);
+  if (idea) return nextIdeaNumber(db, idea.prefix);
   const dash = base.lastIndexOf("-");
   const prefix = dash < 0 ? base : base.slice(0, dash);
   let next = Number(

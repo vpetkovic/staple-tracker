@@ -666,6 +666,7 @@ const issueShape = {
   cancelledAt: z.string().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
+  ideaNumber: z.string().optional().describe("The permanent idea number, I-<PREFIX>-<n>, on a plan record: an idea's, kept once it is promoted"),
 };
 
 type Equals<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;

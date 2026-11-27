@@ -232,7 +232,7 @@ describe("a maturity that does not change is a no-op", () => {
 
   it("refuses going back to raw in words that say so", () => {
     const ref = idea("Exploring", "exploring");
-    expect(refused(() => plan.update(ref, { maturity: "raw" }, "vp", PERSON)).message).toMatch(/^The idea "Exploring" is exploring; it cannot be moved back to raw\. An exploring idea offers: /);
+    expect(refused(() => plan.update(ref, { maturity: "raw" }, "vp", PERSON)).message).toMatch(/^The idea "Exploring" \(I-TST-\d+\) is exploring; it cannot be moved back to raw\. An exploring idea offers: /);
   });
 });
 

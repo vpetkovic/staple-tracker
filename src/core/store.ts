@@ -2,6 +2,7 @@ import { type ResolvedInstruction, resolveInstructions } from "./instructions.js
 import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { EVENT_ORDER, EVENT_ORDER_DESC, insertEvent } from "./event-log.js";
+import { canonicalIdeaRef, isIdeaNumber, nextIdeaNumber } from "./idea-numbers.js";
 import { RENUMBER_GUARD_MS, aliasedIssueId, removedByRestore, formerHolderOf, formerHolders, formerMove, noteRenumber, recordIdentifierMove, renumbersAcknowledged } from "./identifier-moves.js";
 import { connectionPath } from "./cloud/connection.js";
 import { MemberLens, withEventMembers } from "./cloud/member-lens.js";
@@ -98,7 +99,7 @@ import {
   type KindWithAppearance,
 } from "./kind-appearance.js";
 import { MILESTONE_KIND, MILESTONE_MEMBERSHIP, assertNotReservedActor, isGoalRunGate } from "./milestones.js";
-import { IDEA_KIND, PLAN_KINDS_MISSING_MESSAGE, PLAN_KINDS, assertPlanParent, assertPlanRekind, displayRef, draftIdentifier, isPlanKind, planKindRefusal, steeringRefusal } from "./plan.js";
+import { IDEA_KIND, PLAN_KINDS_MISSING_MESSAGE, PLAN_KINDS, assertPlanParent, assertPlanRekind, displayRef, isPlanKind, planKindRefusal, steeringRefusal } from "./plan.js";
 import { PlanStore } from "./plan-store.js";
 import { ExternalLinkStore } from "./integrations/link-store.js";
 import { LISTED_HORIZON } from "./plan-members.js";
@@ -440,6 +441,8 @@ interface IssueRow {
   updated_at: string;
   /** The status derivation last wrote here; NULL once anything else moved the row (migration 017). */
   derived_status?: string | null;
+  /** The number a promoted idea keeps (migration 026); absent on a database from before it. */
+  plan_idea_number?: string | null;
 }
 
 /** An issue's stored criteria as a list: none stored reads as an empty one. */
@@ -486,7 +489,18 @@ function rowToIssue(row: IssueRow): Issue {
     cancelledAt: row.cancelled_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    ...ideaNumberOf(row),
   };
+}
+
+/**
+ * A plan record's permanent number (`idea-numbers.ts`): an idea's identifier, or the number a
+ * promoted one kept. Only present on a record that has one, so every other issue's shape is as it was.
+ */
+function ideaNumberOf(row: IssueRow): { ideaNumber?: string } {
+  const kept = row.plan_idea_number ?? null;
+  if (kept !== null) return { ideaNumber: kept };
+  return isIdeaNumber(row.identifier) ? { ideaNumber: row.identifier } : {};
 }
 
 interface CommentRow {
@@ -2662,12 +2676,25 @@ export class WorkspaceStore {
       | undefined;
     if (exact) return exact;
     const parsed = parseIdentifier(trimmed) ?? parseIdentifier(`${this.prefix}-${trimmed}`);
-    const canonical = parsed ? `${parsed.prefix}-${parsed.number}` : null;
-    if (canonical !== null) {
-      const row = this.db.prepare("SELECT * FROM issues WHERE identifier = ?").get(canonical) as unknown as
+    const ideaRef = canonicalIdeaRef(trimmed, this.prefix);
+    const canonical = parsed ? `${parsed.prefix}-${parsed.number}` : ideaRef;
+    // `I-5` parses as a ticket of a workspace prefixed `I` too; that one is asked first.
+    for (const spelling of new Set([canonical, ideaRef])) {
+      if (spelling === null) continue;
+      const row = this.db.prepare("SELECT * FROM issues WHERE identifier = ?").get(spelling) as unknown as
         | IssueRow
         | undefined;
       if (row) return row;
+    }
+    /**
+     * The number a promoted idea kept (`idea-numbers.ts`): a record that went on to become an
+     * epic answers to the idea number it had, on every device, before any alias is asked.
+     */
+    if (ideaRef !== null) {
+      const kept = this.db.prepare("SELECT * FROM issues WHERE plan_idea_number = ? ORDER BY created_at, id LIMIT 1").get(ideaRef) as unknown as
+        | IssueRow
+        | undefined;
+      if (kept) return kept;
     }
     /**
      * An identifier this issue used to carry, before sync or a conflict resolution moved
@@ -2675,7 +2702,8 @@ export class WorkspaceStore {
      * `TST-2+1` somebody copied into a handoff stopped naming anything the moment the
      * issue was given its settled number.
      */
-    const aliased = aliasedIssueId(this.db, trimmed.toUpperCase()) ?? (canonical ? aliasedIssueId(this.db, canonical) : null);
+    const aliased =
+      aliasedIssueId(this.db, trimmed.toUpperCase()) ?? (canonical ? aliasedIssueId(this.db, canonical) : null) ?? (ideaRef ? aliasedIssueId(this.db, ideaRef) : null);
     if (aliased) {
       return this.db.prepare("SELECT * FROM issues WHERE id = ?").get(aliased) as unknown as IssueRow | undefined;
     }
@@ -2858,8 +2886,7 @@ export class WorkspaceStore {
        * An idea holds no ticket number until it is promoted: a draft identifier made from its own
        * UUID, which consumes nothing from the counter and is never shown (design/plan.md, "Identity").
        */
-      const draft = kind === IDEA_KIND;
-      const identifier = draft ? draftIdentifier(id) : `${this.prefix}-${this.nextIssueNumber()}`;
+      const identifier = kind === IDEA_KIND ? nextIdeaNumber(this.db, this.prefix) : `${this.prefix}-${this.nextIssueNumber()}`;
       const now = this.journal.mutationAt();
       const row = this.db
         .prepare(
@@ -8942,9 +8969,16 @@ export class WorkspaceStore {
       const row = this.requireRow(issueId);
       const now = this.journal.mutationAt();
       const identifier = `${this.prefix}-${this.nextIssueNumber()}`;
-      this.db.prepare("UPDATE issues SET identifier = ?, kind = ?, updated_at = ? WHERE id = ?").run(identifier, kind, now, row.id);
+      /**
+       * Its idea number stays on the row (`idea-numbers.ts`), written with the move in one
+       * journaled update, so every device that receives the promotion, or hydrates after it,
+       * reads the same number beside the ticket's. The alias below is this device's only.
+       */
+      const kept = row.plan_idea_number ?? (isIdeaNumber(row.identifier) ? row.identifier : null);
+      this.db.prepare("UPDATE issues SET identifier = ?, kind = ?, plan_idea_number = ?, updated_at = ? WHERE id = ?").run(identifier, kind, kept, now, row.id);
       recordIdentifierMove(this.db, { issueId: row.id, from: row.identifier, to: identifier, at: now });
-      this.journal.record({ entity: "issue", entityId: row.id, verb: "update", payload: { identifier, kind, updatedAt: now }, actor: actor ?? null });
+      const keptField = kept !== null && kept !== (row.plan_idea_number ?? null) ? { planIdeaNumber: kept } : {};
+      this.journal.record({ entity: "issue", entityId: row.id, verb: "update", payload: { identifier, kind, ...keptField, updatedAt: now }, actor: actor ?? null });
       this.emitEvent({ kind: "idea_promoted", issueId: row.id, actor, payload: { identifier, kind } });
       return rowToIssue(this.requireRow(row.id));
     });

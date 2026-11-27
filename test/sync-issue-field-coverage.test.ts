@@ -65,6 +65,7 @@ const EXCLUDED: Record<string, string> = {
   plan_delivered_on: "null at create; the person's delivered-outside-the-tracker mark journals it (test/cloud-plan-sync.test.ts)",
   branch: "null at create, and left out of a create while null; `staple branch` journals it (test/ticket-branch.test.ts)",
   base_commit: "as branch",
+  plan_idea_number: "null at create; promotion journals the number a promoted idea keeps, and the plan layer journals a legacy record's (test/cloud-idea-numbers.test.ts)",
 };
 
 function armed(): WorkspaceStore {

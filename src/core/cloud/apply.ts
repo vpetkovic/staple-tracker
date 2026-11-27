@@ -50,6 +50,7 @@ import { criterionMarkFromValue, criterionMarkPosition, criterionMarkValue } fro
 import { planLinkFromValue, planLinkIssue, writePlanLink } from "../plan-links.js";
 import { planRowFromValue, planRowId, writePlanRow } from "../plan-rows.js";
 import { isDraftIdentifier } from "../plan.js";
+import { advanceIdeaNumber, isIdeaNumber } from "../idea-numbers.js";
 import { writeCriterionMark } from "../milestone-marks.js";
 import { rederiveSubtreeDepths } from "../tree-depth.js";
 import { MAX_TREE_DEPTH } from "../types.js";
@@ -168,6 +169,8 @@ export const ISSUE_FIELDS: Record<string, Column> = {
   // The branch the work lives on and the commit it was cut from (migration 024, ticket-branch.ts).
   branch: col("branch"),
   baseCommit: col("base_commit"),
+  // The number a promoted idea keeps (migration 026, idea-numbers.ts).
+  planIdeaNumber: col("plan_idea_number"),
 };
 
 /**
@@ -189,6 +192,7 @@ export const SPARSE_ISSUE_FIELDS: ReadonlySet<string> = new Set([
   "planDeliveredOn",
   "branch",
   "baseCommit",
+  "planIdeaNumber",
 ]);
 
 export const COMMENT_FIELDS: Record<string, Column> = {
@@ -818,6 +822,8 @@ function applyIssue(db: DatabaseSync, input: ApplyInput): boolean {
       : null;
     // A settlement that lost its number to an earlier claim carries nothing else to write.
     if (values.size > 0) updateRow(db, "issues", "id", input.entityId, [...values]);
+    // A promoted idea's kept number is one the idea counter must pass too (`idea-numbers.ts`).
+    if (values.has("plan_idea_number")) advanceIdeaNumber(db, values.get("plan_idea_number"));
     if (values.has("parent_id")) {
       // A move: the subtree's depth follows the moved row's, as on the device that moved it.
       rederiveSubtreeDepths(db, input.entityId);
@@ -1129,6 +1135,7 @@ function insertIssue(db: DatabaseSync, input: ApplyInput, pairs: Array<[string, 
   ).run(...(([...values.values()] as never[]) satisfies never[]));
 
   advanceIssueNumber(db, values.get("identifier") as string);
+  advanceIdeaNumber(db, values.get("plan_idea_number"));
 }
 
 /**
@@ -1175,6 +1182,11 @@ function deriveIssueColumns(db: DatabaseSync, values: Map<string, unknown>, inse
  * not exist yet. See {@link provisionalIdentifier}.
  */
 function advanceIssueNumber(db: DatabaseSync, identifier: string): void {
+  // An idea's number has its own counter (`idea-numbers.ts`).
+  if (isIdeaNumber(identifier)) {
+    advanceIdeaNumber(db, identifier);
+    return;
+  }
   const dash = identifier.lastIndexOf("-");
   if (dash < 0) return;
   const number = Number(identifier.slice(dash + 1));
@@ -1369,7 +1381,7 @@ function displaceIdentifierHolder(
    * stand-in a create would, on the record until the promoting device settles it.
    */
   const current = identifierOf(db, input.entityId);
-  if (!decision && current !== null && isDraftIdentifier(current)) {
+  if (!decision && current !== null && (isDraftIdentifier(current) || (isIdeaNumber(current) && !isIdeaNumber(incoming[1])))) {
     const provisional = provisionalIdentifier(db, incoming[1], claimSeqOf(input, ["identifier"]));
     recordIdentifierConflict(db, input, incoming[1], provisional);
     pairs[index] = ["identifier", provisional];

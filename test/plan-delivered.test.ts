@@ -103,7 +103,7 @@ describe("the person marks an idea delivered outside the tracker", () => {
     mark(id, "2026-11-01");
     const after = store.createIssue({ title: "After" }).identifier;
     expect([before, after]).toEqual(["TST-3", "TST-4"]);
-    expect(store.getIssue(id).identifier).toMatch(/^~/);
+    expect(store.getIssue(id).identifier).toMatch(/^I-[A-Z]+-\d+$/);
     expect(store.db.prepare("SELECT COUNT(*) AS n FROM plan_members WHERE issue_id = ?").get(id)).toEqual({ n: 0 });
     expect(store.milestones().get(now().identifier).members.some((member) => member.issueId === id)).toBe(false);
     expect(() => store.queue().enqueue(id, {}, "agent")).toThrow(/is an idea/);

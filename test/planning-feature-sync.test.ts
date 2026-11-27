@@ -20,7 +20,7 @@ it("the person flag reaches another device and changes its plan writes without d
     expect(b.store.planningOn()).toBe(false);
     expect(() => b.store.plan().capture({ title: "Hidden" }, "worker")).toThrow(/Planning is off/);
     expect(b.store.listIssues({ includeResolved: true }).some(i => i.id === idea.id)).toBe(false);
-    expect(b.store.getIssue(idea.id).identifier).toMatch(/^~/);
+    expect(b.store.getIssue(idea.id).identifier).toMatch(/^I-[A-Z]+-\d+$/);
     a.use();
     a.store.setSetting("features.planning", true, "Larkspur owner", { via: "settings" });
     await a.sync(); await b.sync();

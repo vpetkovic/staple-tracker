@@ -41,7 +41,7 @@ describe("experimental planning workspace flag", () => {
     expect(() => store.queue().enqueue(idea.id, {}, "agent")).toThrow();
     expect(() => store.updateIssue(idea.id, { kind: "task" }, "agent")).toThrow();
     expect(() => store.createIssue({ title: "Bypass", kind: "idea", createdBy: "agent" })).toThrow(OFF);
-    expect(store.getIssue(idea.id).identifier).toMatch(/^~/);
+    expect(store.getIssue(idea.id).identifier).toMatch(/^I-[A-Z]+-\d+$/);
     expect(store.queue().effectiveQueue().rows.some(row => row.issueId === idea.id)).toBe(false);
     store.db.close();
   });

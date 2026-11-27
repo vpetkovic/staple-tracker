@@ -101,7 +101,7 @@ describe("the shaped gate", () => {
   it("refuses shaping, from raw or exploring, until the plan has what it needs, naming it", () => {
     const raw = plan.capture({ title: "Thin" }, "agent").id;
     expect(refused(() => plan.update(raw, { maturity: "shaped" }, "vp", PERSON))).toBe(
-      'The idea "Thin" cannot be marked shaped yet: it needs a goal, a task breakdown and acceptance criteria before it is shaped.',
+      'The idea "Thin" (I-TST-1) cannot be marked shaped yet: it needs a goal, a task breakdown and acceptance criteria before it is shaped.',
     );
     plan.update(raw, { maturity: "exploring" }, "vp", PERSON);
     plan.update(raw, { plan: { ...PLAN, breakdown: [{ ...PLAN.breakdown![0]!, title: "" }] } }, "agent");

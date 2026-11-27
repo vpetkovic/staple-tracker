@@ -48,6 +48,7 @@ async function http(path: string, body?: Record<string, unknown>) {
 interface Idea {
   id: string;
   identifier: string | null;
+  number: string | null;
   promoted: boolean;
   title: string;
   maturity: string;
@@ -109,11 +110,12 @@ describe("the plan on every surface", () => {
     const fromMcp = toolPayload(await mcpCall("list_ideas", {})) as Plan;
     const fromHttp = (await http(`/api/plan?ws=${WS}`)).body as unknown as Plan;
     for (const idea of fromCli.ideas) ids[idea.title] = idea.id;
-    const shape = (plan: Plan) => plan.ideas.map((idea) => [idea.title, idea.identifier, idea.maturity, idea.stage]);
+    const shape = (plan: Plan) => plan.ideas.map((idea) => [idea.title, idea.identifier, idea.number, idea.maturity, idea.stage]);
+    // No ticket number, and each its own idea number in capture order, whichever surface captured it.
     expect(shape(fromCli)).toEqual([
-      ["From the CLI", null, "raw", "raw"],
-      ["From MCP", null, "raw", "raw"],
-      ["From the page", null, "shaped", "shaped"],
+      ["From the CLI", null, "I-PLA-1", "raw", "raw"],
+      ["From MCP", null, "I-PLA-2", "raw", "raw"],
+      ["From the page", null, "I-PLA-3", "shaped", "shaped"],
     ]);
     // Captures took no ticket number: the next issue is the one after the epic and the two horizons.
     const next = (await cliJson("new", "Next ticket")) as { identifier: string };
@@ -128,12 +130,14 @@ describe("the plan on every surface", () => {
     const tasks = toolPayload(await mcpCall("list_tasks", {})) as { items: Array<{ identifier: string; title: string }> };
     expect(tasks.items.map((task) => task.identifier)).not.toContain(null);
     for (const title of ["From the CLI", "From MCP", "From the page"]) expect(tasks.items.map((task) => task.title)).not.toContain(title);
-    // The shared drawer's payload for an idea: no number (null, draft), its plan, never the stored key.
-    const drawer = await http(`/api/issue?ws=${WS}&ref=${ref("From the page")}`);
-    expect(drawer.status).toBe(200);
-    expect(JSON.stringify(drawer.body)).not.toMatch(/~[0-9a-f]{32}/);
-    expect(drawer.body.issue).toMatchObject({ id: ref("From the page"), identifier: null, draft: true });
-    expect(drawer.body.planRecord).toMatchObject({ idea: { id: ref("From the page"), state: "shaped", identifier: null } });
+    // The shared drawer's payload for an idea, by its id or its number: its idea number, no ticket number in the plan's view.
+    for (const drawerRef of [ref("From the page"), "I-PLA-3", "i-3"]) {
+      const drawer = await http(`/api/issue?ws=${WS}&ref=${drawerRef}`);
+      expect(drawer.status).toBe(200);
+      expect(JSON.stringify(drawer.body)).not.toMatch(/~[0-9a-f]{32}/);
+      expect(drawer.body.issue).toMatchObject({ id: ref("From the page"), identifier: "I-PLA-3", ideaNumber: "I-PLA-3" });
+      expect(drawer.body.planRecord).toMatchObject({ idea: { id: ref("From the page"), state: "shaped", identifier: null, number: "I-PLA-3" } });
+    }
     const now = (fromCli.horizons[0] as { identifier: string; id: string });
     const horizonDrawer = await http(`/api/issue?ws=${WS}&ref=${now.identifier}`);
     expect(horizonDrawer.body.horizonPlan).toMatchObject({ horizon: { id: now.id, state: "planned" } });
@@ -247,7 +251,7 @@ describe("the plan on every surface", () => {
   });
 });
 
-describe("no surface shows an unpromoted idea's draft identifier", () => {
+describe("every surface shows an unpromoted idea's number, resolves it, and never shows a draft identifier", () => {
   const DRAFT = /~[0-9a-f]{32}/;
 
   /** Every object in a JSON value that describes the given issue. */
@@ -264,7 +268,7 @@ describe("no surface shows an unpromoted idea's draft identifier", () => {
   it("walks the CLI, the MCP tools and the HTTP routes that print or serialize an issue", async () => {
     const madeText = await cli("new", "Captured through new", "--kind", "idea", "--ws", WS);
     expect(madeText.status, madeText.stderr).toBe(0);
-    const made = (await cliJson("new", "Captured through new, as JSON", "--kind", "idea")) as { id: string };
+    const made = (await cliJson("new", "Captured through new, as JSON", "--kind", "idea")) as { id: string; identifier: string };
     const id = made.id;
     const texts: Array<[string, string]> = [["cli new", madeText.stdout]];
     const documents: Array<[string, unknown]> = [["cli new --json", made]];
@@ -307,12 +311,25 @@ describe("no surface shows an unpromoted idea's draft identifier", () => {
     for (const [where, text] of texts) expect(DRAFT.test(text), `${where} shows a draft: ${text.match(DRAFT)?.[0]}`).toBe(false);
     const described = documents.flatMap(([where, document]) => issueObjects(document, id).map((issue) => [where, issue] as const));
     expect(described.map(([where]) => where)).toEqual(expect.arrayContaining(["cli new --json", "cli show --json", "cli ls --kind idea --json", "cli idea show --json", "mcp get_task", `http /api/issue?ws=${WS}&ref=${id}`]));
-    // An issue says it is a draft; the plan's own view of an idea says so as `promoted: false`.
+    // An issue's identifier is its idea number; the plan's own view of an idea has no ticket number and names its number.
+    const number = made.identifier;
+    expect(number).toMatch(/^I-PLA-\d+$/);
     for (const [where, issue] of described) {
-      const flag = "promoted" in issue ? { promoted: issue.promoted } : { draft: issue.draft };
-      expect({ where, identifier: issue.identifier, ...flag }).toEqual({ where, identifier: null, ...("promoted" in issue ? { promoted: false } : { draft: true }) });
+      const seen = "promoted" in issue ? { identifier: issue.identifier, number: issue.number, promoted: issue.promoted } : { identifier: issue.identifier, draft: issue.draft };
+      expect({ where, ...seen }).toEqual({ where, ...("promoted" in issue ? { identifier: null, number, promoted: false } : { identifier: number, draft: undefined }) });
     }
-    // The text names it by its id.
-    expect(texts.find(([where]) => where === "cli show")?.[1]).toContain(id);
+    // Every surface finds it by that number, in any case.
+    expect(((await cliJson("show", number.toLowerCase())) as { issue: { id: string } }).issue.id).toBe(id);
+    expect(((await cliJson("idea", "show", number)) as { idea: { id: string } }).idea.id).toBe(id);
+    for (const [tool, args] of [["get_task", { ref: number }], ["show_ticket", { ref: number.toLowerCase() }], ["get_idea", { ref: number }]] as const) {
+      const found = await mcpCall(tool, args);
+      expect(found.isError, `${tool}: ${JSON.stringify(found.content)}`).toBeFalsy();
+      expect(JSON.stringify(found), tool).toContain(tool === "show_ticket" ? number : id);
+    }
+    const byNumber = await fetch(`${origin}/api/issue?ws=${WS}&ref=${number}`, { headers: { "x-staple-token": token } });
+    expect(((await byNumber.json()) as { issue: { id: string } }).issue.id).toBe(id);
+    // The text names it by its number.
+    expect(texts.find(([where]) => where === "cli show")?.[1]).toContain(number);
+
   });
 });

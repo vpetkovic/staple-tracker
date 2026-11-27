@@ -501,6 +501,12 @@ export interface Issue {
   cancelledAt: string | null;
   createdAt: string;
   updatedAt: string;
+  /**
+   * A plan record's permanent idea number, `I-<PREFIX>-<n>` (`idea-numbers.ts`): an idea's
+   * identifier, kept once it is promoted and its identifier is the ticket number. Absent on
+   * every issue that never was an idea.
+   */
+  ideaNumber?: string;
 }
 
 // ---------- projects (migration 009) ----------
