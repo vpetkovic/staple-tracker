@@ -167,31 +167,35 @@ export function CostSetupDialog({ open, onOpenChange, view, cost }: { open: bool
           <SavedWhere cost={cost} className="min-w-0 flex-1 basis-56" />
           <div className="flex items-center gap-2">
             {confirmReset ? (
-              <span role="group" aria-label="Reset both profiles" className="flex flex-wrap items-center gap-1.5 text-body" data-reset-confirm>
+              // The question takes the row to itself, so Done is never beside a half-answered reset.
+              <span role="group" aria-label="Reset both profiles" className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1.5 text-body" data-reset-confirm>
                 <span className="text-muted-foreground">Clear every figure in both profiles?</span>
-                <button
-                  type="button"
-                  autoFocus
-                  onClick={() => {
-                    setConfirmReset(false);
-                    cost.apply(resetProfiles());
-                  }}
-                  className="focus-ring h-control-md min-h-0 rounded-md border border-[var(--plain-risk-border)] px-2.5 text-body font-medium text-[var(--plain-risk-fg)] hover:bg-[var(--plain-risk-bg)]"
-                >
-                  Reset
-                </button>
-                <button type="button" onClick={() => setConfirmReset(false)} className="focus-ring h-control-md min-h-0 rounded-md px-2.5 text-body text-muted-foreground hover:bg-surface-hover hover:text-foreground">
-                  Keep
-                </button>
+                <span className="inline-flex items-center gap-1.5">
+                  <button type="button" autoFocus onClick={() => setConfirmReset(false)} className="focus-ring h-control-md min-h-0 rounded-md border px-2.5 text-body font-medium hover:bg-surface-hover">
+                    Keep
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setConfirmReset(false);
+                      cost.apply(resetProfiles());
+                    }}
+                    className="focus-ring h-control-md min-h-0 rounded-md border border-[var(--plain-risk-border)] px-2.5 text-body font-medium text-[var(--plain-risk-fg)] hover:bg-[var(--plain-risk-bg)]"
+                  >
+                    Reset
+                  </button>
+                </span>
               </span>
             ) : (
-              <button type="button" onClick={() => setConfirmReset(true)} className="focus-ring h-control-md min-h-0 rounded-md px-2.5 text-body text-muted-foreground hover:bg-surface-hover hover:text-foreground" data-reset>
-                Reset both profiles
-              </button>
+              <>
+                <button type="button" onClick={() => setConfirmReset(true)} className="focus-ring h-control-md min-h-0 rounded-md px-2.5 text-body text-muted-foreground hover:bg-surface-hover hover:text-foreground" data-reset>
+                  Reset both profiles
+                </button>
+                <button type="button" onClick={() => onOpenChange(false)} className="focus-ring h-control-md min-h-0 rounded-md bg-primary px-3 text-body font-medium text-primary-foreground">
+                  Done
+                </button>
+              </>
             )}
-            <button type="button" onClick={() => onOpenChange(false)} className="focus-ring h-control-md min-h-0 rounded-md bg-primary px-3 text-body font-medium text-primary-foreground">
-              Done
-            </button>
           </div>
         </div>
       </DialogContent>
