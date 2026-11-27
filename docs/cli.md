@@ -213,6 +213,7 @@ need `--person`, which records the change under `humanName`.
 | `staple idea task <ref> add\|set\|rm <key>` | One breakdown row: title, `--estimate`, `--depends`, `--acceptance`, `--owner`, `--notes`. |
 | `staple idea import <plan.md>` | Capture an idea from a plan file, with `--parent`, `--horizon`, `--maturity`; prints what it kept in Context instead of its section. |
 | `staple idea defer <ref> <n>` | Leave question `n` open on purpose; it no longer holds shaping back. |
+| `staple idea convert <ref>` | A ticket that should have been an idea becomes a raw idea on the same record: its comments, documents, files and history stay, it takes the next idea number, and its ticket number still names it. Its children become its sub-ideas; a parent that is tracker work is left. Refused, naming every reason, when it or anything under it is checked out, was started, is done or cancelled, blocks or waits on other work, is queued, is in a milestone or is linked to an idea. |
 | `staple idea adopt <ref> <issue> [--research]` / `unlink` | Link existing work, or remove a link (work or research). `--research` links the issue as research or a POC: it shows in the idea's own research list and does not start the idea or count toward its progress or horizon. |
 | `staple idea ask` / `resolve <ref> <n>` / `decide` | Add a question, resolve question `n`, record a decision. |
 | `staple idea reset-baseline <ref> --person` | The current planned window becomes the baseline. |

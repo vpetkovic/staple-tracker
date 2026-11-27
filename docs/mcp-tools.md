@@ -58,7 +58,7 @@ The loop an agent follows, described in
 
 ## Planning
 
-The idea and horizon tools (`list_ideas` through `unlink_idea`) belong to
+The idea and horizon tools (`list_ideas` through `convert_to_idea`) belong to
 [experimental planning](plan.md). They refuse until a person turns on `features.planning`,
 which an agent reads with `get_setting` and cannot change.
 
@@ -98,6 +98,7 @@ epic.
 | `start_idea` | Promote an idea to an epic in place, adopt an issue, or link one as research or a POC (`research`: listed apart, does not start the idea or count as its delivery) | `staple idea promote`, `adopt`, `adopt --research` | yes |
 | `scaffold_idea` | Preview an idea's epic and its tasks from the breakdown, then create exactly that preview, named by its `fingerprint` | `staple idea scaffold` | yes |
 | `unlink_idea` | Remove a link from an idea, work or research | `staple idea unlink` | yes |
+| `convert_to_idea` | Turn an unstarted ticket that should have been an idea into a raw idea on the same record, its children into sub-ideas; its ticket number still names it (`ticketNumber` on the issue). Refused, with every reason, when anything in it is claimed, started or depended on | `staple idea convert` | yes |
 
 ## Autopilot runs
 
