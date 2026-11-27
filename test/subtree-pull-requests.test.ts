@@ -109,6 +109,24 @@ describe("a parent's subtree pull requests", () => {
     store.db.close();
   });
 
+  it("keeps children made in the same millisecond in the order they were made", () => {
+    const { store, link } = setup();
+    const epic = store.createIssue({ title: "Epic" });
+    const first = store.createIssue({ title: "First", parent: epic.id });
+    // Make later children until one's id sorts before the first's, so an id tie-break would flip them.
+    let made = 1;
+    let last = store.createIssue({ title: `Later ${made}`, parent: epic.id });
+    while (last.id > first.id) last = store.createIssue({ title: `Later ${++made}`, parent: epic.id });
+    store.db.prepare("UPDATE issues SET created_at = ? WHERE parent_id = ?").run("2026-11-27T00:00:00.000Z", epic.id);
+    link(first.identifier, 60);
+    link(last.identifier, 61);
+    expect(keysOf(subtreePullRequests(store, epic.id))).toEqual([
+      ["team/repo#60", false, [first.identifier]],
+      ["team/repo#61", false, [last.identifier]],
+    ]);
+    store.db.close();
+  });
+
   it("reads any number of parents in the same few queries as one, never one per child", () => {
     const { store, link } = setup();
     const small = store.createIssue({ title: "Small" });
