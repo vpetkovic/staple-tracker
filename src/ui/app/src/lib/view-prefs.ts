@@ -63,7 +63,7 @@
  * Unlike `parent`, the id and the label agree here: the axis reads `issue.kind` and the
  * header says "Kind". There was no common case to name it after and no lie available.
  */
-import { emptyFilters, retainDimensionValues, type FilterState } from "./filters";
+import { emptyFilters, retainDimensionValues, withDimension, type FilterState } from "./filters";
 import {
   DEFAULT_SORT,
   isSortDirection,
@@ -270,6 +270,21 @@ export function withFiltersForScope(
   next: FilterState,
 ): Record<string, FilterState> {
   return { ...filters, [scope]: next };
+}
+
+/**
+ * One scope's project selection replaced, every other filter in it kept: the rail's project
+ * row narrows Tasks to `[id]`, and its Tasks row (`[]`) shows every task again. The scope's
+ * current filters are read the way the page reads them, the legacy fallback included, so
+ * clearing the project from a scope nobody has filtered in yet keeps the rest of that set.
+ */
+export function withScopeProjects(
+  filters: Readonly<Record<string, FilterState>>,
+  scope: string,
+  fallback: FilterState,
+  projects: readonly string[],
+): Record<string, FilterState> {
+  return withFiltersForScope(filters, scope, withDimension(filtersForScope(filters, scope, fallback), "project", projects));
 }
 
 /**

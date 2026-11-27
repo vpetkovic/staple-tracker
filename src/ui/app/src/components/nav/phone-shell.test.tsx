@@ -37,6 +37,7 @@ function session(over: Partial<StapleSession> = {}): StapleSession {
     openHorizon: noop,
     projects: { data: [], error: undefined, loading: false, reload: noop },
     focusProject: noop,
+    showAllTasks: noop,
     ws: "",
     setWs: noop,
     issues: { data: [], error: undefined, loading: false, reload: noop },

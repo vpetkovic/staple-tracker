@@ -219,7 +219,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw failure;
   }
 
-  const body = (await res.json().catch(() => ({}))) as unknown;
+  const body = (await res.json().catch((error: unknown) => {
+    // A body cut off by the request's own abort or timeout is a failed request, not an empty
+    // answer; only a body that is not JSON reads as `{}`.
+    if (init?.signal?.aborted) throw error;
+    return {};
+  })) as unknown;
   if (!res.ok) throw new ApiError(res.status, body as Partial<ErrorEnvelope>);
   return body as T;
 }
@@ -237,7 +242,7 @@ const qs = (params: Record<string, string | number | undefined>): string => {
 
 export const getBootstrap = () => request<Bootstrap>("/api/bootstrap");
 
-export const getPoll = () => request<Poll>("/api/poll");
+export const getPoll = (signal?: AbortSignal) => request<Poll>("/api/poll", { signal });
 
 /**
  * This machine's cloud state — the same `CloudSurfaceReport` the CLI prints and
