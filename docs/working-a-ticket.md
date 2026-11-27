@@ -104,8 +104,10 @@ when a section has nothing to report. `staple doc APP-1 worklog --put worklog.md
 
 The worklog is what makes a ticket resumable. It is written after every step, not
 at the end, because the events that end a session early (a usage limit, a killed
-terminal) are the same ones that stop a summary being written. See
-[Handoff and resume](handoff.md).
+terminal) are the same ones that stop a summary being written. While the holder's
+worklog is missing, incomplete or an hour behind its work, its comments and other progress
+writes answer with a `worklog` reminder, and handing the ticket on (step 5) is refused
+until it is current. See [Handoff and resume](handoff.md).
 
 **5. Finish with evidence.** `staple done` (MCP `update_task` with status `done`) closes
 the ticket with a note of what was run and what passed:

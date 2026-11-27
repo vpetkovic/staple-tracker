@@ -30,6 +30,21 @@ protocol (see [How an agent works a ticket](working-a-ticket.md)) leave two thin
 Both must be written before the interruption, because an interruption gives no warning.
 A summary planned for the end of the session never gets written.
 
+Staple holds the holder to it, through the CLI and MCP alike:
+
+- While the holder's worklog is missing (nothing written since it took the ticket; a
+  previous holder's does not count), incomplete (Done, Next or Files touched empty) or
+  behind (the holder has kept writing on the ticket for an hour since it; silence such
+  as a long build or a usage-limit pause does not count), its checkout, comments,
+  documents and attempt milestones answer with a `worklog` field (and a `worklog …`
+  line on stderr in the terminal) that says so and gives the checkpoint command.
+- The holder handing the ticket on (any move out of active work, to review, done,
+  blocked, todo or backlog, and a release) is refused with exit 2 `validation` until
+  its worklog is current. A cancel is not checked. Neither is anyone who is not the
+  holder: a person closing an agent's ticket, or freeing a silent holder's claim with
+  `release --if-stale`. A person who claimed the ticket through the CLI or MCP is its
+  holder and checkpoints like an agent; the web UI's actions are not checked.
+
 ## 2. See which claims have gone quiet
 
 `staple ls` and `staple show` print how long each claim has been held, and how long

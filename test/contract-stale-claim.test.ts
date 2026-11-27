@@ -27,6 +27,7 @@ vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
 import { openDb } from "../src/core/db.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
 import {
+  checkpointArgs,
   cliEnvelope,
   mcpEnvelope,
   runCliAsync,
@@ -303,6 +304,8 @@ describe("a dead holder can be taken over, explicitly, on every surface", () => 
     const stolen = await newHeldTask("Event shape steal");
     backdate(stolen, 7200);
     expect((await cli("start", stolen, "--ws", WS, "--steal-if-stale", "30m")).status).toBe(0);
+    // The thief now holds it, so its release is its own handoff and wants a worklog first.
+    expect((await cli(...checkpointArgs(stolen), "--ws", WS)).status).toBe(0);
     expect((await cli("release", stolen, "--ws", WS, "--if-stale", "0")).status).toBe(0);
 
     const events = (await cli("events", "--ws", WS, "--json"))

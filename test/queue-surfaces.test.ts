@@ -22,6 +22,7 @@ import {
   cliEnvelope,
   mcpEnvelope,
   normalize,
+  checkpointArgs,
   runCliAsync,
   startMcpClient,
   toolPayload,
@@ -331,6 +332,7 @@ describe("strict refuses the same way on every surface", () => {
     );
 
     // The MCP twin: override_reason on checkout_task, on a different row.
+    expect((await cli(...checkpointArgs("QUE-4"), "--ws", WS)).status).toBe(0);
     expect((await cli("release", "QUE-4", "--ws", WS)).status).toBe(0);
     const viaMcp = await mcp.call("checkout_task", {
       ws: WS,
@@ -340,6 +342,7 @@ describe("strict refuses the same way on every surface", () => {
     });
     expect(viaMcp.isError).toBeFalsy();
     // …and the HTTP twin, which is the UI's confirm dialog.
+    expect((await cli(...checkpointArgs("QUE-4"), "--ws", WS)).status).toBe(0);
     expect((await cli("release", "QUE-4", "--ws", WS)).status).toBe(0);
     const { status } = await http("/api/action", {
       type: "checkout",
@@ -348,6 +351,7 @@ describe("strict refuses the same way on every surface", () => {
       overrideReason: "third surface",
     });
     expect(status).toBe(200);
+    expect((await cli(...checkpointArgs("QUE-4"), "--ws", WS)).status).toBe(0);
     expect((await cli("release", "QUE-4", "--ws", WS)).status).toBe(0);
   });
 });
@@ -456,6 +460,7 @@ describe("fresh pickup contract", () => {
     expect(next).toMatchObject({ identifier: "QUE-5", kind: "task", eligibility: "eligible", claim: null });
     const viaMcp = await mcp.call("checkout_task", { ws: WS, ref: next.identifier, actor: "agent-1" });
     expect(viaMcp.isError, JSON.stringify(viaMcp.content)).toBeFalsy();
+    expect((await cli(...checkpointArgs(next.identifier), "--agent", "agent-1", "--ws", WS)).status).toBe(0);
     expect((await cli("release", next.identifier, "--agent", "agent-1", "--ws", WS)).status).toBe(0);
     expect((await cli("checkout", next.identifier, "--agent", "agent-1", "--ws", WS)).status).toBe(0);
     // Checkout keeps its separate crash-recovery contract.

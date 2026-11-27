@@ -112,6 +112,7 @@ async function task(done = false): Promise<string> {
   const made = toolPayload(await mcpCall("create_task", { title: unique("Task") })) as { identifier: string };
   if (done) {
     await mcpCall("checkout_task", { ref: made.identifier });
+    await mcpCall("checkpoint", { ref: made.identifier, done: "Did the work.", next: "none", filesTouched: "none" });
     await mcpCall("update_task", { ref: made.identifier, status: "done" });
   }
   return made.identifier;
@@ -144,6 +145,7 @@ async function promotedFixture(state: "started" | "shipped"): Promise<{ id: stri
   if (state === "shipped") {
     const made = toolPayload(await mcpCall("create_task", { title: unique("Its task"), parent: identifier })) as { identifier: string };
     await mcpCall("checkout_task", { ref: made.identifier });
+    await mcpCall("checkpoint", { ref: made.identifier, done: "Did the work.", next: "none", filesTouched: "none" });
     await mcpCall("update_task", { ref: made.identifier, status: "done" });
   }
   return { id, identifier };
@@ -516,6 +518,7 @@ describe("the horizon lifecycle on every surface", () => {
       if (state === "shipped") {
         // Its work landing is what closes the milestone, as for any milestone.
         await mcpCall("checkout_task", { ref: work });
+        await mcpCall("checkpoint", { ref: work, done: "Did the work.", next: "none", filesTouched: "none" });
         await mcpCall("update_task", { ref: work, status: "done" });
       }
     }

@@ -364,9 +364,14 @@ If you hold a worker attempt and an orchestrator attempt on the same issue, pass
 Keep a document keyed \`worklog\` on every task you hold, and **revise it at every
 milestone**, not at the end.
 
-Automated runs check the latest worklog before accepting a handoff. It must
-have been written during the current session (or tenure for an interactive
-run), with content under Done, Next, and Files touched. Write "none" when a
+Handing on is checked, in a run or not. While you hold the ticket, moving it out
+of active work (to review, done, blocked, todo or backlog; a cancel is exempt),
+or releasing it, is refused (exit 2, \`validation\`) until the worklog was
+written since you took it, has content under Done, Next and Files touched, and
+you have not kept working for an hour past it. Your comments, documents and
+milestones answer with a \`worklog\` field (a \`worklog …\` line on stderr in
+the terminal) while it is not: checkpoint then, not at the end. Automated runs
+also require it to be written during the current session. Write "none" when a
 section has nothing to report. Comments alone do not satisfy this check.
 
 \`\`\`bash

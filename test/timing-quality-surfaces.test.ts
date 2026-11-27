@@ -15,7 +15,7 @@ import { writeEventRow } from "../src/core/event-row.js";
 import { setClock } from "../src/core/types.js";
 import { resolveWorkspace } from "../src/core/workspace.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
-import { CONTRACT_AGENT, runCliAsync, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
+import { CONTRACT_AGENT, checkpointArgs, runCliAsync, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
 
 const WS = "quality";
 let home: string;
@@ -62,6 +62,7 @@ beforeAll(async () => {
   for (const name of ["quick", "quicker"]) {
     refs[name] = await mint(name, "--parent", epic, "--estimate", "1h");
     expect((await cli("checkout", refs[name]!, "--ws", WS)).status).toBe(0);
+    expect((await cli(...checkpointArgs(refs[name]!), "--ws", WS)).status).toBe(0);
     expect((await cli("done", refs[name]!, "--ws", WS)).status).toBe(0);
   }
   refs.skipped = await mint("skipped", "--parent", epic, "--kind", "bug");

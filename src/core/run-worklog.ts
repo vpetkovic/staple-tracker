@@ -11,10 +11,14 @@ export function checkpointedSince(store: WorkspaceStore, issueId: string, since:
     throw error;
   }
   if (!(Date.parse(document.createdAt) >= Date.parse(since))) return false;
-  // Check the required handoff sections, without trying to judge the agent's prose.
+  return hasHandoffSections(document.body);
+}
+
+/** Content under Done, Next and Files touched, without trying to judge the agent's prose. */
+export function hasHandoffSections(body: string): boolean {
   const sections = new Map<string, string[]>();
   let current: string[] | undefined;
-  for (const line of document.body.split(/\r?\n/)) {
+  for (const line of body.split(/\r?\n/)) {
     const heading = /^#{1,6}\s+(.+?)\s*#*\s*$/.exec(line);
     if (heading) {
       current = [];

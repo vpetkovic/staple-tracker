@@ -12,7 +12,7 @@
 import { spawn } from "node:child_process";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CLI_ENTRY, REPO_ROOT, TSX_CLI, bareEnv, removeDir, tempDir } from "./fixtures/characterize-support.js";
-import { mcpEnvelope, normalize, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
+import { checkpointArgs, mcpEnvelope, normalize, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
 import { spawnAsync } from "./fixtures/spawn-async.js";
 
 let home: string;
@@ -173,8 +173,10 @@ describe("run continue, driven through the CLI as a driver loop drives it", () =
     expect(await next(who)).toMatchObject({ action: "take", ref: x1, resumed: false });
     expect((await cli("show", x1!)).json).toMatchObject({ issue: { checkoutAgent: who } });
     expect(await next(who)).toMatchObject({ action: "take", ref: x1, resumed: true });
+    expect((await cliAs(who, ...checkpointArgs(x1!))).status).toBe(0);
     expect((await cliAs(who, "status", x1!, "in_review")).status).toBe(0);
     expect(await next(who)).toMatchObject({ action: "take", ref: x2, recorded: { ref: x1, outcome: "done", source: "attempt" } });
+    expect((await cliAs(who, ...checkpointArgs(x2!))).status).toBe(0);
     expect((await cliAs(who, "status", x2!, "in_review")).status).toBe(0);
     // Both in review: nothing to take, but the scope is not empty.
     expect(await next(who)).toMatchObject({ action: "wait", reason: "waiting_on_others", retryAfterSeconds: 60, recorded: { ref: x2, outcome: "done" } });
@@ -211,6 +213,7 @@ describe("run continue, driven through the CLI as a driver loop drives it", () =
     const first = await next("drv-tickets");
     // A failed ticket is retried once without spending the budget; a finished one spends it.
     expect(await next("drv-tickets", "--outcome", "failed", "--reason", "x")).toMatchObject({ action: "take", ref: first.ref });
+    expect((await cliAs("drv-tickets", ...checkpointArgs(String(first.ref)))).status).toBe(0);
     expect((await cliAs("drv-tickets", "status", String(first.ref), "in_review")).status).toBe(0);
     expect(await next("drv-tickets")).toMatchObject({ action: "stop", reason: "budget", detail: { budget: "tickets", maxTickets: 1 } });
 
@@ -243,6 +246,7 @@ describe("run continue, driven through the CLI as a driver loop drives it", () =
     const blocked = await epicWith("Blocked", 2);
     await cliAs("drv-block", "run", "start", "--scope", blocked.epic);
     const taken = await next("drv-block");
+    expect((await cliAs("drv-block", ...checkpointArgs(String(taken.ref)))).status).toBe(0);
     expect((await cliAs("drv-block", "block", String(taken.ref), "--owner", "VP", "--action", "decide")).status).toBe(0);
     expect(await next("drv-block")).toMatchObject({ action: "stop", reason: "vp_blocked", recorded: { ref: taken.ref, outcome: "failed" } });
   }, 120_000);
@@ -282,6 +286,7 @@ describe("run continue, driven through the CLI as a driver loop drives it", () =
     // Handed on before the stop, it is the continue that settles it, answering the run's reason.
     const again = await cliAs(who, "run", "start", "--scope", scope);
     const second = await next(who);
+    expect((await cliAs(who, ...checkpointArgs(String(second.ref)))).status).toBe(0);
     expect((await cliAs(who, "status", String(second.ref), "in_review")).status).toBe(0);
     await cli("run", "stop", String(again.json.id), "-m", "pulled again");
     expect(await next(who, "--outcome", "failed", "--reason", "run was stopped")).toMatchObject({

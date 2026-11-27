@@ -32,6 +32,14 @@ export const CLI_ENTRY = join(REPO_ROOT, "src/cli.ts");
 /** The agent identity every contract fixture writes as. */
 export const CONTRACT_AGENT = "contract-agent";
 
+/**
+ * The CLI arguments of a complete checkpoint on `ref`: what a holder writes before it hands a
+ * ticket on (in_review, done, blocked, release), which refuse it without one.
+ */
+export function checkpointArgs(ref: string): string[] {
+  return ["checkpoint", ref, "--done", "Did the work.", "--next", "none", "--files", "none"];
+}
+
 // ---------- normalization ----------
 
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

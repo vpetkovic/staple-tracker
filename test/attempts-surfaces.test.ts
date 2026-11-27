@@ -10,7 +10,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CLI_ENTRY, REPO_ROOT, TSX_CLI, bareEnv, removeDir, tempDir } from "./fixtures/characterize-support.js";
-import { normalize, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
+import { checkpointArgs, normalize, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
@@ -85,6 +85,8 @@ describe("staple attempt and the attempt flags", () => {
     const again = await cli("checkout", ref);
     expect(attemptOf(again.json)).toMatchObject({ openedBy: "reclaim", resumesAttemptId: first, ordinal: 2 });
 
+    // A holder hands its claim back with a worklog: release refuses it without one.
+    expect((await cli(...checkpointArgs(ref))).status).toBe(0);
     const failed = await cli("release", ref, "--outcome", "failed", "--reason", "cannot reproduce");
     expect(failed.json).toMatchObject({ identifier: ref, status: "todo" });
     expect(attemptOf(failed.json)).toMatchObject({ outcome: "failed", endReason: "cannot reproduce", endDetection: "reported" });
@@ -197,14 +199,17 @@ describe("MCP record_attempt_event", () => {
 
     const fromCli = (await cli("attempt", "milestone", viaCli, "-m", "checkpoint", "--agent", "agent-mcp")).json;
     const fromMcp = toolPayload(await mcp.call("record_attempt_event", { ref: viaMcp, event: "milestone", label: "checkpoint", ws: WS })) as Record<string, unknown>;
-    const shape = (payload: Record<string, unknown>) => normalize({ ...payload, identifier: "<ref>" });
+    // Each answer names its own ticket, in its identifier and in its worklog reminder.
+    const shape = (payload: Record<string, unknown>) => normalize(JSON.parse(JSON.stringify({ ...payload, identifier: "<ref>" }).replaceAll(String(payload.identifier), "<ref>")));
     expect(shape(fromMcp)).toEqual(shape(fromCli));
+    expect(fromMcp).toMatchObject({ worklog: { state: "missing" } });
     expect(fromMcp).toMatchObject({ agent: "agent-mcp", state: "running" });
 
     // The attempt fields on checkout_task and release_task reach the same store method.
     const third = String((await cli("new", "MCP claim")).json.identifier);
     const claimed = toolPayload(await mcp.call("checkout_task", { ref: third, harness: "codex", model: "gpt-x", ws: WS })) as Record<string, unknown>;
     expect(attemptOf(claimed)).toMatchObject({ agent: "agent-mcp", harness: { name: "codex", model: "gpt-x" } });
+    await mcp.call("checkpoint", { ref: third, done: "Tried it.", next: "Unblock upstream.", filesTouched: "none", ws: WS });
     const released = toolPayload(await mcp.call("release_task", { ref: third, outcome: "failed", reason: "blocked upstream", ws: WS })) as Record<string, unknown>;
     expect(attemptOf(released)).toMatchObject({ outcome: "failed", endReason: "blocked upstream" });
     const refused = await mcp.call("record_attempt_event", { ref: third, event: "interrupt", reason: "released_stale", ws: WS });
@@ -268,7 +273,9 @@ describe("HTTP /api/action", () => {
 
       const claimed = await post({ type: "checkout", ref: viaHttp });
       const fromCli = (await cli("checkout", viaCli, "--agent", "agent-http")).json;
-      const shape = (payload: Record<string, unknown>) => normalize({ ...payload, identifier: "<ref>", title: "<title>", attempt: { ...attemptOf(payload), identifier: "<ref>" } });
+      // The worklog reminder is the agent surfaces' (CLI, MCP); the web UI's actions do not carry it.
+      const shape = ({ worklog: _worklog, ...payload }: Record<string, unknown>) =>
+        normalize({ ...payload, identifier: "<ref>", title: "<title>", attempt: { ...attemptOf(payload), identifier: "<ref>" } });
       expect(shape(claimed)).toEqual(shape(fromCli));
       expect(attemptOf(claimed)).toMatchObject({ agent: "agent-http", openedBy: "checkout", state: "running" });
 
