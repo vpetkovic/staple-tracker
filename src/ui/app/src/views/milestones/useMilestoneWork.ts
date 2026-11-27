@@ -204,7 +204,7 @@ export function useMilestoneWork(
         }),
       );
     },
-    [view, ws, write],
+    [view, ws, write, session.issues.data, workspace],
   );
 
   const onReload = useCallback(() => {
