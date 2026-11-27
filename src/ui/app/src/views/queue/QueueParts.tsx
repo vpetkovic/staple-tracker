@@ -68,9 +68,9 @@ export function PolicyTag({ policy, workspace, onOpenSettings }: { policy: Queue
 // ---------- Add to queue ----------
 
 /**
- * Add to queue: the app's task picker (the same options, filter and option row as
- * `SearchableSelect`) in a popover behind a button. Picking adds to the end of the plan. It
- * never offers to create: a queue entry is a relation to work that exists.
+ * Add to queue: the app's task options and `SearchableSelect`'s filter, in a popover behind a
+ * button. Picking adds to the end of the plan. It never offers to create: a queue entry is a
+ * relation to work that exists.
  */
 export function AddToQueue({
   workspace,
@@ -91,6 +91,7 @@ export function AddToQueue({
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  // Not `SearchableSelect`, which owns its field trigger and keeps a selection (checkboxes, chips); its own filter is reused here, and it exports no option row.
   const matches = filterOptions(options, query).slice(0, 60);
   return (
     <Popover
