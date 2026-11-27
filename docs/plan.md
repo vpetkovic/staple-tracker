@@ -269,8 +269,9 @@ If the plan changed after the preview, the confirm is refused and you preview ag
 
 Each task remembers where it came from. Its detail shows a **from I-STA-4 · row R2** chip that
 opens the idea in Plan, `staple show` prints the same line, and its context page opens with
-"Scaffolded from idea I-STA-4, breakdown row R2". The chip reads the row's key as the breakdown
-holds it now, and says "a removed row" once the row is gone from the plan.
+"Scaffolded from idea I-STA-4, breakdown row R2". The page is written once, so it keeps the
+number and key they had at scaffold; the chip and `staple show` read them as they stand now, with
+the row's key as the breakdown holds it, and "a removed row" once the row is gone from the plan.
 
 ```bash
 staple idea scaffold <id>                    # preview, prints the fingerprint

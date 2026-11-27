@@ -91,7 +91,7 @@ epic.
 | `move_milestone_member` | Move a member, or into another milestone | `staple milestone mv` | yes |
 | `reorder_milestone_members` | Set the members' order | `staple milestone reorder` | yes |
 | `list_ideas` | The plan: horizons and ideas with stage, late and not started | `staple idea ls` | no |
-| `get_idea` | One idea, by idea number, ticket number or id: brief, questions, decisions, links | `staple idea show` | no |
+| `get_idea` | One idea, by idea number, ticket number or id: brief, questions, decisions, links, `sparkedBy` (the ticket that sparked it) and `sparked` | `staple idea show` | no |
 | `list_horizons` | Horizons in order | `staple horizon ls` | no |
 | `capture_idea` | Capture a raw idea; `sparked_by` names the ticket whose work turned it up | `staple idea new` | yes |
 | `update_idea` | Edit title, brief, plan sections, questions (answer or defer) and decisions; steering fields, the delivered-outside-the-tracker mark included, are refused as the person's | `staple idea set`, `ask`, `resolve`, `decide` | yes |

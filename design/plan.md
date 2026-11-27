@@ -393,7 +393,10 @@ task of theirs, offers no Scaffold.
 `origin_kind` `plan-row`, `origin_id` `<idea id>/<row id>` (`core/plan-provenance.ts`), written in
 its own create. Its id follows from the same pair, so two devices scaffolding offline send one
 identical value and no origin claim contends with another record's. Its `context` document opens
-with "Scaffolded from idea I-STA-n, breakdown row K." A detail read (`WorkspaceStore.context`,
+with "Scaffolded from idea I-STA-n, breakdown row K, as numbered at scaffold": a snapshot, written
+once, so a number sync later moves or a key renamed since is not rewritten there (a document
+rewrite would be a synced write of its own); a stand-in number (`I-STA-5+12`) is never written,
+and the line names the row alone then. A detail read (`WorkspaceStore.context`,
 so `staple show`, `get_task` and the drawer) answers `scaffoldedFrom`: the idea's id, its idea
 number and ticket number as they stand now, and the row's key as the breakdown holds it now (null
 once the row is removed). A task an earlier build scaffolded has no such origin; the read matches
@@ -402,7 +405,8 @@ its id against `scaffoldTaskId` of its parent's rows instead, while the row is s
 *Sparked ideas.* An idea captured with `sparkedBy` (`staple idea new --sparked-by`, `capture_idea`
 `sparked_by`) keeps that ticket the way a finding keeps where it was found: `origin_kind`
 `sparked`, `origin_id` `<ticket id>/<idea id>`, unique by construction, in the idea's own create.
-An idea or a milestone is refused as the spark before anything is written. The idea's detail and
+An idea, a milestone or an empty reference is refused as the spark before anything is written; it
+is written once, with no later edit, as a finding's origin is. The idea's detail and
 context answer `sparkedBy`; the ticket's context answers `sparked`, the ideas it sparked, oldest
 first. Both stay when the idea is promoted or scaffolded. All three reads are on one record's
 detail, a constant number of queries, and no list reads them; with planning off they answer null
