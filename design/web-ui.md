@@ -26,14 +26,14 @@ surfaces that open on top of any of them.
 | --- | --- | --- |
 | [Inbox](#inbox) | What waits on a person: gates, reviews, blockers a person owns, stopped runs, silent claims, sync conflicts | The rail's first row and the first phone tab; "Go to Inbox"; `?view=inbox` (`?view=attention` lands there) |
 | [Autopilot](#autopilot-runs) | Every autopilot run and one run in full; a notice when one stops | The rail's second row and its live-run lines; the second phone tab; a task's run line; a stop notice; `?view=autopilot`, `?view=autopilot&run=<run id>` |
-| [Tasks](#tasks) | Every issue as one tree, parents over children, with grouping, sorting, filters, search and the pickup cues | Rail and tab bar *Tasks*; "Go to Tasks"; a project row under it; `?view=tasks` |
-| [Queue](#queue) | The pickup order as one dense list: what an agent would take next, the plan with what each queued epic or milestone expands to, the open work after it, and the editor for it; one section per workspace on *All workspaces* | *Queue*; "Go to Queue"; `?view=queue` |
-| [Graph](#graph) | Issues as a node graph: epics as containers, dependencies as edges | *Graph*; "Go to Graph"; `?view=graph` |
-| [Milestones](#milestones) | Open milestones as an outline in plan order, each section with its progress, goal and work in order; finished ones on a shelf | *Milestones*; "Go to Milestones"; a row's milestone marker; a milestone's **Show in Milestones**; `?view=milestones&focus=<identifier>` |
-| [Estimates](#estimates) | How long work took against its estimate, per group of similar work | *Estimates*; "Go to Estimates"; `?view=estimate-accuracy` |
-| [Usage](#usage) | This computer's provider limits and the pace against each one | *Usage* under *This computer*; "Go to Usage"; `?view=budget` |
+| [Tasks](#tasks) | Every issue as one tree, parents over children, with grouping, sorting, filters, search and the pickup cues | *Tasks* in the rail and the fourth phone tab; "Go to Tasks"; a project row under it (in More on a phone); `?view=tasks` |
+| [Queue](#queue) | The pickup order as one dense list: what an agent would take next, the plan with what each queued epic or milestone expands to, the open work after it, and the editor for it; one section per workspace on *All workspaces* | The rail's third row and the third phone tab; "Go to Queue"; `?view=queue` |
+| [Graph](#graph) | Issues as a node graph: epics as containers, dependencies as edges | *Graph* in the rail and in More on a phone; "Go to Graph"; `?view=graph` |
+| [Milestones](#milestones) | Open milestones as an outline in plan order, each section with its progress, goal and work in order; finished ones on a shelf | *Milestones* in the rail and in More; "Go to Milestones"; a row's milestone marker; a milestone's **Show in Milestones**; `?view=milestones&focus=<identifier>` |
+| [Estimates](#estimates) | How long work took against its estimate, per group of similar work | *Estimates* in the rail and in More; "Go to Estimates"; `?view=estimate-accuracy` |
+| [Usage](#usage) | This computer's provider limits and the pace against each one | *Usage* at the rail's foot and under *This computer* in More; "Go to Usage"; `?view=budget` |
 | [Task detail](#task-detail) | One issue: details, connections, documents, activity, the agent payload and time | Click or Enter on any row, node or reference |
-| [Settings](#settings) | Statuses, kinds, workflow settings, cloud, usage capture | The rail's *Settings*; the palette; `?settings` |
+| [Settings](#settings) | Statuses, kinds, workflow settings, cloud, usage capture | *Settings* at the rail's foot and in More; the palette; `?settings` |
 | [Choose a workspace](#choose-a-workspace) | Shown in place of Estimates on *All workspaces* | Opening it with no workspace chosen |
 
 The command palette (`⌘K`), the New task dialog (`c`), the project dialog and
@@ -57,57 +57,140 @@ Below 768px the gutter and the radius go and the frame is `100dvh`. Dark mode
 is charcoal, not near-black. Every shell size is a token in
 `styles/system-tokens.css`.
 
-**The rail** is 240px (264px from 1680px) and reads top to bottom:
+**The rail** is the desk's left column. Its head is the scope, everything under
+it is in that scope, its foot is the computer, and exactly one row is
+highlighted. Top to bottom (`components/nav/NavRail.tsx`):
 
-- the brand mark and a *Hide navigation* button;
-- in `--hub` mode, the **Workspaces** group: *All workspaces*, then each
-  registered workspace with a one-letter tile, capped at six (the current one is
-  always kept) with the rest behind *More workspaces*. A single-workspace page
-  lists none;
-- the top rows, above the workspaces and with no heading (`TOP_VIEWS`):
-  *Inbox*, with every workspace's count and a dot when something is new to this
-  browser, and *Autopilot*, always present, with "n live" and one line per live
-  run (its state dot, its name, and the ticket it is on or its state; at most
-  four, then "n more"). A line is a link to that run;
-- **Views**: *Tasks*, *Queue*, *Graph*, *Milestones*, *Estimates*;
-- **This computer**: *Usage*, at the bottom of the rail;
-- the foot, above a hairline: *Settings* and a dark-mode switch
-  (`role="switch"`). The page follows the system's light or dark setting until
-  someone uses the switch, and only that pick is remembered (`staple:theme:v2`,
-  `lib/theme.ts`). The old `staple:theme` key, which earlier builds wrote on every
-  load, is never read as a pick and is removed.
+- **The head**, as tall as the top bar, is the scope: a 20px tile and the
+  scope's name ("All workspaces" or the workspace's name). The tile is the app's
+  mark for *All workspaces* and the workspace's letter (the first of its prefix)
+  for one. In `--hub` mode the head is the workspace switcher and opens the
+  workspace list (below). With one workspace it is the name
+  alone, with nothing to open. On *Usage* the name steps back to the secondary
+  tone, because the page is about this computer; choosing a workspace from there
+  opens that workspace's Tasks.
+- **Now**, with no heading (`TOP_VIEWS`): *Inbox*, with every workspace's count
+  and a dot when something is new to this browser; *Autopilot*, with "n live"
+  and one line per live run (its state dot, its name, and the ticket it is on or
+  its state; at most four, then "n more"); and *Queue*. A run line is a link to
+  that run.
+- **The workspace's records**, 12px below: *Tasks* with its projects under it,
+  *Graph*, *Milestones*, *Plan* (only with planning on) and *Estimates*.
+- **The foot**, above a hairline at the bottom: *Usage*, *Integrations* and
+  *Settings*, with the dark-mode switch beside Settings (`role="switch"`). They
+  read the same whichever workspace is chosen. The page follows the system's
+  light or dark setting until someone uses the switch, and only that pick is
+  remembered (`staple:theme:v2`, `lib/theme.ts`). The old `staple:theme` key,
+  which earlier builds wrote on every load, is never read as a pick and is
+  removed.
 
-Rows are 32px (44px on a touch screen). The active view carries
-`aria-current="page"`; a group header is a disclosure button whose chevron
-shows on hover and focus. The groups are data (`components/nav/nav-model.ts`,
-an array of groups of items), so moving a view between groups is an edit to
-that array and not to the rail. *Usage* sits apart because budget readings are
-this computer's: the view takes no workspace, and no workspace row is marked
-current while it is open. Choosing a workspace from it opens that workspace's
-Tasks.
+The zones have no labels and nothing folds. They are data (`NAV_GROUPS` in
+`components/nav/nav-model.ts`, built from `TOP_VIEWS` and `VIEWS`), so moving a
+view between zones is an edit to that array and not to the rail. The command
+palette lists the views in the same order.
+
+Rows are 32px (44px on a touch screen) with 8px corners. The page's row carries
+`aria-current="page"` and is filled. **Exactly one row is filled.** When a child
+is the place (Tasks narrowed to one project, or a live run open on the Autopilot
+page) the child carries `aria-current="true"` and takes the fill. The parent
+keeps `aria-current="page"` and is marked `data-child-current`, which draws it in
+the foreground tone with no fill. The place moves to a child only when that
+child is a row on screen: a filter naming a project the rail does not list (still
+loading, a failed read, another workspace's) leaves the fill on Tasks, and so
+does a run not among the run lines. The run lines and the project rows share one
+shape: 28px, on a hairline spine that drops from the parent's icon. A project's
+name keeps priority over its workspace caption, which takes at most 40% of the
+row and truncates; the row's title has both.
+
+**Under forced colours** (Windows High Contrast and the like) backgrounds are
+replaced, so the place is an inset 2px outline in the system's `Highlight`
+instead of the fill: on the full and narrow rails, the More sheet's rows and the
+current tab's pill. State dots, badges and the reconnecting dot keep their own
+colours (`forced-color-adjust: none`).
+
+**Marks share one register:** right-aligned, `text-label`, tabular, tertiary. A
+count is a plain number. Something new or waiting is a 6px accent dot before the
+number: the Inbox's new rows, Settings' waiting join requests. Live is the run's
+state dot before "n live", breathing while a run works. *Integrations* shows an
+amber dot when a connection needs attention.
+
+**While the server does not answer.** The page polls every 1.5s; when its polls
+have gone unanswered for 5 seconds (`useConnection` in `lib/useStaple.ts`) the
+counts and dots on screen are the last ones heard and may be stale. The rail
+says so without shouting. It is marked `data-stale`, and one rule dims every
+mark in it (`data-nav-mark`) to 80%: the Inbox count and its dot, "n live" and
+its dot, the run lines' dots and asides, the project counts, and the Settings
+and Integrations marks. At 80% a dimmed count or dot still measures at least
+3:1 against the rail in both themes. Rows keep their full strength and still
+work. One line appears in its own slot between the rail's scrolling body and the
+foot's hairline, so however long the list it is always in sight: a 28px status
+(`role="status"`, `aria-live="polite"`, the region always present and empty
+while the page is live), not a control, with the waiting tone's dot breathing in
+the icon column and the word *Reconnecting*. The narrow rail shows the dot alone
+in a 36px slot, named *Reconnecting* and with a tooltip. On a phone the Inbox
+badge and the Autopilot dot dim, and nothing else changes. All of it goes at
+the first answer.
 
 **Projects hang off Tasks.** The Tasks row carries a `+` (*New project*),
 visible on hover and focus and always in the tab order, that opens the project
 dialog. Every tracked project is a sub-row beneath it (see
 [Projects](#projects)): the name and its open issue count, which gives way to a
-gear (*Project settings*) on hover. Clicking a project switches to Tasks and
-narrows it to that project's issues, and nothing else; the row then carries
-`aria-current="true"` for as long as Tasks is filtered to exactly it. *Tasks*
-itself, from the rail, the phone's tab bar or "Go to Tasks", shows every task: it
-drops the project narrowing and keeps the other filters. On *All
-workspaces* the rows are captioned with their workspace, which is what tells two
-projects with one name apart.
+gear (*Project settings*) on hover and focus; on a touch screen both show.
+Clicking a project switches to Tasks and narrows it to that project's issues,
+and nothing else; the row then carries `aria-current="true"` for as long as
+Tasks is filtered to exactly it. *Tasks* itself, from the rail, the phone's tab
+bar or "Go to Tasks", shows every task: it drops the project narrowing and keeps
+the other filters (`navigateTo` in `lib/session.ts` is every menu's way to a
+view). On *All workspaces* the rows are captioned with
+their workspace, which is what tells two projects with one name apart.
 
-The rail collapses with `[` or `⌘\` (Ctrl-\ elsewhere) and remembers that it
-did (`staple:rail:v1`); a *Show navigation* button then appears in the top bar.
-A bare `[` typed into a field, or pressed while a menu or dialog is open, is
-not a toggle.
+**Two widths.** The rail is *full* (240px, 264px from 1680px;
+`--shell-rail-width`) or *narrow* (52px, icons only; `--shell-rail-narrow`), and
+on a desk it is always on screen. Narrow, each row is a 36px icon button named
+for its row, with a tooltip on its right that says the name and the mark in
+words ("Inbox · 23 waiting, 4 new"). The head is the scope's tile, still the
+switcher. *Inbox* wears its count as a badge on the icon's corner ("99+" past
+99): quiet by default, and in the accent (`--badge-fresh`) while something
+waiting is new to this browser. *Autopilot* wears a state dot while a run is
+live, *Settings* its join-request count the quiet way, *Integrations* its dot.
+The narrow rail shows no sub-rows. Under a finger its buttons keep their 36px
+look and get 44px through an invisible hit area.
 
-**The top bar** (52px) names the scope and the view: "All workspaces › Tasks"
-or "staple › Tasks" (the workspace's name), where the scope opens the workspace switcher in hub
-mode, and "This computer" on Usage. Beside it sits the sync pill (below), then,
-on the right, the palette field (*Find a task or command*, `⌘K`) and the
-**New task** button (`c`). The browser tab is titled `View · Scope · staple`.
+`[` or `⌘\` (Ctrl-\ elsewhere) switches between the two widths, and so does
+the toggle at the left end of the top bar. A bare `[` typed into a field, or
+pressed while a menu or dialog is open, is not a toggle. The width eases between
+the two (`--motion-duration-base`, `--motion-ease-out`) while the rows keep
+their own width, and never moves under reduced motion.
+
+The rail remembers its width per desk size (`components/nav/rail-mode.ts`). There
+are two size classes: *compact*, 768px to 1023px, which starts narrow, and
+*wide*, from 1024px, which starts full. A choice made in one class leaves the
+other alone. Both live under `staple:rail:v2` as `{ "wide": …, "compact": … }`,
+a class absent until someone chooses in it. A browser with no v2 value reads the
+old `staple:rail:v1` once for *wide*: `collapsed` there becomes narrow. v1 is
+never written. Every part of the page that asks for the width shares one state,
+so the top bar's toggle and the rail cannot disagree.
+
+**The workspace list.** The head, and the top bar's scope while the rail is
+narrow, open the workspace list (`components/nav/WorkspaceSwitcher.tsx`): a popover on a desk and a bottom
+sheet on a phone. Each workspace is one line: its tile, its name, how much waits
+on a person there, and a check on the current one. The count is a plain number
+in the marks' register, from the Inbox's own read (every workspace's, so no
+second fetch); nothing shows at 0, and *All workspaces* shows the total. Rows
+are 36px on a desk and 48px on a phone. A workspace's task-number prefix is in
+its row's title and still finds it in the search box, which leads the list past
+six workspaces. The list is a listbox: arrows, Home, End and Enter work as in
+the palette, and Escape closes it and returns the focus to what opened it.
+
+**The top bar** (52px) starts with the rail's toggle (*Collapse navigation* or
+*Expand navigation*, `aria-expanded` while the rail is full). Then the page's
+name. While the rail is full the bar says only the page ("Tasks"): the rail's
+head names the scope beside it. While the rail is narrow it says "All workspaces
+› Tasks" or "staple › Tasks", where the scope opens the workspace list in hub
+mode. A view about this computer says "This computer › Usage" at either width.
+Beside it sits the sync pill (below), then, on the right, the palette field
+(*Find a task or command*, `⌘K`) and the **New task** button (`c`). The browser
+tab is titled `View · Scope · staple`.
 
 **The sync pill** says the workspace's sync state in a word or two
 ("Synced", "Offline", "2 waiting to send"); a click opens a short card with what
@@ -130,17 +213,37 @@ are 32px. Below 1280px their words drop and they become icon buttons with
 tooltips, and the search folds into an icon that opens in place. Escape in the
 search clears it; a second Escape leaves the field.
 
-**On a phone** the top bar holds the menu button (the rail as a drawer, at most
-85% of the width, closed by a row, the scrim, Escape or Back), the workspace
-switcher as a pill (a bottom sheet), the sync state as one icon, search and New
-task. Under it, the view's name large, its controls as 44px icon buttons, and
-the active filters as one sideways-scrolling row. A bottom **tab bar** holds five
-tabs (`components/nav/ViewTabBar.tsx`): *Inbox* with its count, *Autopilot* with
-a dot while a run is live (green working, amber paused or waiting), *Tasks*,
-*Queue* (`TAB_VIEWS`), and *More*, a bottom sheet with every other view. More is
-drawn as current when the page is on one of them. On a touch screen, controls grow to
-44px at any width, except on the [Milestones](#milestones) page, which keeps each
-control's desk look and gives it a 32px tap.
+**On a phone** there is no rail and no drawer. The top bar starts with the
+workspace switcher as a 32px pill (it opens the workspace list as a sheet), then
+the sync state as one icon, search and New task. Under it, the view's name
+large, its controls as icon buttons, and the active filters as one
+sideways-scrolling row. A bottom **tab bar** holds five tabs
+(`components/nav/ViewTabBar.tsx`, `TAB_VIEWS`): *Inbox* with its count (quiet,
+or in the accent while something is new), *Autopilot* with a dot while a run is
+live (green working, amber paused or waiting), *Queue*, *Tasks*, and *More*.
+
+*More* is a bottom sheet with the rest of the rail, in 48px rows:
+
+- the scope's other views: *Graph*, *Milestones*, *Plan* (planning on) and
+  *Estimates*;
+- **Projects**: each project of the scope with its open count and a settings
+  gear, captioned with its workspace when the rows span several, then *New
+  project*. Tapping one narrows Tasks to it, and it is marked while Tasks shows
+  exactly it;
+- **This computer**: *Usage*, *Integrations*, *Settings* and *Dark mode* (a
+  switch).
+
+The sheet closes before it opens a dialog, and the dialog opens with the focus
+on the *More* tab, so that is where the focus lands when the dialog closes (on a
+desk, a dialog opened from the rail returns it to the row that opened it,
+`lib/return-focus.ts`). Escape, the scrim and Back close the sheet, and the focus
+returns to the *More* tab. More is drawn as current when the page
+is one of its views. The shell's controls keep their drawn size at every width:
+under a finger the pill, the narrow rail's buttons and the top bar's search and
+New task get 44px through an invisible hit area rather than a bigger box.
+A view's own controls still grow to 44px on a touch screen at any width, except
+on the [Milestones](#milestones) page, which keeps each control's desk look and
+gives it a 32px tap.
 
 **The address follows the page.** The workspace, the view, the search text,
 the done toggle, a milestone focus and every filter are written into the URL
@@ -159,18 +262,20 @@ a request lost to a network change cannot stop the page refreshing.
 | --- | --- | --- |
 | `⌘K` / Ctrl-K | anywhere, even in a field | opens or closes the command palette |
 | `c` | anywhere but a field or open dialog | New task |
-| `[`, `⌘\` / Ctrl-\ | anywhere | hides or shows the rail |
+| `[`, `⌘\` / Ctrl-\ | a desk, outside an open menu or dialog; a bare `[` not in a field (`⌘\` / Ctrl-\ works there too) | switches the rail between full and narrow, the focus staying on the same row |
 | ↑ ↓ ← → Home End Enter Space | the Tasks grid | move, fold and unfold, open |
 | `s` | a focused task row (desk) | opens the row's status menu |
 | `j` / `k`, Alt-↓ / Alt-↑ | task detail | next or previous task in the list on screen |
-| Escape | an open surface | closes it (the palette, a dialog, the detail, the phone drawer) |
+| Escape | an open surface | closes it (the palette, a dialog, the detail, the workspace list, the More sheet) |
 | Alt-↑ / Alt-↓ | Queue and Milestones rows, settings lists | move the row up or down |
 | Alt-Home / Alt-End | Queue rows | move the row to the top or bottom |
 
-The palette's first group lists "Go to Tasks", "Go to Queue", "Go to Graph",
-"Go to Milestones", "Go to Estimates" and "Go to Usage" (all but the current
-view), "Settings", "Settings: Usage", "Settings: Cloud account" and "Settings:
-Statuses", and in hub mode "Switch to All workspaces" and "Switch to"
+The palette's first group lists the views, all but the current one. Recently
+used commands lead the list; the "Go to" commands otherwise follow the rail's
+order: "Go to Inbox", "Go to Autopilot", "Go to Queue", "Go to Tasks", "Go to
+Graph", "Go to Milestones", "Go to Plan" (planning on), "Go to Estimates" and
+"Go to Usage". Then "Settings", "Settings: Usage", "Settings: Cloud
+account" and "Settings: Statuses", and in hub mode "Switch to All workspaces" and "Switch to"
 followed by each workspace's name.
 
 ## Tasks
@@ -871,7 +976,7 @@ calendar, the gate, every landing, and that no control on a phone is a 44px box.
 
 ## Estimates
 
-The fifth view in the rail, **Estimates** (also "Go to Estimates" in
+The last of the rail's records, **Estimates** (also "Go to Estimates" in
 the command palette, which also finds it by *estimate accuracy* and
 *calibration*), is the
 workspace's calibration report: `GET /api/calibration`, the payload of `staple
@@ -963,7 +1068,7 @@ issues get a forecast. The type mirror is pinned against the store's types in
 
 ## Usage
 
-The rail's **This computer** group holds one view, **Usage** (also "Go to
+At the rail's foot, with Integrations and Settings, sits **Usage** (also "Go to
 Usage" in the command palette, which also finds it by *budget*): this machine's provider limits and each
 one's session pressure, `GET /api/budget`, the payload of `staple budget
 --json` and MCP `get_budget` ([execution-telemetry.md](execution-telemetry.md#pressure)).
@@ -1438,7 +1543,8 @@ continues one. Everything reads one `GET /api/runs` per change fingerprint
   first and takes an optional note: `POST /api/run/stop`; pause and resume are
   `POST /api/run/pause` and `/api/run/resume`.
 - **The rail and the tab bar.** One line per live run under *Autopilot* in the
-  rail; a dot on the phone's *Autopilot* tab while a run is live.
+  full rail; a dot on the narrow rail's *Autopilot* icon and on the phone's
+  *Autopilot* tab while a run is live.
 - **The badge.** A task a live run holds, the run's scope row and a folded
   parent hiding held work wear an *Autopilot* badge; the task's detail says
   which run is working on it and links to the run.
@@ -2052,7 +2158,7 @@ so a new project setting is one more entry.
 **Where a project shows up.** The page fetches every workspace's projects once
 per poll and narrows them where they are used, so an issue opened from another
 workspace still sees its own workspace's projects. The rail lists them under
-Tasks; the **Project** filter dimension offers them by name (captioned with the
+Tasks, and a phone's More sheet under *Projects*; the **Project** filter dimension offers them by name (captioned with the
 workspace when the page spans several) and matches on the id, so a saved filter
 survives a rename — and a deleted project's id is dropped from every saved
 scope on the next poll, so no chip outlives its project; the
@@ -2145,7 +2251,9 @@ The styles are four layers, imported in this order by `styles/app.css`:
   (`text-caption` … `text-display`, each with its own line height, registered
   with `cn()` in `lib/utils.ts` so a size and a colour class merge correctly), the
   4px spacing rhythm, named surfaces, one focus ring, and the shell geometry
-  (rail width, top bar and toolbar heights, the gutter, control heights).
+  (the rail's two widths, top bar and toolbar heights, the gutter, control
+  heights) and `--badge-fresh`, the accent a count badge takes while something
+  in it is new.
 - `app.css` is staple's own layer on top: the status-to-hue mapping and the SVG
   chrome for the dependency graph, which has no Tailwind equivalent.
 

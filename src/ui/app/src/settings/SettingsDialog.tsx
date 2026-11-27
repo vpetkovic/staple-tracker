@@ -85,6 +85,7 @@ import {
 } from "./settings-shell";
 import { useTargetSettings } from "./useTargetSettings";
 import { WorkspaceChooser } from "./WorkspaceChooser";
+import { useReturnFocus } from "@/lib/return-focus";
 
 /**
  * Is the viewport too narrow for two panes? Read once at mount and then subscribed, so
@@ -292,6 +293,7 @@ export function SettingsDialog({
       </Select>
     </label>
   ) : null;
+  const returnFocus = useReturnFocus(open);
 
   return (
     <Dialog
@@ -303,6 +305,8 @@ export function SettingsDialog({
       <DialogPortal>
         <DialogOverlay />
         <DialogPrimitive.Content
+          // Opened by an event, not a trigger: the focus goes back to what opened it (lib/return-focus.ts).
+          onCloseAutoFocus={returnFocus}
           data-settings-dialog
           data-mode={mode}
           data-layout={layout}

@@ -31,14 +31,13 @@ export const VIEWS = ["tree", "queue", "attention", "autopilot", "graph", "miles
 export type ViewName = (typeof VIEWS)[number];
 
 /**
- * WHERE EACH VIEW SITS IN THE NAVIGATION. The two views about what needs a person and what
- * agents are doing sit above the workspaces at the top of the rail, apart from the Views
- * group; the phone's tab bar shows `TAB_VIEWS` and every other view is one tap further, in
- * its More sheet. They are the placement the rail and the tab bar are to follow (STA-557
- * lays them out); nothing else decides it.
+ * WHERE EACH VIEW SITS IN THE NAVIGATION. `TOP_VIEWS` are the rail's first zone, what is
+ * happening now: what waits on a person, what agents are doing, and what they take next. The
+ * phone's tab bar shows `TAB_VIEWS` and every other view is one tap further, in its More
+ * sheet. They are the placement the rail and the tab bar follow; nothing else decides it.
  */
-export const TOP_VIEWS: readonly ViewName[] = ["attention", "autopilot"];
-export const TAB_VIEWS: readonly ViewName[] = ["attention", "autopilot", "tree", "queue"];
+export const TOP_VIEWS: readonly ViewName[] = ["attention", "autopilot", "queue"];
+export const TAB_VIEWS: readonly ViewName[] = ["attention", "autopilot", "queue", "tree"];
 
 export function isTopView(view: ViewName): boolean {
   return TOP_VIEWS.includes(view);
@@ -66,8 +65,8 @@ export const VIEW_LABELS: Record<ViewName, string> = {
 /**
  * The views that are about THIS MACHINE, not a workspace: the provider budget is read from the
  * machine's hub, never synchronizes, and is the same whichever workspace is picked. The rail
- * lists them in their own "Machine" group (`components/nav/nav-model.ts`), apart from the
- * workspace's views.
+ * lists them at its foot with Integrations and Settings (`components/nav/nav-model.ts`),
+ * apart from the workspace's views.
  */
 export const MACHINE_VIEWS: readonly ViewName[] = ["budget"];
 

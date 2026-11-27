@@ -3,13 +3,15 @@
  *
  * ── On a desk: a rail, a top bar, one toolbar, the view ─────────────────────────────────
  *
- *   THE RAIL (w-rail: 240px, 264px from 1680px) — `components/nav/NavRail.tsx`. Where you
- *     are: the workspaces, listed (so the scope and the way to change it are on screen
- *     without a menu), the views in that scope, and at the foot what belongs to this
- *     computer, Settings and the theme. It collapses (`[`, or cmd-\) and remembers that.
- *   THE TOP BAR (h-topbar: 52px) — `TopBar` below. "All workspaces › Tasks": the scope (a
- *     click opens the switcher) and the page's name, the sync pill, then on the right find
- *     anything (the palette, cmd-K) and the page's one primary action, New task.
+ *   THE RAIL — `components/nav/NavRail.tsx`. Where you are: the scope at its head (the
+ *     workspace switcher), the views in that scope, and at the foot what belongs to this
+ *     computer. Always there on a desk, at one of two widths: full (w-rail: 240px, 264px
+ *     from 1680px) or narrow (w-rail-narrow: icons only). `[` or cmd-\ switches between
+ *     them, and each desk size remembers its own choice (`components/nav/rail-mode.ts`).
+ *   THE TOP BAR (h-topbar: 52px) — `TopBar` below. The rail's toggle, then the page's name
+ *     ("All workspaces › Tasks" while the rail is narrow, the scope being the switcher), the
+ *     sync pill, then on the right find anything (the palette, cmd-K) and the page's one
+ *     primary action, New task.
  *   THE TOOLBAR (h-toolbar: 44px) — `components/filters/Toolbar.tsx`. Which tasks (Filter,
  *     the quick filters beside it, the filters that are on, search) and how they look
  *     (Group, Sort, Done). Only on the views that honour them (`viewControls`); a report
@@ -18,45 +20,43 @@
  * The content is a card on the desk (`--shell-gutter` of the sidebar tint round it). Every
  * size, surface and ring here is a token from styles/system-tokens.css.
  *
- * ── The rail is in-flow on a wide viewport and an overlay on a narrow one ─────────────
- *
- * Below 768px a permanent rail column is width the list does not get, so the rail
- * becomes a sheet opened from the menu button in the content header and closed by a
- * row, the scrim or Escape. The two states are held separately: `collapsed` is the
- * persisted desktop preference, `overlayOpen` is transient. A narrow window never
- * writes to the preference, so opening the sheet on a phone does not un-collapse the
- * rail on the desk.
- *
  * ── On a phone it is an app, not a squeezed desktop ───────────────────────────────────
  *
  * Below 768px the shell takes the shape every phone app has:
  *
- *   A TOP BAR — the menu button (the rail as a drawer: projects, Settings, theme), the
- *     workspace switcher as a pill with the FULL name (one tap opens it as a bottom sheet),
- *     the sync state as one icon, search, and New task. It sits under the status bar's
- *     safe area.
+ *   A TOP BAR — the workspace switcher as a 32px pill with the name (one tap opens it as a
+ *     bottom sheet), the sync state as one icon, search, and New task. It sits under the
+ *     status bar's safe area. There is no menu button and no drawer.
  *   THE CONTENT HEADER — the view's name, large, and its controls as 44px icon buttons.
  *   THE QUICK FILTERS — one sideways-scrolling row (FilterChips).
- *   A BOTTOM TAB BAR — the six views, one tap each, on the home-indicator safe area
- *     (`components/nav/ViewTabBar.tsx` argues the pattern).
+ *   A BOTTOM TAB BAR — Inbox, Autopilot, Queue, Tasks, and More: a sheet with the rest of
+ *     the rail (the other views, the projects, this computer). It is the phone's one menu,
+ *     on the home-indicator safe area (`components/nav/ViewTabBar.tsx` argues the pattern).
  *
  * The frame is `100dvh`, so the browser's collapsing toolbars never hide the tab bar, and
- * nothing in the chrome is wider than the screen: the sync strip that used to overflow a
- * phone sideways is now a pill (CloudStrip).
+ * nothing in the chrome is wider than the screen (the sync state is a pill, CloudStrip).
+ *
+ * ── Controls keep their size under a finger ───────────────────────────────────────────
+ *
+ * A touch screen needs 44px to hit, not 44px drawn. The pill, the narrow rail's buttons and
+ * the top bar's search and New task keep the size they have on a desk and get the rest from
+ * an invisible `::before` hit area (7px round a bordered control, whose absolute box is
+ * measured from inside its border).
  *
  * ── The scope is always named ─────────────────────────────────────────────────────────
  *
- * The header says which workspace the page is on — the workspace's name, or "All
- * workspaces" — beside the view's name, so no screen implies a workspace the person did not
- * pick (`scopeName` in lib/session.ts).
+ * Every screen says which workspace the page is on, the workspace's name or "All
+ * workspaces" (`scopeName` in lib/session.ts), so none implies a workspace the person did
+ * not pick. On a desk with the rail full, the rail's head says it, and the top bar says only
+ * the page; with the rail narrow the top bar says "scope › page". On a phone the pill says it.
  *
  * ── Why the view rows are buttons and not the Tabs primitive ──────────────────────────
  *
  * They switch what the whole page is, and they control no `TabsContent` — App.tsx swaps
  * the view. `aria-current="page"` on a button is what this actually is.
  */
-import { ChevronRight, Menu, Monitor, PanelLeft, Plus, Search, SquarePen } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { ChevronRight, Monitor, PanelLeft, Plus, Search, SquarePen } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
 import { CloudStrip } from "@/components/CloudStrip";
 import { JoinRequestWatcher } from "@/components/join/JoinRequestToast";
 import { SharedBadge } from "@/components/SharedBadge";
@@ -70,25 +70,18 @@ import { DoneToggle, Toolbar, doneLivesInTopBar } from "@/components/filters/Too
 import { NavRail } from "@/components/nav/NavRail";
 import { ViewTabBar } from "@/components/nav/ViewTabBar";
 import { WorkspaceSwitcher } from "@/components/nav/WorkspaceSwitcher";
-import {
-  loadRailCollapsed,
-  overlayFocusTarget,
-  railKeyAction,
-  saveRailCollapsed,
-} from "@/components/nav/nav-model";
+import { railKeyAction } from "@/components/nav/nav-model";
+import { useRailMode, type RailMode } from "@/components/nav/rail-mode";
 import { Button } from "@/components/ui/button";
 import { floatingSurfaceIsOpen, isTyping } from "@/lib/keyboard";
 import { openCommandPalette, openCreateIssue } from "@/lib/shell-events";
 import { currentWorkspace, isAllWorkspaces, isMachineView, scopeName, useSession, viewControls, viewLabel } from "@/lib/session";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useBackToClose } from "@/lib/back-to-close";
 import { cn } from "@/lib/utils";
 import { useIsDesk } from "@/lib/use-media";
 
 /** Is the viewport wide enough for the rail to be a column? The one breakpoint (lib/use-media). */
 const useWideViewport = useIsDesk;
-
-const storage = () => (typeof localStorage === "undefined" ? undefined : localStorage);
 
 /** A 44px icon button for the phone's top bar. */
 function BarButton({ label, onClick, children, ...rest }: { label: string; onClick: () => void; children: ReactNode } & Record<`data-${string}`, string | boolean>) {
@@ -116,51 +109,63 @@ function paletteKeys(): string {
 /**
  * THE DESK'S TOP BAR — where you are, and the two things you can do from anywhere.
  *
- * Left: the scope, then the page — "All workspaces › Tasks" — so the first words on the page
- * say which workspace it is about and what it is. The scope is itself the switcher (a click
- * opens the workspace list), which keeps it changeable while the rail is put away; a view
- * about this computer (Usage) says "This computer" there instead, because it is the same
- * whichever workspace is chosen. Then the sync state, as one pill.
+ * Left: the rail's toggle, in one place whichever width the rail is. Then the page's name.
+ * While the rail is full its head already names the scope, a hand's width away, so the bar
+ * says only the page. While the rail is narrow the head is a letter, so the bar says the
+ * scope and the page, "All workspaces › Tasks", and the scope is itself the switcher (a click
+ * opens the workspace list). A view about this computer (Usage) says "This computer › Usage"
+ * at either width, because the page is in no workspace and the rail's head does not say
+ * that. Then the sync state, as one pill.
  *
  * Right: find anything (the command palette, as a field-shaped button that shows its
  * shortcut) and the page's PRIMARY action, New task — the one filled button in the chrome.
  */
 export function TopBar({
-  railVisible,
-  onShowRail,
+  railMode,
+  onToggleRail,
   cloud,
   hubCloud,
 }: {
-  railVisible: boolean;
-  onShowRail: () => void;
+  railMode: RailMode;
+  onToggleRail: () => void;
   cloud: CloudSurfaceReport | null;
   hubCloud: HubCloudReport | null;
 }) {
   const session = useSession();
   const title = viewLabel(session.view);
   const machine = isMachineView(session.view);
+  const toggleLabel = railMode === "full" ? "Collapse navigation" : "Expand navigation";
+  const crumb = machine || railMode === "narrow";
   return (
     <header data-top-bar className="flex h-topbar shrink-0 items-center gap-3 border-b px-page">
-      {railVisible ? null : (
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Show navigation"
-          title="Show navigation ([)"
-          data-nav-show
-          onClick={onShowRail}
-          className="-ml-2 rounded-lg text-text-tertiary hover:text-foreground pointer-coarse:size-11"
-        >
-          <PanelLeft className="size-4" />
-        </Button>
-      )}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={toggleLabel}
+            aria-expanded={railMode === "full"}
+            aria-keyshortcuts="["
+            data-nav-toggle
+            onClick={onToggleRail}
+            // 32px under a finger too: its 44px is an invisible area round it, inside the 52px bar.
+            className="relative -ml-2 shrink-0 rounded-lg text-text-tertiary hover:text-foreground pointer-coarse:size-8 pointer-coarse:min-h-0 pointer-coarse:before:absolute pointer-coarse:before:-inset-1.5 pointer-coarse:before:content-['']"
+          >
+            <PanelLeft className="size-4" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">
+          {toggleLabel}
+          <span className="ml-1.5 font-mono text-caption opacity-70">[</span>
+        </TooltipContent>
+      </Tooltip>
       <div className="flex min-w-0 items-center gap-1" data-top-bar-title>
         {machine ? (
           <span data-scope-name className="flex shrink-0 items-center gap-1.5 text-body text-text-secondary">
             <Monitor aria-hidden className="size-3.5 text-text-tertiary" />
             This computer
           </span>
-        ) : session.mode === "hub" ? (
+        ) : !crumb ? null : session.mode === "hub" ? (
           <WorkspaceSwitcher variant="crumb" />
         ) : (
           // One workspace, nothing to switch to: its name, as words, not a menu of one.
@@ -168,8 +173,8 @@ export function TopBar({
             {scopeName(session)}
           </span>
         )}
-        <ChevronRight aria-hidden className="size-4 shrink-0 text-text-tertiary" />
-        <h1 className="truncate pl-0.5 text-heading font-semibold">{title}</h1>
+        {crumb ? <ChevronRight aria-hidden className="size-4 shrink-0 text-text-tertiary" /> : null}
+        <h1 className={cn("truncate text-heading font-semibold", crumb && "pl-0.5")}>{title}</h1>
       </div>
       {machine ? null : <SharedBadge slug={currentWorkspace(session)?.slug ?? ""} report={cloud} />}
       {machine ? null : <CloudStrip report={cloud} hub={hubCloud} />}
@@ -182,10 +187,13 @@ export function TopBar({
           aria-keyshortcuts="Meta+K Control+K"
           onClick={openCommandPalette}
           className={cn(
-            "flex h-control-md items-center gap-2 rounded-lg border bg-surface-sunken pointer-coarse:h-11",
+            // Under a finger it keeps its size; the 44px is an invisible hit area round it (7px,
+            // because an absolute box is measured from inside the 1px border).
+            "relative flex h-control-md items-center gap-2 rounded-lg border bg-surface-sunken",
+            "pointer-coarse:min-h-0 pointer-coarse:before:absolute pointer-coarse:before:-inset-[7px] pointer-coarse:before:content-['']",
             // Below 1024px the top bar has no room for a field: it is a square icon button,
             // named the same, with the shortcut in its tooltip-free accessible name.
-            "w-control-md justify-center px-0 pointer-coarse:w-11 lg:w-[clamp(14rem,20vw,20rem)] lg:justify-start lg:pr-1.5 lg:pl-2.5",
+            "w-control-md justify-center px-0 lg:w-[clamp(14rem,20vw,20rem)] lg:justify-start lg:pr-1.5 lg:pl-2.5",
             "text-body text-text-tertiary transition-colors hover:border-border-strong hover:text-text-secondary focus-ring",
           )}
         >
@@ -197,7 +205,11 @@ export function TopBar({
         </button>
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button data-top-new-task onClick={() => openCreateIssue()} className="h-control-md gap-1.5 rounded-lg px-3 text-body pointer-coarse:h-11">
+            <Button
+              data-top-new-task
+              onClick={() => openCreateIssue()}
+              className="relative h-control-md gap-1.5 rounded-lg px-3 text-body pointer-coarse:min-h-0 pointer-coarse:before:absolute pointer-coarse:before:-inset-y-1.5 pointer-coarse:before:inset-x-0 pointer-coarse:before:content-['']"
+            >
               <Plus aria-hidden className="size-4" />
               New task
             </Button>
@@ -248,65 +260,29 @@ export function AppShell({ children }: { children: ReactNode }) {
     void refreshSharedWorkspaces();
   }, [session.version, ws]);
 
-  const [collapsed, setCollapsed] = useState(() => loadRailCollapsed(storage()));
-  const [overlayOpen, setOverlayOpen] = useState(false);
-  useEffect(() => saveRailCollapsed(storage(), collapsed), [collapsed]);
-
-  const railVisible = wide ? !collapsed : overlayOpen;
-  const toggleRail = useCallback(() => {
-    if (wide) setCollapsed((current) => !current);
-    else setOverlayOpen((current) => !current);
-  }, [wide]);
-  const closeOverlay = useCallback(() => setOverlayOpen(false), []);
-  // The phone's menu drawer: Back closes it (lib/back-to-close.ts).
-  useBackToClose(!wide && overlayOpen, closeOverlay);
-
-  // A sheet left open while the window grows would become a second rail beside the first.
-  useEffect(() => {
-    if (wide) setOverlayOpen(false);
-  }, [wide]);
+  const { mode: railMode, toggle: toggleRail } = useRailMode();
 
   /**
-   * The keyboard, decided in `railKeyAction` (nav-model.ts) from three facts this
-   * listener reads off the DOM: an open dialog, menu or listbox owns the key — so Escape
-   * in a dialog closes the dialog and not the sheet behind it, and `[` cannot collapse
-   * the rail under the open workspace switcher; Escape closes the sheet; the shortcut
-   * toggles, unless `[` was typed into a field.
+   * The keyboard, decided in `railKeyAction` (nav-model.ts) from the facts this listener reads
+   * off the DOM: an open dialog, menu or listbox owns the key, so `[` cannot switch the rail
+   * under the open workspace switcher; otherwise the shortcut toggles, unless `[` was typed
+   * into a field. A phone has no rail, so there the keys are nobody's.
    */
   useEffect(() => {
+    if (!wide) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      const action = railKeyAction(event, {
-        overlayOpen,
-        surfaceOpen: floatingSurfaceIsOpen(),
-        typing: isTyping(event.target),
-      });
-      if (action === null) return;
+      const action = railKeyAction(event, { surfaceOpen: floatingSurfaceIsOpen(), typing: isTyping(event.target) });
+      if (action !== "toggle") return;
       event.preventDefault();
-      if (action === "close-overlay") setOverlayOpen(false);
-      else toggleRail();
+      toggleRail();
     };
     // CAPTURE phase, like the palette's cmd-K listener: Radix dismisses a dialog on a
     // document-capture keydown and React has unmounted it by the time a bubble listener
-    // runs, so "is a dialog open" would already answer no and Escape would close the
-    // sheet behind the dialog it just closed. Window capture runs before document capture.
+    // runs, so "is a dialog open" would already answer no. Window capture runs before
+    // document capture.
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [overlayOpen, toggleRail]);
-
-  /**
-   * Focus follows the sheet: into the rail when it opens, so the keyboard lands inside
-   * it rather than behind it; back to the "Show navigation" button when it closes —
-   * by Escape, the scrim or a row — rather than dropping to `<body>`. The button is
-   * absent when the sheet closed because the window grew, and then there is nothing to
-   * return to and nothing is done.
-   */
-  const wasOverlayOpen = useRef(false);
-  useEffect(() => {
-    const target = overlayFocusTarget(wasOverlayOpen.current, overlayOpen);
-    wasOverlayOpen.current = overlayOpen;
-    if (target === "rail") document.querySelector<HTMLElement>("[data-nav-rail] button")?.focus();
-    if (target === "show-navigation") document.querySelector<HTMLElement>("[data-nav-show]")?.focus();
-  }, [overlayOpen]);
+  }, [wide, toggleRail]);
 
   const title = viewLabel(session.view);
   const scope = scopeName(session);
@@ -327,45 +303,26 @@ export function AppShell({ children }: { children: ReactNode }) {
       collapsing browser toolbar never hides the foot.
     */
     <div className="flex h-dvh bg-sidebar text-foreground" data-shell={wide ? "wide" : "phone"}>
-      {wide && railVisible ? <NavRail onHide={toggleRail} /> : null}
-
-      {!wide && overlayOpen ? (
-        <div className="fixed inset-0 z-40 flex" data-nav-overlay>
-          <div
-            aria-hidden
-            className="absolute inset-0 bg-scrim backdrop-blur-[2px]"
-            onClick={closeOverlay}
-          />
-          <div className="relative h-full max-w-[85vw] pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] bg-sidebar shadow-lg">
-            <NavRail onHide={closeOverlay} onNavigate={closeOverlay} />
-          </div>
-        </div>
-      ) : null}
+      {wide ? <NavRail mode={railMode} /> : null}
 
       <div
         data-content-frame
-        className={cn(
-          "flex min-w-0 flex-1 flex-col overflow-hidden bg-card md:my-gutter md:mr-gutter md:rounded-xl md:border md:shadow-xs",
-          wide && !railVisible && "md:ml-gutter",
-        )}
+        className="flex min-w-0 flex-1 flex-col overflow-hidden bg-card md:my-gutter md:mr-gutter md:rounded-xl md:border md:shadow-xs"
       >
         {wide ? (
           <>
             {/* ── the desk: where you are and the primary action; then which tasks and how ── */}
-            <TopBar railVisible={railVisible} onShowRail={toggleRail} cloud={cloud} hubCloud={hubCloud} />
+            <TopBar railMode={railMode} onToggleRail={toggleRail} cloud={cloud} hubCloud={hubCloud} />
             <Toolbar />
           </>
         ) : (
           <>
-            {/* ── the phone's top bar: menu, where you are, and the three global verbs ── */}
+            {/* ── the phone's top bar: where you are, and the three global verbs ── */}
             <div
               data-app-bar
               className="flex shrink-0 items-center gap-1 border-b bg-card px-1.5 pt-[max(0.25rem,env(safe-area-inset-top))] pb-1"
             >
-              <BarButton label="Menu" onClick={toggleRail} data-nav-show>
-                <Menu aria-hidden />
-              </BarButton>
-              <div className="flex min-w-0 flex-1 justify-start">
+              <div className="flex min-w-0 flex-1 justify-start pl-2">
                 <WorkspaceSwitcher variant="bar" />
               </div>
               {all ? null : <SharedBadge slug={currentWorkspace(session)?.slug ?? ""} report={cloud} compact />}

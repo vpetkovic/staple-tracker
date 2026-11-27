@@ -64,17 +64,21 @@ export interface RailModeStore {
 }
 
 export function createRailModeStore(storage: Pick<Storage, "getItem" | "setItem"> | undefined): RailModeStore {
-  let modes: RailModes;
-  try {
-    modes = decodeRailModes(storage?.getItem(RAIL_MODE_STORAGE_KEY) ?? null, storage?.getItem(RAIL_STORAGE_KEY) ?? null);
-  } catch {
-    modes = {};
-  }
+  const read = (fallback: RailModes): RailModes => {
+    try {
+      return decodeRailModes(storage?.getItem(RAIL_MODE_STORAGE_KEY) ?? null, storage?.getItem(RAIL_STORAGE_KEY) ?? null);
+    } catch {
+      return fallback;
+    }
+  };
+  let modes: RailModes = read({});
   const listeners = new Set<() => void>();
   return {
     modes: () => modes,
     toggle: (sizeClass) => {
-      modes = toggledRailModes(modes, sizeClass);
+      // Another tab may have chosen in the other size class since this page read storage: start
+      // from what storage holds now, with this class as this page shows it, and flip this class.
+      modes = toggledRailModes({ ...read(modes), [sizeClass]: railModeFor(modes, sizeClass) }, sizeClass);
       try {
         storage?.setItem(RAIL_MODE_STORAGE_KEY, JSON.stringify(modes));
       } catch {

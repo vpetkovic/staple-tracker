@@ -98,13 +98,14 @@ describe("the theme", () => {
     });
   });
 
-  it("follows the system with the rail hidden, and the switch agrees when the rail comes back", async () => {
+  it("follows the system with the rail narrowed, and the switch agrees when the rail comes back", async () => {
     await withPage({ ...DESK, colorScheme: "light" }, async (page) => {
       await page.keyboard.press("[");
-      await page.locator("[data-nav-rail]").waitFor({ state: "detached" });
+      await page.locator('[data-nav-rail][data-rail-mode="narrow"]').waitFor();
       await page.emulateMedia({ colorScheme: "dark" });
       await expect.poll(() => dark(page)).toBe(true);
       await page.keyboard.press("[");
+      await page.locator('[data-nav-rail][data-rail-mode="full"]').waitFor();
       expect(await page.getByRole("switch", { name: "Dark mode" }).getAttribute("aria-checked")).toBe("true");
     });
   });
@@ -228,14 +229,106 @@ describe("choosing a workspace from Usage", () => {
     await withPage(
       DESK,
       async (page) => {
-        expect(await page.locator("[data-nav-workspace][aria-current]").count()).toBe(0);
-        await page.locator('[data-nav-workspace="navfocus"]').click();
+        // On Usage the rail's head steps back: the page is in no workspace.
+        const name = page.locator('[data-workspace-switcher="head"] [data-workspace-name]');
+        expect(await name.getAttribute("class")).toContain("text-text-secondary");
+        await page.locator('[data-workspace-switcher="head"]').click();
+        await page.locator('[data-workspace-option="navfocus"]').click();
         await expect.poll(() => new URL(page.url()).searchParams.get("view")).toBe("tasks");
         expect(new URL(page.url()).searchParams.get("ws")).toBe("navfocus");
-        expect(await page.locator('[data-nav-workspace="navfocus"]').getAttribute("aria-current")).toBe("true");
+        expect(await name.textContent()).toBe("navfocus");
+        expect(await name.getAttribute("class")).not.toContain("text-text-secondary");
         expect(await page.locator("[data-nav-item='view:tree']").getAttribute("aria-current")).toBe("page");
       },
-      { server: hubUi, search: "&view=budget", ready: (page) => page.locator('[data-nav-workspace="navfocus"]').waitFor() },
+      { server: hubUi, search: "&view=budget", ready: (page) => page.locator('[data-workspace-switcher="head"]').waitFor() },
     );
   });
+});
+
+describe("the rail under the keyboard", () => {
+  const focused = (page: Page) =>
+    page.evaluate(() => {
+      const element = document.activeElement;
+      if (!element || element === document.body) return "body";
+      const hook = ["data-nav-item", "data-nav-settings", "data-nav-toggle", "data-view-tab"].find((name) => element.hasAttribute(name));
+      return hook ? `${hook}=${element.getAttribute(hook)}` : element.tagName;
+    });
+
+  it("keeps the focus on the same row when [ changes the rail's width, a project going to Tasks", async () => {
+    await withPage(DESK, async (page) => {
+      await page.locator("[data-nav-item='view:graph']").focus();
+      await page.keyboard.press("[");
+      await page.locator('[data-nav-rail][data-rail-mode="narrow"]').waitFor();
+      expect(await focused(page)).toBe("data-nav-item=view:graph");
+      await page.keyboard.press("[");
+      await page.locator('[data-nav-rail][data-rail-mode="full"]').waitFor();
+      expect(await focused(page)).toBe("data-nav-item=view:graph");
+      // A project row has no narrow twin: its parent row takes the focus.
+      await page.locator(`[data-nav-project="${projectId}"]`).focus();
+      await page.keyboard.press("[");
+      await page.locator('[data-nav-rail][data-rail-mode="narrow"]').waitFor();
+      expect(await focused(page)).toBe("data-nav-item=view:tree");
+      await page.keyboard.press("[");
+    });
+  });
+
+  it("gets the focus back on Settings from the dialog it opened", async () => {
+    await withPage(DESK, async (page) => {
+      await page.locator("[data-nav-settings]").focus();
+      await page.keyboard.press("Enter");
+      await page.locator("[data-settings-dialog]").waitFor();
+      await page.keyboard.press("Escape");
+      await page.locator("[data-settings-dialog]").waitFor({ state: "detached" });
+      await expect.poll(() => focused(page)).toBe("data-nav-settings=true");
+    });
+  });
+
+  it("gets the focus back on the More tab from a dialog the More sheet opened", async () => {
+    await withPage(
+      PHONE,
+      async (page) => {
+        await page.locator('[data-view-tab="more"]').click();
+        await page.locator("[data-more-new-project]").click();
+        await page.locator("[data-project-dialog]").waitFor();
+        await page.keyboard.press("Escape");
+        await page.locator("[data-project-dialog]").waitFor({ state: "detached" });
+        await expect.poll(() => focused(page)).toBe("data-view-tab=more");
+      },
+      { ready: (page) => page.locator("[data-view-tabs]").waitFor() },
+    );
+  });
+});
+
+describe("the rail while the server does not answer", () => {
+  it("keeps Reconnecting in sight above the foot however long the list of projects", async () => {
+    const { store } = openWorkspace(dbPath);
+    const made: string[] = [];
+    try {
+      for (let i = 0; i < 32; i++) made.push(store.projects().create({ name: `Long list ${String(i).padStart(2, "0")}` }, "setup").id);
+    } finally {
+      store.db.close();
+    }
+    try {
+      await withPage({ viewport: { width: 1280, height: 720 } }, async (page) => {
+        await page.locator(`[data-nav-project="${made.at(-1)}"]`).waitFor({ state: "attached" });
+        await page.route("**/api/poll*", (route) => route.abort());
+        const status = page.locator('[data-nav-connection="reconnecting"]');
+        await status.waitFor({ timeout: 15_000 });
+        const seen = await status.evaluate((element) => {
+          const box = element.getBoundingClientRect();
+          const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+          const scroller = document.querySelector("[data-nav-rail] .overflow-y-auto")!;
+          return { inView: box.top >= 0 && box.bottom <= innerHeight, onTop: element === hit || element.contains(hit), listScrolls: scroller.scrollHeight > scroller.clientHeight };
+        });
+        expect(seen).toEqual({ inView: true, onTop: true, listScrolls: true });
+      });
+    } finally {
+      const again = openWorkspace(dbPath);
+      try {
+        for (const id of made) again.store.projects().remove(id, "setup");
+      } finally {
+        again.store.db.close();
+      }
+    }
+  }, 40_000);
 });
