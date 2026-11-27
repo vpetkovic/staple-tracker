@@ -162,7 +162,6 @@ export function AnalyticsView({ onAuthError }: { onAuthError: (error: AuthError)
   const hubMode = session.mode === "hub";
   const data = report.data;
   const stale = data !== undefined && !answers(data, query, hubMode);
-  const open = (workspace: string, ref: string) => session.open(workspace, ref);
 
   const compact = slot !== null;
   const tabs = <DetailTabStrip sheet={compact} compact label="Analytics lens" items={LENSES} active={lens} />;
@@ -179,9 +178,9 @@ export function AnalyticsView({ onAuthError }: { onAuthError: (error: AuthError)
     ) : (
       <PageState report={data} error={report.error} stale={stale} onRetry={report.reload}>
         {lens === "overview" ? (
-          <OverviewLens report={data} query={query} order={session.workspaces.map((workspace) => workspace.slug)} onAuthError={onAuthError} onOpenReturn={() => chooseLens("return")} onOpenTicket={open} />
+          <OverviewLens report={data} query={query} order={session.workspaces.map((workspace) => workspace.slug)} onAuthError={onAuthError} onOpenReturn={() => chooseLens("return")} onOpenTicket={session.open} />
         ) : (
-          <ReturnLens workspace={ws} period={period} query={query} onAuthError={onAuthError} onOpenTicket={open} />
+          <ReturnLens workspace={ws} period={period} query={query} onAuthError={onAuthError} onOpenTicket={session.open} />
         )}
       </PageState>
     );

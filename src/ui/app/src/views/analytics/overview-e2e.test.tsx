@@ -18,6 +18,7 @@ import { formatCount } from "@/components/analytics/format";
 import type { AnalyticsReport, RoiResponse } from "@/lib/analytics-api";
 import { PageState } from "./AnalyticsView";
 import { OverviewBoard } from "./OverviewBoard";
+import { PageNotes } from "./overview-parts";
 import { caveatOf, caveatSentence, isEmptyScope, OVERVIEW_CAVEATS } from "./overview-data";
 import { setClock } from "../../../../../core/types.ts";
 import { initWorkspace } from "../../../../../core/workspace.ts";
@@ -33,6 +34,7 @@ let origin: string;
 let hub: AnalyticsReport;
 let roi: RoiResponse;
 let alpha: AnalyticsReport;
+let alphaAllTime: AnalyticsReport;
 let empty: AnalyticsReport;
 const previousHome = process.env.STAPLE_HOME;
 
@@ -50,9 +52,13 @@ beforeAll(async () => {
   setClock(() => clock);
   const at = (minutes: number): void => void (clock = T0 + minutes * 60_000);
 
+  // alpha's first ticket, eleven years back: longer ago than one read covers.
+  const a = initWorkspace({ global: true, slug: "alpha" }).store;
+  clock = Date.parse("2015-06-01T12:00:00.000Z");
+  a.createIssue({ title: "The first idea" });
+
   // alpha: one feature (an epic of two tickets, one estimated, one worked with no model logged),
   // and a bug closed on import, with no agent and no estimate.
-  const a = initWorkspace({ global: true, slug: "alpha" }).store;
   at(0);
   const epic = a.createIssue({ title: "[EPIC-1] Checkout flow", kind: "epic" }).id;
   const first = a.createIssue({ title: "Card form", parent: epic, estimatedSeconds: 4 * 3600 }).id;
@@ -80,8 +86,11 @@ beforeAll(async () => {
   b.updateIssue(task, { status: "done" }, "beta-worker");
   b.db.close();
 
-  // empty: registered, nothing in it.
+  // empty: registered, nothing in it. ghost: registered, its database gone.
   initWorkspace({ global: true, slug: "empty" }).store.db.close();
+  const ghost = initWorkspace({ global: true, slug: "ghost" });
+  ghost.store.db.close();
+  rmSync(ghost.dbPath, { force: true });
   setClock(null);
 
   ui = startUiServer({ port: 0, hub: true });
@@ -91,6 +100,7 @@ beforeAll(async () => {
   roi = await get(`/api/analytics/roi?scope=hub&${PERIOD}`);
   alpha = await get(`/api/analytics?scope=alpha&${PERIOD}`);
   empty = await get("/api/analytics?scope=empty&to=2026-09-07&tz=UTC");
+  alphaAllTime = await get("/api/analytics?scope=alpha&to=2026-09-07&tz=UTC");
 }, 60_000);
 
 afterAll(() => {
@@ -154,6 +164,26 @@ describe("the Overview drawn from the hub's answer", () => {
     const html = board(alpha);
     expect(text(html)).toContain(`${alpha.headline.done} tickets closed`);
     expect(html).not.toContain("Other workspaces");
+  });
+});
+
+describe("what limits the whole page", () => {
+  it("names a registered workspace this computer could not open", () => {
+    const unavailable = caveatOf(hub, "workspace_unavailable");
+    expect(unavailable?.count).toBe(1);
+    const html = renderToStaticMarkup(<PageNotes report={hub} />);
+    expect(html).toContain('data-page-note="workspace_unavailable"');
+    expect(text(html)).toContain(caveatSentence(unavailable!, hub));
+    expect(text(html)).toContain("(ghost)");
+  });
+
+  it("says the history goes further back when all time was clamped, and stays quiet otherwise", () => {
+    expect(alphaAllTime.period.explicit).toBe(false);
+    expect(alphaAllTime.period.firstActivity! < alphaAllTime.period.from).toBe(true);
+    const html = renderToStaticMarkup(<PageNotes report={alphaAllTime} />);
+    expect(html).toContain('data-page-note="history"');
+    expect(text(html)).toContain(`The history goes back further, to Jun 1, 2015.`);
+    expect(renderToStaticMarkup(<PageNotes report={alpha} />)).toBe("");
   });
 });
 

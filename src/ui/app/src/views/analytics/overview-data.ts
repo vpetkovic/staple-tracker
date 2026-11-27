@@ -349,9 +349,9 @@ export const OVERVIEW_CAVEATS: readonly CaveatCode[] = [
   "no_model",
 ];
 
-/** Every Overview caveat in the report, as sentences. */
-export function caveatSentences(report: AnalyticsReport): { code: CaveatCode; sentence: string }[] {
-  return OVERVIEW_CAVEATS.flatMap((code) => {
+/** The report's caveats among `codes` (every Overview one by default), as sentences in that order. */
+export function caveatSentences(report: AnalyticsReport, codes: readonly CaveatCode[] = OVERVIEW_CAVEATS): { code: CaveatCode; sentence: string }[] {
+  return codes.flatMap((code) => {
     const caveat = caveatOf(report, code);
     return caveat ? [{ code, sentence: caveatSentence(caveat, report) }] : [];
   });

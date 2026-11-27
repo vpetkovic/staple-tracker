@@ -24,8 +24,6 @@ import type { AnalyticsHeadline, AnalyticsReport, CaveatCode, RoiResponse } from
 import {
   againstWords,
   burstsOf,
-  caveatOf,
-  caveatSentence,
   caveatSentences,
   coverageOf,
   documentBars,
@@ -65,21 +63,25 @@ const bucketWord = { day: "day", week: "week", month: "month" } as const;
 const plural = (count: number, one: string, many = `${one}s`) => `${count.toLocaleString("en-US")} ${count === 1 ? one : many}`;
 const tableFirst = (report: AnalyticsReport) => (report.period.bucket === "day" ? "Day" : "Starting");
 
+/** One limit on the figures, with the dashed partial-data mark. */
+function Note({ id, children, attribute }: { id: string; children: ReactNode; attribute: "data-caveat" | "data-page-note" }) {
+  return (
+    <p className="inline-flex min-h-6 items-start gap-1.5 text-label text-muted-foreground" {...{ [attribute]: id }}>
+      <CircleDashed aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+      <span>{children}</span>
+    </p>
+  );
+}
+
 /** The caveats that limit one widget, each as a sentence beside its partial-data note. */
 function CaveatNotes({ report, codes }: { report: AnalyticsReport | undefined; codes: readonly CaveatCode[] }) {
   if (!report) return null;
-  const notes = codes.flatMap((code) => {
-    const caveat = caveatOf(report, code);
-    return caveat ? [{ code, sentence: caveatSentence(caveat, report) }] : [];
-  });
-  if (notes.length === 0) return null;
   return (
     <>
-      {notes.map((note) => (
-        <p key={note.code} className="inline-flex min-h-6 items-start gap-1.5 text-label text-muted-foreground" data-caveat={note.code}>
-          <CircleDashed aria-hidden className="mt-0.5 size-3.5 shrink-0" />
-          <span>{note.sentence}</span>
-        </p>
+      {caveatSentences(report, codes).map((note) => (
+        <Note key={note.code} id={note.code} attribute="data-caveat">
+          {note.sentence}
+        </Note>
       ))}
     </>
   );
@@ -224,7 +226,6 @@ export function WorkspacesWidget({ report, order, className }: { report: Analyti
       title="Where the time went"
       sentence={report ? <>Agent time by workspace, with what it closed there.</> : null}
       state={stateOf(report, (data) => data.workspaces.some((row) => row.agentHours > 0), { title: "No agent time in this period", hint: NOTHING_HINT })}
-      footer={<CaveatNotes report={report} codes={["workspace_unavailable"]} />}
       minBodyHeight={140}
     >
       <BarList ariaLabel="Agent time by workspace" items={rows} />
@@ -467,17 +468,16 @@ export function RecordWidget({ report, className }: { report: AnalyticsReport | 
 export function PageNotes({ report }: { report: AnalyticsReport | undefined }) {
   if (!report) return null;
   const notes = [
-    ...(caveatOf(report, "workspace_unavailable") ? [{ id: "workspace_unavailable", sentence: caveatSentence(caveatOf(report, "workspace_unavailable")!, report) }] : []),
+    ...caveatSentences(report, ["workspace_unavailable"]).map((note) => ({ id: note.code as string, sentence: note.sentence })),
     ...(historyGoesFurther(report) ? [{ id: "history", sentence: furtherHistorySentence(report) }] : []),
   ];
   if (notes.length === 0) return null;
   return (
     <div className="flex flex-col gap-1" data-page-notes>
       {notes.map((note) => (
-        <p key={note.id} className="inline-flex items-start gap-1.5 text-label text-muted-foreground" data-page-note={note.id}>
-          <CircleDashed aria-hidden className="mt-0.5 size-3.5 shrink-0" />
-          <span>{note.sentence}</span>
-        </p>
+        <Note key={note.id} id={note.id} attribute="data-page-note">
+          {note.sentence}
+        </Note>
       ))}
     </div>
   );
