@@ -314,14 +314,16 @@ describe("the queue in plain words", () => {
     expect(summary.notPlanned).toBe(queue.effective.filter((r) => r.unqueued).length);
   });
 
-  it("says it on the queue page's header as counts and a meter in the progress palette", () => {
+  it("says it on the queue page's header as counts and a meter, waiting drawn neutral", () => {
     const summary = queueSummary(queue.effective);
     const html = renderToStaticMarkup(<Standing summary={summary} finished={0} busy={false} onPrune={noop} />);
     expect(html).toContain(`<b>${summary.planned}</b> in the plan:`);
     expect(html).toMatch(new RegExp(`<b>${summary.counts.waiting}</b> <span class="q-wide">waiting</span>`));
     expect(html).toContain('data-segment="active"');
-    // One palette: waiting is the blocked red, ready the to-do amber, as on the rows' glyphs.
-    expect(html).toMatch(/data-segment="waiting" style="flex-grow:\d+;background:var\(--status-task-blocked\)"/);
+    // The progress palette, except waiting: on the Queue that is a sequenced plan's normal
+    // state, so it is a neutral grey, not the palette's blocked red.
+    expect(html).toMatch(/data-segment="active" style="flex-grow:\d+;background:var\(--status-task-in_progress\)"/);
+    expect(html).toMatch(/data-segment="waiting" style="flex-grow:\d+;background:var\(--ds-gray-600\)"/);
   });
 });
 
