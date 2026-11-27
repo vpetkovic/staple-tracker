@@ -161,6 +161,42 @@ describe("the rail's Tasks row", () => {
   });
 });
 
+describe("Tasks from the phone's tab bar and the palette", () => {
+  const projectOf = (page: Page) => new URL(page.url()).searchParams.getAll("project");
+  const narrowed = () => `&view=tasks&project=${projectId}`;
+
+  it("shows every task from the tab bar after a project narrowed the list", async () => {
+    await withPage(
+      PHONE,
+      async (page) => {
+        expect(projectOf(page)).toEqual([projectId]);
+        await page.locator('[data-view-tab="queue"]').click();
+        await expect.poll(() => new URL(page.url()).searchParams.get("view")).toBe("queue");
+        await page.locator('[data-view-tab="tree"]').click();
+        await expect.poll(() => new URL(page.url()).searchParams.get("view")).toBe("tasks");
+        expect(projectOf(page)).toEqual([]);
+      },
+      { search: narrowed(), ready: (page) => page.locator("[data-view-tabs]").waitFor() },
+    );
+  });
+
+  it("shows every task from the palette's Go to Tasks after a project narrowed the list", async () => {
+    await withPage(
+      DESK,
+      async (page) => {
+        await page.locator("[data-nav-item='view:queue']").click();
+        await expect.poll(() => new URL(page.url()).searchParams.get("view")).toBe("queue");
+        await page.keyboard.press("Control+k");
+        await page.keyboard.type("Go to Tasks");
+        await page.getByRole("option", { name: /Go to Tasks/ }).first().click();
+        await expect.poll(() => new URL(page.url()).searchParams.get("view")).toBe("tasks");
+        expect(projectOf(page)).toEqual([]);
+      },
+      { search: narrowed(), ready: (page) => page.locator("[data-nav-rail]").waitFor() },
+    );
+  });
+});
+
 describe("the page's poll", () => {
   it("gives up a poll that hangs, so the page keeps refreshing", async () => {
     await withPage(DESK, async (page) => {

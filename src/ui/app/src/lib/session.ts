@@ -359,6 +359,16 @@ export interface StapleSession {
   refresh: () => void;
 }
 
+/**
+ * Every menu's way to a view: the rail, the phone's tab bar, the palette's "Go to". Tasks
+ * from a menu means every task in scope, so it leaves a project the list was narrowed to
+ * (`showAllTasks`); every other view is switched to as it is.
+ */
+export function navigateTo(session: Pick<StapleSession, "setView" | "showAllTasks">, view: ViewName): void {
+  if (view === "tree") session.showAllTasks();
+  else session.setView(view);
+}
+
 export const SessionContext = createContext<StapleSession | null>(null);
 
 /**

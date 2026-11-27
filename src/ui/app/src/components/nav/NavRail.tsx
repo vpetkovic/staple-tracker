@@ -62,7 +62,7 @@ import { projectsForWorkspace } from "@/lib/projects";
 import { isResolvedStatus } from "@/lib/settings";
 import { openProjectDialog, openSettings } from "@/lib/shell-events";
 import { usePendingJoinRequests } from "@/lib/pending-requests";
-import { isAllWorkspaces, scopeName, useSession, type ViewName } from "@/lib/session";
+import { isAllWorkspaces, navigateTo, scopeName, useSession, type ViewName } from "@/lib/session";
 import { useInboxBadge, type InboxBadge } from "@/lib/attention";
 import { useRuns } from "@/lib/runs";
 import { useTheme } from "@/lib/theme";
@@ -604,9 +604,7 @@ export function NavRail({
   const session = useSession();
   const phone = useCompactHeader();
   const select = (view: ViewName) => {
-    // Tasks from the rail is every task in scope: it leaves a project the page was narrowed to.
-    if (view === "tree") session.showAllTasks();
-    else session.setView(view);
+    navigateTo(session, view);
     onNavigate?.();
   };
   const views = navGroup("views");
