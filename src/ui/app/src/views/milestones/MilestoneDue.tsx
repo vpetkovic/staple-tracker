@@ -40,6 +40,11 @@ export function useSetMilestoneTarget(workspace: string | undefined, milestoneId
   const clear = useCallback(() => setError(null), []);
   const set = useCallback(
     async (targetDate: string | null): Promise<boolean> => {
+      // Never a write with no milestone named: the store would answer "No issue matches".
+      if (!milestoneId) {
+        setError("This milestone has not loaded yet. Try again in a moment.");
+        return false;
+      }
       setBusy(true);
       setError(null);
       try {

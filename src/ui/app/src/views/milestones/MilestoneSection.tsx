@@ -168,7 +168,7 @@ export function OpenSection({
   // Read once wanted, and keep reading: folding it again keeps what it shows ready.
   const [wanted, setWanted] = useState(false);
   if (!wanted && (!folded || milestone.status === "awaiting_approval")) setWanted(true);
-  const work = useMilestoneWork(workspace, wanted ? milestone.identifier : null, onAuthError, { startFolded: true });
+  const work = useMilestoneWork(workspace, wanted ? milestone.identifier : null, onAuthError, { startFolded: true, milestoneId: milestone.id });
   const queue = useSectionQueue(workspace, milestone.id, queueRevision);
   return (
     <SectionView
@@ -525,7 +525,7 @@ export function FinishedLine({ row, workspace, onAuthError, open, onToggle }: { 
 }
 
 function FinishedBody({ row, workspace, onAuthError }: { row: MilestoneListRow; workspace: string; onAuthError: (error: AuthError) => void }) {
-  const work = useMilestoneWork(workspace, row.milestone.identifier, onAuthError, { showAll: true, startFolded: true });
+  const work = useMilestoneWork(workspace, row.milestone.identifier, onAuthError, { showAll: true, startFolded: true, milestoneId: row.milestone.id });
   return (
     <div className="border-t">
       <SectionBody work={work} workspace={workspace} row={row} />

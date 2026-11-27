@@ -330,6 +330,41 @@ describe.skipIf(Boolean(reason))("the Milestones page, pressed in a real browser
     await context.close();
   });
 
+  it("sets the due date of a folded section, which has read nothing, from the calendar and from the menu", async () => {
+    const { page, context } = await open("");
+    await section(page, refs.plan!).locator("[data-milestone-fold]").click();
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForTimeout(300);
+    expect(await section(page, refs.plan!).getAttribute("data-milestone-folded")).toBe("");
+    const written: string[] = [];
+    page.on("request", (request) => {
+      if (request.url().includes("/api/milestone/update")) written.push(String(JSON.parse(request.postData() ?? "{}").ref));
+    });
+    const targetOf = async () => (await get<{ milestone: { id: string; targetDate: string | null } }>(`/api/milestone?ws=${WS}&ref=${refs.plan}`)).milestone;
+    await section(page, refs.plan!).locator("[data-milestone-due-button]").click();
+    await page.locator('[data-milestone-due-picker] input[type="date"]').fill("2030-02-20");
+    await page.locator("[data-milestone-due-save]").click();
+    await page.waitForTimeout(800);
+    expect((await targetOf()).targetDate).toBe("2030-02-20");
+    expect(await page.locator("[data-milestone-due-picker]").count()).toBe(0);
+    // The menu's Change due date, still folded: the reads its menu started have not landed yet.
+    await section(page, refs.plan!).locator("[data-milestone-menu]").click();
+    await page.locator('[role=menu] [data-menu-item="due"]').click();
+    await page.locator('[data-milestone-due-picker] input[type="date"]').fill("2030-03-21");
+    await page.locator("[data-milestone-due-save]").click();
+    await page.waitForTimeout(800);
+    const after = await targetOf();
+    expect(after.targetDate).toBe("2030-03-21");
+    // Every write named the milestone; none went out with an empty reference.
+    expect(written).toEqual([after.id, after.id]);
+    await page.locator("[data-milestone-due-button]").first().waitFor();
+    await section(page, refs.plan!).locator("[data-milestone-due-button]").click();
+    await page.locator("[data-milestone-due-clear]").click();
+    await page.waitForTimeout(800);
+    expect((await targetOf()).targetDate).toBeNull();
+    await context.close();
+  });
+
   it("approves the milestone's gate from the page, signed by the person, and the status follows", async () => {
     const { page, context } = await open(refs.gated!);
     const gated = section(page, refs.gated!);

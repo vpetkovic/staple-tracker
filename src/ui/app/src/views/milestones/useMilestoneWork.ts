@@ -69,12 +69,13 @@ export interface MilestoneWork {
 /**
  * `showAll`: a finished milestone is a record, so its work is listed whatever the Done toggle says.
  * `startFolded`: each member starts as one line (an epic shows its own count) until it is unfolded.
+ * `milestoneId`: the milestone's id from its list row, for the due-date write while the view has not arrived.
  */
 export function useMilestoneWork(
   workspace: string,
   ref: string | null,
   onAuthError: (error: AuthError) => void,
-  { showAll = false, startFolded = false }: { showAll?: boolean; startFolded?: boolean } = {},
+  { showAll = false, startFolded = false, milestoneId = "" }: { showAll?: boolean; startFolded?: boolean; milestoneId?: string } = {},
 ): MilestoneWork {
   const session = useSession();
   const [busy, setBusy] = useState(false);
@@ -106,7 +107,7 @@ export function useMilestoneWork(
   const view = written ?? loaded;
   const now = useMemo(() => new Date(), [view]);
   const projection = useMemo(() => (view ? projectedDue(view.remaining, now) : null), [view, now]);
-  const dueWrite = useSetMilestoneTarget(ws, view?.milestone.id ?? "");
+  const dueWrite = useSetMilestoneTarget(ws, view?.milestone.id ?? milestoneId);
   // The Tasks list's own done gate and its fold, so "Done hidden" hides the same rows here.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const onToggle = useCallback(
