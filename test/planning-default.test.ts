@@ -79,7 +79,7 @@ describe("a new workspace starts with planning on", () => {
       const repositoryId = readStoredRepositoryId(store.db)!;
       expect(horizons.map((horizon) => horizon.id)).toEqual(["Now", "Next"].map((name) => stableHorizonId(repositoryId, name)));
       // Stored as a setting, so it travels to every device like the person's own choice.
-      expect(store.settings().values.get("features.planning")?.value).toBe(true);
+      expect(store.settingValue("features.planning")).toMatchObject({ value: true, source: "workspace" });
     });
   });
 
