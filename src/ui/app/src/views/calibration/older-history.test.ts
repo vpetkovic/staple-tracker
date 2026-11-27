@@ -77,4 +77,11 @@ describe("the older-history preference", () => {
     expect(source).not.toMatch(/useState\([^)]*(?:RECONSTRUCTED|false)/);
     expect(source).toMatch(/onToggleReconstructed=\{setIncludeReconstructed\}/);
   });
+
+  it("is what the Estimates lens of Analytics reads, where the old address now lands", () => {
+    const source = readFileSync(new URL("../analytics/EstimatesLens.tsx", import.meta.url), "utf8");
+    expect(source).toMatch(/const \[older\] = useIncludeOlderHistory\(\);/);
+    // The stored choice decides what the lens asks the server for.
+    expect(source).toMatch(/\.\.\.\(older \? \{ include: "reconstructed" as const \} : \{\}\)/);
+  });
 });

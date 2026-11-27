@@ -669,8 +669,12 @@ describe.skipIf(Boolean(reason))("the shell, measured", () => {
     expect((await atLeast44(graph.page, '[aria-label="expand BET-5"]')).drawnH).toBeLessThan(20);
     await graph.context.close();
 
+    // The old Estimates address opens Analytics on its Estimates lens, for the same workspace.
     const estimates = await page("/?ws=alpha&view=estimate-accuracy");
-    await atLeast44(estimates.page, '[data-testid="include-reconstructed"]');
+    await settle(estimates.page, 600);
+    expect(await estimates.page.locator("[data-analytics]").getAttribute("data-lens")).toBe("estimates");
+    expect(await estimates.page.locator("[data-workspace-filter]").getAttribute("aria-label")).toBe("Workspace: alpha");
+    expect(new URL(estimates.page.url()).searchParams.get("view")).toBe("analytics");
     await estimates.context.close();
 
     const usage = await page("/?view=budget");
@@ -702,7 +706,7 @@ describe.skipIf(Boolean(reason))("the shell, measured", () => {
       ]),
     ).toEqual([24, 32, 28, 32]);
     expect(await heights("/?view=budget", ['[data-testid="budget-refresh"]'])).toEqual([24]);
-    expect((await heights("/?ws=alpha&view=estimate-accuracy", ["[data-include-reconstructed-label]"]))[0]).toBeLessThanOrEqual(24);
+    expect((await heights("/?ws=alpha&view=estimate-accuracy", ["[data-workspace-filter]"]))[0]).toBeLessThanOrEqual(32);
   }, 60_000);
 
   it("a tablet's desk layout under a finger: the rail's controls and the rows' small controls are 44px targets", async () => {

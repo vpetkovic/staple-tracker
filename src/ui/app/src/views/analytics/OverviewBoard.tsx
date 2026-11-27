@@ -19,6 +19,7 @@ import {
   MixWidget,
   ModelsWidget,
   OutcomesWidget,
+  PageNotes,
   ParallelWidget,
   RecordWidget,
   RhythmWidget,
@@ -36,12 +37,13 @@ const TOPICS: readonly { id: Topic; label: string }[] = [
   { id: "reliability", label: "Reliability" },
 ];
 
-export function OverviewBoard({ report, returns, model, against, onOpenReturn, onOpenTicket }: OverviewProps) {
+export function OverviewBoard({ report, roi, order, onOpenReturn, onOpenTicket }: OverviewProps) {
   const [topic, setTopic] = useState<Topic>("delivery");
-  const many = report === undefined || report.scope.kind === "all";
+  const many = report === undefined || (report.scope.kind === "hub" && report.scope.workspaces.length > 1);
   return (
     <div className="flex flex-col gap-3" data-overview="board">
-      <KpiRow report={report} returns={returns} model={model} against={against} onOpenReturn={onOpenReturn} className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5 max-xl:[&>*:last-child]:col-span-2" />
+      <KpiRow report={report} roi={roi} onOpenReturn={onOpenReturn} className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5 max-xl:[&>*:last-child]:col-span-2" />
+      <PageNotes report={report} />
       <div role="tablist" aria-label="Topic" className="sticky top-0 z-10 -mx-page flex gap-1 overflow-x-auto border-b bg-card px-page [scrollbar-width:none] max-md:-mx-3 max-md:px-3" data-topic-tabs>
         {TOPICS.map((item) => (
           <button
@@ -59,16 +61,16 @@ export function OverviewBoard({ report, returns, model, against, onOpenReturn, o
       <div role="tabpanel" aria-label={TOPICS.find((item) => item.id === topic)?.label} className="flex min-h-[calc(100dvh-11rem)] flex-col gap-3" data-topic={topic}>
         {topic === "delivery" ? (
           <div className="grid gap-3 lg:grid-cols-3">
-            <DoneTrend report={report} className="lg:col-span-2" />
+            <DoneTrend report={report} order={order} className="lg:col-span-2" />
             <MixWidget report={report} />
-            <FeaturesWidget report={report} onOpenTicket={onOpenTicket} limit={8} className="lg:col-span-2" />
+            <FeaturesWidget report={report} order={order} onOpenTicket={onOpenTicket} limit={8} className="lg:col-span-2" />
             <RecordWidget report={report} />
             <BurstsWidget report={report} className="lg:col-span-3" />
           </div>
         ) : topic === "capacity" ? (
           <div className="grid gap-3 lg:grid-cols-3">
-            <HoursTrend report={report} className={many ? "lg:col-span-2" : "lg:col-span-3"} />
-            {many ? <WorkspacesWidget report={report} /> : null}
+            <HoursTrend report={report} order={order} className={many ? "lg:col-span-2" : "lg:col-span-3"} />
+            {many ? <WorkspacesWidget report={report} order={order} /> : null}
             <ParallelWidget report={report} className="lg:col-span-2" />
             <EstimatesWidget report={report} />
           </div>
