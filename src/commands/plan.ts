@@ -72,7 +72,9 @@ function ideaLine(idea: IdeaView, plan: PlanView): string {
   const progress = idea.progress === null ? "" : ` ${Math.round(idea.progress * 100)}%`;
   // An idea is named by its idea number until it is promoted, then by its ticket number with the idea number beside it.
   const kept = idea.identifier !== null && idea.number !== null ? ` (${idea.number})` : "";
-  return `${(idea.identifier ?? idea.number ?? idea.id).padEnd(9)} ${idea.stage.padEnd(9)} ${horizon.padEnd(14)} ${"  ".repeat(depth)}${idea.title}${kept}${progress}${flags ? `  [${flags}]` : ""}`;
+  // An import waiting for an agent says so: it is an agent's to take, on a horizon or not.
+  const classify = idea.nextStep?.need === "classify" ? "  (to classify)" : "";
+  return `${(idea.identifier ?? idea.number ?? idea.id).padEnd(9)} ${idea.stage.padEnd(9)} ${horizon.padEnd(14)} ${"  ".repeat(depth)}${idea.title}${kept}${progress}${flags ? `  [${flags}]` : ""}${classify}`;
 }
 
 function printScaffold(preview: ScaffoldPreview, dry: boolean, depth = 0): void {

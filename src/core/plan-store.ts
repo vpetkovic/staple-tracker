@@ -2306,6 +2306,8 @@ export class PlanStore {
       // Top down, so each child's parent is an idea before the child becomes one.
       for (const row of subtree) {
         const issue = this.store.convertToIdea(row.id, this.nextRecordRank(), actor);
+        // A ticket's own document of that key is not an import's request: it would read as a classify step.
+        if (this.classifyOf(row.id) !== null) this.store.putDocument(row.id, CLASSIFY_KEY, "", { author: actor, changeSummary: "converted: not an import" }, { plan: true });
         converted.push({ from: row.identifier, to: issue.identifier, title: row.title });
       }
       this.settleMembership(actor);

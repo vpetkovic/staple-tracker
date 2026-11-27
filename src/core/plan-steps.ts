@@ -186,7 +186,7 @@ export function classifyStep(input: {
     state: input.state,
     need: "classify",
     who: "agent",
-    instruction: `"${input.title}" was imported from ${input.classify ?? "a file"} with no maturity chosen. Read the original (staple file ls ${ref}, then staple file get <id> --out <path>) and classify it: fill its plan from the file (staple idea plan ${ref}, staple idea task ${ref} add, staple idea ask ${ref}, staple idea decide ${ref}), which moves it to exploring, and propose it shaped (staple idea propose ${ref}) once it passes the gate. When it is only a raw thought, leave it raw with staple idea set ${ref} --classified. Scheduling it and marking it shaped stay the person's.`,
+    instruction: `"${input.title}" was imported from ${input.classify ?? "a file"} with no maturity chosen. Read the original (staple file ls ${ref}, then staple file get <id> --out <path>) and classify it: fill its plan from the file (staple idea plan ${ref}, staple idea task ${ref} add, staple idea ask ${ref}, staple idea decide ${ref}), which moves it to exploring, and propose it shaped (staple idea propose ${ref}) once it passes the gate. When it is only a raw thought, leave it raw with staple idea set ${ref} --classified. A file over 256 KiB keeps its bytes on the device that imported it: classify it there. Scheduling it and marking it shaped stay the person's.`,
   };
 }
 

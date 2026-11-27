@@ -223,7 +223,7 @@ design you kept from ChatGPT or claude.ai. Pick the file and the stage it starts
 **Import**. Nothing is imported until you do. From a terminal:
 
 ```bash
-staple idea import plans/gift-cards.md --horizon Now --maturity exploring --person
+staple idea import plans/gift-cards.md --maturity exploring --person
 staple idea import exports/passkeys-chat.html
 ```
 
@@ -238,8 +238,10 @@ and the rest stays in the file. Any other kind of file is refused and nothing is
 *to classify*, asks an agent to read the file, fill the plan from it (which moves the idea to
 exploring) and propose it shaped once it passes the gate, or leave it raw when it is only a raw
 thought (`staple idea set I-STA-12 --classified`). Agents find the step on the idea
-(`nextStep` in `get_idea` and `list_ideas`, `step` in `staple idea show`), whether or not it is on
-a horizon. Pick **Raw**, **Exploring** or **Shaped** instead and no agent is asked; shaped is held
+(`nextStep` in `get_idea` and `list_ideas`, `step` in `staple idea show`, *(to classify)* in
+`staple idea ls`), whether or not it is on a horizon; a pickup's plan steps list it only while a
+horizon carries it (a sub-idea of a scheduled idea). A file over 256 KiB keeps its bytes on the
+device that imported it, so classify it there. Pick **Raw**, **Exploring** or **Shaped** instead and no agent is asked; shaped is held
 to the shaped gate. An imported idea has no sub-ideas
 yet, so importing straight into shaped needs breakdown rows; import a parent as exploring, add
 its sub-ideas, then mark it shaped.

@@ -1291,7 +1291,8 @@ The plan (experimental; features.planning defaults off)
               create an idea from a .md, .html or .jsx file, the original attached under
               Files; Markdown maps to its sections and task table (prints what it kept in
               Context instead of its section), HTML gives its title, JSX its file name.
-              --horizon and --maturity are the person's (--person); with no --maturity it
+              --maturity and --horizon are the person's (--person; a horizon takes a
+              maturity past raw, and is named by its identifier); with no --maturity it
               waits to be classified: its step asks an agent to read the file, fill the
               plan and propose it shaped, or leave it raw with idea set --classified
   idea set <ref> [--title T] [--brief T]

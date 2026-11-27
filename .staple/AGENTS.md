@@ -67,6 +67,12 @@ and an instruction. The `horizon-plan` instruction on its tickets says the same:
    scaffold every shaped idea you see: scaffold only a `scaffold` step, after
    re-checking its breakdown against what has landed.
 
+An idea imported from a file with no stage chosen waits for an agent: its
+`nextStep` is `classify` wherever it is (`list_ideas`, `get_idea`, `staple idea show`;
+`staple idea ls` marks it *(to classify)*), and pickups list it only while a
+horizon carries it. Read the file under Files, fill the plan from it and propose it
+shaped once it passes the gate, or leave it raw with `staple idea set <ref> --classified`.
+
 A step is never claimed, and an idea is never checked out or queued. A run with
 nothing left to take but steps pending stops with `planning_needed` and lists
 them in `detail.planSteps`.

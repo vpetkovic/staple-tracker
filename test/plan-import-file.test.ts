@@ -187,6 +187,17 @@ describe("importing a file as an idea", () => {
       expect(plan.ideaView(idea.id)).toMatchObject({ state: "exploring", nextStep: null });
     });
 
+    it("is not read off a converted ticket's own document of that key", () => {
+      const ticket = store.createIssue({ title: "Sort this by severity" });
+      store.putDocument(ticket.identifier, "classify", "Severity first, then age.", { author: "agent" });
+      const converted = plan.convertTicket(ticket.identifier, "agent").idea;
+      expect(converted).toMatchObject({ state: "raw", nextStep: null });
+    });
+
+    it("says to classify a file too large to travel on the device that imported it", () => {
+      expect(imported().nextStep!.instruction).toContain("over 256 KiB keeps its bytes on the device that imported it");
+    });
+
     it("cannot be written or cleared as a raw document", () => {
       const idea = imported();
       expect(refused(() => store.putDocument(idea.id, "classify", "", { author: "agent" })).message).toContain("classify request");

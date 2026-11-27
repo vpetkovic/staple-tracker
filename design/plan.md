@@ -507,7 +507,12 @@ passes the gate, or leave it raw on purpose with `classified` (`update_idea clas
 steps it is the record's `nextStep` whether or not a horizon carries it, with `horizonId` null
 when none does; where a horizon carries it, it is the horizon's step in place of `brainstorm`.
 Proposing it shaped and `classified` empty the document; enrichment and the person's maturity
-moves settle it with no write, since the step reads raw state. A raw write of the key is refused.
+moves settle it with no write, since the step reads raw state (a dropped import the person restores
+into raw was never classified, so its step returns). A converted ticket's own `classify` document
+is emptied by the conversion: it is not an import's request. Only a horizon that carries the record
+lists the step in its `planSteps` and pickups; an uncarried import's step is on the record alone
+(`list_ideas`, `get_idea`, `idea show`, and *(to classify)* in `idea ls`). A file over the inline
+limit keeps its bytes on the importing device, and the step says to classify it there. A raw write of the key is refused.
 Every view reads the waiting imports in one statement. Two devices that settle one import offline
 write the same empty body or touch different fields (an enrichment writes `plan_explored`), so
 every device, a fresh one included, reads the same step with no conflict.

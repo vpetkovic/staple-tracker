@@ -117,6 +117,9 @@ describe("importing a file on every surface", () => {
     expect(terminal.status, terminal.stderr).toBe(0);
     expect(terminal.stdout).toContain("imported Gift cards");
     expect(terminal.stdout).toContain("to classify: no maturity was chosen");
+    const listed = (await cli("idea", "ls")).stdout.split("\n").filter((line) => line.includes("Gift cards"));
+    expect(listed.length).toBeGreaterThan(0);
+    expect(listed.every((line) => line.endsWith("(to classify)"))).toBe(true);
     const agent = toolPayload(await mcp.call("import_idea", { ws: WS, content: MARKDOWN, filename: "gift-cards.md" })) as ImportAnswer;
     expect(gist(agent.idea)).toMatchObject({ title: "Gift cards", goal: "Customers redeem cards.", rows: 1, step: { need: "classify" } });
     const page = await http("/api/plan/import", { filename: "mock.jsx", contentBase64: Buffer.from(JSX).toString("base64") });
@@ -133,8 +136,13 @@ describe("importing a file on every surface", () => {
     // Without --person the maturity is refused: it is the person's.
     const unattributed = await cli("idea", "import", md, "--maturity", "exploring");
     expect(unattributed.status).not.toBe(0);
-    // import_idea takes no maturity: an agent's import is always raw and waits to be classified.
-    const agent = await mcp.call("import_idea", { ws: WS, content: MARKDOWN, filename: "chosen.md", maturity: "shaped" });
+    // import_idea takes a maturity or a horizon only to refuse it, saying whose it is; without them it is raw and waits to be classified.
+    for (const extra of [{ maturity: "shaped" }, { horizon: "Now" }]) {
+      const refused = await mcp.call("import_idea", { ws: WS, content: MARKDOWN, filename: "chosen.md", ...extra });
+      expect(refused.isError).toBe(true);
+      expect(JSON.stringify(refused.content)).toContain("the person's call");
+    }
+    const agent = await mcp.call("import_idea", { ws: WS, content: MARKDOWN, filename: "chosen.md" });
     expect(gist((toolPayload(agent) as ImportAnswer).idea)).toMatchObject({ maturity: "raw", step: { need: "classify" } });
   });
 
