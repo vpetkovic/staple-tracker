@@ -37,7 +37,11 @@ export function Heatmap({ cells, rows, columns, columnNames, format, ariaLabel, 
         aria-describedby={hintId}
         tabIndex={0}
         className="focus-ring-inset grid min-w-0 grid-cols-[2rem_1fr] gap-x-1.5 gap-y-[3px] rounded-sm"
-        onPointerLeave={() => setActive(null)}
+        // A finger lifted from a tapped cell also "leaves" the grid; only a mouse or pen
+        // leaving clears it. A tap elsewhere clears it through blur.
+        onPointerLeave={(event) => {
+          if (event.pointerType !== "touch") setActive(null);
+        }}
         onBlur={() => setActive(null)}
         onKeyDown={(event) => {
           const next = stepCell(active, event.key, cells.length, cells[0]?.length ?? 0);
