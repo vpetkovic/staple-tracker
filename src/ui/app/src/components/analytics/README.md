@@ -13,8 +13,9 @@ together.
   the heat ramp and the forced-colours rules. Everything else the widgets wear is an app token.
 - Put a chart inside a `Widget`. The frame owns loading, empty, error and partial data, so the chart
   only ever draws real data.
-- Give every chart a table twin (`columnChartTable`, `heatmapTable`) through `Widget`'s `table`, so
-  no value lives only in a tooltip or a colour.
+- Give a chart whose values live in a tooltip or a colour a table twin (`columnChartTable`,
+  `heatmapTable`) through `Widget`'s `table`. A widget that prints each value beside its mark
+  (`BarList`, `SegmentedBar`, `FeatureTable`, `BurstCards`) is already its own table.
 - Say numbers with `format.ts`, so a figure reads the same on a tile, an axis, a tooltip and a table.
 
 Rules every widget keeps:

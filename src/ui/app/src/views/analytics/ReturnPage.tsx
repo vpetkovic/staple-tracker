@@ -13,7 +13,7 @@
  * from nowhere else, and a figure still at its default wears an "assumed" mark.
  */
 import { ChevronRight, CircleCheck, OctagonAlert, Settings2, TriangleAlert, type LucideIcon } from "lucide-react";
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { formatDayRange, formatEffortHours, formatMoney, formatMultiple, formatNumber, formatPercent } from "@/components/analytics/format";
 import { ReturnRange } from "@/components/analytics/ReturnRange";
 import { StatTile } from "@/components/analytics/StatTile";
@@ -51,6 +51,17 @@ export function ReturnPage({ roi, stale = false, cost, error, onRetry, query, on
     place.current = scroller()?.scrollTop ?? 0;
     setRoleId(id);
   };
+  // The focus follows the page: to the role's heading when it opens, back to its row when it closes.
+  const shown = useRef<string | null>(roleId);
+  useEffect(() => {
+    const was = shown.current;
+    shown.current = roleId;
+    if (was === roleId) return;
+    const within = root.current;
+    if (!within) return;
+    if (roleId) within.querySelector<HTMLElement>("[data-role-heading]")?.focus({ preventScroll: true });
+    else if (was) [...within.querySelectorAll<HTMLElement>(`[data-role-row="${CSS.escape(was)}"] button, [data-role-card="${CSS.escape(was)}"] button, [data-role-absent="${CSS.escape(was)}"]`)].find((item) => item.offsetParent !== null)?.focus({ preventScroll: true });
+  }, [roleId]);
   useLayoutEffect(() => {
     const box = scroller();
     if (box) box.scrollTop = roleId ? 0 : place.current;
@@ -61,7 +72,7 @@ export function ReturnPage({ roi, stale = false, cost, error, onRetry, query, on
       replaceUrl(url.toString());
     });
   }, [roleId]);
-  if (error && (!roi || stale)) return <ProblemState title="The return could not be worked out" message={error.message} action={<button type="button" onClick={onRetry} className="focus-ring min-h-0 rounded-md border px-2.5 py-1 text-label font-medium">Try again</button>} />;
+  if (error && (!roi || stale)) return <ProblemState title="The return could not be worked out" message={error.message} action={<button type="button" onClick={onRetry} className="focus-ring relative min-h-0 rounded-md border px-2.5 py-1 text-label font-medium before:absolute before:-inset-y-1.5 before:inset-x-0 before:content-['']">Try again</button>} />;
   if (!roi || !cost) return <ReturnSkeleton />;
   const view = returnView(roi, cost.model);
   const role = view.all.find((item) => item.roleId === roleId);
@@ -254,10 +265,20 @@ function RoleByRole({ view, cost, onOpenRole, onSetup }: { view: ReturnView; cos
   const personDetail = `${view.director.activeDays} days agents ran × ${formatNumber(view.director.hoursPerActiveDay)} h a day${view.share < 1 ? shareWords(view.share, "agent time") : ""}`;
   const aiOf = (role: RoleView) => ({ amount: role.aiLines.length > 0 ? money(role.aiCost) : "—", detail: role.aiLines.length > 0 ? aiDetail(role.aiLines, sign, view.hub ? null : role.share, "its agent time") : "No AI cost assigned", muted: role.aiLines.length === 0 });
   const sharedDetail = aiDetail(view.shared.lines, sign, view.hub ? null : view.share, "agent time");
-  const openLabel = (role: RoleView) => `Open ${role.title}: its tickets, how it is worked out and how it is recognized`;
+  // Said after a row's own figures: what opening it shows. One hidden sentence per role, for the table and the cards.
+  const openHints = (
+    <div hidden>
+      {view.roles.map((role) => (
+        <span key={role.roleId} id={`open-role-${role.roleId}`}>
+          Opens {role.title}: its tickets, how it is worked out and how it is recognized.
+        </span>
+      ))}
+    </div>
+  );
   const rate = (value: number) => `${sign}${formatNumber(value)}`;
   return (
     <section aria-label="Role by role" className="@container/roles rounded-xl border bg-card p-4" data-role-table>
+      {openHints}
       <h3 className="text-title font-semibold">Role by role</h3>
       <p className="mt-0.5 max-w-4xl text-label text-pretty text-muted-foreground">
         The people {scope} would have needed, read from its tickets: what hiring each would cost, and what you paid for AI instead. Hours are counted two ways: <b className="font-medium text-foreground">agent time</b> is what the agents&apos; sessions recorded,{" "}
@@ -280,7 +301,7 @@ function RoleByRole({ view, cost, onOpenRole, onSetup }: { view: ReturnView; cos
         <ul>
           {present.map((role) => (
             <li key={role.roleId} className="border-b" data-role-row={role.roleId}>
-              <button type="button" aria-label={openLabel(role)} onClick={() => onOpenRole(role.roleId)} className={cn(ROW, "focus-ring-inset group/role w-full min-h-0 py-3 text-left transition-colors hover:bg-surface-hover")}>
+              <button type="button" aria-describedby={`open-role-${role.roleId}`} onClick={() => onOpenRole(role.roleId)} className={cn(ROW, "focus-ring-inset group/role w-full min-h-0 py-3 text-left transition-colors hover:bg-surface-hover")}>
                 <span className="min-w-0">
                   <span className="block truncate text-body font-medium group-hover/role:underline">{role.title}</span>
                   <span className="block text-label text-muted-foreground tabular-nums">{role.tickets.toLocaleString("en-US")} tickets</span>
@@ -336,7 +357,7 @@ function RoleByRole({ view, cost, onOpenRole, onSetup }: { view: ReturnView; cos
           const ai = aiOf(role);
           return (
             <li key={role.roleId} data-role-card={role.roleId}>
-              <button type="button" aria-label={openLabel(role)} onClick={() => onOpenRole(role.roleId)} className="focus-ring flex w-full min-h-0 flex-col gap-2.5 rounded-lg border p-3 text-left transition-colors hover:bg-surface-hover">
+              <button type="button" aria-describedby={`open-role-${role.roleId}`} onClick={() => onOpenRole(role.roleId)} className="focus-ring flex w-full min-h-0 flex-col gap-2.5 rounded-lg border p-3 text-left transition-colors hover:bg-surface-hover">
                 <span className="flex items-start justify-between gap-3">
                   <span className="min-w-0">
                     <span className="block truncate text-body font-semibold">{role.title}</span>
@@ -409,7 +430,7 @@ function RoleByRole({ view, cost, onOpenRole, onSetup }: { view: ReturnView; cos
 function fallbackWords(view: ReturnView): string {
   const used = view.fallbacks[0]?.usedTitle ?? "the first role";
   const what = view.fallbacks.map((fallback) => (fallback.type !== null ? `${fallback.type} work` : `rule ${(fallback.rule ?? 0) + 1}`));
-  return `${what.join(", ")} ${what.length === 1 ? "names a role" : "name roles"} no longer in the list, so ${what.length === 1 ? "its hours are" : "their hours are"} priced as ${used}. Give ${what.length === 1 ? "it" : "them"} a role on a role's page.`;
+  return `${what.join(", ")} ${what.length === 1 ? "names a role" : "name roles"} no longer in the list, so ${what.length === 1 ? "its hours are" : "their hours are"} priced as ${used}. Open a role and add that kind of work to it to move ${what.length === 1 ? "it" : "them"}.`;
 }
 
 /** A card's two figures side by side: what hiring would cost (both counts) and what the AI cost. */

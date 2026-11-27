@@ -56,11 +56,15 @@ describe("the tile's states", () => {
     expect(plain).toMatch(/^<section aria-label="Agent time"/);
     expect(plain).not.toContain("<button");
     const open = renderToStaticMarkup(<StatTile label="Return" value="2.4×" onOpen={() => {}} openLabel="Open the Return lens" />);
-    expect(open).toMatch(/^<button type="button" aria-label="Open the Return lens"/);
+    expect(open).toMatch(/^<button type="button" data-slot="stat-tile"/);
+    // The figure is the button's name, not hidden behind a label; what opening does comes after it.
+    expect(open).not.toContain("aria-label=");
+    expect(open.indexOf("2.4×")).toBeGreaterThan(-1);
+    expect(open.indexOf("Open the Return lens")).toBeGreaterThan(open.indexOf("2.4×"));
     expect(open).toContain("focus-ring");
     // The nudge on hover is motion, so it only plays when the reader has not asked for less.
     expect(open).toContain("motion-safe:group-hover/tile:translate-x-0.5");
-    expect(renderToStaticMarkup(<StatTile label="Return" value="2.4×" onOpen={() => {}} />)).toContain('aria-label="Return"');
+    expect(renderToStaticMarkup(<StatTile label="Return" value="2.4×" onOpen={() => {}} />)).toContain("Open Return</span>");
   });
 });
 

@@ -1008,8 +1008,8 @@ empty state.
 
 **Overview** (`OverviewBoard.tsx`, `overview-parts.tsx`) reads
 `GET /api/analytics` (`useAnalytics`), and `GET /api/analytics/roi` (`useRoi`)
-only while it is open, for its Return tile. Five figures lead, each with its
-change against the period before, then four topics behind sticky tabs
+only while it is open, for its Return tile. Five figures lead, the first four
+with their change against the period before, then four topics behind sticky tabs
 (*Delivery*, *Capacity*, *Speed*, *Reliability*). Every widget is fed through
 `overview-data.ts`, pure functions from the report to what a widget draws. A
 workspace keeps one colour: its slot is its place in the session's workspace
@@ -1044,11 +1044,15 @@ shared. `cost-edits.ts` maps every edit to the parts of the model it writes;
 once and the figures follow when the server has re-priced it. A conflict points
 at *Settings → Cloud → Conflicts*; a validation refusal is the server's sentence
 under the field. The foot says which workspace holds the model and whether it
-syncs, with *Move* when it does not. A figure nobody has saved wears *assumed*.
+syncs, with *Move* whenever the hub has another workspace to hold it. *Reset
+both profiles* asks first and puts both back to the shipped defaults. A figure
+nobody has saved wears *assumed*. The dialog is opened by a button, not a Radix
+trigger, so it hands the focus back with `useReturnFocus`.
 
 **The widgets** are `components/analytics/*`, each with its own loading, empty,
-error and partial-data states and a table twin; their data contracts are in
-`components/analytics/README.md`.
+error and partial-data states; the charts over time carry a table twin, and the
+widgets that print each value beside its mark do not need one. Their data
+contracts are in `components/analytics/README.md`.
 
 **How it is verified.** `overview-e2e.test.tsx` and `return-e2e.test.tsx` start
 the real HTTP server over workspaces written through the store and render the
@@ -1076,7 +1080,8 @@ in 10 past tickets landed. Three figures follow. **By kind of work** is one row
 per kind and priority on a shared scale where 100% is the estimate: the bar is
 where 8 in 10 past tickets landed (the ratio's p10–p90), the mark is the typical
 one, and a confidence pill says how sure the figure is (`cohortConfidence` in
-`lib/plain-language.ts`: no samples or no bounds is *Unknown*; bounds under the
+`lib/plain-language.ts`: no samples or no bounds reads *Can't tell yet*, with no
+pill; bounds under the
 90% target or `small_sample` is *Rough guess*; a quantile under the target is
 *Fairly sure*; otherwise *Quite sure*). A row opens to its detail.
 
@@ -1087,8 +1092,10 @@ drawn behind *Show older history*, under its own heading, never mixed with the
 measured rows.
 
 **All workspaces.** One row per workspace on the same scale, each from that
-workspace's broadest measured group; a row chooses the workspace. Estimate
-accuracy is worked out per workspace, so nothing is pooled across them.
+workspace's broadest measured group; a row chooses the workspace. Each row is
+that workspace's own figure. The sentence above the rows is their average,
+weighted by tickets, worked out in the browser. A workspace whose report could
+not be read is named as left out, never shown as empty.
 
 `views/calibration/CalibrationView.tsx` is no longer routed. Its report
 component stays because the forecast tests below render it.

@@ -118,7 +118,7 @@ export function RolePageView({ role, view, cost, tickets, onBack, onSetup, onOpe
 
       <header className="min-w-0">
         <p className="text-label font-medium text-muted-foreground">Role · {view.scope}</p>
-        <h2 className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-display font-semibold md:text-[28px] md:leading-[34px]">
+        <h2 tabIndex={-1} data-role-heading className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-display font-semibold outline-none md:text-[28px] md:leading-[34px]">
           {title}
           <span className="inline-flex items-center gap-1.5 text-reading font-medium text-text-secondary">
             {rate} an hour to hire
@@ -181,7 +181,6 @@ export function RolePageView({ role, view, cost, tickets, onBack, onSetup, onOpe
   );
 }
 
-const TYPE_WORDS: Record<AgentTypeId, string> = { engineering: "engineering", design: "design", documentation: "documentation", research: "research", orchestration: "orchestration" };
 
 /** The editor: kinds of agent work, then one chip field per one-field rule, then the rest read-only. */
 function Recognition({ roleId, cost, recognized }: { roleId: string; cost: CostApi; recognized: ReturnType<typeof recognitionOf> }) {
@@ -194,7 +193,7 @@ function Recognition({ roleId, cost, recognized }: { roleId: string; cost: CostA
       <ChipField
         label="Kinds of agent work"
         placeholder=""
-        values={recognized.types.map((type) => TYPE_WORDS[type])}
+        values={[...recognized.types]}
         onRemove={recognized.catchAll ? undefined : (index) => cost.apply(costEdits.typeOff(model, recognized.types[index]!))}
         problem={cost.problem(`types.${roleId}`)}
       >
@@ -213,7 +212,7 @@ function Recognition({ roleId, cost, recognized }: { roleId: string; cost: CostA
               <option value="">Add a kind of work</option>
               {elsewhere.map((type) => (
                 <option key={type} value={type}>
-                  {TYPE_WORDS[type]} (now {titleOf(model.roleMapping.types[type])})
+                  {type} (now {titleOf(model.roleMapping.types[type])})
                 </option>
               ))}
             </select>
@@ -238,7 +237,7 @@ function Recognition({ roleId, cost, recognized }: { roleId: string; cost: CostA
       ))}
       {recognized.others.length > 0 ? (
         <p className="text-label text-pretty text-muted-foreground" data-role-rules-other>
-          Also from rules set elsewhere, which this page does not change:{" "}
+          Also from rules with more than one condition, which are listed here and not edited on this page:{" "}
           {recognized.others.map(({ rule, index }) => `rule ${index + 1}, ${ruleWords(rule)}`).join("; ")}.
         </p>
       ) : null}

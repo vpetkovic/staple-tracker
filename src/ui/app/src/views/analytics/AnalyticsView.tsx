@@ -28,6 +28,7 @@ import { DetailTabStrip } from "@/detail/tabs/DetailTabStrip";
 import type { AnalyticsQuery, AnalyticsReport } from "@/lib/analytics-api";
 import type { AuthError } from "@/lib/api";
 import { replaceUrl, whenHistoryIsFree } from "@/lib/back-to-close";
+import { usePhoneHeaderSlot } from "@/lib/phone-header-slot";
 import { useSession, type AnalyticsLanding } from "@/lib/session";
 import { useAnalytics, useRoi } from "@/lib/use-analytics";
 import { cn } from "@/lib/utils";
@@ -84,25 +85,6 @@ export function openingLens(search: string, landing: AnalyticsLanding | null): L
 export function openingWorkspace(search: string, landing: AnalyticsLanding | null, workspaces: readonly { slug: string }[], hub: boolean): string {
   const value = landing ? landing.workspace : (new URLSearchParams(search).get("workspace") ?? "");
   return hub && workspaces.some((workspace) => workspace.slug === value) ? value : "";
-}
-
-/**
- * The phone shell's slot beside the page name, or null on the desk. The shell draws the slot only
- * in its phone shape, and it can switch shape a moment after this view hears the same media
- * change, so the slot is looked up again whenever the shell's shape attribute changes.
- */
-function usePhoneHeaderSlot(): HTMLElement | null {
-  const [slot, setSlot] = useState<HTMLElement | null>(null);
-  useLayoutEffect(() => {
-    const find = () => setSlot(document.querySelector<HTMLElement>("[data-phone-header-slot]"));
-    find();
-    const shell = document.querySelector("[data-shell]");
-    if (!shell || typeof MutationObserver === "undefined") return;
-    const observer = new MutationObserver(find);
-    observer.observe(shell, { attributes: true, attributeFilter: ["data-shell"] });
-    return () => observer.disconnect();
-  }, []);
-  return slot;
 }
 
 export function AnalyticsView({ onAuthError }: { onAuthError: (error: AuthError) => void }) {
@@ -201,9 +183,9 @@ export function AnalyticsView({ onAuthError }: { onAuthError: (error: AuthError)
     ) : (
       <PageState report={data} error={report.error} stale={stale} onRetry={report.reload}>
         {lens === "overview" ? (
-          <OverviewLens report={data} query={query} hubMode={hubMode} order={session.workspaces.map((workspace) => workspace.slug)} onAuthError={onAuthError} onOpenReturn={() => chooseLens("return")} onOpenTicket={session.open} />
+          <OverviewLens report={data} query={query} hubMode={hubMode} order={session.workspaces.map((workspace) => workspace.slug)} onAuthError={onAuthError} onOpenReturn={() => chooseLens("return")} onOpenEstimates={() => chooseLens("estimates")} onOpenTicket={session.open} />
         ) : (
-          <ReturnLens workspace={ws} period={period} query={query} onAuthError={onAuthError} onOpenTicket={session.open} />
+          <ReturnLens workspace={ws} query={query} onAuthError={onAuthError} onOpenTicket={session.open} />
         )}
       </PageState>
     );
@@ -241,7 +223,7 @@ export function AnalyticsView({ onAuthError }: { onAuthError: (error: AuthError)
 export function PageState({ report, error, stale, onRetry, children }: { report: AnalyticsReport | undefined; error: Error | undefined; stale: boolean; onRetry: () => void; children: ReactNode }) {
   // No answer for this period and workspace: none at all, or only an earlier one the failed read left behind.
   if (error && (!report || stale)) {
-    return <ProblemState title="Analytics could not be loaded" message={error.message} action={<button type="button" onClick={onRetry} className="focus-ring min-h-0 rounded-md border px-2.5 py-1 text-label font-medium">Try again</button>} />;
+    return <ProblemState title="Analytics could not be loaded" message={error.message} action={<button type="button" onClick={onRetry} className="focus-ring relative min-h-0 rounded-md border px-2.5 py-1 text-label font-medium before:absolute before:-inset-y-1.5 before:inset-x-0 before:content-['']">Try again</button>} />;
   }
   if (report && !stale && isEmptyScope(report)) {
     return (
@@ -258,11 +240,11 @@ export function PageState({ report, error, stale, onRetry, children }: { report:
  * and read again each time it opens, so a rate changed on the Return lens shows here. Like the
  * report, the previous answer stays on screen while a new period loads.
  */
-function OverviewLens({ report, query, hubMode, order, onAuthError, onOpenReturn, onOpenTicket }: { report: AnalyticsReport | undefined; query: AnalyticsQuery; hubMode: boolean; order: readonly string[]; onAuthError: (error: AuthError) => void; onOpenReturn: () => void; onOpenTicket: (workspace: string, ref: string) => void }) {
+function OverviewLens({ report, query, hubMode, order, onAuthError, onOpenReturn, onOpenEstimates, onOpenTicket }: { report: AnalyticsReport | undefined; query: AnalyticsQuery; hubMode: boolean; order: readonly string[]; onAuthError: (error: AuthError) => void; onOpenReturn: () => void; onOpenEstimates: () => void; onOpenTicket: (workspace: string, ref: string) => void }) {
   const roi = useRoi(query, onAuthError);
   // The tile never shows another period's return as this one's: it waits, or says it could not be worked out.
   const current = roi.data !== undefined && answers(roi.data, query, hubMode) ? roi.data : undefined;
-  return <OverviewBoard report={report} roi={current ?? (roi.error ? null : undefined)} order={order} onOpenReturn={onOpenReturn} onOpenTicket={onOpenTicket} />;
+  return <OverviewBoard report={report} roi={current ?? (roi.error ? null : undefined)} order={order} onOpenReturn={onOpenReturn} onOpenEstimates={onOpenEstimates} onOpenTicket={onOpenTicket} />;
 }
 
 /** The reader's calendar day, kept current while the page stays open. */
@@ -344,13 +326,14 @@ function PeriodPicker({ value, onChange, compact, resolved }: { value: PeriodAsk
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-64 p-1" data-period-menu>
-        <ul role="listbox" aria-label="Period">
+        <ul role="list" aria-label="Period" className="m-0 list-none p-0">
           {PRESETS.map((item) => {
             const selected = value.preset === item.id;
             return (
-              <li key={item.id} role="option" aria-selected={selected}>
+              <li key={item.id}>
                 <button
                   type="button"
+                  aria-pressed={selected}
                   onClick={() => {
                     onChange({ preset: item.id });
                     setOpen(false);
@@ -381,7 +364,7 @@ function PeriodPicker({ value, onChange, compact, resolved }: { value: PeriodAsk
             <DayField label="From" value={from} onChange={setFrom} max={to || undefined} />
             <DayField label="To" value={to} onChange={setTo} min={from || undefined} />
           </div>
-          <button type="submit" disabled={!valid} className="focus-ring mt-2 h-7 min-h-0 w-full rounded-md bg-primary text-label font-medium text-primary-foreground disabled:opacity-40">
+          <button type="submit" disabled={!valid} className="focus-ring mt-2 h-8 min-h-0 w-full rounded-md bg-primary text-label font-medium text-primary-foreground disabled:opacity-40">
             Show this range
           </button>
         </form>
@@ -394,7 +377,7 @@ function DayField({ label, value, onChange, min, max }: { label: string; value: 
   return (
     <label className="block text-caption text-muted-foreground">
       {label}
-      <input type="date" value={value} min={min} max={max} onChange={(event) => onChange(event.target.value)} className="focus-ring mt-0.5 block h-7 min-h-0 w-full rounded-md border bg-card px-1.5 text-label text-foreground" />
+      <input type="date" value={value} min={min} max={max} onChange={(event) => onChange(event.target.value)} className="focus-ring mt-0.5 block h-8 min-h-0 w-full rounded-md border bg-card px-1.5 text-label text-foreground" />
     </label>
   );
 }

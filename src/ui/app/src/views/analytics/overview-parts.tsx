@@ -37,6 +37,7 @@ import {
   modelBars,
   outcomeParts,
   parallelPoints,
+  plural,
   priorityParts,
   returnTile,
   sparkValues,
@@ -52,6 +53,8 @@ export interface OverviewProps {
   /** The session's workspace slugs in order: each workspace's colour slot is its place here. */
   order: readonly string[];
   onOpenReturn: () => void;
+  /** Opens the Estimates lens, from the widget that sets planned effort against agent time. */
+  onOpenEstimates: () => void;
   onOpenTicket: (workspace: string, ref: string) => void;
 }
 
@@ -60,7 +63,6 @@ const stateOf = (report: AnalyticsReport | undefined, has: (report: AnalyticsRep
   report === undefined ? LOADING : has(report) ? { kind: "ready" } : { kind: "empty", ...empty };
 const NOTHING_HINT = "Nothing was recorded in this period. Try a longer one.";
 const bucketWord = { day: "day", week: "week", month: "month" } as const;
-const plural = (count: number, one: string, many = `${one}s`) => `${count.toLocaleString("en-US")} ${count === 1 ? one : many}`;
 const tableFirst = (report: AnalyticsReport) => (report.period.bucket === "day" ? "Day" : "Starting");
 
 /** One limit on the figures, with the dashed partial-data mark. */
@@ -119,7 +121,7 @@ export function KpiRow({ report, roi, onOpenReturn, className }: Pick<OverviewPr
         value={headline ? formatCount(headline.epicsDone) : null}
         sentence={headline ? <>{plural(headline.done, "ticket")} closed{headline.bugsFixed > 0 ? `, ${headline.bugsFixed.toLocaleString("en-US")} of them bug fixes` : ""}.</> : null}
         trend={report ? sparkValues(report, "done") : undefined}
-        delta={delta("done", "up")}
+        delta={delta("epicsDone", "up")}
       />
       <StatTile
         label="Time to done"
@@ -155,7 +157,7 @@ export function KpiRow({ report, roi, onOpenReturn, className }: Pick<OverviewPr
 
 // ---------------------------------------------------------------- capacity and delivery over time
 
-export function HoursTrend({ report, order, className, height }: { report: AnalyticsReport | undefined; order: readonly string[]; className?: string; height?: number }) {
+export function HoursTrend({ report, order, className }: { report: AnalyticsReport | undefined; order: readonly string[]; className?: string }) {
   const lanes = report ? workspaceLanes(report, order) : null;
   const series = lanes?.series ?? [];
   const points = report && lanes ? trendPoints(report, "agentHours", lanes) : [];
@@ -177,12 +179,12 @@ export function HoursTrend({ report, order, className, height }: { report: Analy
         ) : null
       }
     >
-      <ColumnChart series={series} points={points} height={height} format={(value) => formatEffortHours(value)} totalLabel="All workspaces" ariaLabel={`Agent hours per ${report?.period.bucket ?? "day"}: ${formatEffortHours(capacity?.agentHours ?? 0)} in total.`} />
+      <ColumnChart series={series} points={points} format={(value) => formatEffortHours(value)} totalLabel="All workspaces" ariaLabel={`Agent hours per ${report?.period.bucket ?? "day"}: ${formatEffortHours(capacity?.agentHours ?? 0)} in total.`} />
     </Widget>
   );
 }
 
-export function DoneTrend({ report, order, className, height }: { report: AnalyticsReport | undefined; order: readonly string[]; className?: string; height?: number }) {
+export function DoneTrend({ report, order, className }: { report: AnalyticsReport | undefined; order: readonly string[]; className?: string }) {
   const lanes = report ? workspaceLanes(report, order) : null;
   const series = lanes?.series ?? [];
   const points = report && lanes ? trendPoints(report, "done", lanes) : [];
@@ -196,7 +198,7 @@ export function DoneTrend({ report, order, className, height }: { report: Analyt
       table={report ? columnChartTable(tableFirst(report), series, points) : undefined}
       minBodyHeight={200}
     >
-      <ColumnChart series={series} points={points} height={height} format={(value) => plural(value, "ticket")} totalLabel="All workspaces" ariaLabel={`Tickets closed per ${report?.period.bucket ?? "day"}: ${delivery?.done ?? 0} in total.`} />
+      <ColumnChart series={series} points={points} format={(value) => plural(value, "ticket")} totalLabel="All workspaces" ariaLabel={`Tickets closed per ${report?.period.bucket ?? "day"}: ${delivery?.done ?? 0} in total.`} />
     </Widget>
   );
 }
@@ -348,7 +350,7 @@ export function ModelsWidget({ report, className }: { report: AnalyticsReport | 
       sentence={report ? <>Attempts by model family, read from what each agent session reported.</> : null}
       state={stateOf(report, () => rows.length > 0, { title: "No attempts in this period", hint: NOTHING_HINT })}
       coverage={report ? coverageOf(report, "no_model", "attempts", "logged their model") : null}
-      help="Staple records the model only when the agent's harness reports it. Where it did not, the harness is named when it is known, and the rest is counted as no model logged."
+      help="Staple records the model only when the agent's tool reports it. Where it did not, the tool (Claude, Codex) is named when it is known, and the rest is counted as no model logged."
       minBodyHeight={140}
     >
       <BarList ariaLabel="Attempts by model family" labelWidth="10.5rem" items={rows} />

@@ -15,14 +15,12 @@ import { useSession } from "@/lib/session";
 import { saveCostModel, useCostModel, useRoi } from "@/lib/use-analytics";
 import { refusalSentence, withHome, type CostEdit } from "./cost-edits";
 import { answers } from "./overview-data";
-import type { PeriodAsk } from "./period";
 import type { CostApi, SaveStatus } from "./return-parts";
 import { ReturnPage } from "./ReturnPage";
 
 export function ReturnLens({ workspace, query, onAuthError, onOpenTicket }: {
   /** "" is every workspace on this computer. */
   workspace: string;
-  period: PeriodAsk;
   /** The same period and workspace as the query the real routes take. */
   query: AnalyticsQuery;
   onAuthError: (error: AuthError) => void;

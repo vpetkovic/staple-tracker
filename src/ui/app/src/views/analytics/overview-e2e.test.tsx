@@ -14,11 +14,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { formatCount } from "@/components/analytics/format";
+import { formatCount, formatMultiple } from "@/components/analytics/format";
 import type { AnalyticsReport, RoiResponse } from "@/lib/analytics-api";
 import { PageState } from "./AnalyticsView";
 import { OverviewBoard } from "./OverviewBoard";
-import { PageNotes } from "./overview-parts";
+import { EstimatesWidget, PageNotes } from "./overview-parts";
 import { caveatOf, caveatSentence, isEmptyScope, OVERVIEW_CAVEATS } from "./overview-data";
 import { setClock } from "../../../../../core/types.ts";
 import { initWorkspace } from "../../../../../core/workspace.ts";
@@ -120,7 +120,7 @@ const text = (html: string): string =>
     .replace(/\s+/g, " ");
 
 const board = (report: AnalyticsReport, answer: RoiResponse | null | undefined = roi): string =>
-  renderToStaticMarkup(<OverviewBoard report={report} roi={answer} order={ORDER} onOpenReturn={() => {}} onOpenTicket={() => {}} />);
+  renderToStaticMarkup(<OverviewBoard report={report} roi={answer} order={ORDER} onOpenReturn={() => {}} onOpenEstimates={() => {}} onOpenTicket={() => {}} />);
 
 describe("the Overview drawn from the hub's answer", () => {
   it("leads with the period's figures as the server counted them", () => {
@@ -154,9 +154,27 @@ describe("the Overview drawn from the hub's answer", () => {
     const html = text(board(hub));
     expect(html).toContain("Return on AI spend");
     expect(roi.measured.returnOnTotalCost).not.toBeNull();
+    // The figure itself: both counts as the route priced them, low to high (one figure when they print the same).
+    const ends = [roi.measured.returnOnTotalCost!, ...(roi.planned.valueHours > 0 ? [roi.planned.returnOnTotalCost!] : [])].sort((a, b) => a - b).map(formatMultiple);
+    const figure = ends.length === 2 && ends[0] !== ends[1] ? `${ends[0]!.replace("×", "")}–${ends[1]}` : ends[0]!;
+    expect(html).toContain(`Return on AI spend ${figure}`);
     expect(html).toContain("Default rates until you set yours");
     // An ROI read that failed says so instead of loading forever.
     expect(text(board(hub, null))).toContain("Could not be worked out");
+  });
+
+  it("says the change in features beside Features shipped, not the change in tickets", () => {
+    const now = { ...hub.headline, epicsDone: 2, done: 10 };
+    const before = { ...hub.headline, epicsDone: 2, done: 5 };
+    const same = text(board({ ...hub, headline: now, previous: { from: "2026-08-01", to: "2026-08-07", headline: before } }));
+    // Tickets doubled and features did not move: the tile under "Features shipped" says no change.
+    expect(same).toMatch(/Features shipped 2 [^%]*No change/);
+    const more = text(board({ ...hub, headline: { ...now, epicsDone: 3 }, previous: { from: "2026-08-01", to: "2026-08-07", headline: before } }));
+    expect(more).toMatch(/Features shipped 3 [^%]*\+50%/);
+  });
+
+  it("opens the Estimates lens from the widget that sets planned effort against agent time", () => {
+    expect(renderToStaticMarkup(<EstimatesWidget report={hub} onOpenEstimates={() => {}} />)).toContain("Open Estimates for accuracy by group");
   });
 
   it("draws one workspace without a workspace legend or the per-workspace widget", () => {

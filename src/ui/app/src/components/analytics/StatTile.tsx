@@ -103,8 +103,12 @@ export function StatTile({
   const frame = cn("flex min-w-0 flex-col gap-1.5 rounded-xl border bg-card p-4 text-left text-card-foreground", className);
   if (onOpen) {
     return (
-      <button type="button" onClick={onOpen} aria-label={openLabel ?? label} data-slot="stat-tile" className={cn(frame, "group/tile focus-ring cursor-pointer transition-colors hover:border-border-strong hover:bg-surface-hover")}>
+      // The tile's own words are its name, so a screen reader hears the figure; what opening does is said after them.
+      <button type="button" onClick={onOpen} data-slot="stat-tile" className={cn(frame, "group/tile focus-ring cursor-pointer transition-colors hover:border-border-strong hover:bg-surface-hover")}>
         {body}
+        <span className="sr-only" data-open-label>
+          {openLabel ?? `Open ${label}`}
+        </span>
       </button>
     );
   }

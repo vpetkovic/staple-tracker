@@ -14,8 +14,8 @@
  * and Tasks is the work itself.
  *
  * The fifth tab is More, a sheet in the rail's order: the scope's other views (Graph,
- * Milestones, Plan with planning on, Estimates); its projects (each narrows Tasks to itself,
- * each with its settings, then New project); and This computer (Usage, Integrations, Settings,
+ * Milestones, Plan with planning on); its projects (each narrows Tasks to itself, each with its
+ * settings, then New project); and This computer (Usage, Integrations, Analytics, Settings,
  * Dark mode). More is drawn as current while one of its views is on screen. The sheet closes
  * before any dialog it opens, so a dialog never stacks on it.
  *

@@ -20,7 +20,7 @@ import { ConfidencePill } from "@/components/plain/StatusPill";
 import { EmptyState, ProblemState } from "@/components/plain/States";
 import { Skeleton } from "@/components/ui/skeleton";
 import { getCalibration, type AuthError } from "@/lib/api";
-import { accuracyGroups, accuracyHeadline, cohortConfidence, cohortRangeWords, groupSentence, ratioFigure, type AccuracyGroup } from "@/lib/plain-language";
+import { accuracyGroups, accuracyHeadline, cohortConfidence, cohortRangeWords, groupSentence, kindName, ratioFigure, type AccuracyGroup } from "@/lib/plain-language";
 import type { CalibrationCohort, CalibrationReport } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
@@ -41,7 +41,6 @@ interface Row {
 const cohortsOf = (report: CalibrationReport): CalibrationCohort[] => (report.list === "cohorts" ? (report.items as CalibrationCohort[]) : []);
 const figureOf = (group: AccuracyGroup): CalibrationCohort => (group.kind === "own" ? group.cohort : group.figure);
 
-const KIND_WORDS: Record<string, string> = { "*": "All finished work", task: "Tasks", bug: "Bug fixes", chore: "Chores", spike: "Spikes", epic: "Epics", feature: "Features" };
 const known = (value: string) => value !== "*" && value !== "unknown";
 
 /**
@@ -69,7 +68,7 @@ function rowsOf(report: CalibrationReport): Row[] {
     (a, b) => Number(a.older) - Number(b.older) || Number(b.kind === "*") - Number(a.kind === "*") || (weight.get(b.kind) ?? 0) - (weight.get(a.kind) ?? 0) || a.kind.localeCompare(b.kind) || b.figure.samples - a.figure.samples,
   );
 }
-const fullName = (row: Row) => (row.kind === "*" || row.group === null ? row.name : `${KIND_WORDS[row.kind] ?? row.kind}, ${lowerFirst(row.name)}`);
+const fullName = (row: Row) => (row.kind === "*" || row.group === null ? row.name : `${kindName(row.kind)}, ${lowerFirst(row.name)}`);
 /** The group that speaks for a whole workspace: the broadest measured one, else the one with most tickets. */
 function overallOf(report: CalibrationReport): Row | null {
   const rows = rowsOf(report);
@@ -83,6 +82,21 @@ export function EstimatesLens({ workspace, workspaces, onChooseWorkspace, onAuth
   return <OneWorkspace key={single} workspace={single} onAuthError={onAuthError} version={version} />;
 }
 
+/** What the typical share of the estimate means: under it is the agents' speed, over it is work that overran. */
+export function leadReading(ratio: number): string {
+  if (ratio > 1.05) return "The work usually runs over its estimate here, so plan with that, or estimate higher.";
+  if (ratio >= 0.95) return "The estimates here are close to what the work takes.";
+  return "Estimates are planning figures, close to what a person would need, so the gap is the speed of the agents, not a planning mistake.";
+}
+
+function RetryButton({ onRetry }: { onRetry: () => void }) {
+  return (
+    <button type="button" onClick={onRetry} className="focus-ring relative min-h-0 rounded-md border px-2.5 py-1 text-label font-medium before:absolute before:-inset-y-1.5 before:inset-x-0 before:content-['']">
+      Try again
+    </button>
+  );
+}
+
 // ---------------------------------------------------------------- one workspace
 
 function OneWorkspace({ workspace, onAuthError, version }: { workspace: string; onAuthError: (error: AuthError) => void; version: number }) {
@@ -90,7 +104,7 @@ function OneWorkspace({ workspace, onAuthError, version }: { workspace: string; 
   const load = useCallback(() => getCalibration({ ws: workspace || undefined, limit: 200, ...(older ? { include: "reconstructed" as const } : {}) }), [workspace, older]);
   const report = useResource(load, [workspace, older, version], onAuthError);
   const data = report.data && report.data.filter.include.includes("reconstructed") === older ? report.data : undefined;
-  if (report.error && !data) return <ProblemState title="Estimates could not be loaded" message={report.error.message} />;
+  if (report.error && !data) return <ProblemState title="Estimates could not be loaded" message={report.error.message} action={<RetryButton onRetry={report.reload} />} />;
   if (!data) return <LensSkeleton />;
   const rows = rowsOf(data);
   const measured = rows.filter((row) => !row.older);
@@ -120,7 +134,7 @@ function OneWorkspace({ workspace, onAuthError, version }: { workspace: string; 
           </h2>
           {overall ? (
             <p className="max-w-3xl text-reading text-text-secondary">
-              That is {formatPercent(overall.figure.ratio.expected.value)} of the estimate, from {overall.figure.samples.toLocaleString("en-US")} finished tickets with measured time. Estimates are planning figures, close to what a person would need, so the gap is the speed of the agents, not a planning mistake.
+              That is {formatPercent(overall.figure.ratio.expected.value)} of the estimate, from {overall.figure.samples.toLocaleString("en-US")} finished tickets {overall.older ? "in the older history, rebuilt from logs" : "with measured time"}. {leadReading(overall.figure.ratio.expected.value)}
             </p>
           ) : null}
         </section>
@@ -195,21 +209,24 @@ function Converter({ rows }: { rows: readonly Row[] }) {
 function AllWorkspaces({ workspaces, onChoose, onAuthError, version }: { workspaces: readonly { slug: string; prefix: string }[]; onChoose: (slug: string) => void; onAuthError: (error: AuthError) => void; version: number }) {
   const slugs = workspaces.map((workspace) => workspace.slug).join(",");
   const load = useCallback(
-    () => Promise.all(workspaces.map((workspace) => getCalibration({ ws: workspace.slug, limit: 200 }).then((report) => ({ slug: workspace.slug, report }), () => ({ slug: workspace.slug, report: null })))),
+    () => Promise.all(workspaces.map((workspace) => getCalibration({ ws: workspace.slug, limit: 200 }).then((report) => ({ slug: workspace.slug, report, failed: false }), () => ({ slug: workspace.slug, report: null, failed: true })))),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [slugs],
   );
   const all = useResource(load, [slugs, version], onAuthError);
-  if (all.error && !all.data) return <ProblemState title="Estimates could not be loaded" message={all.error.message} />;
+  if (all.error && !all.data) return <ProblemState title="Estimates could not be loaded" message={all.error.message} action={<RetryButton onRetry={all.reload} />} />;
   if (!all.data) return <LensSkeleton />;
   const rows: Row[] = [];
   const without: string[] = [];
-  for (const { slug, report } of all.data) {
+  const unread: string[] = [];
+  for (const { slug, report, failed } of all.data) {
     const overall = report ? overallOf(report) : null;
     if (overall) rows.push({ id: slug, name: slug, kind: "", figure: overall.figure, group: null, older: false, onOpen: () => onChoose(slug) });
+    else if (failed) unread.push(slug);
     else without.push(slug);
   }
   rows.sort((a, b) => b.figure.samples - a.figure.samples);
+  if (rows.length === 0 && unread.length > 0) return <ProblemState title="Estimates could not be loaded" message={`Could not be read: ${unread.join(", ")}.`} action={<RetryButton onRetry={all.reload} />} />;
   if (rows.length === 0) {
     return (
       <EmptyState title="No estimates to compare yet">
@@ -227,6 +244,7 @@ function AllWorkspaces({ workspaces, onChoose, onAuthError, version }: { workspa
         <p className="max-w-3xl text-reading text-text-secondary">
           Estimate accuracy is worked out for each workspace on its own, because estimating habits differ between projects. Choose a workspace to see it by kind of work and to try an estimate.
           {without.length > 0 ? ` Nothing to compare yet in ${without.join(", ")}.` : ""}
+          {unread.length > 0 ? <span data-estimates-unread> Could not be read, so left out: {unread.join(", ")}.</span> : null}
         </p>
       </section>
       <ScaleTable title="By workspace" sentence="Each row is all the measured work in one workspace. The bar is where 8 in 10 past tickets landed; the mark is the typical one; the line at 100% is the estimate itself." rows={rows} nameHeader="Workspace" />
@@ -277,7 +295,7 @@ function ScaleTable({ title, sentence, rows: allRows, nameHeader, sections = fal
           return (
             <li key={row.id} className="border-b last:border-b-0">
               {index === olderAt ? <p className="pt-4 pb-1 text-label font-medium text-muted-foreground">Older history: rebuilt from logs, less precise, kept apart</p> : null}
-              {sections && row.kind !== "*" && rows[index - 1]?.kind !== row.kind ? <p className="pt-3 text-caption font-medium tracking-[var(--tracking-eyebrow)] text-text-tertiary uppercase">{KIND_WORDS[row.kind] ?? row.kind}</p> : null}
+              {sections && row.kind !== "*" && rows[index - 1]?.kind !== row.kind ? <p className="pt-3 text-caption font-medium tracking-[var(--tracking-eyebrow)] text-text-tertiary uppercase">{kindName(row.kind)}</p> : null}
               <div className={cn(TABLE, "py-2.5")}>
                 <div className="min-w-0">
                   {row.onOpen ? (

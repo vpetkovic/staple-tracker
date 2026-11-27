@@ -37,20 +37,37 @@ const TOPICS: readonly { id: Topic; label: string }[] = [
   { id: "reliability", label: "Reliability" },
 ];
 
-export function OverviewBoard({ report, roi, order, onOpenReturn, onOpenTicket }: OverviewProps) {
+export function OverviewBoard({ report, roi, order, onOpenReturn, onOpenEstimates, onOpenTicket }: OverviewProps) {
   const [topic, setTopic] = useState<Topic>("delivery");
   const many = report === undefined || (report.scope.kind === "hub" && report.scope.workspaces.length > 1);
   return (
     <div className="flex flex-col gap-3" data-overview="board">
       <KpiRow report={report} roi={roi} onOpenReturn={onOpenReturn} className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5 max-xl:[&>*:last-child]:col-span-2" />
       <PageNotes report={report} />
-      <div role="tablist" aria-label="Topic" className="sticky top-0 z-10 -mx-page flex gap-1 overflow-x-auto border-b bg-card px-page [scrollbar-width:none] max-md:-mx-3 max-md:px-3" data-topic-tabs>
+      <div
+        role="tablist"
+        aria-label="Topic"
+        className="sticky top-0 z-10 -mx-page flex gap-1 overflow-x-auto border-b bg-card px-page [scrollbar-width:none] max-md:-mx-3 max-md:px-3"
+        data-topic-tabs
+        // The arrow keys move between tabs, as a tab list does; Tab leaves it for the panel.
+        onKeyDown={(event) => {
+          const at = TOPICS.findIndex((item) => item.id === topic);
+          const to = event.key === "ArrowRight" ? (at + 1) % TOPICS.length : event.key === "ArrowLeft" ? (at + TOPICS.length - 1) % TOPICS.length : event.key === "Home" ? 0 : event.key === "End" ? TOPICS.length - 1 : -1;
+          if (to < 0) return;
+          event.preventDefault();
+          setTopic(TOPICS[to]!.id);
+          event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')[to]?.focus();
+        }}
+      >
         {TOPICS.map((item) => (
           <button
             key={item.id}
             type="button"
             role="tab"
+            id={`analytics-topic-${item.id}`}
             aria-selected={topic === item.id}
+            aria-controls="analytics-topic-panel"
+            tabIndex={topic === item.id ? 0 : -1}
             onClick={() => setTopic(item.id)}
             className={cn("focus-ring-inset -mb-px min-h-0 shrink-0 border-b-2 border-transparent px-3 py-2 text-body font-medium text-muted-foreground transition-colors hover:text-foreground", topic === item.id && "border-foreground text-foreground")}
           >
@@ -58,7 +75,7 @@ export function OverviewBoard({ report, roi, order, onOpenReturn, onOpenTicket }
           </button>
         ))}
       </div>
-      <div role="tabpanel" aria-label={TOPICS.find((item) => item.id === topic)?.label} className="flex min-h-[calc(100dvh-11rem)] flex-col gap-3" data-topic={topic}>
+      <div role="tabpanel" id="analytics-topic-panel" aria-labelledby={`analytics-topic-${topic}`} className="flex min-h-[calc(100dvh-11rem)] flex-col gap-3" data-topic={topic}>
         {topic === "delivery" ? (
           <div className="grid gap-3 lg:grid-cols-3">
             <DoneTrend report={report} order={order} className="lg:col-span-2" />
@@ -72,7 +89,7 @@ export function OverviewBoard({ report, roi, order, onOpenReturn, onOpenTicket }
             <HoursTrend report={report} order={order} className={many ? "lg:col-span-2" : "lg:col-span-3"} />
             {many ? <WorkspacesWidget report={report} order={order} /> : null}
             <ParallelWidget report={report} className="lg:col-span-2" />
-            <EstimatesWidget report={report} />
+            <EstimatesWidget report={report} onOpenEstimates={onOpenEstimates} />
           </div>
         ) : topic === "speed" ? (
           <div className="grid gap-3 lg:grid-cols-3">

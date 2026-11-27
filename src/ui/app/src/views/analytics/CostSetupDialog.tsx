@@ -23,10 +23,11 @@ import { useState, type ReactNode } from "react";
 import { formatEffortHours, formatMoney } from "@/components/analytics/format";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { AiSpendEntryValue, CostRole, ProfileId } from "@/lib/analytics-api";
+import { useReturnFocus } from "@/lib/return-focus";
 import { cn } from "@/lib/utils";
 import { costEdits, moveHome, newId, resetProfiles } from "./cost-edits";
 import { AddButton, AmountField, AssumedTag, IconButton, Segmented, TextField, type CostApi, type SaveStatus } from "./return-parts";
-import { activeProfile, catchAllRole, currencySymbol, entryDates, isAssumed, monthlyOf, scenarioWords, type ReturnView } from "./return-model";
+import { DEFAULT_RATE, activeProfile, catchAllRole, currencySymbol, entryDates, isAssumed, monthlyOf, scenarioWords, type ReturnView } from "./return-model";
 
 export const SCENARIOS: readonly { id: ProfileId; label: string }[] = [
   { id: "solo", label: "Just me" },
@@ -36,7 +37,8 @@ export const SCENARIOS: readonly { id: ProfileId; label: string }[] = [
 export function CostSetupDialog({ open, onOpenChange, view, cost }: { open: boolean; onOpenChange: (open: boolean) => void; view: ReturnView; cost: CostApi }) {
   const model = cost.model;
   const mode = model.scenario.mode;
-  // Reset clears both profiles and cannot be undone, so it asks once before it does.
+  const returnFocus = useReturnFocus(open);
+  // Reset puts both profiles back to the defaults and cannot be undone, so it asks once before it does.
   const [confirmReset, setConfirmReset] = useState(false);
   const words = scenarioWords(mode);
   const solo = mode === "solo";
@@ -62,7 +64,7 @@ export function CostSetupDialog({ open, onOpenChange, view, cost }: { open: bool
             <span className="mb-1 block text-label text-muted-foreground tabular-nums">{line?.present ? `${line.tickets.toLocaleString("en-US")} tickets were this role's work` : "No tickets here"}</span>
             <TextField label="Role title" value={role.title} onCommit={(title) => cost.apply(costEdits.roleTitle(model, role.id, title))} className="w-full font-medium" problem={cost.problem(`roles.${role.id}.title`)} />
           </div>
-          <AmountField label="To hire, an hour" prefix={sign} suffix="/h" value={profile.rates[role.id] ?? 100} onCommit={(rate) => cost.apply(costEdits.roleRate(model, role.id, rate))} problem={cost.problem(`roles.${role.id}.hourlyRate`)} />
+          <AmountField label="To hire, an hour" prefix={sign} suffix="/h" value={profile.rates[role.id] ?? DEFAULT_RATE} onCommit={(rate) => cost.apply(costEdits.roleRate(model, role.id, rate))} problem={cost.problem(`roles.${role.id}.hourlyRate`)} />
           {role.id === home ? (
             <span />
           ) : (
@@ -134,6 +136,8 @@ export function CostSetupDialog({ open, onOpenChange, view, cost }: { open: bool
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
+        // Opened by a button on the page, not a Radix trigger: the focus goes back to that button on close.
+        onCloseAutoFocus={returnFocus}
         className="flex max-h-[min(50rem,92dvh)] w-[min(44rem,calc(100vw-1.5rem))] max-w-none flex-col gap-0 p-0 sm:max-w-none max-sm:top-0 max-sm:left-0 max-sm:h-dvh max-sm:max-h-none max-sm:w-screen max-sm:translate-x-0 max-sm:rounded-none max-sm:border-0"
         data-cost-setup-dialog
       >
@@ -169,7 +173,7 @@ export function CostSetupDialog({ open, onOpenChange, view, cost }: { open: bool
             {confirmReset ? (
               // The question takes the row to itself, so Done is never beside a half-answered reset.
               <span role="group" aria-label="Reset both profiles" className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1.5 text-body" data-reset-confirm>
-                <span className="text-muted-foreground">Clear every figure in both profiles?</span>
+                <span className="text-muted-foreground">Put both profiles back to the defaults?</span>
                 <span className="inline-flex items-center gap-1.5">
                   <button type="button" autoFocus onClick={() => setConfirmReset(false)} className="focus-ring h-control-md min-h-0 rounded-md border px-2.5 text-body font-medium hover:bg-surface-hover">
                     Keep

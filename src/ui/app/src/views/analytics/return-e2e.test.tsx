@@ -152,10 +152,12 @@ describe("Just me, on the shipped defaults, every workspace", () => {
     }
     const shared = text(section(table, 'data-role-row="shared"'));
     expect(shared).toContain(money(roi.measured.sharedAiCost));
-    expect(shared).toContain("AI subscription $200 × 1 a month");
+    // The shipped plan, as the model the server answered with holds it: nothing here is typed in.
+    const plan = model.model.solo.entries[0]!;
+    expect(shared).toContain(`${plan.label} $${plan.monthlyAmount} × ${plan.quantity} a month`);
     expect(shared).not.toContain("of agent time");
     const person = text(section(table, 'data-role-row="person"'));
-    expect(person).toContain(`Your time, directing the agents${roi.basis.activeDaysHub} days agents ran × 8 h a day`);
+    expect(person).toContain(`Your time, directing the agents${roi.basis.activeDaysHub} days agents ran × ${model.model.solo.director.hoursPerActiveDay} h a day`);
     expect(person).toContain(money(roi.measured.director.cost));
     expect(text(section(table, 'data-role-row="total"'))).toContain(money(roi.measured.totalCost));
   });

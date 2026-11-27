@@ -31,7 +31,7 @@ page.
 
 ## 2. Overview: what the agents delivered
 
-Five figures lead, each with its change against the period before:
+Five figures lead. The first four show their change against the period before:
 
 
 ![The Analytics Overview: five figures across the top (agent capacity, features shipped, time to done, agent reliability, return on AI spend), then tickets closed per day by workspace and the kinds of work](../site/static/img/screens/analytics-overview-light.webp)
@@ -55,9 +55,11 @@ Under them, four topics. The topic tabs stay at the top while you scroll.
   the week work lands in.
 - **Reliability:** how attempts ended, and which model did the work.
 
-Every chart has a table behind the small table button in its corner, and says so
-in words when a figure rests on part of the data (*Partial: 248 of 346 finished
-tickets have an estimate*).
+A chart over time has a table behind the small table button in its corner; the
+other widgets print their numbers beside their bars. Each says so in words when a
+figure rests on part of the data (*Partial: 248 of 346 finished tickets have an
+estimate*). The planned-effort widget under *Capacity* opens the *Estimates*
+lens.
 
 ## 3. Return: hiring against AI
 
@@ -136,9 +138,10 @@ record token use, so it cannot price API usage itself.
 Changes are saved as you make them. The setup is kept in one workspace, named at
 the foot of the dialog, and covers every workspace on this computer. If that
 workspace is connected to [cloud sync](cloud-sync.md) the setup follows you to
-your other devices; if it is not, the dialog says *Saved on this computer only*
-and **Move** puts it in a workspace that is. *Reset both profiles* clears the two
-profiles' figures and keeps your roles and chips.
+your other devices; if it is not, the dialog says *Saved on this computer only*.
+**Move** puts it in another workspace of your choice, for instance one that
+syncs. *Reset both profiles* asks first, then puts the two profiles' figures back
+to the defaults (marked *assumed* again) and keeps your roles and chips.
 
 ## 5. Estimates: how far off they run
 
@@ -156,8 +159,9 @@ The Estimates lens says how long work really takes against its estimate.
   is the typical one. A row says how sure the figure is, and opens to the detail.
 
 With *All workspaces* chosen, there is one row per workspace; choose one to see it
-by kind of work. Estimate accuracy is worked out for each workspace on its own,
-because estimating habits differ between projects. The same report is
+by kind of work. Each row is worked out for that workspace on its own, because
+estimating habits differ between projects; the sentence above the rows is their
+average, weighted by how many tickets each rests on. The same report is
 `staple calibrate`; see [Budget and estimates](budget-and-estimates.md).
 
 ## What the figures do not know

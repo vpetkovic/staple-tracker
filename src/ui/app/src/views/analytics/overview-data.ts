@@ -16,6 +16,7 @@ import { changeRatio, formatDay, formatDayRange, formatEffortHours, formatHours 
 import type { SegmentPart } from "@/components/analytics/SegmentedBar";
 import type { Coverage } from "@/components/analytics/Widget";
 import type { AnalyticsHeadline, AnalyticsQuery, AnalyticsReport, Bucket, Caveat, CaveatCode, RoiResponse } from "@/lib/analytics-api";
+import { builtinKindName } from "@/lib/plain-language";
 import { assumedFigures } from "./return-model";
 
 // ---------------------------------------------------------------- the read itself
@@ -213,22 +214,23 @@ export function burstsOf(report: AnalyticsReport): Burst[] {
 
 // ---------------------------------------------------------------- mix
 
-export const KIND_WORDS: Record<string, string> = { task: "Tasks", bug: "Bug fixes", chore: "Chores", spike: "Spikes", epic: "Features (epics)" };
+/** A kind of ticket in words (`lib/plain-language.ts`). On the Overview an epic is a feature, the word its headline uses. */
+export const kindWords = (kind: string): string => (kind === "epic" ? "Features (epics)" : (builtinKindName(kind) ?? capital(kind)));
 const KIND_ORDER = ["task", "bug", "chore", "spike", "epic"];
 const PRIORITY_ORDER = ["critical", "high", "medium", "low"];
 const capital = (word: string) => `${word.charAt(0).toUpperCase()}${word.slice(1).replace(/[-_]/g, " ")}`;
 const rank = (order: readonly string[]) => (id: string) => (order.includes(id) ? order.indexOf(id) : order.length);
 
-function partsOf(counts: Readonly<Record<string, number>>, order: readonly string[], words: Record<string, string>): SegmentPart[] {
+function partsOf(counts: Readonly<Record<string, number>>, order: readonly string[], words: (id: string) => string): SegmentPart[] {
   const at = rank(order);
   return Object.entries(counts)
     .filter(([, value]) => value > 0)
     .sort(([a, x], [b, y]) => at(a) - at(b) || y - x || a.localeCompare(b))
-    .map(([id, value]) => ({ id, label: words[id] ?? capital(id), value }));
+    .map(([id, value]) => ({ id, label: words(id), value }));
 }
 
-export const kindParts = (report: AnalyticsReport): SegmentPart[] => partsOf(report.delivery.byKind, KIND_ORDER, KIND_WORDS);
-export const priorityParts = (report: AnalyticsReport): SegmentPart[] => partsOf(report.delivery.byPriority, PRIORITY_ORDER, {});
+export const kindParts = (report: AnalyticsReport): SegmentPart[] => partsOf(report.delivery.byKind, KIND_ORDER, kindWords);
+export const priorityParts = (report: AnalyticsReport): SegmentPart[] => partsOf(report.delivery.byPriority, PRIORITY_ORDER, capital);
 
 // ---------------------------------------------------------------- speed
 
@@ -237,7 +239,7 @@ export function kindSpeedBars(report: AnalyticsReport): BarListItem[] {
   return Object.entries(report.speed.cycleByKind)
     .flatMap(([kind, row]) => (row.medianHours === null || row.n === 0 ? [] : [{ kind, n: row.n, medianHours: row.medianHours }]))
     .sort((a, b) => b.n - a.n || a.kind.localeCompare(b.kind))
-    .map((row) => ({ id: row.kind, label: KIND_WORDS[row.kind] ?? capital(row.kind), value: row.medianHours, text: formatHours(row.medianHours), detail: `${row.n.toLocaleString("en-US")} tickets` }));
+    .map((row) => ({ id: row.kind, label: kindWords(row.kind), value: row.medianHours, text: formatHours(row.medianHours), detail: `${row.n.toLocaleString("en-US")} tickets` }));
 }
 
 // ---------------------------------------------------------------- reliability
@@ -315,7 +317,9 @@ export function coverageOf(report: AnalyticsReport, code: CaveatCode, noun: stri
   return { covered: Math.max(0, caveat.of - caveat.count), total: caveat.of, noun, have };
 }
 
-const count = (value: number, one: string, many = `${one}s`) => `${value.toLocaleString("en-US")} ${value === 1 ? one : many}`;
+/** "1 ticket", "1,284 tickets". */
+export const plural = (value: number, one: string, many = `${one}s`) => `${value.toLocaleString("en-US")} ${value === 1 ? one : many}`;
+const count = plural;
 const of = (caveat: Caveat) => (caveat.of !== null && caveat.of > 0 ? ` of ${caveat.of.toLocaleString("en-US")}` : "");
 
 /** The caveat as one plain sentence, for the widget it limits and for the method notes. */

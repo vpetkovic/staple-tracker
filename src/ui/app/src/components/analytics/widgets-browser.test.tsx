@@ -255,7 +255,7 @@ describe.skipIf(Boolean(reason))("every control from the keyboard", () => {
       expect(names.filter((name) => name === "Hours per day: 14 h in total.")).toHaveLength(1);
       expect(names.filter((name) => name === "Tickets closed by weekday and hour")).toHaveLength(1);
       expect(names).toContain("Show Hours per day as a table");
-      expect(names).toContain("Open the Return lens");
+      expect(names.some((name) => name.includes("Open the Return lens"))).toBe(true);
       expect(names).toContain("Show all 10 features");
       expect(names).toContain("Try again");
       for (const stop of stops) {
@@ -287,7 +287,7 @@ describe.skipIf(Boolean(reason))("clicks", () => {
 
   it("a stat tile in button mode calls onOpen on a click and on Enter", async () => {
     await withPage(DESK, async (page) => {
-      const tile = page.getByRole("button", { name: "Open the Return lens" });
+      const tile = page.getByRole("button", { name: /Open the Return lens/ });
       await tile.click();
       await tile.focus();
       await page.keyboard.press("Enter");
@@ -345,7 +345,7 @@ describe.skipIf(Boolean(reason))("on a touch screen", () => {
       expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(true);
       const touch = await measure(page);
       expect(touch.map((button) => button.name)).toEqual(desk.map((button) => button.name));
-      expect(touch.map((button) => button.name)).toEqual(expect.arrayContaining(["Show Hours per day as a table", "What does this mean?", "Open the Return lens", "Feature 1", "Show all 10 features", "Try again"]));
+      expect(touch.map((button) => button.name)).toEqual(expect.arrayContaining(["Show Hours per day as a table", "What does this mean?", expect.stringContaining("Open the Return lens"), "Feature 1", "Show all 10 features", "Try again"]));
       touch.forEach((button, index) => {
         expect(button.height, button.name).toBe(desk[index]?.height);
         expect(button.tapHeight, button.name).toBeGreaterThanOrEqual(32);
@@ -416,7 +416,7 @@ describe.skipIf(Boolean(reason))("forced colours", () => {
 describe.skipIf(Boolean(reason))("reduced motion", () => {
   const motion = (page: Page) =>
     page.evaluate(() => {
-      const arrow = document.querySelector('[aria-label="Open the Return lens"] svg') as Element;
+      const arrow = document.querySelector('button[data-slot="stat-tile"] svg') as Element;
       return {
         skeletons: [...document.querySelectorAll('[data-slot="skeleton"]')].map((element) => getComputedStyle(element).animationName),
         arrowTransition: getComputedStyle(arrow).transitionDuration,
@@ -430,15 +430,15 @@ describe.skipIf(Boolean(reason))("reduced motion", () => {
       expect(moving.skeletons).toHaveLength(5);
       expect(moving.skeletons.every((name) => name !== "none")).toBe(true);
       expect(moving.arrowTransition).not.toBe("0s");
-      await page.getByRole("button", { name: "Open the Return lens" }).hover();
-      await expect.poll(() => page.locator('[aria-label="Open the Return lens"] svg').first().evaluate((element) => getComputedStyle(element).translate)).not.toBe("none");
+      await page.getByRole("button", { name: /Open the Return lens/ }).hover();
+      await expect.poll(() => page.locator('button[data-slot="stat-tile"] svg').first().evaluate((element) => getComputedStyle(element).translate)).not.toBe("none");
     });
     await withPage({ ...DESK, reducedMotion: "reduce" }, async (page) => {
       const still = await motion(page);
       expect(still.skeletons.every((name) => name === "none")).toBe(true);
       expect(still.arrowTransition).toBe("0s");
-      await page.getByRole("button", { name: "Open the Return lens" }).hover();
-      expect(await page.locator('[aria-label="Open the Return lens"] svg').first().evaluate((element) => getComputedStyle(element).translate)).toBe("none");
+      await page.getByRole("button", { name: /Open the Return lens/ }).hover();
+      expect(await page.locator('button[data-slot="stat-tile"] svg').first().evaluate((element) => getComputedStyle(element).translate)).toBe("none");
     });
   });
 });
