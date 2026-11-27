@@ -17,7 +17,7 @@
  * facts scroll away under it, and the due date and the queue chip move to the facts as text.
  */
 import { ArrowUpRight, CalendarDays, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, ListMinus, ListPlus, MoreHorizontal, RefreshCw } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useEffect, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from "react";
 import { GuardRefusal } from "@/components/GuardRefusal";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -26,7 +26,7 @@ import { HorizonPlanTree } from "@/detail/PlanActions";
 import { dequeueTask, enqueueTask, type AuthError } from "@/lib/api";
 import { useBackToClose } from "@/lib/back-to-close";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
-import { useSession } from "@/lib/session";
+import { useSession, type StapleSession } from "@/lib/session";
 import type { EffectiveQueueRow, MilestoneListRow, MilestoneView } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { ErrorState } from "@/views/ViewChrome";
@@ -426,6 +426,34 @@ function SectionMenu({
   );
 }
 
+/** Open a horizon where its plan is: Plan's Horizons lens, landing on it, inside the app. */
+export function openInPlan(session: Pick<StapleSession, "openHorizon">, workspace: string, horizon: { identifier: string }): void {
+  session.openHorizon(workspace, horizon.identifier);
+}
+
+/**
+ * "Open in Plan": a link to the lens's address for the horizon, so it can be opened in a new tab,
+ * that a plain press follows inside the app (`openInPlan`) instead of reloading the page.
+ */
+function OpenInPlanLink({ workspace, horizon }: { workspace: string; horizon: { identifier: string } }) {
+  const session = useSession();
+  const follow = (event: MouseEvent<HTMLAnchorElement>) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    openInPlan(session, workspace, horizon);
+  };
+  return (
+    <a
+      href={`?${new URLSearchParams({ ws: workspace, view: "plan", "plan-lens": "horizons", focus: horizon.identifier })}`}
+      onClick={follow}
+      className="focus-ring relative shrink-0 rounded-sm text-label text-text-secondary underline-offset-2 hover:underline @max-[760px]/ms:before:absolute @max-[760px]/ms:before:-inset-y-2 @max-[760px]/ms:before:-inset-x-1 @max-[760px]/ms:before:content-['']"
+      data-milestone-open-plan={horizon.identifier}
+    >
+      Open in Plan
+    </a>
+  );
+}
+
 /** A line like the lens's rows: a chevron at the fold chevron's x, a label, what it holds. */
 function FoldLine({ open, onToggle, children, end, ...data }: { open: boolean; onToggle: () => void; children: ReactNode; end?: ReactNode } & Record<`data-${string}`, string | undefined>) {
   return (
@@ -485,11 +513,7 @@ export function SectionBody({ work, workspace, row, defaultGoalOpen, defaultPlan
             open={planOpen}
             onToggle={() => setPlanOpen(!planOpen)}
             data-milestone-plan-line={view.milestone.identifier}
-            end={
-              <a href={`?${new URLSearchParams({ ws: workspace, view: "plan", "plan-lens": "horizons" })}`} className="focus-ring relative shrink-0 rounded-sm text-label text-text-secondary underline-offset-2 hover:underline @max-[760px]/ms:before:absolute @max-[760px]/ms:before:-inset-y-2 @max-[760px]/ms:before:-inset-x-1 @max-[760px]/ms:before:content-['']" data-milestone-open-plan="">
-                Open in Plan
-              </a>
-            }
+            end={<OpenInPlanLink workspace={workspace} horizon={plan.horizon} />}
           >
             <span className="ml-1.5 font-medium text-foreground">Plan</span>
             <span className="text-text-secondary">

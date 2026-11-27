@@ -225,3 +225,31 @@ it("keeps a landing's unfold per section: another section's fold leaves it, and 
     await close();
   }
 }, 30_000);
+
+it("opens a horizon's plan from its Milestones section inside the app, landing on it in the Horizons lens", async () => {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(5000);
+  try {
+    // A horizon is listed on Milestones once it has a date.
+    const dated = await fetch(`http://127.0.0.1:${(ui.server.address() as AddressInfo).port}/api/milestone/update`, {
+      method: "POST",
+      headers: { "x-staple-token": ui.token, "content-type": "application/json" },
+      body: JSON.stringify({ ws: "larkspur", ref: next.identifier, targetDate: "2031-06-30", actor: "Mira" }),
+    });
+    expect(dated.status).toBe(200);
+    await page.goto(route(`&ws=larkspur&view=milestones&focus=${next.identifier}`).replace("&view=plan", ""));
+    const link = page.locator(`[data-milestone-section="${next.identifier}"] [data-milestone-open-plan]`);
+    await link.waitFor();
+    expect(await link.getAttribute("href")).toBe(`?ws=larkspur&view=plan&plan-lens=horizons&focus=${next.identifier}`);
+    // No document load: a marker set on this document survives the press.
+    await page.evaluate(() => ((window as unknown as { stayed: boolean }).stayed = true));
+    await link.click();
+    await page.locator(`[data-plan-column="h:${next.id}"][data-plan-landed]`).waitFor();
+    expect(await page.evaluate(() => (window as unknown as { stayed?: boolean }).stayed)).toBe(true);
+    const address = new URL(page.url()).searchParams;
+    expect([address.get("view"), address.get("focus")]).toEqual(["plan", next.identifier]);
+  } finally {
+    await context.close();
+  }
+}, 30_000);

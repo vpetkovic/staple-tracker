@@ -21,7 +21,7 @@ import { criterion, goal, listRow, member, progress, view, work } from "./fixtur
 import { AddWork, goalStartsOpen, MilestoneGlyph, StatusSubmenu } from "./milestone-parts";
 import { milestonesMemoryKey } from "./milestones-memory";
 import { landingOf, MilestonesOutline, outlineGroups } from "./MilestonesOutline";
-import { SectionBody, SectionView, type SectionQueue } from "./MilestoneSection";
+import { openInPlan, SectionBody, SectionView, type SectionQueue } from "./MilestoneSection";
 import type { MilestoneWork } from "./useMilestoneWork";
 import { memberRowKey, WorkTree } from "./WorkTree";
 
@@ -213,6 +213,12 @@ describe("a section's goal and plan", () => {
 
   it("draws the Plan line only for a horizon", () => {
     expect(inSession(<SectionBody work={loaded()} workspace="staple" row={rowOf(data)} />)).not.toContain("data-milestone-plan-line");
+  });
+
+  it("opens a horizon in Plan inside the app, by the workspace and the horizon's identifier", () => {
+    const calls: Array<[string, string]> = [];
+    openInPlan({ openHorizon: (workspace, ref) => calls.push([workspace, ref]) }, "exercises-api", { identifier: "EXE-12" });
+    expect(calls).toEqual([["exercises-api", "EXE-12"]]);
   });
 });
 
