@@ -28,7 +28,7 @@ import { CostSetupDialog, SCENARIOS } from "./CostSetupDialog";
 import { costEdits } from "./cost-edits";
 import { AssumedTag, Segmented, type CostApi } from "./return-parts";
 import { RolePage } from "./RolePage";
-import { ATTEMPT_CAP_HOURS, aiDetail, assumedFigures, assumedWords, isAssumed, netFigure, orderedEnds, peopleWords, returnView, scenarioWords, sharePercent, shareWords, type ReturnView, type RoleView } from "./return-model";
+import { aiDetail, assumedFigures, assumedWords, isAssumed, netFigure, orderedEnds, peopleWords, returnView, scenarioWords, sharePercent, shareWords, type ReturnView, type RoleView } from "./return-model";
 
 export function ReturnPage({ roi, stale = false, cost, error, onRetry, query, onAuthError, onOpenTicket }: {
   roi: RoiResponse | undefined;
@@ -482,7 +482,7 @@ function ReturnMethod({ view }: { view: ReturnView }) {
     <ShowDetails dense label="How the return is worked out">
       <ul className="max-w-3xl list-disc space-y-1.5 pl-5 text-body text-text-secondary">
         <li>Return = value of the work ÷ (AI spend + the directing person&apos;s time). Value = each role&apos;s hours × that role&apos;s rate.</li>
-        <li>Agent time is recorded attempt time, each attempt capped at {ATTEMPT_CAP_HOURS} hours. Planned effort is the sum of estimates on finished tickets (a ticket whose subtasks carry estimates adds nothing of its own, so nothing is counted twice).</li>
+        <li>Agent time is recorded attempt time, each attempt capped at {view.attemptCapHours} hours. Planned effort is the sum of estimates on finished tickets (a ticket whose subtasks carry estimates adds nothing of its own, so nothing is counted twice).</li>
         <li>Directing time is the days on which agents ran anywhere on this computer × the hours a day you enter. Staple does not record a person&apos;s time, so this is your figure.</li>
         <li>AI spend is what you assign in Cost setup: each subscription (its price × how many) and each monthly API bill belongs to a role or to the whole team, counted by the day over the period. Nothing is divided between roles. Staple does not record token use, so it cannot price API usage itself.</li>
         {view.share < 1 ? (

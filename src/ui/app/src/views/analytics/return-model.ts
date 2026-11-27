@@ -31,10 +31,6 @@ import type {
 } from "@/lib/analytics-api";
 import { formatNumber, formatPercent } from "@/components/analytics/format";
 
-/** A full-time week, for "Team to match it". The server's `definitions.fteHoursPerWeek`; `RoiResponse` does not echo the definitions. */
-export const FTE_HOURS_PER_WEEK = 40;
-/** The server's `definitions.attemptCapHours`, for the sentence that says agent time is capped. */
-export const ATTEMPT_CAP_HOURS = 12;
 /** The rate a role the profile does not set reads at (the contract's default). */
 export const DEFAULT_RATE = 100;
 
@@ -97,6 +93,8 @@ export interface ReturnView {
   scope: string;
   hub: boolean;
   period: { from: string; to: string; days: number; weeks: number };
+  /** The longest one agent session counts for (the server's `definitions.attemptCapHours`). */
+  attemptCapHours: number;
   /** Present roles, the server's order (most value first). */
   roles: RoleView[];
   /** Roles in the list that did no work in scope, in the list's order. */
@@ -122,7 +120,7 @@ export interface ReturnView {
 
 const lineOf = (entry: RoiAiEntry): AiLine => ({ id: entry.id, label: entry.label, kind: entry.kind, perMonth: entry.monthlyAmount, quantity: entry.quantity, cost: entry.cost });
 
-function lensView(lens: RoiLens, days: number): LensView {
+function lensView(lens: RoiLens, days: number, fteHoursPerWeek: number): LensView {
   const weeks = days / 7;
   return {
     hours: lens.valueHours,
@@ -130,7 +128,7 @@ function lensView(lens: RoiLens, days: number): LensView {
     multiple: lens.returnOnTotalCost,
     net: lens.net,
     leverage: lens.outputMultiplier,
-    fte: weeks > 0 ? lens.valueHours / (weeks * FTE_HOURS_PER_WEEK) : 0,
+    fte: weeks > 0 && fteHoursPerWeek > 0 ? lens.valueHours / (weeks * fteHoursPerWeek) : 0,
   };
 }
 
@@ -185,8 +183,9 @@ export function returnView(roi: RoiResponse, model: CostModelValue = roi.model.m
     share: roi.basis.share,
     aiSpend: measured.aiCost,
     cost: measured.totalCost,
-    measured: lensView(measured, roi.period.days),
-    planned: planned.valueHours > 0 ? lensView(planned, roi.period.days) : null,
+    measured: lensView(measured, roi.period.days, roi.definitions.fteHoursPerWeek),
+    planned: planned.valueHours > 0 ? lensView(planned, roi.period.days, roi.definitions.fteHoursPerWeek) : null,
+    attemptCapHours: roi.definitions.attemptCapHours,
     breakEvenRate: measured.breakEvenRate,
     estimates: { covered, total: partial?.of ?? total },
     caveats,

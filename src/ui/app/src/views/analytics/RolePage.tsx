@@ -24,7 +24,7 @@ import type { Resource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
 import { agentWords, costEdits, isChip } from "./cost-edits";
 import { AssumedTag, Chip, ChipField, type CostApi } from "./return-parts";
-import { AGENT_TYPES, ATTEMPT_CAP_HOURS, catchAllRole, isAssumed, matchersOf, planWords, shareWords, type ReturnView, type RoleView, type RuleField } from "./return-model";
+import { AGENT_TYPES, catchAllRole, isAssumed, matchersOf, planWords, shareWords, type ReturnView, type RoleView, type RuleField } from "./return-model";
 
 /** The one-field rules a role page edits, in the approved order. */
 export const MATCH_FIELDS: readonly { key: RuleField; label: string; lead: string; placeholder: string }[] = [
@@ -156,7 +156,7 @@ export function RolePageView({ role, view, cost, tickets, onBack, onSetup, onOpe
           label="Agent time"
           value={formatEffortHours(role.measuredHours).replace(" h", "")}
           unit="h"
-          sentence={`What the agents' sessions recorded on this role's work in the period, each capped at ${ATTEMPT_CAP_HOURS} hours.${other > 0 ? ` ${formatEffortHours(other)} of it is on tickets not finished in this period.` : ""}`}
+          sentence={`What the agents' sessions recorded on this role's work in the period, each capped at ${view.attemptCapHours} hours.${other > 0 ? ` ${formatEffortHours(other)} of it is on tickets not finished in this period.` : ""}`}
         />
         <StatTile label="Estimates" value={formatEffortHours(role.plannedHours).replace(" h", "")} unit="h" sentence={`Planned for the ${role.estimatedTickets} of its ${role.tickets} tickets that carry an estimate.`} note={without > 0 ? `${without} tickets add nothing` : undefined} />
         <StatTile label="To hire" value={hire.join("–")} sentence={`Those hours × ${rate} an hour: ${money(role.measuredValue)} by agent time${high ? `, ${money(role.plannedValue)} by estimates` : ""}.`} />

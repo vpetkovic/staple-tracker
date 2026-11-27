@@ -39,6 +39,7 @@ function answer(patch: Partial<RoiResponse> = {}): RoiResponse {
     asOf: "2026-11-26T12:00:00.000Z",
     period: { from: "2026-10-30", to: "2026-11-26", tz: "UTC", days: 28, bucket: "day", explicit: true, firstActivity: "2026-09-01", lastActivity: "2026-11-26" },
     scope: { kind: "workspace", workspaces: [{ slug: "staple", prefix: "STA", available: true }] },
+    definitions: { attemptCapHours: 12, fteHoursPerWeek: 40, fteHoursPerDay: 8, sprintGapDays: 5, sprintMinDone: 10, importWindowSeconds: 120 },
     model: MODEL,
     measured: lens("measured", {
       valueHours: 50,
