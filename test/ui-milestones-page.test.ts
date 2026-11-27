@@ -147,6 +147,8 @@ beforeAll(async () => {
     store.milestones().addMember(rows.milestone.id, rowsEpic.id, {}, null);
     store.milestones().addMember(rows.milestone.id, rowsTask.id, { note: longNote }, null);
     store.milestones().addMember(rows.milestone.id, rowsBug.id, { note: longNote }, null);
+    // The task waits on the bug: a dependency chip on each row.
+    store.setBlockedBy(rowsTask.id, [rowsBug.id], "w");
     Object.assign(refs, {
       rows: rows.milestone.identifier,
       rowsEpic: rowsEpic.identifier,
@@ -883,6 +885,13 @@ describe.skipIf(Boolean(reason))("the Milestones page, pressed in a real browser
     expect(chip.drawn).toBeLessThan(32);
     expect(chip.tap).toBeGreaterThanOrEqual(32);
     await context.close();
+
+    // A work row's dependency chip keeps the desk chip's 20px and takes a 32px tap, not the 44px floor.
+    const rowsPhone = await open(refs.rows!, WS, phone, true);
+    const dep = await measureTap(rowsPhone.page, `[data-milestone-section="${refs.rows}"] [data-desk-cues] .staple-dep-badge`);
+    expect(dep.drawn).toBe(20);
+    expect(dep.tap).toBeGreaterThanOrEqual(32);
+    await rowsPhone.context.close();
 
     // Bordered text buttons: 28px drawn, a 32px tap counted from inside the border.
     const missing = await open("", WS, phone, true);
