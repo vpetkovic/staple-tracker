@@ -657,11 +657,11 @@ try {
 
   // Planning is readable but person-controlled, and absent until enabled.
   const planningFlag = JSON.parse(toolText(await rpc("tools/call", { name: "get_setting", arguments: { key: "features.planning" } })));
-  assert(planningFlag.value === false && planningFlag.source === "default", "experimental planning defaults off");
+  assert(planningFlag.value === false && planningFlag.source === "default", "planning is off where the workspace never stored it");
   const flagRefused = await rpc("tools/call", { name: "set_setting", arguments: { key: "features.planning", value: true, actor: "smoke-agent" } });
   assert(flagRefused.isError === true && toolText(flagRefused).includes("Only a person"), "an agent cannot change the planning flag");
   for (const name of ["list_ideas", "list_horizons"]) {
-    assert(byName.get(name).description.startsWith("Experimental, only when features.planning is on."), `${name} describes the feature gate`);
+    assert(byName.get(name).description.startsWith("Only when features.planning is on."), `${name} describes the feature gate`);
     const refused = await rpc("tools/call", { name, arguments: {} });
     assert(refused.isError === true && toolText(refused).includes("Planning is off in this workspace"), `${name} refuses when planning is off`);
   }

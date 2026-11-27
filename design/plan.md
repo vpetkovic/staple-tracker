@@ -25,11 +25,16 @@ in `plan-accounting.ts`, and the store half in
 `plan-store.ts` (`store.plan()`). The surfaces are `src/commands/plan.ts` (CLI), the plan tools in
 `src/mcp.ts`, the `/api/plan` routes in `src/ui/server.ts` and `src/ui/app/src/views/plan/`.
 
-## The flag: experimental, off by default
+## The flag: on for a new workspace
 
-Planning is experimental and may change. One synchronized workspace setting,
-`features.planning` (`settings-registry.ts`), defaults to false. Only a person changes it, in
-Settings → Experimental or with `staple settings set features.planning true|false --person`
+One synchronized workspace setting, `features.planning` (`settings-registry.ts`), turns planning
+on. Its registry default is false, so a workspace that never stored it (one an older build made)
+keeps planning off; `initWorkspace` stores true, through the person path, in a workspace whose
+database and repository identity it has just made, so a new workspace starts with planning on.
+A clone (identity from git) and a join target (identity from the share link) are an existing
+workspace arriving on a machine: init leaves the key alone there and the workspace's own value
+arrives by sync, since writing true would overrule the owner's choice on every device. Only a
+person changes it, in Settings → Features or with `staple settings set features.planning true|false --person`
 under their `humanName`. `staple plan enable --person` is an alias that sets the same flag; there
 is no second switch. Agents read it through `get_setting` and `show_about`; an agent's
 `set_setting` on it is refused.
@@ -898,7 +903,7 @@ keeps its timestamps while it is.
 
 The hold is protection, not presentation: it keys on what the records are, so it holds with the
 flag off too, where the horizon reads as a plain milestone that says it is held by its plan
-([the flag](#the-flag-experimental-off-by-default)). Dates are calendar days in UTC, inclusive, as for milestones
+([the flag](#the-flag-on-for-a-new-workspace)). Dates are calendar days in UTC, inclusive, as for milestones
 ([milestones.md](milestones.md#dates-calendar-days-utc-inclusive)).
 
 **Dependencies between records.** Only an explicit reference counts: a line of the Dependencies
@@ -1431,7 +1436,6 @@ What converges, under both folds, on a tail device and a freshly hydrated one:
 
 ## Known limits
 
-- **Experimental.** The model, its surfaces and its storage may change in any release.
 - **Mixed builds.** A device that has not migrated refuses a pulled operation page stamped schema
   20 with `schema_ahead`, and one on schema 20 refuses a page stamped 21 (the delivered mark) the
   same way. The snapshot route checks the protocol only, so an older build that
@@ -1485,7 +1489,8 @@ What converges, under both folds, on a tail device and a freshly hydrated one:
 
 | test | proves |
 |---|---|
-| `test/planning-feature*.test.ts(x)` (the base suite, surfaces, sync, protocol, poll, review, UI) | the flag: off by default, person-only on every surface, off hides every surface and keeps the data, on restores it, protection holds in both states, the flag and the Later upgrade sync |
+| `test/planning-feature*.test.ts(x)` (the base suite, surfaces, sync, protocol, poll, review, UI) | the flag: off where never stored, person-only on every surface, not resettable from Settings, off hides every surface and keeps the data, on restores it, protection holds in both states, the flag and the Later upgrade sync |
+| `test/planning-default.test.ts` | a new workspace starts with planning on through every person's door (`staple init`, `--global`, the MCP `init` tool), its horizons on the repository's stable ids; `--no-planning` and `planning: false` start it off; a clone, a join target, an older build's workspace and an internal init keep the default; re-init leaves a person's choice; the inbox leaves horizons out while planning is on |
 | `test/store-plan.test.ts` | enabling and its refusal; identity (no counter consumed, never a ref, never shown, numbered at promotion, earlier builds' numbers drafted); every guard; the tracker's own writes, horizon dates included; dependencies; nesting and stage; horizons as milestones; membership (move, unschedule, unlink, plan order, hand-placed members stay, a promoted record counted, a queued horizon expanding); a horizon's own status (its only work cancelled with and without a rebuild between, reopened; shipped on done work only; removal refused while it holds open work or is queued; an edit of a removed horizon refused before any write); Promote in place, under a promoted parent, refused when dropped or already promoted; Adopt on a promoted record; missing links; actual windows on real-shaped data; late vs not started; the baseline; every steering refusal |
 | `test/plan-sections.test.ts` | the importer on fixtures shaped like real plan files: every row kept, sections mapped, nothing dropped, what it cannot place reported; wrapped and nested items, prose under list headings, headings and comments inside code fences, escaped pipes, repeated keys and front matter kept, each said; unknown keys named; sections round-trip through their documents; every estimate form, and why one reads as none; cycles, unknown and repeated keys in the gate; the gate's phrases; completeness |
 | `test/plan-scaffold.test.ts` | sections persist as revisions, an agent writes them, duplicate keys refused; the gate on every path to shaped, deferred questions let through; an umbrella shaped on a sub-idea that is not dropped, refused when every sub-idea is dropped, plan incomplete when its last one is; Scaffold creates exactly its preview, idempotently and for rows added later, nested sub-ideas as child epics, an umbrella with no rows as its epic and its shaped sub-ideas' epics, previewed and retried after its confirm and building a sub-idea shaped since, never where the lifecycle does not offer it; import with its file attached |

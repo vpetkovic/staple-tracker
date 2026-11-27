@@ -223,7 +223,7 @@ beforeAll(async () => {
   process.env.NODE_NO_WARNINGS = "1";
 
   // ---- 1. init a repo workspace. The protocol travels with it. --------------
-  initOut = cliAs(A, "init", "--slug", "drill");
+  initOut = cliAs(A, "init", "--no-planning", "--slug", "drill");
   expect(initOut.status, initOut.stderr).toBe(0);
   dbPath = join(repo, ".staple", "staple.db");
   guidePath = join(repo, ".staple", "AGENTS.md");

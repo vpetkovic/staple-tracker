@@ -67,7 +67,9 @@ function titles(dbPath: string): string[] {
     // Sorted, not `ORDER BY id`: `issues.id` is an opaque identifier, not a
     // sequence, so its ordering says nothing. What is being proven here is that
     // the SET of rows survived the copy, which is exactly A5's own validation.
-    return (db.prepare("SELECT title FROM issues").all() as Array<{ title: string }>)
+    // A new workspace starts with planning on, so the seed also holds the default horizons
+    // (ranked milestones); the rows under test are the work.
+    return (db.prepare("SELECT title FROM issues WHERE NOT (kind = 'milestone' AND plan_rank IS NOT NULL)").all() as Array<{ title: string }>)
       .map((r) => r.title)
       .sort();
   } finally {

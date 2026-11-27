@@ -42,9 +42,12 @@ it("OFF removes the Horizon filter even when old row data survives; ON restores 
   }
 });
 
-it("Settings labels the person-controlled planning toggle experimental", () => {
-  expect(SETTING_CATEGORIES.find(c => c.id === "features")?.label).toBe("Experimental");
-  expect(SETTING_DEFINITIONS.find(d => d.key === "features.planning")).toMatchObject({ default: false, scope: "workspace", ui: { control: "toggle", label: "Planning (experimental)" } });
+it("Settings shows the person-controlled planning toggle under Features, labelled nowhere experimental", () => {
+  expect(SETTING_CATEGORIES.find(c => c.id === "features")?.label).toBe("Features");
+  expect(SETTING_CATEGORIES.some(c => /experimental/i.test(`${c.label} ${c.description}`))).toBe(false);
+  // The default stays off for a workspace that never stored the key; a new one stores it on at init.
+  expect(SETTING_DEFINITIONS.find(d => d.key === "features.planning")).toMatchObject({ default: false, scope: "workspace", ui: { control: "toggle", label: "Planning", resettable: false } });
+  expect(SETTING_DEFINITIONS.filter(d => /experimental/i.test(`${d.ui?.label ?? ""} ${d.ui?.description ?? ""}`)).map(d => d.key)).toEqual([]);
 });
 
 it("OFF removes the Horizon grouping axis and ON restores it", () => {

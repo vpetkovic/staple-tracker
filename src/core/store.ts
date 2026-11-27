@@ -367,6 +367,11 @@ export interface IssueFilters {
   excludeAssignees?: readonly string[];
   /** List ideas and horizons too. Without it (and without a `kind` filter) they are left out. */
   includePlan?: boolean;
+  /**
+   * Leave out the horizons while planning is on (the inbox): a horizon is the plan's slot,
+   * tracked by the work on it, never work to pick up. With planning off it is a plain milestone.
+   */
+  excludeHorizons?: boolean;
 }
 
 /**
@@ -2355,7 +2360,7 @@ export class WorkspaceStore {
    * new value as a `setting_changed` event.
    */
   setSetting(key: string, value: unknown, actor?: string | null, person?: PersonDecision | null): SettingValueView {
-    if (key === "features.planning" && !person) throw new StapleError("validation", "Only a person can change features.planning, in Settings → Experimental or with `staple settings set features.planning true --person`. The UI is the person and its token is the person's; agents are trusted not to impersonate the person through that token or --person.");
+    if (key === "features.planning" && !person) throw new StapleError("validation", "Only a person can change features.planning, in Settings → Features or with `staple settings set features.planning true --person`. The UI is the person and its token is the person's; agents are trusted not to impersonate the person through that token or --person.");
     const definition = requireSettingDefinition(key, "workspace");
     const next = validateSettingValue(definition, value, `workspace ${this.slug}`);
     if (key === "kinds.default") this.assertConfiguredKind(next as string);
@@ -2440,7 +2445,7 @@ export class WorkspaceStore {
 
   /** Clear a stored value so the definition's default applies again. A no-op when nothing is stored. */
   resetSetting(key: string, actor?: string | null, person?: PersonDecision | null): SettingValueView {
-    if (key === "features.planning" && !person) throw new StapleError("validation", "Only a person can change features.planning, in Settings → Experimental or with `staple settings set features.planning false --person`. The UI is the person and its token is the person's; agents are trusted not to impersonate the person through that token or --person.");
+    if (key === "features.planning" && !person) throw new StapleError("validation", "Only a person can change features.planning, in Settings → Features or with `staple settings set features.planning false --person`. The UI is the person and its token is the person's; agents are trusted not to impersonate the person through that token or --person.");
     const definition = requireSettingDefinition(key, "workspace");
     return this.atomically(() => {
       const snapshot = this.settings();
@@ -8654,6 +8659,10 @@ export class WorkspaceStore {
       where.push(`kind NOT IN (${[...PLAN_KINDS].map(() => "?").join(",")})`);
       params.push(...PLAN_KINDS);
     }
+    if (filters.excludeHorizons && this.planningOn()) {
+      where.push("NOT (kind = ? AND plan_rank IS NOT NULL)");
+      params.push(MILESTONE_KIND);
+    }
     if (filters.assignee) {
       where.push("assignee = ?");
       params.push(filters.assignee);
@@ -8754,7 +8763,9 @@ export class WorkspaceStore {
     blocked: Array<InboxEntry>;
     hasMore: boolean;
   } {
-    const filters: IssueFilters = assignee ? { assignee } : {};
+    // Horizons are the plan's slots, not pickup work: `next` never takes one, so the inbox
+    // never lists one first for an agent to start.
+    const filters: IssueFilters = assignee ? { assignee, excludeHorizons: true } : { excludeHorizons: true };
     if (excludeAssignees && excludeAssignees.length > 0) filters.excludeAssignees = excludeAssignees;
     // The three buckets partition ONE window over the open issues, so the page
     // is over the scan, not over any one list.

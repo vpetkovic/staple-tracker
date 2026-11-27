@@ -279,8 +279,8 @@ describe("on the CLI and over MCP", () => {
     home = mkdtempSync(join(tmpdir(), "staple-cross-hold-surfaces-"));
     cwd = mkdtempSync(join(tmpdir(), "staple-cross-hold-cwd-"));
     process.env.NODE_NO_WARNINGS = "1";
-    await ok("init", "--global", "app");
-    await ok("init", "--global", "web");
+    await ok("init", "--no-planning", "--global", "app");
+    await ok("init", "--no-planning", "--global", "web");
     await ok("new", "Send the reset email", "--ws", "app");
     await ok("new", "Reset page", "--ws", "web");
     await ok("new", "Reset copy", "--ws", "web");

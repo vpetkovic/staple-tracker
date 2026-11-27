@@ -80,8 +80,8 @@ beforeAll(async () => {
   process.env.STAPLE_HOME = home;
   process.env.NODE_NO_WARNINGS = "1";
 
-  expect((await cli("init", "--global", WS)).status).toBe(0);
-  expect((await cli("init", "--global", BARE)).status).toBe(0);
+  expect((await cli("init", "--no-planning", "--global", WS)).status).toBe(0);
+  expect((await cli("init", "--no-planning", "--global", BARE)).status).toBe(0);
   expect((await cli("kinds", "add", "milestone", "--label", "Milestone", "--ws", WS)).status).toBe(0);
   // CON-1 programme > CON-2 epic > CON-3 task; CON-4 a standalone task.
   expect((await cli("new", "R programme", "--kind", "epic", "--ws", WS)).status).toBe(0);

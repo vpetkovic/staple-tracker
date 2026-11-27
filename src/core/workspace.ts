@@ -174,6 +174,13 @@ export function initWorkspace(options: {
    * and not an edit to the repository's own root `.gitignore`.
    */
   gitignore?: boolean;
+  /**
+   * Turn planning on when this call makes a new workspace (see below). The doors that create
+   * a workspace on purpose pass true unless told otherwise: `staple init`, bare `staple`,
+   * `staple add` and the MCP `init` tool. A join (`cloud/share.ts`) does not: it makes the
+   * local copy of a workspace that already exists, whose own setting arrives by sync.
+   */
+  planning?: boolean;
 }): OpenedWorkspace & {
   created: boolean;
   /** Where the protocol guide lives; null for global workspaces, which get none. */
@@ -448,8 +455,31 @@ export function initWorkspace(options: {
       hub.recordRepositoryId(storedSlug, repository.repositoryId);
     }
 
+    const store = new WorkspaceStore(db, storedSlug, prefix);
+    /**
+     * A NEW workspace starts with planning on: its database and its identity were both made by
+     * this call, through a door that creates workspaces on purpose (`options.planning`). After
+     * the identity, so the default horizons take the repository's stable ids.
+     *
+     * The workspace's first value, not a change to one: written under no actor, through the
+     * person path because no one has decided anything yet. From here on only a person changes
+     * it, as everywhere else.
+     *
+     * Not a clone, whose manifest came out of git, and not a join target, whose manifest the
+     * share link wrote first: both are an existing workspace arriving on this machine, and its
+     * setting arrives with it by sync. Writing `true` there would overrule the owner's choice on
+     * every device. Nor a workspace an older build made, which never stored the key: the
+     * registry default stays off, so upgrading turns nothing on.
+     *
+     * Stored and journaled as the person's own choice would be, so a device that hydrates the
+     * workspace reads planning on as this one does, and turning it off keeps working as before.
+     */
+    if (options.planning === true && created && repository.manifestWritten) {
+      store.setSetting("features.planning", true, null, { via: "init" });
+    }
+
     return {
-      store: new WorkspaceStore(db, storedSlug, prefix),
+      store,
       dbPath,
       created,
       guidePath: guide?.path ?? null,

@@ -194,8 +194,8 @@ provider, and a link never changes the ticket's status.
 - `out_of_order`: take the expected eligible ticket; do not send an override yourself.
 - Blocked work remains blocked until its real dependency resolves. Do not mark the
   blocker done or rewrite the queue just to make a checkout pass.
-- Planning is experimental and off by default. Read `get_setting` for
-  `features.planning` before using idea or horizon tools. Only a person enables it.
+- Planning is on in a new workspace; one an older build made keeps it off. Read `get_setting`
+  for `features.planning` before using idea or horizon tools. Only a person changes it.
   Ideas are plans, not claimable tickets; name one by its number (`I-STA-12`). If pickup returns `planSteps`, take only
   steps whose `who` is `agent`; surface person-owned decisions and questions.
 - For an authorized autopilot run, call `continue_run` after each ticket and obey

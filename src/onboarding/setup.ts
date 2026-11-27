@@ -161,6 +161,8 @@ export interface SetupOptions {
   migrate?: boolean;
   /** false declines `.staple/.gitignore`. */
   gitignore?: boolean;
+  /** false starts a new workspace without planning (`staple init --no-planning`). */
+  planning?: boolean;
 }
 
 export interface SetupResult {
@@ -190,7 +192,7 @@ export function runSetup(options: SetupOptions = {}): SetupResult {
     return {
       action: "create",
       dir,
-      workspace: initWorkspace({ global: true, slug: options.slug, gitignore: options.gitignore }),
+      workspace: initWorkspace({ global: true, slug: options.slug, gitignore: options.gitignore, planning: options.planning !== false }),
       migration: null,
       warnings: [],
     };
@@ -212,6 +214,7 @@ export function runSetup(options: SetupOptions = {}): SetupResult {
     dir,
     slug: options.slug,
     gitignore: options.gitignore,
+    planning: options.planning !== false,
   });
 
   return {

@@ -184,7 +184,8 @@ export interface SettingDefinitionView {
   default: unknown;
   version: number;
   sensitivity: "normal" | "sensitive";
-  ui: { label: string; description: string; control: SettingControl; order: number };
+  /** `resettable: false`: no Reset for it, and a section's Reset to defaults skips it. */
+  ui: { label: string; description: string; control: SettingControl; order: number; resettable?: false };
 }
 
 /** One effective value with its provenance. `value` is absent when `redacted`. */

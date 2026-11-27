@@ -54,7 +54,7 @@ beforeAll(async () => {
   emptyDir = mkdtempSync(join(tmpdir(), "staple-finding-cwd-"));
   process.env.STAPLE_HOME = home;
   process.env.NODE_NO_WARNINGS = "1";
-  expect((await cli("init", "--global", WS)).status).toBe(0);
+  expect((await cli("init", "--no-planning", "--global", WS)).status).toBe(0);
   // CON-1 the epic, CON-2 the origin under it, CON-3 a sibling that keeps the epic open.
   expect((await cli("new", "Epic", "--ws", WS)).status).toBe(0);
   expect((await cli("new", "Origin", "--parent", "CON-1", "--ws", WS)).status).toBe(0);

@@ -312,7 +312,7 @@ export function isDelivered(deliveredOn: string | null | undefined): deliveredOn
 
 // ---------- guards ----------
 
-export const PLAN_KINDS_MISSING_MESSAGE = "Planning is off in this workspace; a person turns it on in Settings → Experimental or with `staple settings set features.planning true --person`.";
+export const PLAN_KINDS_MISSING_MESSAGE = "Planning is off in this workspace; a person turns it on in Settings → Features or with `staple settings set features.planning true --person`.";
 
 /** The one sentence every tracker door gives an unpromoted idea. */
 export function planKindRefusal(issue: { identifier: string; kind: string; title?: string | null }, action: string): StapleError {

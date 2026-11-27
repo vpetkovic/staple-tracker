@@ -101,7 +101,7 @@ beforeAll(async () => {
   process.env.STAPLE_HOME = home;
   process.env.NODE_NO_WARNINGS = "1";
 
-  expect((await cli("init", "--global", WS)).status).toBe(0);
+  expect((await cli("init", "--no-planning", "--global", WS)).status).toBe(0);
   // QUE-1 epic > QUE-2, QUE-3; QUE-4 a standalone task; QUE-5 blocks QUE-3.
   expect((await cli("new", "S: continuity", "--kind", "epic", "--ws", WS)).status).toBe(0);
   expect((await cli("new", "S1", "--parent", "QUE-1", "--ws", WS)).status).toBe(0);

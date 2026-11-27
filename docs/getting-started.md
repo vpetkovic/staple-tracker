@@ -25,11 +25,13 @@ instead: the same setup with the defaults, and no UI.
 Created workspace "app" (prefix APP) at /work/app/.staple/staple.db — registered in hub.
 Wrote the agent protocol guide to /work/app/.staple/AGENTS.md — read it before working this repo.
 Wrote /work/app/.staple/.gitignore so the database stays out of git; AGENTS.md is deliberately NOT ignored.
+Planning is on: ideas, and the horizons Now and Next, which are milestones. A person turns it off in Settings → Features; `staple init --no-planning` starts a workspace without it.
 ```
 
 The prefix is the first three letters of the directory name, in capitals: tickets in
 a repository called `app` are `APP-1`, `APP-2`, and in `payments-service` they are
-`PAY-1`, `PAY-2`. If another repository on this machine already has
+`PAY-1`, `PAY-2`. [Planning](plan.md)'s horizons Now and Next take the first two numbers,
+so the first ticket you file is `APP-3`. If another repository on this machine already has
 a workspace called `app`, `init --yes` stops with a `conflict`. Name this one yourself with
 `staple init --yes --slug <name>`, and staple picks a prefix no other workspace uses
 (`APPA`, for example).
@@ -103,8 +105,8 @@ the next ticket: [Connect your agent](connect-your-agent.md).
 
 - [How an agent works a ticket](working-a-ticket.md): the loop your agents follow.
 - [Plans become tickets](plans-to-tickets.md): turn a feature plan into an epic.
-- [Planning (experimental)](plan.md): off by default. Capture ideas and plan horizons before
-  they become tickets.
+- [Planning](plan.md): capture ideas and plan horizons before they become tickets. On in a
+  new workspace.
 - [Configuration](configuration.md): machine preferences and workspace settings.
 
 Going deeper: [packaging and install](../design/packaging.md) covers the runtime,

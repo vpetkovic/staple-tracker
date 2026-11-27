@@ -106,9 +106,9 @@ describe("walk-up resolution", () => {
     // for `.tasks`, this nested repository would resolve to its parent.
     const parent = makeLegacyRepo("walk-parent");
     const childDir = nestedDir(parent, "packages", "child");
-    const init = cli(parent, ["init"], {});
+    const init = cli(parent, ["init", "--no-planning"], {});
     expect(init.status).toBe(0);
-    const childInit = cli({ ...parent, repo: childDir }, ["init"], {});
+    const childInit = cli({ ...parent, repo: childDir }, ["init", "--no-planning"], {});
     expect(childInit.status).toBe(0);
 
     const found = findWorkspace(childDir);
@@ -180,7 +180,7 @@ describe("ambiguity — the forked workspace", () => {
 
   it("refuses to init, before writing anything", () => {
     const box = fork("ambig-init");
-    const result = cli(box, ["init"]);
+    const result = cli(box, ["init", "--no-planning"]);
     expect(result.status).toBe(4);
     expect(existsSync(box.journal)).toBe(false);
   });
@@ -194,7 +194,7 @@ describe("init adoption", () => {
     const box = makeLegacyRepo("adopt");
     seedIssues(box, 3, "kept");
 
-    const result = cli(box, ["init"]);
+    const result = cli(box, ["init", "--no-planning"]);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain(box.legacyDb);
     expect(result.stdout).toContain("legacy .tasks/ layout");

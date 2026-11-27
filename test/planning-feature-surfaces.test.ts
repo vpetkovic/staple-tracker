@@ -20,6 +20,9 @@ beforeAll(async () => {
   process.env.STAPLE_HOME = home;
   expect((await runCliAsync(["init", "--global", WS], { STAPLE_HOME: home })).status).toBe(0);
   expect((await runCliAsync(["config", "set", "humanName", "Larkspur owner"], { STAPLE_HOME: home })).status).toBe(0);
+  // A new workspace starts with planning on; these surfaces are proven from off, as a person leaves it.
+  expect(JSON.parse((await cli("settings", "get", "features.planning")).stdout)).toMatchObject({ value: true, source: "workspace" });
+  expect((await cli("settings", "set", "features.planning", "false", "--person")).status).toBe(0);
   mcp = await startMcpClient({ home, cwd, agent: "worker" });
   ui = startUiServer({ port: 0, hub: true });
   await once(ui.server, "listening");
@@ -39,7 +42,10 @@ it("CLI, MCP and HTTP refuse OFF, report the readable flag, and restore ON", asy
     expect(JSON.stringify(result)).toContain("Planning is off in this workspace");
   }
   const tools = await mcp.client.listTools();
-  expect(tools.tools.find(t => t.name === "list_ideas")?.description).toMatch(/^Experimental, only when features.planning is on\./);
+  expect(tools.tools.find(t => t.name === "list_ideas")?.description).toMatch(/^Only when features.planning is on\./);
+  expect(tools.tools.filter(t => /experimental/i.test(t.description ?? "")).map(t => t.name)).toEqual([]);
+  expect(mcp.client.getInstructions()).not.toMatch(/experimental/i);
+  expect(JSON.stringify((await mcp.call("show_about", { ws: WS })).content)).not.toMatch(/experimental/i);
   expect(toolPayload(await mcp.call("get_setting", { ws: WS, key: "features.planning" }))).toMatchObject({ value: false });
   expect((await mcp.call("show_about", { ws: WS })).structuredContent).toMatchObject({ features: { planning: false } });
   const refused = await mcp.call("set_setting", { ws: WS, key: "features.planning", value: true, actor: "Larkspur owner" });

@@ -221,7 +221,7 @@ const featureInstructions = (() => {
   catch { return "Resolve the workspace and read get_setting features.planning first."; }
 })();
 const server = new McpServer({ name: "staple", version: STAPLE_VERSION }, {
-  instructions: `${featureInstructions} Planning is experimental, defaults off, and only a person changes it in Settings → Experimental or with staple settings set features.planning true --person. Read get_setting or show_about for the current workspace state; explicit ws may differ from this handshake. When off, use ordinary tasks and milestones; plan tools refuse. Ideas have their own numbers, I-<PREFIX>-<n>, and are never pickup work. With planning on, a brainstorm or a new, unplanned capability found while working a ticket is an idea (capture_idea), a defect is a ticket (create_task), and what the ticket you hold needs is fixed in that ticket.`,
+  instructions: `${featureInstructions} Planning is on for a new workspace, and only a person changes it in Settings → Features or with staple settings set features.planning true|false --person. Read get_setting or show_about for the current workspace state; explicit ws may differ from this handshake. When off, use ordinary tasks and milestones; plan tools refuse. Ideas have their own numbers, I-<PREFIX>-<n>, and are never pickup work. With planning on, a brainstorm or a new, unplanned capability found while working a ticket is an idea (capture_idea), a defect is a ticket (create_task), and what the ticket you hold needs is fixed in that ticket.`,
 });
 const PLANNING_TOOLS = new Set(["list_ideas", "get_idea", "list_horizons", "capture_idea", "import_idea", "update_idea", "scaffold_idea", "start_idea", "unlink_idea", "convert_to_idea", "reset_idea_baseline"]);
 
@@ -415,7 +415,7 @@ const MACHINE_LOCAL_WRITES = new Set(["configure_integration","record_budget_sam
   ) => {
     assertAnnotated(name, rawConfig);
     if (PLANNING_TOOLS.has(name)) {
-      rawConfig = { ...rawConfig, description: `Experimental, only when features.planning is on. ${rawConfig.description ?? ""}` };
+      rawConfig = { ...rawConfig, description: `Only when features.planning is on. ${rawConfig.description ?? ""}` };
       const planCallback = rawCb;
       rawCb = (...args: unknown[]) => {
         const ws = (args[0] as { ws?: string } | undefined)?.ws;
@@ -3104,6 +3104,10 @@ server.registerTool(
         .string()
         .optional()
         .describe("Workspace slug; defaults to the directory name, required when global"),
+      planning: z
+        .boolean()
+        .optional()
+        .describe("A new workspace starts with planning on (ideas, and the horizons Now and Next); false starts it without. An existing workspace keeps its own setting"),
     },
     outputSchema: {
       slug: z.string(),
@@ -3117,6 +3121,7 @@ server.registerTool(
       guideWritten: z
         .boolean()
         .describe("false when a guide was already there and was kept unchanged"),
+      planning: z.boolean().describe("Whether planning is on in the workspace, as init leaves it"),
     },
     // initWorkspace is documented idempotent: re-running an existing workspace
     // refreshes its hub registration and keeps the already-minted prefix.
@@ -3128,9 +3133,9 @@ server.registerTool(
       openWorldHint: false,
     },
   },
-  ({ dir, global: isGlobal, slug }) =>
+  ({ dir, global: isGlobal, slug, planning }) =>
     run(() => {
-      const opened = initWorkspace({ dir, global: isGlobal, slug });
+      const opened = initWorkspace({ dir, global: isGlobal, slug, planning: planning !== false });
       const summary = {
         slug: opened.store.slug,
         prefix: opened.store.prefix,
@@ -3138,6 +3143,7 @@ server.registerTool(
         created: opened.created,
         guidePath: opened.guidePath,
         guideWritten: opened.guideWritten,
+        planning: opened.store.planningOn(),
       };
       // Hand back a serializable summary, drop the handle init just opened, and
       // reset the caches so the next call re-resolves and can see this workspace.
@@ -4690,7 +4696,7 @@ server.registerTool(
                 .filter((status) => status.count > 0)
                 .map((status) => `${status.count} ${status.label.toLowerCase()}`)
                 .join(", ")}.`),
-      `Experimental features: planning ${features?.planning ? "on" : "off"}. Only a person changes features.planning.`,
+      `Features: planning ${features?.planning ? "on" : "off"}. Only a person changes features.planning.`,
       `Views: ${views.map((view) => `${view.name} (${view.uri})`).join(", ")}.`,
     ];
     return { content: [{ type: "text" as const, text: lines.join("\n") }], structuredContent: payload };

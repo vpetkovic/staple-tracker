@@ -62,7 +62,7 @@ function legacyRepo(name: string, issues: string[]): string {
   const dir = repo(name);
   mkdirSync(join(dir, ".tasks"), { recursive: true });
   const seed = repo(`${name}-seed`);
-  expect(cli(seed, ["init", "--slug", name]).status).toBe(0);
+  expect(cli(seed, ["init", "--no-planning", "--slug", name]).status).toBe(0);
   copyFileSync(join(seed, ".staple", "staple.db"), join(dir, ".tasks", "tasks.db"));
   for (const title of issues) {
     expect(cli(dir, ["new", title, "--db", join(dir, ".tasks", "tasks.db")]).status).toBe(0);
@@ -108,7 +108,7 @@ describe("bare `staple --yes` with no terminal", () => {
 
   it("is a setup no-op on a workspace that already exists", () => {
     const dir = repo("yes-existing");
-    expect(cli(dir, ["init"]).status).toBe(0);
+    expect(cli(dir, ["init", "--no-planning"]).status).toBe(0);
     const before = diskTree(dir);
 
     const result = cli(dir, ["--yes"]);

@@ -1,15 +1,14 @@
 ---
 title: Planning, from idea to shipped
-sidebar_label: Planning (experimental)
-description: An experimental layer above the tracker. Capture ideas, shape them into plans, schedule them on horizons, scaffold the epic and tasks, and follow the work until it ships. Off until a person turns it on.
+sidebar_label: Planning
+description: The layer above the tracker. Capture ideas, shape them into plans, schedule them on horizons, scaffold the epic and tasks, and follow the work until it ships. On for a new workspace.
 ---
 
 # Planning, from idea to shipped
 
-> [!WARNING]
-> **Experimental, and off by default.** Planning may change in any release, including how its
-> data is stored. It stays off in a workspace until a person turns it on, and turning it off
-> again hides it without deleting anything.
+> [!NOTE]
+> **On for a new workspace.** A workspace made by an older build keeps planning off until a
+> person turns it on. Turning it off again hides it without deleting anything.
 
 Planning covers the part of the work that comes before tickets. An **idea** holds a plan while
 you are still deciding. A **horizon** groups ideas into a delivery slot, such as Now, Next or a
@@ -68,8 +67,15 @@ raw, it reads exploring. A horizon's state follows the work on it.
 
 ## 1. Turn it on
 
-In the web UI, open **Settings → Experimental** and turn on **Planning (experimental)**. At the
-terminal, a person with a configured name can do the same:
+A workspace made with `staple init` starts with planning on, its Now and Next horizons in place.
+So does a home workspace made with `staple init --global`. Horizons are milestones, so Now and
+Next take the workspace's first two ticket numbers and the first task you file is the third.
+`staple init --no-planning` (or the MCP `init` tool with `planning: false`) starts a workspace
+without planning. A clone of a repository, or a
+workspace made to join a shared one, takes the shared workspace's own setting when it syncs.
+
+In a workspace where it is off, open **Settings → Features** in the web UI and turn on
+**Planning**. At the terminal, a person with a configured name can do the same:
 
 ```bash
 staple config set humanName "Your Name"     # once per machine
@@ -624,7 +630,7 @@ the earliest one starts. The horizon itself stays
 
 ## 11. Turn it off
 
-Turn **Planning (experimental)** off in **Settings → Experimental**, or run
+Turn **Planning** off in **Settings → Features**, or run
 `staple settings set features.planning false --person`. Then:
 
 - Plan, its lenses, the idea tabs, the palette commands and the Tasks horizon chip, grouping and

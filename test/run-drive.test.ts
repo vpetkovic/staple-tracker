@@ -77,7 +77,7 @@ function lines(stdout: string): Array<Record<string, unknown>> {
 async function workspace(titles: string[]): Promise<{ dir: string; refs: string[] }> {
   const dir = tempDir("run-drive-ws");
   cleanup.push(dir);
-  const init = await cli(dir, ["init", "--json"], "vp");
+  const init = await cli(dir, ["init", "--no-planning", "--json"], "vp");
   expect(init.status, init.stderr).toBe(0);
   const refs: string[] = [];
   for (const title of titles) {

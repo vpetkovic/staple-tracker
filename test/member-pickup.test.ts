@@ -77,7 +77,7 @@ function cache(): MembersCache {
 beforeAll(async () => {
   home = mkdtempSync(join(tmpdir(), "staple-member-pickup-"));
   emptyDir = mkdtempSync(join(tmpdir(), "staple-member-pickup-cwd-"));
-  expect((await runCliAsync(["init", "--global", WS], { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT })).status).toBe(0);
+  expect((await runCliAsync(["init", "--no-planning", "--global", WS], { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT })).status).toBe(0);
   // MEM-1 marko's · MEM-2 unassigned · MEM-3 VP's (in another case) · MEM-4 an agent's.
   expect((await cli("new", "Fix webhook retry", "--assignee", "marko")).status).toBe(0);
   expect((await cli("new", "Supabase RLS for inbox")).status).toBe(0);

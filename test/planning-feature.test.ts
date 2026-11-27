@@ -13,8 +13,8 @@ function workspace() {
   return new WorkspaceStore(db, "larkspur", "LAR");
 }
 
-describe("experimental planning workspace flag", () => {
-  it("defaults off, is readable, and only a person can change or reset it", () => {
+describe("the planning workspace flag", () => {
+  it("defaults off where never stored, is readable, and only a person can change or reset it", () => {
     const store = workspace();
     expect(store.settingValue("features.planning")).toMatchObject({ value: false, source: "default" });
     expect(() => store.setSetting("features.planning", true, "agent")).toThrow(/trusted not to impersonate/);

@@ -25,7 +25,7 @@ async function json<T>(...args: string[]): Promise<T> {
 
 beforeAll(async () => {
   home = mkdtempSync(join(tmpdir(), "staple-next-label-"));
-  expect((await runCliAsync(["init", "--global", WS], { STAPLE_HOME: home })).status).toBe(0);
+  expect((await runCliAsync(["init", "--no-planning", "--global", WS], { STAPLE_HOME: home })).status).toBe(0);
   await cli("kinds", "add", "milestone", "--label", "Milestone");
 }, 60_000);
 

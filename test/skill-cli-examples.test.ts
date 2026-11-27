@@ -89,7 +89,7 @@ beforeAll(() => {
   home = tempDir("skill-examples-home");
   repo = tempDir("skill-examples-repo");
   elsewhere = tempDir("skill-examples-elsewhere");
-  expect(runCliAt(repo, ["init", "--slug", "skill", "--yes"], { STAPLE_HOME: home, HOME: home }).status).toBe(0);
+  expect(runCliAt(repo, ["init", "--no-planning", "--slug", "skill", "--yes"], { STAPLE_HOME: home, HOME: home }).status).toBe(0);
   expect(staple(["new", "First task", "--json"]).status).toBe(0);
   // The idea-or-ticket table's idea commands need planning on, which only a person turns on.
   expect(staple(["config", "set", "humanName", "Skill Person"]).status).toBe(0);

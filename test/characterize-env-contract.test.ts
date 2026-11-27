@@ -66,8 +66,8 @@ beforeAll(() => {
   const cli = (cwd: string, args: string[], env: Record<string, string> = {}) =>
     runCliAt(cwd, args, { STAPLE_HOME: home, STAPLE_AGENT: "char-env", ...env });
 
-  expect(cli(repo, ["init"]).status).toBe(0);
-  expect(cli(repo, ["init", "--global", "gws"]).status).toBe(0);
+  expect(cli(repo, ["init", "--no-planning"]).status).toBe(0);
+  expect(cli(repo, ["init", "--no-planning", "--global", "gws"]).status).toBe(0);
   expect(cli(repo, ["new", "repo task"]).status).toBe(0);
   expect(cli(repo, ["new", "global task", "--db", globalDb]).status).toBe(0);
 }, 120_000);
@@ -110,7 +110,7 @@ describe("workspace walk-up from cwd", () => {
   it("discovers `.staple/staple.db`, and still discovers legacy `.tasks/tasks.db`", () => {
     const decoy = tempDir("char-env-decoy");
     mkdirSync(join(decoy, ".staple"), { recursive: true });
-    expect(runCliAt(decoy, ["init", "--global", "decoyws"], { STAPLE_HOME: home }).status).toBe(0);
+    expect(runCliAt(decoy, ["init", "--no-planning", "--global", "decoyws"], { STAPLE_HOME: home }).status).toBe(0);
     spawnSync("cp", [join(home, "workspaces", "decoyws.db"), join(decoy, ".staple", "staple.db")]);
     expect(ls(decoy).status).toBe(0);
 

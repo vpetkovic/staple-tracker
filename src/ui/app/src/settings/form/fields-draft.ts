@@ -64,6 +64,7 @@ export function resetField(
   definition: SettingDefinitionView,
   served: SettingValueView | undefined,
 ): FieldsDraft {
+  if (definition.ui.resettable === false) return draft;
   const next = { ...draft };
   if (!served || served.source === "default") delete next[definition.key];
   else next[definition.key] = { op: "reset", key: definition.key };
@@ -76,6 +77,7 @@ export function isResettable(
   definition: SettingDefinitionView,
   served: SettingValueView | undefined,
 ): boolean {
+  if (definition.ui.resettable === false) return false;
   const op = draft[definition.key];
   if (op?.op === "set") return !sameValue(op.value, definition.default);
   if (op?.op === "reset") return false;

@@ -327,7 +327,7 @@ describe("a horizon held with planning off", () => {
     const plain = store.createIssue({ title: "Release train", kind: "milestone" });
     expect(store.milestones().get(plain.identifier)).not.toHaveProperty("heldByPlan");
     expect(store.milestones().get(horizon2(store, "Next"))).not.toHaveProperty("heldByPlan");
-    expect(() => store.updateIssue(horizon2(store, "Next"), { title: "Soon" }, "vp")).toThrow(/^Planning is off in this workspace; a person turns it on in Settings → Experimental or with `staple settings set features.planning true --person`\.$/);
+    expect(() => store.updateIssue(horizon2(store, "Next"), { title: "Soon" }, "vp")).toThrow(/^Planning is off in this workspace; a person turns it on in Settings → Features or with `staple settings set features.planning true --person`\.$/);
   });
 });
 

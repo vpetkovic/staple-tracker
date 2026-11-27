@@ -154,8 +154,8 @@ beforeAll(async () => {
   };
 
   // --- workspaces (via the init TOOL, per the ticket) ---
-  await call("init", "init", { global: true, slug: "contract" });
-  await call("init_two", "init", { global: true, slug: "contract-two" });
+  await call("init", "init", { global: true, slug: "contract", planning: false });
+  await call("init_two", "init", { global: true, slug: "contract-two", planning: false });
 
   // --- fixture tree: CON-1 root, CON-2 idempotent, CON-3 blocker, CON-4 child ---
   await call("create", "create_task", {
@@ -1227,6 +1227,7 @@ describe("tool response shapes (31/31)", () => {
       created: true,
       guidePath: null,
       guideWritten: false,
+      planning: false,
     });
     // A second workspace proves the prefix collision suffix is part of the contract.
     assertGolden("init_two", {
@@ -1236,6 +1237,7 @@ describe("tool response shapes (31/31)", () => {
       created: true,
       guidePath: null,
       guideWritten: false,
+      planning: false,
     });
   });
 
