@@ -140,6 +140,8 @@ for (const width of [1280, 390]) {
       const page = await context.newPage();
       page.setDefaultTimeout(5000);
       await page.goto(route("milestones", `&ws=larkspur&focus=${horizon}`));
+      // The link lands on the horizon's section; its ideas are behind the Plan line.
+      await page.locator(`[data-milestone-plan-line="${horizon}"]`).click();
       const link = page.locator(`[data-open-plan-idea="${idea}"]`).first();
       await link.waitFor();
       await link.click();
