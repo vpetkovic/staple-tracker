@@ -72,7 +72,10 @@ is charcoal, not near-black. Every shell size is a token in
 - **Views**: *Tasks*, *Queue*, *Graph*, *Milestones*, *Estimates*;
 - **This computer**: *Usage*, at the bottom of the rail;
 - the foot, above a hairline: *Settings* and a dark-mode switch
-  (`role="switch"`, remembered under `staple:theme`).
+  (`role="switch"`). The page follows the system's light or dark setting until
+  someone uses the switch, and only that pick is remembered (`staple:theme:v2`,
+  `lib/theme.ts`). The old `staple:theme` key, which earlier builds wrote on every
+  load, is never read as a pick and is removed.
 
 Rows are 32px (44px on a touch screen). The active view carries
 `aria-current="page"`; a group header is a disclosure button whose chevron
@@ -80,7 +83,8 @@ shows on hover and focus. The groups are data (`components/nav/nav-model.ts`,
 an array of groups of items), so moving a view between groups is an edit to
 that array and not to the rail. *Usage* sits apart because budget readings are
 this computer's: the view takes no workspace, and no workspace row is marked
-current while it is open.
+current while it is open. Choosing a workspace from it opens that workspace's
+Tasks.
 
 **Projects hang off Tasks.** The Tasks row carries a `+` (*New project*),
 visible on hover and focus and always in the tab order, that opens the project
@@ -88,7 +92,9 @@ dialog. Every tracked project is a sub-row beneath it (see
 [Projects](#projects)): the name and its open issue count, which gives way to a
 gear (*Project settings*) on hover. Clicking a project switches to Tasks and
 narrows it to that project's issues, and nothing else; the row then carries
-`aria-current="true"` for as long as Tasks is filtered to exactly it. On *All
+`aria-current="true"` for as long as Tasks is filtered to exactly it. *Tasks*
+itself, from the rail, the phone's tab bar or "Go to Tasks", shows every task: it
+drops the project narrowing and keeps the other filters. On *All
 workspaces* the rows are captioned with their workspace, which is what tells two
 projects with one name apart.
 
@@ -143,7 +149,8 @@ workspace pushes a history entry, so Back returns from it; narrowing the list
 replaces the entry. An address naming a workspace the hub does not have lands on
 *All workspaces*. The page re-reads on a change fingerprint polled every 1.5s
 (`lib/useStaple.ts`), so a write from the CLI, MCP or another tab shows within
-one poll.
+one poll. A poll not answered within 8s is given up and the next one asked, so
+a request lost to a network change cannot stop the page refreshing.
 
 ### Keyboard
 
