@@ -100,8 +100,9 @@
   flex-shrink: 1;
 }
 
-/* Calm chips: a soft fill and no outline, so a row of them reads as one quiet cluster. */
-.staple-row[data-desk] :is(.staple-label-pill, .staple-dep-badge, .staple-pr-badge) {
+/* Calm chips: a soft fill and no outline, so a row of them reads as one quiet cluster. `[data-desk-cues]`
+   gives a cluster outside the row (a milestone's work tree) the same chips. */
+:is(.staple-row[data-desk], [data-desk-cues]) :is(.staple-label-pill, .staple-dep-badge, .staple-pr-badge) {
   height: 20px;
   border-color: transparent;
   border-radius: 999px;
@@ -109,42 +110,42 @@
   color: var(--muted-foreground);
 }
 
-.staple-row[data-desk] .staple-label-pill {
+:is(.staple-row[data-desk], [data-desk-cues]) .staple-label-pill {
   gap: 5px;
   padding: 0 9px 0 7px;
   font-size: var(--text-caption, 11px);
 }
 
-.staple-row[data-desk] .staple-label-overflow {
+:is(.staple-row[data-desk], [data-desk-cues]) .staple-label-overflow {
   padding: 0 8px;
 }
 
-.staple-row[data-desk] .staple-dep-badge {
+:is(.staple-row[data-desk], [data-desk-cues]) .staple-dep-badge {
   padding: 0 8px 0 6px;
 }
 
-.staple-row[data-desk] .staple-dep-badge:hover {
+:is(.staple-row[data-desk], [data-desk-cues]) .staple-dep-badge:hover {
   border-color: transparent;
   background: var(--surface-selected);
 }
 
 /* The blocked task's cue is the strong one, in the blocked status's red; "Blocks 3" is neutral. */
-.staple-row[data-desk] .staple-dep-badge[data-words][data-kind="blocked-by"] {
+:is(.staple-row[data-desk], [data-desk-cues]) .staple-dep-badge[data-words][data-kind="blocked-by"] {
   background: color-mix(in oklab, var(--status-task-blocked) 12%, transparent);
   color: var(--plain-risk-fg);
   font-weight: 500;
 }
 
-.staple-row[data-desk] .staple-dep-badge[data-words][data-kind="blocked-by"] svg {
+:is(.staple-row[data-desk], [data-desk-cues]) .staple-dep-badge[data-words][data-kind="blocked-by"] svg {
   color: var(--status-task-icon-blocked);
 }
 
-.staple-row[data-desk] .staple-dep-badge[data-words][data-kind="blocks"] {
+:is(.staple-row[data-desk], [data-desk-cues]) .staple-dep-badge[data-words][data-kind="blocks"] {
   padding: 0 8px;
   color: var(--muted-foreground);
 }
 
-.staple-row[data-desk] .staple-pr-badge {
+:is(.staple-row[data-desk], [data-desk-cues]) .staple-pr-badge {
   padding: 0 8px;
   font-family: var(--font-sans);
   font-variant-numeric: tabular-nums;

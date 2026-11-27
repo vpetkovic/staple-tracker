@@ -129,6 +129,11 @@ describe("switching workspace keeps the page", () => {
   it("lands on All workspaces with the view unchanged", () => {
     expect(afterWorkspaceSwitch({ view: "milestones" }, "", () => emptyFilters()).view).toBe("milestones");
   });
+
+  it("leaves a view about this computer for the workspace's default page, so the choice shows", () => {
+    expect(afterWorkspaceSwitch({ view: "budget" }, "pinecone", () => emptyFilters()).view).toBe("tree");
+    expect(afterWorkspaceSwitch({ view: "budget" }, "", () => emptyFilters()).view).toBe("tree");
+  });
 });
 
 describe("the Inbox and the Autopilot page", () => {
@@ -152,6 +157,14 @@ describe("the Inbox and the Autopilot page", () => {
     const onRun = withShellState(BASE, state({ view: "autopilot", run: "abc" }));
     expect(new URL(withShellState(onRun, state({ view: "queue" }))).searchParams.has("run")).toBe(false);
     expect(new URL(withShellState(onRun, state({ view: "autopilot" }))).searchParams.has("run")).toBe(false);
+  });
+
+  it("makes opening a milestone, moving to another and going back to the list a step Back returns from", () => {
+    const list = state({ ws: "staple", view: "milestones" });
+    expect(isNavigation(list, { ...list, focus: "STA-1" })).toBe(true);
+    expect(isNavigation({ ...list, focus: "STA-1" }, { ...list, focus: "STA-2" })).toBe(true);
+    expect(isNavigation({ ...list, focus: "STA-1" }, list)).toBe(true);
+    expect(isNavigation({ ...list, focus: "STA-1" }, { ...list, focus: "STA-1", filters: filters({ showDone: true }) })).toBe(false);
   });
 
   it("makes going from the list to a run, from a run to the list, and between runs a step Back returns from", () => {

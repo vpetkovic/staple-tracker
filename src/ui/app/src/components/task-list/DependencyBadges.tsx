@@ -60,6 +60,8 @@ export interface DependencyBadgesProps {
    * a neutral one ("Blocks 3"). The phone keeps its glyph-and-count badges.
    */
   words?: boolean;
+  /** One half alone, for a surface that puts something between the two (a milestone's work tree). Absent: both. */
+  only?: "blockedBy" | "blocks";
 }
 
 /** The merged cue's accessible name: both facts, in the order the badges read. */
@@ -71,11 +73,11 @@ export function mergedDependencySentence(blockedBy: number, blocks: number): str
   return sentence.charAt(0).toUpperCase() + sentence.slice(1);
 }
 
-export function DependencyBadges({ row, merged = false, words = false }: DependencyBadgesProps) {
+export function DependencyBadges({ row, merged = false, words = false, only }: DependencyBadgesProps) {
   const [open, setOpen] = useState(false);
 
-  const blockedBy = row.deps?.blockedBy ?? [];
-  const blocks = row.deps?.blocks ?? [];
+  const blockedBy = only === "blocks" ? [] : (row.deps?.blockedBy ?? []);
+  const blocks = only === "blockedBy" ? [] : (row.deps?.blocks ?? []);
 
   // ABSENT FROM THE DOM, per the column rule — not an invisible box, not a zero badge. A
   // task with nothing in the way and nothing waiting on it is the common case, and it must

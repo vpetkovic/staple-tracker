@@ -1,8 +1,7 @@
 /**
  * R2d (STA-169) — the Queue view's model: the join between the plan and the effective
- * order, the two position labels, the move arithmetic every reorder goes through, the
- * retry a conflict offers, and the add box's search. No DOM, no fetch; the markup is
- * `queue-render.test.tsx`.
+ * order, the move arithmetic every reorder goes through, the retry a conflict offers, and
+ * the add box's search. No DOM, no fetch; the markup is `queue-render.test.tsx`.
  */
 import { describe, expect, it } from "vitest";
 import { row } from "@/components/task-list/fixtures";
@@ -10,7 +9,6 @@ import { effective, entry, queue, workedExample } from "./fixtures";
 import {
   blockersOf,
   effectivePreview,
-  ELIGIBILITY_PRESENTATION,
   movedOrder,
   nextEligible,
   nextWorkLabel,
@@ -18,9 +16,8 @@ import {
   orderForPosition,
   planRows,
   previewOf,
-  reasonLabel,
   retryOrder,
-  rowOrdinal,
+  skippedBefore,
 } from "./queue-model";
 
 describe("the plan joined to its expansion", () => {
@@ -62,46 +59,6 @@ describe("the plan joined to its expansion", () => {
   });
 });
 
-/**
- * ONE SCALE, replacing `pickupLabel` and `effectivePositionLabel`.
- *
- * Those two printed up to three numbers per row across two scales — `expands to 8`,
- * `pickup #10`, `#12 · from plan #4` — which is what made the old list unreadable. They are
- * gone rather than deprecated: a dead exported label that still spells the old vocabulary is
- * how the next surface reintroduces it.
- */
-describe("the one number a row prints", () => {
-  it("is the row's place in the order an agent is handed", () => {
-    expect(rowOrdinal(effective({ identifier: "A", position: 2, planPosition: 2 }))).toBe(2);
-    expect(rowOrdinal(effective({ identifier: "A", position: 3, planPosition: 2 }))).toBe(3);
-  });
-
-  it("is nothing for a container, which is never handed to anybody", () => {
-    expect(rowOrdinal(null)).toBeNull();
-  });
-
-  it("is nothing in the unqueued band, whose section already says what those rows are", () => {
-    expect(rowOrdinal(effective({ identifier: "A", position: 9, unqueued: true }))).toBeNull();
-  });
-
-  it("is nothing for finished work, which will never take its turn", () => {
-    expect(
-      rowOrdinal(effective({ identifier: "A", position: 4, planPosition: 1, eligibility: "resolved" })),
-    ).toBeNull();
-  });
-
-  /*
-   * A CONTAINER HAS NO ORDINAL AND NEEDS NO LABEL. An earlier cut gave it `step N`, which
-   * put the plan scale and the effective scale in the same gutter column — the list then
-   * read `step 1 / 10 / step 4 / 14`, which looks like a hole where there is none. The
-   * gutter now holds ONE scale per indent level: a plan entry prints `entry.planPosition`
-   * bare, a nested descendant prints its pickup number marked `#N`.
-   */
-  it("leaves a container's gutter to the plan position the entry already carries", () => {
-    expect(rowOrdinal(effective({ identifier: "A", position: 1, planPosition: 1 }))).toBe(1);
-  });
-});
-
 describe("what a row is waiting on", () => {
   it("is read off the store's own detail, local and cross-workspace alike", () => {
     expect(
@@ -124,33 +81,6 @@ describe("what a row is waiting on", () => {
     expect(blockersOf(effective({ identifier: "A" }))).toEqual([]);
     expect(blockersOf(effective({ identifier: "A", detail: { blockers: "nonsense" } }))).toEqual([]);
     expect(blockersOf(effective({ identifier: "A", detail: { crossBlockers: [null, 7, { workspace: "w" }] } }))).toEqual([]);
-  });
-});
-
-describe("why a row cannot be picked up", () => {
-  it("is the store's own sentence, and nothing at all when the row is eligible", () => {
-    expect(reasonLabel(effective({ identifier: "A" }))).toBeNull();
-    expect(
-      reasonLabel(effective({ identifier: "A", eligibility: "blocked", reason: "blocked by STA-35, STA-67" })),
-    ).toBe("blocked by STA-35, STA-67");
-    expect(reasonLabel(effective({ identifier: "A", eligibility: "claimed", reason: "held by codex-1" }))).toBe(
-      "held by codex-1",
-    );
-  });
-
-  it("falls back to the eligibility rather than to a blank", () => {
-    expect(reasonLabel(effective({ identifier: "A", eligibility: "gated", reason: null }))).toBe("Gated");
-  });
-
-  it("has a distinct glyph AND word per eligibility, so colour is never the only signal", () => {
-    const shown = Object.values(ELIGIBILITY_PRESENTATION);
-    expect(new Set(shown.map((p) => p.glyph)).size).toBe(shown.length);
-    expect(new Set(shown.map((p) => p.label)).size).toBe(shown.length);
-    expect(ELIGIBILITY_PRESENTATION.blocked).toEqual({ glyph: "⊘", label: "Blocked" });
-    expect(ELIGIBILITY_PRESENTATION.gated).toEqual({ glyph: "◇", label: "Gated" });
-    expect(ELIGIBILITY_PRESENTATION.claimed).toEqual({ glyph: "◐", label: "Claimed" });
-    expect(ELIGIBILITY_PRESENTATION.unavailable).toEqual({ glyph: "–", label: "Unavailable" });
-    expect(ELIGIBILITY_PRESENTATION.resolved).toEqual({ glyph: "✓", label: "Resolved" });
   });
 });
 
@@ -236,5 +166,22 @@ describe("the retry a conflict offers", () => {
     const current = ["A", "B"].map((id, i) => entry({ identifier: id, planPosition: i + 1 }));
     expect(retryOrder(["A", "B"], current)).toBeNull();
     expect(retryOrder(["A", "B", "GONE"], current)).toBeNull();
+  });
+});
+
+describe("what the next pick stepped over", () => {
+  it("is every row ahead of the pick, in effective order, as queue next answers skipped", () => {
+    const view = workedExample();
+    const next = nextEligible(view.effective);
+    // STA-31 is resolved: queue next lists it as skipped too, so the view can say so.
+    expect(skippedBefore(view.effective, next).map((r) => [r.identifier, r.eligibility])).toEqual([["STA-31", "resolved"]]);
+  });
+
+  it("is the whole order when nothing is pickable, and nothing when the first row is the pick", () => {
+    const blocked = effective({ identifier: "STA-1", eligibility: "blocked" });
+    const gated = effective({ identifier: "STA-2", eligibility: "gated", position: 2 });
+    expect(skippedBefore([blocked, gated], null)).toEqual([blocked, gated]);
+    const first = effective({ identifier: "STA-3" });
+    expect(skippedBefore([first, blocked], first)).toEqual([]);
   });
 });

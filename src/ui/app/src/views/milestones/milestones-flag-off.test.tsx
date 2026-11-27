@@ -1,60 +1,58 @@
 /**
- * The Milestones view of a plain milestone, and of any milestone with planning off, is what it
- * was before the plan's tree: the server sends no `horizonPlan` then, and the detail draws byte
- * for byte the markup the snapshot recorded from the code before the tree existed.
+ * A plain milestone, and any milestone with planning off, has no Plan line: the server sends no
+ * `horizonPlan` then, and the section draws its goal and its work only, with or without the
+ * milestone's detail read.
  */
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { detail, issue } from "@/detail/detail-fixture";
 import { useIssueActions } from "@/detail/IssueActions";
 import { SessionContext } from "@/lib/session";
-import type { IssueDetail, MilestoneView } from "@/lib/types";
+import type { IssueDetail } from "@/lib/types";
 import { fakeSession } from "@/views/fake-session";
-import { member, progress, view } from "./fixtures";
-import { memberListRows } from "./milestones-model";
-import { MilestoneDetailPane } from "./MilestonesView";
+import { listRow, member, progress, view, work } from "./fixtures";
+import { SectionView } from "./MilestoneSection";
 
 const NOW = new Date("2026-09-04T12:00:00.000Z");
 const noop = () => {};
+const data = view({ milestone: { id: "id-LAR-190", identifier: "LAR-190", title: "October cut" }, progress: progress({ counts: { done: 2, ready: 1 } }), members: [member({ identifier: "LAR-67" }), member({ identifier: "LAR-68", status: "done" })] });
 
-function Page({ data, withDetail, desk }: { data: MilestoneView; withDetail: IssueDetail | null; desk: boolean }) {
+function Page({ withDetail, narrow }: { withDetail: IssueDetail | null; narrow: boolean }) {
   const controller = useIssueActions(noop);
   return (
-    <MilestoneDetailPane
-      view={data}
-      members={memberListRows(data, [], "staple")}
-      now={NOW}
-      busy={false}
-      failure={null}
-      fullScreen={false}
-      onToggleFullScreen={noop}
-      onOpen={noop}
-      onMove={noop}
-      onRemove={noop}
-      onAdd={noop}
-      onReload={noop}
-      onDismissFailure={noop}
-      decision={withDetail ? { detail: withDetail, controller } : null}
-      desk={desk}
+    <SectionView
+      row={listRow({ milestone: data.milestone, progress: data.progress })}
+      work={work(data, { now: NOW, decision: withDetail ? { detail: withDetail, controller } : null })}
+      workspace="staple"
+      effective={[]}
+      folded={false}
+      onFold={noop}
+      narrow={narrow}
+      queue={{ busy: false, refusal: null, onDismiss: noop }}
     />
   );
 }
 
-const render = (withDetail: IssueDetail | null, desk: boolean) =>
+const render = (withDetail: IssueDetail | null, narrow: boolean) =>
   renderToStaticMarkup(
     <SessionContext.Provider value={fakeSession({ ws: "staple" })}>
-      <Page data={view({ milestone: { id: "id-LAR-190", identifier: "LAR-190", title: "October cut" }, progress: progress({ counts: { done: 2, ready: 1 } }), members: [member({ identifier: "LAR-67" }), member({ identifier: "LAR-68", status: "done" })] })} withDetail={withDetail} desk={desk} />
+      <Page withDetail={withDetail} narrow={narrow} />
     </SessionContext.Provider>,
   );
 
 // Planning off, or a plain milestone: the detail the server sends has no `horizonPlan`.
 const plain = detail({ issue: issue({ id: "id-LAR-190", identifier: "LAR-190", kind: "milestone", title: "October cut" }) });
 
-describe("the Milestones view without a horizon's plan", () => {
-  for (const desk of [true, false]) {
-    it(`draws a plain milestone as before, on the ${desk ? "desk" : "phone"}`, () => {
-      expect(render(null, desk)).toMatchSnapshot();
-      expect(render(plain, desk)).toMatchSnapshot();
+describe("the Milestones outline without a horizon's plan", () => {
+  for (const narrow of [false, true]) {
+    it(`draws a plain milestone's goal and work and no Plan line, ${narrow ? "under" : "from"} 760px`, () => {
+      for (const html of [render(null, narrow), render(plain, narrow)]) {
+        expect(html).toContain("data-milestone-goal-line");
+        expect(html).toContain('data-milestone-member="LAR-67"');
+        expect(html).not.toContain("data-milestone-plan-line");
+        expect(html).not.toContain("data-horizon-plan-tree");
+        expect(html).not.toContain("Open in Plan");
+      }
     });
   }
 });

@@ -9,17 +9,10 @@ import { effective } from "@/views/queue/fixtures";
 import { listRow, member, progress, view } from "./fixtures";
 import {
   hiddenMemberCount,
-  layoutFor,
   memberListRows,
-  visibleMilestones,
   milestoneRisk,
   movedOrder,
-  nextWorkLabel,
-  NOT_QUEUED_LABEL,
-  progressLabel,
-  riskLabels,
   sortMilestones,
-  SPLIT_MIN_WIDTH_PX,
   STATE_PRESENTATION,
 } from "./milestones-model";
 
@@ -90,7 +83,7 @@ describe("milestoneRisk", () => {
     expect(milestoneRisk(risky, queueRows)).toMatchObject({ overdue: true, blocked: 2, gated: 1, waitingIn: { unstarted: 3 } });
     // Two wait on other tasks (blocked, not started); the gated one waits on a person's approval.
     expect(milestoneRisk(risky, queueRows).waiting).toEqual({ onTasksNotStarted: 2, startedOnTasks: {}, startedOnGate: {} });
-    expect(riskLabels(milestoneRisk(risky, queueRows))).toEqual(["! overdue", "⊘ 2 blocked", "◇ 1 gated"]);
+    expect(milestoneRisk(risky, queueRows)).toMatchObject({ overdue: true, blocked: 2, gated: 1 });
   });
 
   /**
@@ -114,20 +107,7 @@ describe("milestoneRisk", () => {
       gated: 0,
       waitingIn: {},
     });
-    expect(riskLabels(milestoneRisk(calm))).toEqual([]);
-  });
-});
-
-describe("labels", () => {
-  it("renders progress as done over countable with the percent", () => {
-    expect(progressLabel(progress({ counts: { done: 5, ready: 6 } }))).toBe("5/11 done · 45%");
-    expect(progressLabel(progress())).toBe("nothing to count yet");
-  });
-
-  it("renders the queue's answer, and says 'no eligible work' when the resolver has none", () => {
-    expect(nextWorkLabel({ identifier: "STA-67", position: 4 })).toBe("next: STA-67 (#4)");
-    expect(nextWorkLabel(null)).toBe(NOT_QUEUED_LABEL);
-    expect(NOT_QUEUED_LABEL).toBe("no eligible work");
+    expect(milestoneRisk(calm)).toMatchObject({ overdue: false, blocked: 0, gated: 0 });
   });
 });
 
@@ -250,26 +230,5 @@ describe("movedOrder", () => {
     expect(movedOrder(members, 0, -1)).toBeNull();
     expect(movedOrder(members, 2, 3)).toBeNull();
     expect(movedOrder(members, 1, 1)).toBeNull();
-  });
-});
-
-describe("layoutFor", () => {
-  it("stacks below the md breakpoint and splits from it", () => {
-    expect(layoutFor(SPLIT_MIN_WIDTH_PX - 1)).toBe("stacked");
-    expect(layoutFor(SPLIT_MIN_WIDTH_PX)).toBe("split");
-    expect(layoutFor(390)).toBe("stacked");
-    // A tablet stacks too: beside the navigation rail a split would leave the detail ~280px.
-    expect(layoutFor(768)).toBe("stacked");
-    expect(layoutFor(1024)).toBe("split");
-    expect(layoutFor(1440)).toBe("split");
-  });
-});
-
-describe("visibleMilestones", () => {
-  const open = listRow({ milestone: { identifier: "STA-1", state: "active" } });
-  const done = listRow({ milestone: { identifier: "STA-2", state: "done" } });
-  it("keeps the milestone the page is pointed at listed, finished or not", () => {
-    expect(visibleMilestones([open, done], false).rows.map((r) => r.milestone.identifier)).toEqual(["STA-1"]);
-    expect(visibleMilestones([open, done], false, [null, "STA-2"])).toMatchObject({ rows: [open, done], hiddenFinished: 0 });
   });
 });

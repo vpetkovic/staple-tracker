@@ -171,7 +171,7 @@ describe("buildCommands", () => {
     expect(commands.find((c) => c.id === "release")?.action).toEqual({ type: "release" });
   });
 
-  it("does not offer the view you are already on", () => {
+  it("offers every other view in the navigation's order, never the one you are on", () => {
     /*
      * Filtered on the ACTION type rather than on the group. O7b (STA-141) put the
      * settings command in the `view` group — it changes what the workspace is rather
@@ -179,7 +179,10 @@ describe("buildCommands", () => {
      * meaning "every view switch". The action type is what this test was always about.
      */
     const views = buildCommands(context({ view: "tree" })).filter((c) => c.action.type === "view");
-    expect(views.map((c) => c.id)).toEqual(["view:queue", "view:attention", "view:autopilot", "view:graph", "view:milestones", "view:plan", "view:calibration", "view:budget"]);
+    // In the navigation's order, the view on screen left out.
+    expect(views.map((c) => c.id)).toEqual(["view:attention", "view:autopilot", "view:queue", "view:graph", "view:milestones", "view:plan", "view:calibration", "view:budget"]);
+    const fromInbox = buildCommands(context({ view: "attention" })).filter((c) => c.action.type === "view");
+    expect(fromInbox.map((c) => c.id)).toEqual(["view:autopilot", "view:queue", "view:tree", "view:graph", "view:milestones", "view:plan", "view:calibration", "view:budget"]);
   });
 
   it("names the calibration view in plain words, and still finds it by its old name", () => {

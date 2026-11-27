@@ -37,6 +37,16 @@ export { useRovingFocus, clampIndex, onRowItself, type RovingFocus } from "./rov
  */
 export { KindGlyph, KIND_GLYPH_SIZE, type KindGlyphProps } from "./KindGlyph";
 export { PrioritySignal } from "./PrioritySignal";
+/**
+ * The row's cells as parts, for a surface that draws its own row from the same pieces (a
+ * milestone's work tree, Plan's outline grammar): what each one says and counts stays here.
+ */
+export { ParentRollupBar } from "./ParentRollup";
+export { DependencyBadges } from "./DependencyBadges";
+export { WhoCue } from "./WhoCue";
+export { PrBadge } from "./PrBadge";
+export { Avatar } from "./WorkingPill";
+export { formatRowDate } from "./row-date";
 export {
   NEVER_DROPPED,
   resolveTaskListConfig,

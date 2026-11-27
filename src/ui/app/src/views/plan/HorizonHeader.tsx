@@ -28,6 +28,26 @@ import { percentText } from "./plan-tree";
 const RING_LINE = "@max-[760px]/plan:shadow-[inset_0_2px_0_0_var(--color-ring),inset_2px_0_0_0_var(--color-ring),inset_-2px_0_0_0_var(--color-ring)]";
 const RING_BLOCK = "@max-[760px]/plan:shadow-[inset_0_-2px_0_0_var(--color-ring),inset_2px_0_0_0_var(--color-ring),inset_-2px_0_0_0_var(--color-ring)]";
 
+/**
+ * A section's fold chevron, at the start of its header's first line; under 760px it takes a 32px
+ * tap without changing how it looks. With no `onFold` (a focus or filter is on) it keeps its room.
+ */
+export function FoldButton({ name, folded, onFold, ...data }: { name: string; folded: boolean; onFold: (() => void) | null } & Record<`data-${string}`, string>) {
+  if (onFold === null) return <span aria-hidden className="-ml-1 size-5 shrink-0" />;
+  return (
+    <button
+      type="button"
+      aria-expanded={!folded}
+      aria-label={`${folded ? "Show" : "Hide"} ${name}`}
+      {...data}
+      onClick={onFold}
+      className="focus-ring relative -ml-1 inline-flex size-5 min-h-0 shrink-0 self-center items-center justify-center rounded text-text-tertiary hover:bg-surface-hover @max-[760px]/plan:before:absolute @max-[760px]/plan:before:-inset-1.5 @max-[760px]/plan:before:content-['']"
+    >
+      {folded ? <ChevronRight className="size-3.5" aria-hidden /> : <ChevronDown className="size-3.5" aria-hidden />}
+    </button>
+  );
+}
+
 /** How the header shows a drag over its section: a target it may drop on, the one under the pointer, or nothing. */
 export type DropMark = "allowed" | "over" | null;
 
@@ -105,20 +125,7 @@ export function HorizonHeader({
         data-plan-horizon-line={horizon.identifier}
         data-stuck={stuck ? "" : undefined}
       >
-        {onFold === null ? (
-          <span aria-hidden className="-ml-1 size-5 shrink-0" />
-        ) : (
-          <button
-            type="button"
-            aria-expanded={!folded}
-            aria-label={`${folded ? "Show" : "Hide"} ${horizon.name}`}
-            data-plan-horizon-fold={horizon.identifier}
-            onClick={onFold}
-            className="focus-ring relative -ml-1 inline-flex size-5 min-h-0 shrink-0 self-center items-center justify-center rounded text-text-tertiary hover:bg-surface-hover @max-[760px]/plan:before:absolute @max-[760px]/plan:before:-inset-1.5 @max-[760px]/plan:before:content-['']"
-          >
-            {folded ? <ChevronRight className="size-3.5" aria-hidden /> : <ChevronDown className="size-3.5" aria-hidden />}
-          </button>
-        )}
+        <FoldButton name={horizon.name} folded={folded} onFold={onFold} data-plan-horizon-fold={horizon.identifier} />
         {renaming ? (
           <RenameField horizon={horizon} write={write} onClose={() => setRenaming(false)} />
         ) : (

@@ -26,15 +26,15 @@ surfaces that open on top of any of them.
 | --- | --- | --- |
 | [Inbox](#inbox) | What waits on a person: gates, reviews, blockers a person owns, stopped runs, silent claims, sync conflicts | The rail's first row and the first phone tab; "Go to Inbox"; `?view=inbox` (`?view=attention` lands there) |
 | [Autopilot](#autopilot-runs) | Every autopilot run and one run in full; a notice when one stops | The rail's second row and its live-run lines; the second phone tab; a task's run line; a stop notice; `?view=autopilot`, `?view=autopilot&run=<run id>` |
-| [Tasks](#tasks) | Every issue as one tree, parents over children, with grouping, sorting, filters, search and the pickup cues | Rail and tab bar *Tasks*; "Go to Tasks"; a project row under it; `?view=tasks` |
-| [Queue](#queue) | The pickup order as one tree: the plan, what each queued epic or milestone expands to, what comes next, and the editor for it | *Queue*; "Go to Queue"; `?view=queue` |
-| [Graph](#graph) | Issues as a node graph: epics as containers, dependencies as edges | *Graph*; "Go to Graph"; `?view=graph` |
-| [Milestones](#milestones) | Milestones in plan order, each with progress, risk and members; **Open** leads to its goal | *Milestones*; "Go to Milestones"; a row's milestone marker; `?view=milestones` |
-| [Estimates](#estimates) | How long work took against its estimate, per group of similar work | *Estimates*; "Go to Estimates"; `?view=estimate-accuracy` |
-| [Usage](#usage) | This computer's provider limits and the pace against each one | *Usage* under *This computer*; "Go to Usage"; `?view=budget` |
+| [Tasks](#tasks) | Every issue as one tree, parents over children, with grouping, sorting, filters, search and the pickup cues | *Tasks* in the rail and the fourth phone tab; "Go to Tasks"; a project row under it (in More on a phone); `?view=tasks` |
+| [Queue](#queue) | The pickup order as one dense list: what an agent would take next, the plan with what each queued epic or milestone expands to, the open work after it, and the editor for it; one section per workspace on *All workspaces* | The rail's third row and the third phone tab; "Go to Queue"; `?view=queue` |
+| [Graph](#graph) | Issues as a node graph: epics as containers, dependencies as edges | *Graph* in the rail and in More on a phone; "Go to Graph"; `?view=graph` |
+| [Milestones](#milestones) | Open milestones as an outline in plan order, each section with its progress, goal and work in order; finished ones on a shelf | *Milestones* in the rail and in More; "Go to Milestones"; a row's milestone marker; a milestone's **Show in Milestones**; `?view=milestones&focus=<identifier>` |
+| [Estimates](#estimates) | How long work took against its estimate, per group of similar work | *Estimates* in the rail and in More; "Go to Estimates"; `?view=estimate-accuracy` |
+| [Usage](#usage) | This computer's provider limits and the pace against each one | *Usage* at the rail's foot and under *This computer* in More; "Go to Usage"; `?view=budget` |
 | [Task detail](#task-detail) | One issue: details, connections, documents, activity, the agent payload and time | Click or Enter on any row, node or reference |
-| [Settings](#settings) | Statuses, kinds, workflow settings, cloud, usage capture | The rail's *Settings*; the palette; `?settings` |
-| [Choose a workspace](#choose-a-workspace) | Shown in place of Queue or Estimates on *All workspaces* | Opening either view with no workspace chosen |
+| [Settings](#settings) | Statuses, kinds, workflow settings, cloud, usage capture | *Settings* at the rail's foot and in More; the palette; `?settings` |
+| [Choose a workspace](#choose-a-workspace) | Shown in place of Estimates on *All workspaces* | Opening it with no workspace chosen |
 
 The command palette (`⌘K`), the New task dialog (`c`), the project dialog and
 the dependencies dialog also open over any view. **New task**
@@ -57,51 +57,140 @@ Below 768px the gutter and the radius go and the frame is `100dvh`. Dark mode
 is charcoal, not near-black. Every shell size is a token in
 `styles/system-tokens.css`.
 
-**The rail** is 240px (264px from 1680px) and reads top to bottom:
+**The rail** is the desk's left column. Its head is the scope, everything under
+it is in that scope, its foot is the computer, and exactly one row is
+highlighted. Top to bottom (`components/nav/NavRail.tsx`):
 
-- the brand mark and a *Hide navigation* button;
-- in `--hub` mode, the **Workspaces** group: *All workspaces*, then each
-  registered workspace with a one-letter tile, capped at six (the current one is
-  always kept) with the rest behind *More workspaces*. A single-workspace page
-  lists none;
-- the top rows, above the workspaces and with no heading (`TOP_VIEWS`):
-  *Inbox*, with every workspace's count and a dot when something is new to this
-  browser, and *Autopilot*, always present, with "n live" and one line per live
-  run (its state dot, its name, and the ticket it is on or its state; at most
-  four, then "n more"). A line is a link to that run;
-- **Views**: *Tasks*, *Queue*, *Graph*, *Milestones*, *Estimates*;
-- **This computer**: *Usage*, at the bottom of the rail;
-- the foot, above a hairline: *Settings* and a dark-mode switch
-  (`role="switch"`, remembered under `staple:theme`).
+- **The head**, as tall as the top bar, is the scope: a 20px tile and the
+  scope's name ("All workspaces" or the workspace's name). The tile is the app's
+  mark for *All workspaces* and the workspace's letter (the first of its prefix)
+  for one. In `--hub` mode the head is the workspace switcher and opens the
+  workspace list (below). With one workspace it is the name
+  alone, with nothing to open. On *Usage* the name steps back to the secondary
+  tone, because the page is about this computer; choosing a workspace from there
+  opens that workspace's Tasks.
+- **Now**, with no heading (`TOP_VIEWS`): *Inbox*, with every workspace's count
+  and a dot when something is new to this browser; *Autopilot*, with "n live"
+  and one line per live run (its state dot, its name, and the ticket it is on or
+  its state; at most four, then "n more"); and *Queue*. A run line is a link to
+  that run.
+- **The workspace's records**, 12px below: *Tasks* with its projects under it,
+  *Graph*, *Milestones*, *Plan* (only with planning on) and *Estimates*.
+- **The foot**, above a hairline at the bottom: *Usage*, *Integrations* and
+  *Settings*, with the dark-mode switch beside Settings (`role="switch"`). They
+  read the same whichever workspace is chosen. The page follows the system's
+  light or dark setting until someone uses the switch, and only that pick is
+  remembered (`staple:theme:v2`, `lib/theme.ts`). The old `staple:theme` key,
+  which earlier builds wrote on every load, is never read as a pick and is
+  removed.
 
-Rows are 32px (44px on a touch screen). The active view carries
-`aria-current="page"`; a group header is a disclosure button whose chevron
-shows on hover and focus. The groups are data (`components/nav/nav-model.ts`,
-an array of groups of items), so moving a view between groups is an edit to
-that array and not to the rail. *Usage* sits apart because budget readings are
-this computer's: the view takes no workspace, and no workspace row is marked
-current while it is open.
+The zones have no labels and nothing folds. They are data (`NAV_GROUPS` in
+`components/nav/nav-model.ts`, built from `TOP_VIEWS` and `VIEWS`), so moving a
+view between zones is an edit to that array and not to the rail. The command
+palette lists the views in the same order.
+
+Rows are 32px (44px on a touch screen) with 8px corners. The page's row carries
+`aria-current="page"` and is filled. **Exactly one row is filled.** When a child
+is the place (Tasks narrowed to one project, or a live run open on the Autopilot
+page) the child carries `aria-current="true"` and takes the fill. The parent
+keeps `aria-current="page"` and is marked `data-child-current`, which draws it in
+the foreground tone with no fill. The place moves to a child only when that
+child is a row on screen: a filter naming a project the rail does not list (still
+loading, a failed read, another workspace's) leaves the fill on Tasks, and so
+does a run not among the run lines. The run lines and the project rows share one
+shape: 28px, on a hairline spine that drops from the parent's icon. A project's
+name keeps priority over its workspace caption, which takes at most 40% of the
+row and truncates; the row's title has both.
+
+**Under forced colours** (Windows High Contrast and the like) backgrounds are
+replaced, so the place is an inset 2px outline in the system's `Highlight`
+instead of the fill: on the full and narrow rails, the More sheet's rows and the
+current tab's pill. State dots, badges and the reconnecting dot keep their own
+colours (`forced-color-adjust: none`).
+
+**Marks share one register:** right-aligned, `text-label`, tabular, tertiary. A
+count is a plain number. Something new or waiting is a 6px accent dot before the
+number: the Inbox's new rows, Settings' waiting join requests. Live is the run's
+state dot before "n live", breathing while a run works. *Integrations* shows an
+amber dot when a connection needs attention.
+
+**While the server does not answer.** The page polls every 1.5s; when its polls
+have gone unanswered for 5 seconds (`useConnection` in `lib/useStaple.ts`) the
+counts and dots on screen are the last ones heard and may be stale. The rail
+says so without shouting. It is marked `data-stale`, and one rule dims every
+mark in it (`data-nav-mark`) to 80%: the Inbox count and its dot, "n live" and
+its dot, the run lines' dots and asides, the project counts, and the Settings
+and Integrations marks. At 80% a dimmed count or dot still measures at least
+3:1 against the rail in both themes. Rows keep their full strength and still
+work. One line appears in its own slot between the rail's scrolling body and the
+foot's hairline, so however long the list it is always in sight: a 28px status
+(`role="status"`, `aria-live="polite"`, the region always present and empty
+while the page is live), not a control, with the waiting tone's dot breathing in
+the icon column and the word *Reconnecting*. The narrow rail shows the dot alone
+in a 36px slot, named *Reconnecting* and with a tooltip. On a phone the Inbox
+badge and the Autopilot dot dim, and nothing else changes. All of it goes at
+the first answer.
 
 **Projects hang off Tasks.** The Tasks row carries a `+` (*New project*),
 visible on hover and focus and always in the tab order, that opens the project
 dialog. Every tracked project is a sub-row beneath it (see
 [Projects](#projects)): the name and its open issue count, which gives way to a
-gear (*Project settings*) on hover. Clicking a project switches to Tasks and
-narrows it to that project's issues, and nothing else; the row then carries
-`aria-current="true"` for as long as Tasks is filtered to exactly it. On *All
-workspaces* the rows are captioned with their workspace, which is what tells two
-projects with one name apart.
+gear (*Project settings*) on hover and focus; on a touch screen both show.
+Clicking a project switches to Tasks and narrows it to that project's issues,
+and nothing else; the row then carries `aria-current="true"` for as long as
+Tasks is filtered to exactly it. *Tasks* itself, from the rail, the phone's tab
+bar or "Go to Tasks", shows every task: it drops the project narrowing and keeps
+the other filters (`navigateTo` in `lib/session.ts` is every menu's way to a
+view). On *All workspaces* the rows are captioned with
+their workspace, which is what tells two projects with one name apart.
 
-The rail collapses with `[` or `⌘\` (Ctrl-\ elsewhere) and remembers that it
-did (`staple:rail:v1`); a *Show navigation* button then appears in the top bar.
-A bare `[` typed into a field, or pressed while a menu or dialog is open, is
-not a toggle.
+**Two widths.** The rail is *full* (240px, 264px from 1680px;
+`--shell-rail-width`) or *narrow* (52px, icons only; `--shell-rail-narrow`), and
+on a desk it is always on screen. Narrow, each row is a 36px icon button named
+for its row, with a tooltip on its right that says the name and the mark in
+words ("Inbox · 23 waiting, 4 new"). The head is the scope's tile, still the
+switcher. *Inbox* wears its count as a badge on the icon's corner ("99+" past
+99): quiet by default, and in the accent (`--badge-fresh`) while something
+waiting is new to this browser. *Autopilot* wears a state dot while a run is
+live, *Settings* its join-request count the quiet way, *Integrations* its dot.
+The narrow rail shows no sub-rows. Under a finger its buttons keep their 36px
+look and get 44px through an invisible hit area.
 
-**The top bar** (52px) names the scope and the view: "All workspaces › Tasks"
-or "staple › Tasks" (the workspace's name), where the scope opens the workspace switcher in hub
-mode, and "This computer" on Usage. Beside it sits the sync pill (below), then,
-on the right, the palette field (*Find a task or command*, `⌘K`) and the
-**New task** button (`c`). The browser tab is titled `View · Scope · staple`.
+`[` or `⌘\` (Ctrl-\ elsewhere) switches between the two widths, and so does
+the toggle at the left end of the top bar. A bare `[` typed into a field, or
+pressed while a menu or dialog is open, is not a toggle. The width eases between
+the two (`--motion-duration-base`, `--motion-ease-out`) while the rows keep
+their own width, and never moves under reduced motion.
+
+The rail remembers its width per desk size (`components/nav/rail-mode.ts`). There
+are two size classes: *compact*, 768px to 1023px, which starts narrow, and
+*wide*, from 1024px, which starts full. A choice made in one class leaves the
+other alone. Both live under `staple:rail:v2` as `{ "wide": …, "compact": … }`,
+a class absent until someone chooses in it. A browser with no v2 value reads the
+old `staple:rail:v1` once for *wide*: `collapsed` there becomes narrow. v1 is
+never written. Every part of the page that asks for the width shares one state,
+so the top bar's toggle and the rail cannot disagree.
+
+**The workspace list.** The head, and the top bar's scope while the rail is
+narrow, open the workspace list (`components/nav/WorkspaceSwitcher.tsx`): a popover on a desk and a bottom
+sheet on a phone. Each workspace is one line: its tile, its name, how much waits
+on a person there, and a check on the current one. The count is a plain number
+in the marks' register, from the Inbox's own read (every workspace's, so no
+second fetch); nothing shows at 0, and *All workspaces* shows the total. Rows
+are 36px on a desk and 48px on a phone. A workspace's task-number prefix is in
+its row's title and still finds it in the search box, which leads the list past
+six workspaces. The list is a listbox: arrows, Home, End and Enter work as in
+the palette, and Escape closes it and returns the focus to what opened it.
+
+**The top bar** (52px) starts with the rail's toggle (*Collapse navigation* or
+*Expand navigation*, `aria-expanded` while the rail is full). Then the page's
+name. While the rail is full the bar says only the page ("Tasks"): the rail's
+head names the scope beside it. While the rail is narrow it says "All workspaces
+› Tasks" or "staple › Tasks", where the scope opens the workspace list in hub
+mode. A view about this computer says "This computer › Usage" at either width.
+Beside it sits the sync pill (below), then, on the right, the palette field
+(*Find a task or command*, `⌘K`) and the **New task** button (`c`). The browser
+tab is titled `View · Scope · staple`.
 
 **The sync pill** says the workspace's sync state in a word or two
 ("Synced", "Offline", "2 waiting to send"); a click opens a short card with what
@@ -124,26 +213,52 @@ are 32px. Below 1280px their words drop and they become icon buttons with
 tooltips, and the search folds into an icon that opens in place. Escape in the
 search clears it; a second Escape leaves the field.
 
-**On a phone** the top bar holds the menu button (the rail as a drawer, at most
-85% of the width, closed by a row, the scrim, Escape or Back), the workspace
-switcher as a pill (a bottom sheet), the sync state as one icon, search and New
-task. Under it, the view's name large, its controls as 44px icon buttons, and
-the active filters as one sideways-scrolling row. A bottom **tab bar** holds five
-tabs (`components/nav/ViewTabBar.tsx`): *Inbox* with its count, *Autopilot* with
-a dot while a run is live (green working, amber paused or waiting), *Tasks*,
-*Queue* (`TAB_VIEWS`), and *More*, a bottom sheet with every other view. More is
-drawn as current when the page is on one of them. On a touch screen, controls grow to
-44px at any width.
+**On a phone** there is no rail and no drawer. The top bar starts with the
+workspace switcher as a 32px pill (it opens the workspace list as a sheet), then
+the sync state as one icon, search and New task. Under it, the view's name
+large, its controls as icon buttons, and the active filters as one
+sideways-scrolling row. A bottom **tab bar** holds five tabs
+(`components/nav/ViewTabBar.tsx`, `TAB_VIEWS`): *Inbox* with its count (quiet,
+or in the accent while something is new), *Autopilot* with a dot while a run is
+live (green working, amber paused or waiting), *Queue*, *Tasks*, and *More*.
+
+*More* is a bottom sheet with the rest of the rail, in 48px rows:
+
+- the scope's other views: *Graph*, *Milestones*, *Plan* (planning on) and
+  *Estimates*;
+- **Projects**: each project of the scope with its open count and a settings
+  gear, captioned with its workspace when the rows span several, then *New
+  project*. Tapping one narrows Tasks to it, and it is marked while Tasks shows
+  exactly it;
+- **This computer**: *Usage*, *Integrations*, *Settings* and *Dark mode* (a
+  switch).
+
+The sheet closes before it opens a dialog, and the dialog opens with the focus
+on the *More* tab, so that is where the focus lands when the dialog closes (on a
+desk, a dialog opened from the rail returns it to the row that opened it,
+`lib/return-focus.ts`). Escape, the scrim and Back close the sheet, and the focus
+returns to the *More* tab. More is drawn as current when the page
+is one of its views. The shell's controls keep their drawn size at every width:
+under a finger the pill, the narrow rail's buttons and the top bar's search and
+New task get 44px through an invisible hit area rather than a bigger box.
+A view's own controls still grow to 44px on a touch screen at any width, except
+on the [Milestones](#milestones) page, which keeps each control's desk look and
+gives it a 32px tap.
 
 **The address follows the page.** The workspace, the view, the search text,
 the done toggle, a milestone focus and every filter are written into the URL
 (`ws`, `view`, `q`, `done=1`, `focus`, one parameter per filter dimension;
 `lib/session-url.ts`), so a link opens the same page. Going to another view or
 workspace pushes a history entry, so Back returns from it; narrowing the list
-replaces the entry. An address naming a workspace the hub does not have lands on
-*All workspaces*. The page re-reads on a change fingerprint polled every 1.5s
-(`lib/useStaple.ts`), so a write from the CLI, MCP or another tab shows within
-one poll.
+replaces the entry. An address naming a workspace the hub does not have, or a
+workspace unregistered while the page is on it, lands on *All workspaces* with the
+filters the page showed for it: an address that names a view shows its own (none
+when it carries none), never the filters remembered for *All workspaces*. A
+milestone focus or a run of that workspace is dropped, as on a switch. The page
+re-reads on a change fingerprint polled every 1.5s (`lib/useStaple.ts`), so a write
+from the CLI, MCP or another tab shows within one poll. A poll not answered within
+8s is given up and the next one asked, so a request lost to a network change cannot
+stop the page refreshing.
 
 ### Keyboard
 
@@ -151,18 +266,20 @@ one poll.
 | --- | --- | --- |
 | `⌘K` / Ctrl-K | anywhere, even in a field | opens or closes the command palette |
 | `c` | anywhere but a field or open dialog | New task |
-| `[`, `⌘\` / Ctrl-\ | anywhere | hides or shows the rail |
+| `[`, `⌘\` / Ctrl-\ | a desk, outside an open menu or dialog; a bare `[` not in a field (`⌘\` / Ctrl-\ works there too) | switches the rail between full and narrow, the focus staying on the same row |
 | ↑ ↓ ← → Home End Enter Space | the Tasks grid | move, fold and unfold, open |
 | `s` | a focused task row (desk) | opens the row's status menu |
 | `j` / `k`, Alt-↓ / Alt-↑ | task detail | next or previous task in the list on screen |
-| Escape | an open surface | closes it (the palette, a dialog, the detail, the phone drawer) |
+| Escape | an open surface | closes it (the palette, a dialog, the detail, the workspace list, the More sheet) |
 | Alt-↑ / Alt-↓ | Queue and Milestones rows, settings lists | move the row up or down |
 | Alt-Home / Alt-End | Queue rows | move the row to the top or bottom |
 
-The palette's first group lists "Go to Tasks", "Go to Queue", "Go to Graph",
-"Go to Milestones", "Go to Estimates" and "Go to Usage" (all but the current
-view), "Settings", "Settings: Usage", "Settings: Cloud account" and "Settings:
-Statuses", and in hub mode "Switch to All workspaces" and "Switch to"
+The palette's first group lists the views, all but the current one. Recently
+used commands lead the list; the "Go to" commands otherwise follow the rail's
+order: "Go to Inbox", "Go to Autopilot", "Go to Queue", "Go to Tasks", "Go to
+Graph", "Go to Milestones", "Go to Plan" (planning on), "Go to Estimates" and
+"Go to Usage". Then "Settings", "Settings: Usage", "Settings: Cloud
+account" and "Settings: Statuses", and in hub mode "Switch to All workspaces" and "Switch to"
 followed by each workspace's name.
 
 ## Tasks
@@ -454,76 +571,82 @@ print, and a container is ranked on the effective scale rather than on its plan 
 
 ## Queue
 
-The Queue view (`views/queue/QueueView.tsx`) is the editor for the
-[pickup queue](queue.md): the order agents take work in, as one full-width tree.
-Everything on it comes from one `GET /api/queue?all=1` (`staple queue --json`),
-read whole regardless of the Done toggle, so resolved plan rows stay in place,
-dimmed, and the plan's numbering has no gaps. The view has no toolbar. On *All
-workspaces* it asks you to [choose a workspace](#choose-a-workspace): each
-workspace keeps its own order.
+The Queue view (`views/queue/`) is the editor for the [pickup queue](queue.md): the
+order agents take work in, as one dense list the full width of the content card, in
+the Inbox's register (sticky sunken headers, one scroller, one tab stop). Everything on
+it is the store's answer: `GET /api/queue?all=1&pickup=1` for a workspace, or
+`GET /api/queues` for every workspace at once (`use-workspace-queue.ts`). Resolved plan
+rows stay in place, dimmed and struck through, so the plan's numbering has no gaps.
+The page's own width decides its layout (a container query at 860px), not the window's.
 
-**The header.** *Pickup order*, a sentence saying what the order is for, and
-*Clear n finished* when the plan holds resolved rows (*Prune n resolved* on a
-phone), which prunes them. Under it, a summary card: *5 tasks are in the plan: 3
-ready to pick up, 1 being worked on and 1 waiting on something.* with a progress
-strip over the same counts (`views/queue/queue-summary.ts`). The plan's
-`revision` is behind *Show details*.
+**A workspace page** has a strip: the policy tag (*Advisory order*, or *Strict order*
+with a lock), a meter and *19 in the plan: 3 ready · 4 being worked on · 11 waiting · 1
+done*, *Clear n finished* when the plan holds resolved entries (it prunes them), *Autopilot
+is working this queue* while a live run works this workspace's queue, and **Add to
+queue**. The policy tag opens one paragraph on what the policy means and *Change in
+Settings*; it does not switch it. On a phone, Add to queue sits on the page's title line.
 
-**Next up.** A band across the top names the row an agent asking right now
-would be handed, with its title and *Open*. It is the first `eligible` row of
-the list below, which is what the resolver answers for a read with no actor, so
-the band and the list can never disagree. With nothing eligible it says
-*Nothing can be picked up right now: every task in the plan is waiting on
-something.*
+**All workspaces** lists every workspace's plan in its own section, in registry order:
+*4 plans across 6 workspaces. Each workspace keeps its own order.* with *Collapse all*
+(on the title line on a phone), then each section's sticky header (fold, the workspace,
+its policy, its counts, Add to queue). A workspace whose plan could not be read is a
+banner above the sections. Containers start folded here and open on a workspace page.
 
-**The order.** The plan's entries in plan order, each drawn with the same task
-row as the Tasks view, and each printing its **plan position** bare in a gutter
-(1, 2, 3, …). Under a queued epic or milestone, the rows it expands to are
-nested on the tree's own connector lines, in the order an agent meets them,
-each printing its **pickup number** with a `#` (`#5`). A container never gets a
-pickup number, because it is never a checkout target, and a resolved row loses
-its number. The expansion is capped at five rows with *and n more under
-STA-66*; the fold chevron opens and closes it. A row that is not pickable
-carries the store's sentence for why as its caption ("blocked by STA-35",
-"queued behind STA-66's review", "held by codex-1"). A claimed row keeps its
-place and its number dims: nothing moves while you are reading.
+**Next.** The first row under every header names the task an agent asking right now
+would be handed, and why that one: *First in the order*, or *#5 in the order · ahead of
+it: 4 being worked on, 1 waiting*, or, for a pick from the open work after the plan,
+that the plan has nothing ready or that there is no plan. A click shows that task in the
+list (opening its container and paging as needed) and flashes it; *Open* opens it. With
+nothing pickable it turns amber: *Nothing can be picked up right now*, with what is
+waiting and being worked on. It is the only place the word Next appears; the pick's own
+row in the list wears the same tint.
 
-**Not planned.** Every other open leaf follows in a folded section, *Not
-planned · n items · picked up after the plan*, in presentation sort, capped at
-ten with the rest counted.
+**The order.** The plan's entries in plan order. An entry's gutter is its plan position,
+which is also its drag handle. Each row has a state column with one vocabulary, a mark
+and words, never colour alone: *Ready*; *Working · holder* (with *quiet 8d* once idle for
+30 minutes or more, the app's stale-claim rule); *Waiting on APP-3, APP-4* (each a link
+to that row); *Blocked on a person*; *Needs your approval*; *In review*; *Another
+member's*; *Done*; or the store's own sentence. A queued epic or milestone rolls up as a meter and *10 tasks · 2 ready · 4
+being worked on*, and opens to its tasks in the order an agent meets them, each with its
+pickup number (`#5`, dimmed while claimed), under a caption for each epic between the
+entry and the task; five first, then *103 more in APP-10 · Show all 108*. An entry the
+order already reached through an earlier one says *Already in the order at #76, inside
+APP-10*. An entry's note is a line under it.
 
-**Reordering.** Drag (`@dnd-kit/core`, the reorder list the settings editors
-use), the per-row move buttons, Alt-↑ / Alt-↓, Alt-Home / Alt-End, and the row
-menu's *Move to top* / *Move to bottom* all end in one
-`POST /api/queue/reorder` carrying the view's `revision` as `baseRevision`. A
-move that would change nothing is never sent. Alt is required on the arrows and
-on Home/End so the plain keys stay with the list's own navigation.
+**After the plan.** Every other open task follows in one folded line, *After the plan ·
+61 open tasks · agents take these in list order once the plan runs out*; open, the same
+rows without numbers, each with *Add*, ten first. With no plan it is *Open work*, open on
+a workspace page, under a *No plan yet* block with Add to queue.
 
-**The row menu** (`components/QueueRowMenu.tsx`, the `⋯` on every row, also
-opened by a long press) is where every row action lives, here and on the Tasks
-list: *Open details*; on a queued row the moves and *Remove from queue*
-(`POST /api/queue/remove`), disabled while somebody holds the row, with the
-reason; on a row not in the plan *Queue next* (`POST /api/queue/enqueue` at
-position 1) and *Add to queue* (appended). A row that is only in the order
-because its container is queued counts as not queued, so it offers the add
-items. On *All workspaces* the menu names which workspace's queue it acts on.
+**Reordering.** Drag an entry by its number (a 2px line shows where it lands; pointer
+events, so a mouse and a finger are one path), Alt-↑ / Alt-↓ and Alt-Home / Alt-End on a
+focused entry, or the row menu's moves. Every path ends in one `POST /api/queue/reorder`
+carrying the plan's `revision` as `baseRevision`, and the new place is announced
+(*APP-12 is now 1 of 3*). While a section's write is out its handles are inert and the
+entry being written is dimmed. Alt and an arrow on a task under an entry does nothing.
 
-**Adding.** The picker above the list, *Queue a task, epic or milestone…*,
-lists this workspace's issues that are not already in the plan and adds the one
-you pick.
+**The keyboard.** The rows of every open section are one tab stop: ↑ / ↓ (and k / j),
+Home / End, → / ← to open and fold a container, Enter or Space to open the task.
 
-**A stale reorder.** Every write carries `baseRevision`, and the store refuses
-a stale one with `revision_conflict`, changing nothing, so the server's order is
-still the truth. The page re-reads and shows *The plan changed elsewhere —
-nothing was written.* with the store's sentence and two deliberate ways out:
-**Reload**, which abandons the move, and **Retry my order**, which re-applies
-the intent at the new revision, keeping whatever the other writer added and
-dropping whatever they removed. Neither happens on its own. Any other refusal
-is the store's own sentence in the shared refusal panel.
+**The row menu** (`components/QueueRowMenu.tsx`, the `⋯` on every row): on an entry
+*Open*, *Move to the top*, *Move up*, *Move down*, *Move to the bottom* with their keys,
+and *Remove from the plan*, disabled while somebody holds the row, naming them; on a task
+under an entry or after the plan *Open*, *Queue next* and *Queue last*.
+
+**Adding.** *Add to queue* opens a search over this workspace's open work that is not in
+the plan and adds the one you pick to the end. It never offers to create a task.
+
+**A stale reorder.** The store refuses a write built on an old `revision` and changes
+nothing, so the page re-reads and puts an amber line under the header: *The plan changed
+somewhere else, so your move was not saved. The order below is the current one.* with
+**Apply my move again** (re-applies the intent to the current plan, keeping what the
+other writer added and dropping what they removed) and **Dismiss**. Any other refusal is
+the store's own sentence in the shared refusal panel.
 
 `views/queue/queue-render.test.tsx` renders the pieces to static markup;
-`queue-model.test.ts`, `queue-tree.test.ts` and `queue-summary.test.ts` pin the
-numbering, the nesting and the summary.
+`queue-words.test.ts`, `queue-lines.test.ts`, `queue-drag.test.ts`, `queue-model.test.ts`
+and `queue-summary.test.ts` pin the words, which rows are drawn, the drop slot, the plan
+join and the counts.
 
 ## Graph
 
@@ -580,38 +703,68 @@ whole hub graph.
 
 The Milestones view (`views/milestones/MilestonesView.tsx`) is the planning view
 for [milestones](milestones.md): dated, human-ordered plans that contain epics
-and tasks without moving them. The page has no toolbar of its own. The *Done*
-toggle in the top bar, the same one the Tasks view uses, decides whether
-finished and cancelled milestones are listed and whether finished rows show in a
-milestone's member list.
+and tasks without moving them. One workspace's page is an outline
+(`views/milestones/MilestonesOutline.tsx`), the shape of Plan's Horizons lens
+(`views/plan/HorizonsLens.tsx`): one scroller of stacked sections, one per open
+milestone, with the lens's paddings, type sizes, hairlines and sticky headers. A
+horizon and a plain milestone read alike, and a page of many milestones scans as
+a column of headers. The two panes it replaced showed one milestone at a time
+beside a list of cards.
+
+The page reads every milestone, finished ones included (`GET /api/milestones`
+with `all`), so which milestones it lists does not depend on the *Done* toggle.
+The toggle, the same one the Tasks view uses, decides only whether finished rows
+show inside a milestone's work. Widths are the page's own container
+(`@container/ms`), not the window: "under 760px" below is `MILESTONES_NARROW` in
+`views/milestones/milestones-memory.ts`.
 
 **Turned off.** A workspace without the `milestone` kind shows *Milestones are
 not turned on in staple.* (the workspace's name) and a **Turn on milestones in Settings** button
 that opens that workspace's *Task types* in [Settings](#settings).
 
-**Left, the plan.** Every milestone in plan order, then target date, then
-identifier: an unplanned milestone sits below every planned one, and a date
-never reorders a plan. On a desk each is a card: the title; the status pill; the
-due date in words; a progress strip; *3 of 4 tasks finished (75%).*; and what
-is in the way (*3 are blocked: 2 wait on other tasks, 1 on a person.*). On a
-phone a row is denser: identifier, `target` date, member count, `plan #`, a
-progress bar with `done/countable` and the percent, the state, the risk, and the
-queue's answer, `next: STA-67 (#4)`, or "no eligible work". With Done hidden
-and nothing open, the list says *No open milestones* (*All 3 milestones are
-finished and hidden while Done is hidden.*) with a **Show finished milestones**
-button; a workspace with no milestones at all says *No milestones here yet*
-and how to create one, with, on a desk, a **New task** button that opens the
-create dialog on the Milestone kind. A
-milestone the address points at (`?focus=`) or that is open stays listed even
-when it is finished and Done is hidden.
+**The outline, top to bottom.** On a desk, the page's toolbar (below). Then one
+section per open milestone, sorted by plan position, then target date, then
+identifier (`sortMilestones`): an unplanned milestone sits below every planned
+one, and a date never reorders a plan. Then the Finished shelf. Under 760px, a full-width
+**Add a milestone** row ends it. While the list loads, two skeleton sections
+shaped like a header stand in. A workspace with no milestones says *No
+milestones here yet* with a **+ Milestone** button. With only finished ones, one
+quiet line says *No open milestones* above the shelf. A list that fails is the
+page's error; a section whose own read fails shows the error with **Retry** in
+that section and leaves the others alone.
 
-**The status pill** is the milestone's stored status, the same glyph, word and
-colour the Tasks list and the task detail give any status (*Backlog*, *Todo*,
-*In Progress*, *Awaiting Approval*, *Done*, or the workspace's own label). The store derives that status
-from the members, so this page and the Tasks list give one answer about the same
-milestone. In the detail header the pill is the task detail's own status menu,
-and a pending approval gate shows the task detail's approve and send-back block
-under the header, through the same action controller, refusals and signing.
+**A section's header** (`views/milestones/MilestoneSection.tsx`) is sticky. Its
+first line: the fold chevron; the glyph (a ring filled to the server's percent,
+red when the milestone is overdue, the check when done, a dotted struck ring when
+cancelled); the name, which opens the milestone's [detail](#task-detail); the due
+date in words with its calendar button; then *Queued #2* when the milestone has
+its own row in the pickup plan, or **Queue** when it has none; and `⋯`. The
+second line is the progress bar with its percent and the flags: *Waiting for
+your approval*, *2 blocked* and *behind* (the pace check's verdict). An overdue
+milestone gets no flag: the red date and the red glyph already say it. The third
+line is one sentence of facts: *2 of 10 tasks finished.*, what waits (*3 are
+blocked: 2 wait on other tasks, 1 on a person.*), the cancelled tasks the count
+leaves out, and *Next up: STA-67, 3 ahead of it in the queue.* (*first in the queue* when nothing is ahead: the number is the ticket's place in the whole pickup order, so it is said as what is ahead rather than as a rank that reads like a place in this milestone)
+
+The header draws from the list row alone, so a folded section asks the server
+for nothing more. The one-milestone reads (`views/milestones/useMilestoneWork.ts`:
+the milestone view and its issue detail) start when the section is unfolded, when
+its `⋯` is first opened, or when it waits for an approval.
+
+**The status lives in `⋯`.** There is no status pill in the header. The store
+derives a milestone's status from its members, so the page and the Tasks list
+give one answer, and a person changes it rarely: a pill on every header would
+offer a control nobody needs at every glance. The `⋯` menu holds *Open details*;
+*Status*, a submenu of the detail's own status items with the same hold-back
+reasons, and *Ask for approval* where it is offered (`detail/IssueActions.tsx`,
+one controller and one set of rules); *Change due date*; *Queue* or *Remove
+from the queue*; and *Collapse* or *Expand*. A queue write that is refused shows
+the store's sentence in the section.
+
+**The gate.** A milestone with a gate shows the task detail's approve and
+send-back block under its header, through the same action controller, refusals
+and signing, whether the section is folded or not: it is what the person is
+asked to act on.
 
 **The due date** (`views/milestones/MilestoneDue.tsx`) is said in words: the
 target a person set (*Due 15 Oct, in 18 days*, *Due today*, *Due tomorrow*,
@@ -624,103 +777,210 @@ no target says *Finished 3 Oct* (*Closed 3 Oct* when cancelled), from its
 `remaining.forecastSeconds` ([milestones](milestones.md)), all open work summed
 rather than the critical path, and it is never stored; its tooltip gives the
 estimated and forecast hours and how many open tasks it leaves out. Overdue is
-judged on the reader's local calendar day, so the words, the red and the risk
-line agree. Beside an open milestone's date a calendar button (*Set a due date*,
-or *Change the due date*) opens a date field holding the set target, or
-pre-filled from the projection when there is none;
+judged on the reader's local calendar day, so the words, the red and the facts
+agree. The calendar button beside an open milestone's date (*Set a due date*,
+or *Change the due date*), and *Change due date* in `⋯`, open a date field
+holding the set target, or pre-filled from the projection when there is none;
 **Save** writes the milestone's own target through `POST /api/milestone/update`,
 the same write as `staple milestone set --target`, and a set target has a
 **Use the estimate** (or **Clear date**) button that removes it. The milestone's
 task detail shows the same control as its Due property.
 
-**Right, one milestone.** On a desk: the title, the status, the due date,
-*Owned by …*, **Open** (the milestone's [detail](#task-detail), where its goal
-is) and an expand button that gives the detail the whole content box. A progress
-card follows with the progress sentence, then one line that says what waits,
-how many cancelled tasks the count leaves out (*1 cancelled task is not
-counted.*) and *Next up: STA-67, number 4 in the pickup order.* The strip splits
-the counted tasks into finished, in review, in progress, blocked, to do and not
-started, in the colours the task rows' status glyphs use; every counted task is
-in exactly one, and cancelled ones are in none. *Show details* opens a grid of
-*Reference*, *Tasks counted* (with the cancelled ones it leaves out), *Starts*,
-*Target*, *Blocked, waiting on other tasks*, *Blocked, waiting on a person*,
-then *Started, still waiting on other tasks* and *Started, waiting for an
-approval* (each only when not 0), *Plan position* (when queued) and *Next up*. The two
-*Blocked* rows add up to the strip's blocked count.
+**The Goal line.** Under the header, unless the section is folded: one row with
+the lens's line metrics, *Goal*, *1 of 4 met*, the pace pill (*On track*,
+*Behind*, *Overdue*, …) and, while folded and from 760px, *Next:* and the first
+criterion that is not met. It opens the criteria in place: each criterion as the
+milestone's detail draws it (`CriterionRow` in `detail/MilestoneGoal.tsx`), the
+marks the check cleared as quiet lines under them (`ClearedMarks`, the one
+component the drawer uses too: *bob's met mark on "Old wording" was cleared: its
+criterion was removed.*, *alice's earlier unmet mark on "Ships" was replaced by
+a later one.*), then the pace sentence. It starts open when judging is the job:
+the milestone waits for approval, or all its work is finished and it is not
+closed (`goalStartsOpen`). Otherwise it starts folded, because on most days the
+goal is context and the work is the job.
 
-Then *What is in this milestone* (*4 items, in order*): the ordered members,
-drawn with the Tasks list's own row and columns. A click on a row, or Enter or
-Space on it, opens the task; the arrow keys, Home and End move between rows, and
-right and left unfold and fold a member epic's children, which follow it
-read-only: membership never rewrites hierarchy and neither does this list. A
-member added with a note shows the note under its row. Done hidden hides the
-same rows here as in the Tasks list: a hidden row's open children take its
-place, each with its parent's chip, and the first of them carries the hidden
-member's controls. The list ends with *3 finished items hidden* and a **Show
-done** button; when every member is finished and hidden it says so (*Everything
-in this milestone is finished; Done is hidden.*) instead of calling the
-milestone empty (`views/milestones/HiddenDone.tsx`). A milestone with no members
-says *Nothing is in this milestone yet* (on a phone, *no members yet — add an
-epic or a task below*).
+**The Plan line.** A milestone that is a [horizon](plan.md#presentation), with
+planning on, gets a second line like the Goal line: *Plan*, *17 ideas* and an
+**Open in Plan** link to the Horizons lens. It unfolds the horizon's summary and
+outline in place (`HorizonPlanTree`), and starts folded.
 
-**Editing membership.** Each member has *Open*, *Move up*, *Move down* and
-*Remove*, plus Alt-↑ / Alt-↓ on the row. Below 1280px, and on a phone, the four
-fold into one `⋯` menu (*Open details*, then *Move STA-67 up*, *Move STA-67
-down* and *Remove STA-67 from this milestone*, each naming the member). The form
-under the list adds a task by reference with an optional note (*Add to
-milestone*; *Add member* on a phone). Writes go to `POST /api/milestone/add`,
-`/remove` and `/reorder`, each carrying the view's `revision` as
-`baseRevision`; the store refuses a stale one with `revision_conflict` and the
-page shows *Member order changed elsewhere.* with the store's sentence and a
-Reload, because the fix is to read again. Any other refusal is the store's own
-sentence. There is no drag. A finished or cancelled milestone is a record: its
-members keep *Open* only, the add form is gone, and its due date has no
-calendar.
+**The work.** The members (`views/milestones/WorkTree.tsx`) are drawn in the
+Plan outline's grammar, so a horizon's ideas and a milestone's tickets read as
+one kind of tree: Plan's grid and column widths by the tree's own width, its
+18px depth guides and chevron, a 14px status glyph, its hairlines and its
+two-line form under 760px. It does not render the Tasks list's row; it reuses
+that row's parts for what a cell says (the status glyph, the parent rollup, the
+dependency, claim and pull request cues, the who badge, the date). A sunken
+strip names the columns: *Work, in order* with the item count, *Progress*, *Now*
+and, from 1040px, *Updated*. Every row starts chevron, glyph, title at one x for
+its depth: there are no leading priority bars and no kind icon slot, because a
+slot only some kinds fill left ragged gaps. After the title, quietly: the
+identifier, the kind as a word when it is not a task or an epic, the *next up*
+flag and the member's note. *Progress* is the rollup bar and count for a row
+with children and the status in words for a leaf; *Now* is what stands in the
+way or who is on it; *Updated* carries the priority, the assignee and the date.
+Each member starts as one line and its chevron unfolds its children, which
+follow it read-only: membership never rewrites hierarchy and neither does this
+list.
 
-**States without colour.** On a phone row (and in the phone detail header until
-the milestone's status loads) the milestone's state is a glyph and a word: planned `○`, active `◐`, overdue `!`,
-done `✓`, cancelled `×`, with "all members done" beside an active milestone
-whose members have all landed (seen only while a gate or a manual status holds
-it open). Blocked and gated are facts about members, not milestone states, and
-appear in the risk line.
+**The order has no numbers.** The rows are in the order work is taken in, which
+is the member order the queue expands, so a number added nothing and, with Done
+hiding earlier members, read as gaps (1, 4, 7). The one place that matters at a
+glance is marked instead: the ticket the queue takes next, and the member that
+holds it, carry a *next up* flag. A direct member's exact place is in its menu
+(*2 of 3 in the order*) and in `aria-posinset` / `aria-setsize`, and a move is
+announced (*Moved to 2 of 3*).
 
-**Layout.** Below 1024px (`SPLIT_MIN_WIDTH_PX`) one pane shows at a time: the
-list, or the chosen milestone's detail with a "Back to milestones" button. From 1024px they split:
-wider than the shell's 768px because the rail takes its share of the window
-first. The expand button in the detail header gives it the whole content box at
-any width; press it again to return.
+**The note** a member was added with sits on the member's own line after the
+identifier, quiet and truncated, whole in its `title`. It takes only the room the
+title leaves. As a second line under some rows it made rows different heights;
+on hover alone it would be lost on a phone and when scanning, which is when it
+is useful.
 
-**All workspaces.** With no workspace chosen in hub mode the view is *Milestones
-in every workspace*: read-only, grouped by workspace, leaving out workspaces
-with no milestones or without the kind, and naming a workspace whose read
-failed. Opening a milestone switches to its workspace and focuses it
-(`views/milestones/AllWorkspacesMilestones.tsx`).
+**Finished work.** Done hidden hides the same rows here as in the Tasks list: a
+hidden row's open children take its place, each saying which parent it is in,
+and the first of them carries the hidden member's controls. One line at the end
+of the tree, drawn as Plan draws its gathered shipped line, says *9 finished
+hidden · show*. It is that milestone's own switch: it shows its finished rows in
+place for the visit and then reads *9 finished shown · hide*; it does not move
+the app-wide Done toggle, and it is the only count of them. When every member
+is finished and hidden the section says so instead of calling the milestone
+empty (`views/milestones/HiddenDone.tsx`). A milestone with no members says
+*Nothing is in this milestone yet. Add an epic or a task.*
+
+**Editing the work.** A row's `⋯` (shown on hover and focus from 760px, always
+on a touch screen) opens on the member's place, then *Open details*, *Move up*,
+*Move down*, *Move to top*, *Move to bottom* and *Remove from this milestone*.
+There are no arrow buttons on the row: they repeated the menu. The keyboard is
+the Tasks list's: the arrows, Home and End move between rows, Enter and Space
+open the task, right and left unfold and fold an epic, and Alt-↑ / Alt-↓ move a
+member. A click on a row opens the task; the controls stop their clicks. **Add
+work** is a button in the section's header, left of Queue, that opens a popover
+with a reference field, an optional note and **Add**; Enter adds and keeps it
+open for the next one, a refused add keeps what was typed and says why, and
+Escape closes it. It works on a folded section without unfolding it. Under 760px
+it is *Add work* in the section's menu. Writes go to `POST /api/milestone/add`, `/remove` and `/reorder`,
+each carrying the view's `revision` as `baseRevision`; the store refuses a stale
+one with `revision_conflict` and the section shows *Member order changed
+elsewhere.* with the store's sentence and a **Reload**, because the fix is to
+read again. Any other refusal is the store's own sentence. Both sit at the top of
+that section's work, and while a write is in flight that section's controls are
+disabled. There is no drag.
+
+**The Finished shelf.** One line on the sunken surface, *Finished 9 · show*,
+folded by default. Open, it lists each finished or cancelled milestone as one
+40px line, the most recently closed first: a chevron, the glyph, the name (it
+opens the detail), the progress sentence (*All 9 tasks are finished.*) and when
+it was due or finished (*Was due 7 Oct*, *Finished 3 Oct*, *Closed 3 Oct*). Its
+chevron opens its Goal line and its work under it. A finished milestone is a
+record: its work is listed whatever the Done toggle says, its members offer
+*Open details* only, there is no Add work, and its date has no calendar.
+
+**Folding, and what is remembered.** Every open section folds with its chevron,
+and the choice is remembered per workspace and per milestone in this browser,
+under `staple:milestones:v1:<workspace>` in `localStorage`:
+`{ "folded": { "<milestone id>": true }, "finished": false }`
+(`views/milestones/milestones-memory.ts`). It is modelled on Plan's memory
+(`views/plan/plan-memory.ts`): the same storage guard, bad or missing data read
+as no choice, and the choice for a milestone that no longer exists dropped on the
+next save. It survives a reload, a view change and a workspace switch. With no
+choice, a section is unfolded from 760px and folded under it, so a phone's first
+screen is the overview. **Collapse all / Expand all** is one control: it reads
+*Collapse all* while any open section is unfolded, else *Expand all*, and writes
+the choice for every open milestone. It is disabled when no milestone is open
+and never touches finished ones. The shelf's own open state is remembered
+(`finished`). A finished milestone's own fold, a member epic's fold and the Goal
+and Plan lines last for the visit and are not stored. A fold is how one reader
+scans the page, not a fact about the plan, so it stays in the browser: it does
+not sync and is not in the address.
+
+**The page's own controls.** On a desk, a toolbar row under the top bar with
+Plan's toolbar metrics (`views/milestones/MilestonesToolbar.tsx`): on the left
+the counts, *4 open · 9 finished*; on the right **Collapse all** or **Expand
+all** (an outline button with its icon and words) and **+ Milestone**, which
+opens the create dialog on the Milestone kind. On the phone shell there is no
+toolbar row: the fold control is an icon button beside the page name, in the
+header slot Plan's lens tabs use (`data-phone-header-slot`, `usePhoneHeaderSlot`
+in `lib/phone-header-slot.ts`), labelled for assistive technology, and **+
+Milestone** is the **Add a milestone** row at the end of the outline.
+
+**Under 760px** the header follows Plan's `HorizonHeader`: only its first line
+sticks, 44px high with a hairline once it is stuck, holding the chevron, the
+glyph, the name, the percent and `⋯`. The bar, the flags and the facts scroll
+away under it. The due date moves into the facts as text, and *Queued #2* with
+it. The calendar button and **Queue** are not drawn there; their actions are in
+`⋯`.
+
+**Control sizes.** A control keeps its desk look at every width. Under 760px its
+tap area grows to at least 32px through an invisible hit area (a `before:`
+pseudo-element with negative insets), as `HorizonHeader`'s fold button does.
+Nothing on the page is drawn as a 44px box, so this page opts out of the shell's
+44px touch floor: text buttons are 28px high on a desk and at most 32px on a
+phone, and a member row's `⋯` is a 28px ghost icon with a 36px hit area. Boxes of
+44px turned the phone page into a column of buttons, and the page is meant to be
+read as an outline.
+
+**Landing from a link.** The focused milestone is part of the address,
+`?view=milestones&focus=<identifier>` (`session.milestoneFocus`, set through
+`session.focusMilestone`). A focus on an open milestone scrolls its section to
+the top, unfolds it for the visit without changing what is remembered, and marks
+it for about 1.6 seconds with a ring that fades (none with reduced motion). The
+section is held at the top for a moment while the sections above it finish
+reading, until the person scrolls or presses anything. A focus on a finished one
+opens the shelf for the visit, opens that line and scrolls to it. A focus the
+list does not carry shows one line at the top, *STA-123 is not in this list.*,
+with **Open it** (the detail), and the outline as it is. The page itself never
+sets the focus: a name opens the detail. A row's milestone marker, the milestone
+detail's **Show in Milestones**, the Inbox and the Autopilot page all arrive
+through `focusMilestone`, so they all land this way.
+
+**All workspaces.** With no workspace chosen in hub mode the page is the same
+outline, read-only (`views/milestones/AllWorkspacesMilestones.tsx`): for each
+workspace a sunken heading strip with its name and counts, then its open
+milestones as section headers with no fold chevron, no `⋯` and no calendar. The
+whole first line is the control: it switches to that workspace and lands on the
+milestone there (`openMilestoneIn`). Then that workspace's own *Finished 9*
+line, which opens to its finished milestones, each opening the same way. A
+workspace whose read failed keeps its failure line; workspaces with no
+milestones, or without the kind, are left out. It takes the full width, with no
+heading paragraph: the top bar names the page.
 
 **In the rest of the app.** A row that is a direct member of a milestone and has
 no parent is drawn under the milestone in the Tasks tree (in the list's copy
 only: a real parent always wins, and the grouped-by-epic view skips it;
-`views/tree/milestone-placement.ts`). A row's milestone marker opens this view
-focused on that milestone (`?view=milestones&focus=`). An issue's detail names
-its milestone, direct or inherited.
+`views/tree/milestone-placement.ts`). A row's milestone marker lands on that
+milestone here (`?view=milestones&focus=`). An issue's detail names its
+milestone, direct or inherited.
 
 **How this section is verified.** `views/milestones/milestones-e2e.test.tsx`
 starts the real HTTP server over a scenario workspace, fetches
 `/api/milestones`, `/api/milestone`, `/api/issues` and `/api/queue`, and
-renders the real list, detail and layout pieces from those payloads with
-`react-dom/server`. It pins the stacked and split layouts and full screen, that
-the accessible row order equals the server's member order (the epic's child
-indented immediately under it, nothing drawn twice), that every reorder control
-carries its member's identifier and only the true edges are disabled, that each
-state is a glyph and a word with the glyph `aria-hidden`, and that a genuinely
-stale `baseRevision`, a real 409 from the real route, renders the conflict
-banner with the store's sentence verbatim while the server keeps the other
+renders the real sections from those payloads with `react-dom/server`. It pins
+one section per plan in plan order with the server's own dates, progress and
+next work; that the accessible row order equals the server's member order (the
+epic's child indented immediately under it, nothing drawn twice); that every
+reorder control carries its member's identifier and only the true edges are
+disabled; that each state is a word with the glyph `aria-hidden`; that the
+buttons and Alt+Arrow compute one move the store takes verbatim; and that a
+genuinely stale `baseRevision`, a real 409 from the real route, renders the
+conflict with the store's sentence verbatim while the server keeps the other
 writer's order. It also sets a due date through the real update route and clears
-it back to the projection, and shows the stored status with the detail's approve
-action, whose approval lands where the Tasks list reads it.
+it back to the projection, counts blocked and gated members from the queue's
+eligibility, and shows the stored status with the detail's approve action, whose
+approval lands where the Tasks list reads it. `milestones-render.test.tsx` pins
+the outline's parts: the header from the list row alone, the phone form, the
+status in `⋯`, the Goal line's opening rule and its cleared marks, the Plan line
+for a horizon only, the work's positions, controls and refusals, the shelf, the
+default folds and the landing cases. `milestones-memory.test.ts` pins the memory:
+per workspace, bad data, pruning and Collapse all. `test/ui-milestones-page.test.ts`
+presses the page in Chromium: opening a row, the focus ring, the keyboard,
+folding and remembering across a reload, the phone's folded start, reordering
+with the buttons, the menu and Alt+arrow, adding and removing, queueing, the
+calendar, the gate, every landing, and that no control on a phone is a 44px box.
 
 ## Estimates
 
-The fifth view in the rail, **Estimates** (also "Go to Estimates" in
+The last of the rail's records, **Estimates** (also "Go to Estimates" in
 the command palette, which also finds it by *estimate accuracy* and
 *calibration*), is the
 workspace's calibration report: `GET /api/calibration`, the payload of `staple
@@ -812,7 +1072,7 @@ issues get a forecast. The type mirror is pinned against the store's types in
 
 ## Usage
 
-The rail's **This computer** group holds one view, **Usage** (also "Go to
+At the rail's foot, with Integrations and Settings, sits **Usage** (also "Go to
 Usage" in the command palette, which also finds it by *budget*): this machine's provider limits and each
 one's session pressure, `GET /api/budget`, the payload of `staple budget
 --json` and MCP `get_budget` ([execution-telemetry.md](execution-telemetry.md#pressure)).
@@ -974,16 +1234,22 @@ refreshed issue. `detail/gate-review.test.tsx` pins the block.
 
 **A milestone's detail.** A milestone opens in the same surface. Its status line
 reads *3 of 9 tasks finished (33%). Due 11 Oct, in 13 days.*, its primary action
-is *Open plan* (the [Milestones](#milestones) view), and Details carries the
+is *Show in Milestones*, which lands on its section of the [Milestones](#milestones)
+view (`openMilestoneIn`, through the `focus` address), and Details carries the
 **goal** in place of *Done when* (`detail/MilestoneGoal.tsx`,
 `lib/goal-text.ts`): *n/m met*, a summary line, each criterion with its verdict
 (*Met*, *Not met*, *Unknown*), its evidence as links (a ticket opens it, a
 document opens that document), who marked it and when, and why an unknown one
-is unknown; the pace (*On track*, *Behind*, *Overdue*, …) with its numbers; the
+is unknown; under the criteria, the marks the check cleared, as quiet lines
+(`ClearedMarks`, shared with the Milestones page; [milestones.md](milestones.md#goal)
+says when a mark is cleared); the pace (*On track*, *Behind*, *Overdue*, …) with its numbers; the
 gate, and whether a goal run or a person asked for it; and the goal run working
-it. A member a run created says *Created by autopilot*. See
+it. *What is in this milestone* lists the members in order, read-only: they are
+edited on the Milestones page. A member a run created says *Created by autopilot*.
+A finished or cancelled milestone keeps the ordinary primary, *Reopen*. See
 [milestones.md](milestones.md#goal) and [runs.md](runs.md#goal-mode).
-`detail/milestone-goal-e2e.test.tsx` pins the goal view against a real goal run.
+`detail/milestone-goal-e2e.test.tsx` pins the goal view against a real goal run, and
+`detail/milestone-detail.test.tsx` the primary's words and the cleared marks.
 
 **The dependencies dialog** (`components/DependenciesDialog.tsx`) opens from a
 row's dependency badge: *Blocked by* and *Blocks*, read-only.
@@ -1281,7 +1547,8 @@ continues one. Everything reads one `GET /api/runs` per change fingerprint
   first and takes an optional note: `POST /api/run/stop`; pause and resume are
   `POST /api/run/pause` and `/api/run/resume`.
 - **The rail and the tab bar.** One line per live run under *Autopilot* in the
-  rail; a dot on the phone's *Autopilot* tab while a run is live.
+  full rail; a dot on the narrow rail's *Autopilot* icon and on the phone's
+  *Autopilot* tab while a run is live.
 - **The badge.** A task a live run holds, the run's scope row and a folded
   parent hiding held work wear an *Autopilot* badge; the task's detail says
   which run is working on it and links to the run.
@@ -1298,15 +1565,14 @@ runs; `views/autopilot/*.test.*` cover the page.
 
 ## Choose a workspace
 
-Queue and Estimates are about one workspace at a time. On *All workspaces* with
-more than one workspace they show a **Choose a workspace** card instead
+Estimates is about one workspace at a time. On *All workspaces* with more than
+one workspace it shows a **Choose a workspace** card instead
 (`views/ChooseWorkspace.tsx`, `views/workspace-scope.ts`): a sentence saying why
-(*Each workspace keeps its own pickup order, so there is no single queue for all
-of them.*), a button per workspace with its prefix, and *What does this mean?*.
+(*Estimates are checked for each workspace on its own.*), a button per workspace with its prefix, and *What does this mean?*.
 Choosing one is the same as choosing it in the switcher, and it becomes the
 default answer when New task or Settings ask which workspace. Tasks and Graph
 show every workspace at once; Milestones shows its read-only all-workspaces
-list; Usage is not about a workspace at all.
+outline; Queue shows a section per workspace; Usage is not about a workspace at all.
 
 ## Settings
 
@@ -1896,7 +2162,7 @@ so a new project setting is one more entry.
 **Where a project shows up.** The page fetches every workspace's projects once
 per poll and narrows them where they are used, so an issue opened from another
 workspace still sees its own workspace's projects. The rail lists them under
-Tasks; the **Project** filter dimension offers them by name (captioned with the
+Tasks, and a phone's More sheet under *Projects*; the **Project** filter dimension offers them by name (captioned with the
 workspace when the page spans several) and matches on the id, so a saved filter
 survives a rename — and a deleted project's id is dropped from every saved
 scope on the next poll, so no chip outlives its project; the
@@ -1989,7 +2255,9 @@ The styles are four layers, imported in this order by `styles/app.css`:
   (`text-caption` … `text-display`, each with its own line height, registered
   with `cn()` in `lib/utils.ts` so a size and a colour class merge correctly), the
   4px spacing rhythm, named surfaces, one focus ring, and the shell geometry
-  (rail width, top bar and toolbar heights, the gutter, control heights).
+  (the rail's two widths, top bar and toolbar heights, the gutter, control
+  heights) and `--badge-fresh`, the accent a count badge takes while something
+  in it is new.
 - `app.css` is staple's own layer on top: the status-to-hue mapping and the SVG
   chrome for the dependency graph, which has no Tailwind equivalent.
 
@@ -2008,7 +2276,7 @@ the rest are in [CONTRIBUTING.md](https://github.com/vpetkovic/staple-tracker/bl
 The Plan lenses use `detail/tabs/DetailTabStrip.tsx`, shared with `IssueDetailPanel`.
 Desktop tabs use its line treatment; phone tabs use its 48px segment track. Radix owns
 roving focus, arrow keys and tab/panel relationships. Scroll reveal and edge fades are shared.
-Plan remembers its lens, drawer and scroll per workspace, while filters use
+Plan remembers its lens, drawer, scroll and the Horizons lens's folds per workspace, while filters use
 the shell's existing URL and per-viewer preferences. Every storage access fails safe.
 
 Unscheduled is the absence of a horizon. Optional-date named horizons remain available

@@ -13,9 +13,15 @@ import type { RunEntry } from "@/lib/types";
 
 /** What the Inbox row shows after its label: the count, a dot for what is new, and the spoken form. */
 export function inboxRowMark(badge: InboxBadge): { count: string | null; fresh: boolean; spoken: string } {
-  if (badge.waiting === 0) return { count: null, fresh: false, spoken: "" };
-  const fresh = badge.unseen > 0;
-  return { count: String(badge.waiting), fresh, spoken: `, ${badge.waiting} waiting${fresh ? `, ${badge.unseen} new` : ""}` };
+  const words = inboxMarkWords(badge);
+  if (words === null) return { count: null, fresh: false, spoken: "" };
+  return { count: String(badge.waiting), fresh: badge.unseen > 0, spoken: `, ${words}` };
+}
+
+/** The Inbox's mark in words, for the narrow rail's tooltip and both rails' spoken names: "23 waiting, 4 new"; null while nothing waits. */
+export function inboxMarkWords(badge: InboxBadge): string | null {
+  if (badge.waiting === 0) return null;
+  return `${badge.waiting} waiting${badge.unseen > 0 ? `, ${badge.unseen} new` : ""}`;
 }
 
 /** "2 live" beside Autopilot; nothing while no run is live. */
