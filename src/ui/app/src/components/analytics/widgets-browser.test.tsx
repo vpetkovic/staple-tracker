@@ -192,13 +192,14 @@ describe.skipIf(Boolean(reason))("the column chart on a touch screen", () => {
   it("keeps the readout of a tapped slot until the reader taps elsewhere", async () => {
     await withPage(TOUCH, async (page) => {
       const readout = page.locator("[data-chart-readout]");
+      // A tap re-renders asynchronously: wait for each state instead of reading it once.
       await page.locator('[data-slot-index="2"]').tap();
-      expect(await page.locator("[data-chart-tooltip]").count()).toBe(1);
-      expect(await readout.textContent()).toBe("Nov 3: 6 h Staple, 2 h Docs; 8 h Total");
+      await expect.poll(() => page.locator("[data-chart-tooltip]").count()).toBe(1);
+      await expect.poll(() => readout.textContent()).toBe("Nov 3: 6 h Staple, 2 h Docs; 8 h Total");
       await page.locator('[data-slot-index="0"]').tap();
-      expect(await readout.textContent()).toBe("Nov 1: 2 h Staple; 2 h Total");
+      await expect.poll(() => readout.textContent()).toBe("Nov 1: 2 h Staple; 2 h Total");
       await page.getByText("Agents worked 14 hours.").tap();
-      expect(await page.locator("[data-chart-tooltip]").count()).toBe(0);
+      await expect.poll(() => page.locator("[data-chart-tooltip]").count()).toBe(0);
     });
   });
 });
