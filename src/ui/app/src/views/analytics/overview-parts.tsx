@@ -1,7 +1,7 @@
 /**
- * The Overview's blocks, each one a reusable widget fed from the report. Both layouts on offer
- * (Brief and Board) are compositions of these and nothing else, which is the point of the widget
- * library: a block knows its data, not the page it sits on.
+ * The Overview's blocks, each one a reusable widget fed from the report. The Board is a composition
+ * of these and nothing else, which is the point of the widget library: a block knows its data, not
+ * the page it sits on.
  *
  * Every block takes `report` possibly undefined and shows its own loading state until it arrives;
  * a block with nothing to draw in the period says so in words instead of drawing an empty chart.
@@ -62,54 +62,6 @@ function sparkValues(buckets: readonly TrendBucket[]): number[] {
   return out;
 }
 const plural = (count: number, one: string, many = `${one}s`) => `${count.toLocaleString("en-US")} ${count === 1 ? one : many}`;
-
-// ---------------------------------------------------------------- the headline
-
-/** The page's one sentence: the capacity the agents added, said in a unit people already use. */
-export function Headline({ report }: { report: AnalyticsReport | undefined }) {
-  if (!report) {
-    return (
-      <div className="space-y-2" role="status">
-        <span className="sr-only">Loading analytics</span>
-        <div className="h-8 w-3/4 max-w-xl animate-pulse rounded-md bg-surface-sunken" />
-        <div className="h-4 w-full max-w-2xl animate-pulse rounded-md bg-surface-sunken" />
-      </div>
-    );
-  }
-  const { capacity, delivery, period, scope } = report;
-  const hours = capacity.agentHours.value ?? 0;
-  const where = scope.kind === "all" ? `across ${plural(delivery.byWorkspace.length, "workspace")}` : `in ${scope.workspaces[0]?.name ?? "this workspace"}`;
-  if (hours <= 0 && (delivery.ticketsDone.value ?? 0) === 0) {
-    return (
-      <div>
-        <h2 className="text-display font-semibold text-balance">Nothing ran in these {period.days} days.</h2>
-        <p className="mt-1.5 max-w-3xl text-reading text-text-secondary">No agent attempts started and no tickets closed between {formatDayRange(period.from, period.to)}. Pick a longer period to see earlier work.</p>
-      </div>
-    );
-  }
-  const big = capacity.calendarWeeks >= 2 && capacity.workWeeks >= 1;
-  return (
-    <div data-analytics-headline>
-      <h2 className="text-display font-semibold text-balance md:text-[28px] md:leading-[34px]">
-        {big ? (
-          <>
-            {formatNumber(capacity.workWeeks)} work-weeks of agent time in {formatNumber(capacity.calendarWeeks)} calendar weeks.
-          </>
-        ) : (
-          <>
-            {formatEffortHours(hours)} of agent time in {plural(period.days, "day")}.
-          </>
-        )}
-      </h2>
-      <p className="mt-1.5 max-w-3xl text-reading text-pretty text-text-secondary">
-        Agents logged <b className="font-semibold text-foreground">{formatEffortHours(hours)}</b> {where}, the capacity of about{" "}
-        <b className="font-semibold text-foreground">{formatNumber(capacity.fte, 1)} full-time {capacity.fte === 1 ? "engineer" : "engineers"}</b> for the period. That shipped{" "}
-        <b className="font-semibold text-foreground">{plural(delivery.featuresDone.value ?? 0, "feature")}</b> and closed <b className="font-semibold text-foreground">{plural(delivery.ticketsDone.value ?? 0, "ticket")}</b>
-        {(delivery.bugsFixed.value ?? 0) > 0 ? <>, {delivery.bugsFixed.value} of them bug fixes</> : null}.
-      </p>
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------- the KPI row
 
@@ -525,15 +477,5 @@ export function MethodNotes({ report }: { report: AnalyticsReport | undefined })
         <li>Only {coverage.model.covered} of {coverage.model.total} attempts logged their model, so the model split is partly read from agent names.</li>
       </ul>
     </ShowDetails>
-  );
-}
-
-/** A group label between blocks of the Brief. */
-export function SectionLabel({ children, hint }: { children: ReactNode; hint?: ReactNode }) {
-  return (
-    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 pt-2">
-      <h2 className="text-title font-semibold">{children}</h2>
-      {hint ? <p className="text-label text-muted-foreground">{hint}</p> : null}
-    </div>
   );
 }

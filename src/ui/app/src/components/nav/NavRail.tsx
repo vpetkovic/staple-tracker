@@ -693,6 +693,11 @@ export function NavRail({
 
       <div className="shrink-0 px-3 pb-1 max-md:px-2.5">
         <IntegrationsRailItem onNavigate={onNavigate} />
+        <ul role="list" className="m-0 list-none p-0" data-nav-foot>
+          {navGroup("foot").items.map((entry) => (
+            <NavItemRow key={entry.id} entry={entry} view={session.view} onSelect={select} onNavigate={onNavigate} />
+          ))}
+        </ul>
       </div>
       {/* ── the foot: Settings, and the theme ── */}
       <div className="flex shrink-0 items-center gap-1 border-t border-sidebar-border/70 px-3 py-2 max-md:block max-md:px-2.5">

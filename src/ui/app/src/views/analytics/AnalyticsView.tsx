@@ -1,102 +1,126 @@
 /**
- * The Analytics destination: what the work delivered and what it cost, for the workspace in
- * scope (or every workspace) over a chosen period.
+ * The Analytics destination: what the work on this computer delivered and what it cost.
  *
- * Two lenses on one page, beside its name the way Plan's are: OVERVIEW (capacity, delivery,
- * speed, reliability) and RETURN (the return on AI spend, with the cost model it rests on).
- * The period control scopes everything under it; the workspace is the shell's own switcher.
+ * It reads every workspace registered here, so it sits at the foot of the rail with the other
+ * things about the computer, and it carries its OWN two filters: the period (presets or a custom
+ * range) and the workspace (all, or one). Three lenses beside the page name, the way Plan has
+ * them: OVERVIEW (delivery, capacity, speed, reliability), RETURN (the return on AI spend) and
+ * ESTIMATES (how estimates compare with the time work took).
  *
- * DIRECTION PREVIEW: each lens ships two layouts behind a prototype switch so the direction can
- * be chosen on the running page. The switch and the layout that loses are removed before the
- * build; the data comes from `proto-api.ts` until the engineering track's hooks land.
+ * On a phone the lenses and both filters live in the shell's header row, beside the page name,
+ * and stay there while the page scrolls. Switching lens keeps each lens's own scroll position.
+ *
+ * The data comes from `proto-api.ts` until the engineering track's hooks land.
  */
-import { CalendarRange, ChevronDown } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useState, type ReactNode } from "react";
+import { CalendarRange, Check, ChevronDown, Layers } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import "@/components/analytics/analytics.css";
+import { formatDayRange } from "@/components/analytics/format";
 import { EmptyState, ProblemState } from "@/components/plain/States";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tabs } from "@/components/ui/tabs";
 import { DetailTabStrip } from "@/detail/tabs/DetailTabStrip";
 import type { AuthError } from "@/lib/api";
 import { afterHistorySettles, replaceUrl } from "@/lib/back-to-close";
 import { useSession } from "@/lib/session";
-import { useIsDesk } from "@/lib/use-media";
 import { useResource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
-import { formatDayRange } from "@/components/analytics/format";
+import { EstimatesLens } from "./EstimatesLens";
 import { OverviewBoard } from "./OverviewBoard";
-import { OverviewBrief } from "./OverviewBrief";
-import { getAnalytics, getReturn, saveCostModel, type CostModel, type PeriodPreset } from "./proto-api";
-import { ReturnCalculator } from "./ReturnCalculator";
-import { ReturnStatement } from "./ReturnStatement";
+import { getAnalytics, getReturn, saveCostModel, type CostModel, type PeriodAsk, type PeriodPreset } from "./proto-api";
+import { ReturnPage } from "./ReturnPage";
 
-export type Lens = "overview" | "return";
-type Layout = "a" | "b";
+export type Lens = "overview" | "return" | "estimates";
 
 const LENSES: readonly { id: Lens; label: string }[] = [
   { id: "overview", label: "Overview" },
   { id: "return", label: "Return" },
+  { id: "estimates", label: "Estimates" },
 ];
-export const PERIODS: readonly { id: PeriodPreset; label: string; against: string }[] = [
-  { id: "7d", label: "Last 7 days", against: "vs prior 7 days" },
-  { id: "30d", label: "Last 30 days", against: "vs prior 30 days" },
-  { id: "90d", label: "Last 90 days", against: "vs prior 90 days" },
-  { id: "ytd", label: "This year", against: "" },
-  { id: "all", label: "All time", against: "" },
+const PRESETS: readonly { id: Exclude<PeriodPreset, "custom">; label: string; short: string }[] = [
+  { id: "7d", label: "Last 7 days", short: "7d" },
+  { id: "30d", label: "Last 30 days", short: "30d" },
+  { id: "90d", label: "Last 90 days", short: "90d" },
+  { id: "ytd", label: "This year", short: "Year" },
+  { id: "all", label: "All time", short: "All" },
 ];
-const LAYOUT_NAMES: Record<Lens, [string, string]> = { overview: ["Brief", "Board"], return: ["Statement", "Calculator"] };
 const PERIOD_KEY = "staple:analytics-period";
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
-function readParam<T extends string>(name: string, allowed: readonly T[]): T | null {
-  const value = new URLSearchParams(window.location.search).get(name);
-  return allowed.includes(value as T) ? (value as T) : null;
-}
-function rememberedPeriod(): PeriodPreset | null {
+function readPeriod(): PeriodAsk {
+  const params = new URLSearchParams(window.location.search);
+  const preset = params.get("period");
+  const from = params.get("from") ?? "";
+  const to = params.get("to") ?? "";
+  if (preset === "custom" && DAY.test(from) && DAY.test(to)) return { preset: "custom", from, to };
+  if (PRESETS.some((item) => item.id === preset)) return { preset: preset as PeriodPreset };
   try {
-    const value = window.localStorage.getItem(PERIOD_KEY);
-    return PERIODS.some((period) => period.id === value) ? (value as PeriodPreset) : null;
+    const saved = JSON.parse(window.localStorage.getItem(PERIOD_KEY) ?? "null") as PeriodAsk | null;
+    if (saved && (PRESETS.some((item) => item.id === saved.preset) || (saved.preset === "custom" && DAY.test(saved.from ?? "") && DAY.test(saved.to ?? "")))) return saved;
   } catch {
-    return null;
+    /* a per-browser preference, best effort */
   }
+  return { preset: "30d" };
 }
+const periodKey = (period: PeriodAsk) => `${period.preset}:${period.from ?? ""}:${period.to ?? ""}`;
 
-/** The phone shell's slot beside the page name, or null on the desk. */
+/**
+ * The phone shell's slot beside the page name, or null on the desk. The shell draws the slot only
+ * in its phone shape, and it can switch shape a moment after this view hears the same media
+ * change, so the slot is looked up again whenever the shell's shape attribute changes.
+ */
 function usePhoneHeaderSlot(): HTMLElement | null {
-  const desk = useIsDesk();
   const [slot, setSlot] = useState<HTMLElement | null>(null);
-  useLayoutEffect(() => setSlot(desk ? null : document.querySelector<HTMLElement>("[data-phone-header-slot]")), [desk]);
+  useLayoutEffect(() => {
+    const find = () => setSlot(document.querySelector<HTMLElement>("[data-phone-header-slot]"));
+    find();
+    const shell = document.querySelector("[data-shell]");
+    if (!shell || typeof MutationObserver === "undefined") return;
+    const observer = new MutationObserver(find);
+    observer.observe(shell, { attributes: true, attributeFilter: ["data-shell"] });
+    return () => observer.disconnect();
+  }, []);
   return slot;
 }
 
 export function AnalyticsView({ onAuthError }: { onAuthError: (error: AuthError) => void }) {
   const session = useSession();
-  const ws = session.mode === "hub" ? session.ws : "";
-  const [lens, setLens] = useState<Lens>(() => readParam("lens", ["overview", "return"] as const) ?? "overview");
-  const [period, setPeriod] = useState<PeriodPreset>(() => readParam("period", PERIODS.map((item) => item.id)) ?? rememberedPeriod() ?? "30d");
-  const [layouts, setLayouts] = useState<Record<Lens, Layout>>(() => ({ overview: readParam("overview-layout", ["a", "b"] as const) ?? "a", return: readParam("return-layout", ["a", "b"] as const) ?? "a" }));
+  const hub = session.mode === "hub" && session.workspaces.length > 1;
+  const [lens, setLens] = useState<Lens>(() => {
+    const value = new URLSearchParams(window.location.search).get("lens");
+    return LENSES.some((item) => item.id === value) ? (value as Lens) : "overview";
+  });
+  const [period, setPeriod] = useState<PeriodAsk>(readPeriod);
+  const [ws, setWs] = useState<string>(() => {
+    const value = new URLSearchParams(window.location.search).get("workspace") ?? "";
+    return hub && session.workspaces.some((workspace) => workspace.slug === value) ? value : "";
+  });
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(PERIOD_KEY, period);
+      window.localStorage.setItem(PERIOD_KEY, JSON.stringify(period));
     } catch {
-      /* a per-browser preference, best effort */
+      /* best effort */
     }
     afterHistorySettles(() => {
       const url = new URL(window.location.href);
       if (url.searchParams.get("view") !== "analytics") return;
       url.searchParams.set("lens", lens);
-      url.searchParams.set("period", period);
-      url.searchParams.set("overview-layout", layouts.overview);
-      url.searchParams.set("return-layout", layouts.return);
+      url.searchParams.set("period", period.preset);
+      for (const key of ["from", "to"] as const) period.preset === "custom" && period[key] ? url.searchParams.set(key, period[key]) : url.searchParams.delete(key);
+      ws ? url.searchParams.set("workspace", ws) : url.searchParams.delete("workspace");
+      for (const stale of ["overview-layout", "return-layout"]) url.searchParams.delete(stale);
       replaceUrl(url.toString());
     });
-  }, [lens, period, layouts]);
+  }, [lens, period, ws]);
 
-  const report = useResource(useCallback(() => getAnalytics(ws, period), [ws, period]), [ws, period], onAuthError);
-  const returns = useResource(useCallback(() => getReturn(ws, period), [ws, period]), [ws, period], onAuthError);
+  const key = periodKey(period);
+  const report = useResource(useCallback(() => getAnalytics(ws, period), [ws, key]), [ws, key], onAuthError);
+  const returns = useResource(useCallback(() => getReturn(ws, period), [ws, key]), [ws, key], onAuthError);
 
-  // The cost model is edited in place: the page shows the edit at once and saves behind it.
+  // The cost model is the person's: an edit shows at once and is saved behind it.
   const [draft, setDraft] = useState<CostModel | null>(null);
   const [saving, setSaving] = useState<"idle" | "saving" | "saved" | "failed">("idle");
   const model = draft ?? returns.data?.model ?? null;
@@ -116,122 +140,193 @@ export function AnalyticsView({ onAuthError }: { onAuthError: (error: AuthError)
     },
     [reloadReturns],
   );
-  // Once a re-read carries the saved model, the draft has done its job.
-  useEffect(() => {
-    if (draft && returns.data && returns.data.model.updatedAt && saving === "saved" && JSON.stringify(returns.data.model.roles) === JSON.stringify(draft.roles)) setDraft({ ...draft, updatedAt: returns.data.model.updatedAt });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [returns.data]);
+
+  // Each lens keeps its own place: switching away and back lands where you were.
+  const scroller = useRef<HTMLDivElement>(null);
+  const places = useRef<Record<Lens, number>>({ overview: 0, return: 0, estimates: 0 });
+  const chooseLens = (next: Lens) => {
+    if (scroller.current) places.current[lens] = scroller.current.scrollTop;
+    setLens(next);
+  };
+  useLayoutEffect(() => {
+    if (scroller.current) scroller.current.scrollTop = places.current[lens];
+  }, [lens]);
 
   const slot = usePhoneHeaderSlot();
-  const layout = layouts[lens];
-  const stale = report.data !== undefined && (report.data.period.preset !== period || (ws !== "" && report.data.scope.workspaces[0]?.slug !== ws) || (ws === "" && report.data.scope.kind !== "all"));
   const data = report.data;
-  const returnData = returns.data && returns.data.period.preset === period ? returns.data : undefined;
+  const fresh = (asked: { preset: PeriodPreset; from: string; to: string } | undefined, scope: { kind: string; workspaces: { slug: string }[] } | undefined) =>
+    asked !== undefined && scope !== undefined && asked.preset === period.preset && (period.preset !== "custom" || (asked.from === period.from && asked.to === period.to)) && (ws === "" ? scope.kind === "all" : scope.workspaces[0]?.slug === ws);
+  const stale = data !== undefined && !fresh(data.period, data.scope);
+  const returnData = returns.data && fresh(returns.data.period, returns.data.scope) ? returns.data : undefined;
+  const days = data?.period.days ?? 0;
+  const against = data?.period.previous ? `vs prior ${days} days` : "";
 
-  const tabs = <DetailTabStrip sheet={slot !== null} compact label="Analytics lens" items={LENSES} active={lens} />;
-  const layoutSwitch = <LayoutSwitch names={LAYOUT_NAMES[lens]} value={layout} onChange={(next) => setLayouts((current) => ({ ...current, [lens]: next }))} />;
-  const periodPicker = <PeriodPicker value={period} onChange={setPeriod} range={data && !stale ? formatDayRange(data.period.from, data.period.to) : null} />;
+  const compact = slot !== null;
+  const tabs = <DetailTabStrip sheet={compact} compact label="Analytics lens" items={LENSES} active={lens} />;
+  const filters = (
+    <>
+      {hub ? <WorkspaceFilter value={ws} onChange={setWs} workspaces={session.workspaces} compact={compact} /> : null}
+      {lens === "estimates" ? null : <PeriodPicker value={period} onChange={setPeriod} compact={compact} resolved={data && !stale ? { from: data.period.from, to: data.period.to, first: data.period.firstActivity } : null} />}
+    </>
+  );
 
   let body: ReactNode;
-  if (report.error && !data) {
+  if (lens === "estimates") {
+    body = <EstimatesLens workspace={ws} workspaces={session.workspaces} onChooseWorkspace={setWs} onAuthError={onAuthError} version={session.version} />;
+  } else if (report.error && !data) {
     body = <ProblemState title="Analytics could not be loaded" message={report.error.message} action={<button type="button" onClick={report.reload} className="focus-ring min-h-0 rounded-md border px-2.5 py-1 text-label font-medium">Try again</button>} />;
   } else if (data?.empty) {
     body = (
       <EmptyState title="Nothing to measure here yet">
-        Analytics fills in as tickets are created, claimed and finished in this workspace. Finish a ticket with an agent and it shows up here.
+        Analytics fills in as tickets are created, claimed and finished. Finish a ticket with an agent and it shows up here.
       </EmptyState>
     );
+  } else if (lens === "overview") {
+    body = <OverviewBoard report={data} returns={returnData} model={model} against={against} onOpenReturn={() => chooseLens("return")} onOpenTicket={(workspace, ref) => session.open(workspace, ref)} />;
   } else {
-    const shared = { report: data, returns: returnData, model, against: PERIODS.find((item) => item.id === period)?.against ?? "", onOpenTicket: (workspace: string, ref: string) => session.open(workspace, ref) };
-    body =
-      lens === "overview" ? (
-        layout === "a" ? <OverviewBrief {...shared} onOpenReturn={() => setLens("return")} /> : <OverviewBoard {...shared} onOpenReturn={() => setLens("return")} />
-      ) : layout === "a" ? (
-        <ReturnStatement returns={returnData} model={model} error={returns.error} onRetry={returns.reload} onChange={changeModel} saving={saving} />
-      ) : (
-        <ReturnCalculator returns={returnData} model={model} error={returns.error} onRetry={returns.reload} onChange={changeModel} saving={saving} />
-      );
+    body = <ReturnPage returns={returnData} model={model} error={returns.error} onRetry={returns.reload} onChange={changeModel} saving={saving} />;
   }
 
   return (
-    <Tabs value={lens} onValueChange={(value) => setLens(value as Lens)} className="h-full min-h-0 gap-0">
-      <div className="flex h-full min-h-0 flex-col" data-analytics data-lens={lens} data-layout={layout}>
-        <div className="flex shrink-0 items-center gap-2 border-b px-gutter py-2 max-md:py-1.5" data-analytics-bar>
-          {slot ? (
-            createPortal(
-              <div className="flex min-w-0 items-center gap-1.5">
-                {tabs}
-                {layoutSwitch}
-              </div>,
-              slot,
-            )
-          ) : (
-            <>
-              <div className="min-w-0 shrink-0">{tabs}</div>
-              {layoutSwitch}
-            </>
-          )}
-          <div className="ml-auto flex min-w-0 items-center gap-2">{periodPicker}</div>
-        </div>
-        <div className={cn("min-h-0 flex-1 overflow-y-auto transition-opacity", stale && "opacity-60")} aria-busy={stale || report.loading}>
-          <div className="mx-auto max-w-[1400px] px-page py-5 max-md:py-4">{body}</div>
+    <Tabs value={lens} onValueChange={(value) => chooseLens(value as Lens)} className="h-full min-h-0 gap-0">
+      <div className="flex h-full min-h-0 flex-col" data-analytics data-lens={lens}>
+        {slot ? (
+          createPortal(
+            <div className="flex min-w-0 flex-1 items-center justify-end gap-1" data-analytics-header>
+              <div className="min-w-0 shrink">{tabs}</div>
+              {filters}
+            </div>,
+            slot,
+          )
+        ) : (
+          <div className="flex shrink-0 items-center gap-2 border-b px-gutter py-2" data-analytics-bar>
+            <div className="min-w-0 shrink-0">{tabs}</div>
+            <div className="ml-auto flex min-w-0 items-center gap-2">{filters}</div>
+          </div>
+        )}
+        <div ref={scroller} className={cn("min-h-0 flex-1 overflow-y-auto transition-opacity", stale && lens !== "estimates" && "opacity-60")} aria-busy={stale || report.loading} data-analytics-scroll>
+          <div className="px-page py-4 max-md:px-3 max-md:py-3">{body}</div>
         </div>
       </div>
     </Tabs>
   );
 }
 
-/** PROTOTYPE ONLY: the switch between the two layouts on offer. Dashed, so it reads as scaffolding. */
-function LayoutSwitch({ names, value, onChange }: { names: [string, string]; value: Layout; onChange: (next: Layout) => void }) {
-  return (
-    <div role="group" aria-label="Prototype layout" className="flex shrink-0 items-center rounded-md border border-dashed border-[var(--viz-track-edge)] p-0.5" data-prototype-switch>
-      {(["a", "b"] as const).map((id, index) => (
-        <button
-          key={id}
-          type="button"
-          aria-pressed={value === id}
-          onClick={() => onChange(id)}
-          className={cn(
-            "focus-ring-inset relative h-6 min-h-0 rounded-[5px] px-2 text-label whitespace-nowrap text-muted-foreground transition-colors before:absolute before:-inset-y-1.5 before:inset-x-0 before:content-[''] hover:text-foreground",
-            value === id && "bg-surface-hover font-medium text-foreground",
-          )}
-        >
-          <span className="md:hidden">{id.toUpperCase()}</span>
-          <span className="max-md:hidden">
-            {id.toUpperCase()} · {names[index]}
-          </span>
-        </button>
-      ))}
-    </div>
-  );
-}
+const CONTROL = "focus-ring relative inline-flex h-control-md min-h-0 shrink-0 items-center gap-1.5 rounded-md border bg-card px-2.5 text-body font-medium transition-colors hover:bg-surface-hover before:absolute before:-inset-y-1 before:inset-x-0 before:content-['']";
+const CONTROL_COMPACT = "h-[30px] gap-1 px-2";
 
-function PeriodPicker({ value, onChange, range }: { value: PeriodPreset; onChange: (next: PeriodPreset) => void; range: string | null }) {
-  const current = PERIODS.find((item) => item.id === value);
+/** Which workspace the figures are for: all of them, or one. */
+function WorkspaceFilter({ value, onChange, workspaces, compact }: { value: string; onChange: (next: string) => void; workspaces: readonly { slug: string; prefix: string }[]; compact: boolean }) {
+  const current = workspaces.find((workspace) => workspace.slug === value);
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          aria-label={`Period: ${current?.label}`}
-          className="focus-ring relative inline-flex h-control-md min-h-0 shrink-0 items-center gap-1.5 rounded-md border bg-card px-2.5 text-body font-medium transition-colors hover:bg-surface-hover max-md:h-[30px] max-md:before:absolute max-md:before:-inset-y-1 max-md:before:inset-x-0 max-md:before:content-['']"
-          data-period-picker
-        >
-          <CalendarRange aria-hidden className="size-3.5 text-text-tertiary" />
-          {current?.label}
-          {range ? <span className="font-normal text-muted-foreground max-sm:hidden">{range}</span> : null}
-          <ChevronDown aria-hidden className="size-3.5 text-text-tertiary" />
+        <button type="button" aria-label={`Workspace: ${current ? current.slug : "All workspaces"}`} className={cn(CONTROL, compact && CONTROL_COMPACT, "max-w-[11rem]")} data-workspace-filter>
+          <Layers aria-hidden className="size-3.5 shrink-0 text-text-tertiary" />
+          {compact && !current ? null : <span className="truncate">{current ? (compact ? current.prefix : current.slug) : "All workspaces"}</span>}
+          <ChevronDown aria-hidden className="size-3.5 shrink-0 text-text-tertiary" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-44">
-        <DropdownMenuRadioGroup value={value} onValueChange={(next) => onChange(next as PeriodPreset)}>
-          {PERIODS.map((item) => (
-            <DropdownMenuRadioItem key={item.id} value={item.id} className="text-body">
-              {item.label}
+      <DropdownMenuContent align="end" className="min-w-48">
+        <DropdownMenuRadioGroup value={value} onValueChange={onChange}>
+          <DropdownMenuRadioItem value="" className="text-body">
+            All workspaces
+          </DropdownMenuRadioItem>
+          {workspaces.map((workspace) => (
+            <DropdownMenuRadioItem key={workspace.slug} value={workspace.slug} className="text-body">
+              {workspace.slug}
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/** The period: presets as rows, and a custom range under them. */
+function PeriodPicker({ value, onChange, compact, resolved }: { value: PeriodAsk; onChange: (next: PeriodAsk) => void; compact: boolean; resolved: { from: string; to: string; first: string } | null }) {
+  const [open, setOpen] = useState(false);
+  const preset = PRESETS.find((item) => item.id === value.preset);
+  const [from, setFrom] = useState(value.from ?? "");
+  const [to, setTo] = useState(value.to ?? "");
+  // Opening the picker starts the custom fields from the period on screen.
+  useEffect(() => {
+    if (!open) return;
+    setFrom(value.from ?? resolved?.from ?? "");
+    setTo(value.to ?? resolved?.to ?? "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+  const custom = value.preset === "custom";
+  const range = resolved ? formatDayRange(resolved.from, resolved.to) : custom && value.from && value.to ? formatDayRange(value.from, value.to) : null;
+  const valid = DAY.test(from) && DAY.test(to) && from <= to;
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button type="button" aria-label={`Period: ${custom ? (range ?? "custom range") : preset?.label}`} className={cn(CONTROL, compact && CONTROL_COMPACT)} data-period-picker>
+          <CalendarRange aria-hidden className="size-3.5 shrink-0 text-text-tertiary" />
+          {compact ? (
+            <span className="whitespace-nowrap">{custom ? (range ?? "Custom") : preset?.short}</span>
+          ) : (
+            <>
+              <span className="whitespace-nowrap">{custom ? "Custom" : preset?.label}</span>
+              {range ? <span className="font-normal whitespace-nowrap text-muted-foreground max-lg:hidden">{range}</span> : null}
+            </>
+          )}
+          <ChevronDown aria-hidden className="size-3.5 shrink-0 text-text-tertiary" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-64 p-1" data-period-menu>
+        <ul role="listbox" aria-label="Period">
+          {PRESETS.map((item) => {
+            const selected = value.preset === item.id;
+            return (
+              <li key={item.id} role="option" aria-selected={selected}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onChange({ preset: item.id });
+                    setOpen(false);
+                  }}
+                  className="focus-ring-inset flex h-8 min-h-0 w-full items-center justify-between rounded-md px-2 text-left text-body hover:bg-surface-hover"
+                >
+                  {item.label}
+                  {selected ? <Check aria-hidden className="size-4" strokeWidth={2.5} /> : null}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+        <form
+          className="mt-1 border-t px-2 pt-2 pb-1.5"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!valid) return;
+            onChange({ preset: "custom", from, to });
+            setOpen(false);
+          }}
+        >
+          <p className="flex items-center justify-between text-label font-medium">
+            Custom range
+            {custom ? <Check aria-hidden className="size-4" strokeWidth={2.5} /> : null}
+          </p>
+          <div className="mt-1.5 grid grid-cols-2 gap-2">
+            <DayField label="From" value={from} onChange={setFrom} max={to || undefined} />
+            <DayField label="To" value={to} onChange={setTo} min={from || undefined} />
+          </div>
+          <button type="submit" disabled={!valid} className="focus-ring mt-2 h-7 min-h-0 w-full rounded-md bg-primary text-label font-medium text-primary-foreground disabled:opacity-40">
+            Show this range
+          </button>
+        </form>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function DayField({ label, value, onChange, min, max }: { label: string; value: string; onChange: (next: string) => void; min?: string; max?: string }) {
+  return (
+    <label className="block text-caption text-muted-foreground">
+      {label}
+      <input type="date" value={value} min={min} max={max} onChange={(event) => onChange(event.target.value)} className="focus-ring mt-0.5 block h-7 min-h-0 w-full rounded-md border bg-card px-1.5 text-label text-foreground" />
+    </label>
   );
 }

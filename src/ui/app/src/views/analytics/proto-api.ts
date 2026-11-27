@@ -4,7 +4,13 @@
  * engineering track as the starting point for the `api-contract`. The real API client and hooks
  * (owned by engineering) replace this file; the views read nothing else from it.
  */
-export type PeriodPreset = "7d" | "30d" | "90d" | "ytd" | "all";
+export type PeriodPreset = "7d" | "30d" | "90d" | "ytd" | "all" | "custom";
+/** What the page asks for: a preset, or `custom` with both days. */
+export interface PeriodAsk {
+  preset: PeriodPreset;
+  from?: string;
+  to?: string;
+}
 
 /** A figure and the same figure for the period before (null when there is no period before). */
 export interface Measure {
@@ -119,17 +125,23 @@ export interface RoleMatch {
   agent: string[];
   workspaces: string[];
 }
+export type Billing = "subscription" | "api";
 export interface CostRole {
   id: string;
   title: string;
   rate: number;
   match: RoleMatch;
+  /** How this role's agents are billed. Unset follows who pays: just me = subscription, a company = API. */
+  billing?: Billing;
 }
 export interface CostModel {
   scenario: "solo" | "company";
   currency: string;
   person: { rate: number; hoursPerActiveDay: number };
+  /** Flat monthly plans. */
   spend: { id: string; label: string; perMonth: number }[];
+  /** The monthly API invoice, shared out over API-billed roles by their agent time. */
+  apiPerMonth: number;
   /** In match order; the last role takes everything no other role matched. */
   roles: CostRole[];
   /** Fields still holding a shipped default, shown as assumptions until the person changes them. */
@@ -151,8 +163,11 @@ export interface ReturnReport {
   period: { preset: PeriodPreset; from: string; to: string; days: number; months: number };
   model: CostModel;
   roles: RoleHours[];
+  /** Days on which agents ran anywhere on this computer. */
   directing: { activeDays: number };
-  capacity: { agentHours: number; calendarWeeks: number };
+  /** The share of this computer's agent time that the scope holds (1 for all workspaces). */
+  share: number;
+  capacity: { agentHours: number; hubAgentHours: number; calendarWeeks: number };
   coverage: { estimates: Covered; capHours: number };
 }
 
@@ -162,9 +177,10 @@ async function json<T>(path: string, init?: RequestInit): Promise<T> {
   if (!response.ok) throw new Error(body.error?.message ?? `The analytics preview data is not available (${response.status}).`);
   return body;
 }
-const query = (ws: string, period: PeriodPreset) => `?ws=${encodeURIComponent(ws)}&period=${period}`;
+const query = (ws: string, period: PeriodAsk) =>
+  `?ws=${encodeURIComponent(ws)}&period=${period.preset}${period.preset === "custom" && period.from && period.to ? `&from=${period.from}&to=${period.to}` : ""}`;
 
-export const getAnalytics = (ws: string, period: PeriodPreset) => json<AnalyticsReport>(`/api/analytics${query(ws, period)}`);
-export const getReturn = (ws: string, period: PeriodPreset) => json<ReturnReport>(`/api/analytics/return${query(ws, period)}`);
+export const getAnalytics = (ws: string, period: PeriodAsk) => json<AnalyticsReport>(`/api/analytics${query(ws, period)}`);
+export const getReturn = (ws: string, period: PeriodAsk) => json<ReturnReport>(`/api/analytics/return${query(ws, period)}`);
 export const saveCostModel = (model: CostModel) => json<CostModel>("/api/analytics/cost-model", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(model) });
 export const resetCostModel = () => json<CostModel>("/api/analytics/cost-model", { method: "DELETE" });

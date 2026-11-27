@@ -18,7 +18,7 @@
  */
 import type { LucideIcon } from "lucide-react";
 import { BatteryMedium, Bot, ChartNoAxesColumn, Gauge, GitFork, Inbox, Layers, Lightbulb, ListOrdered, Milestone } from "lucide-react";
-import { TOP_VIEWS, VIEWS, VIEW_LABELS, isMachineView, isTopView, type ViewName } from "@/lib/session";
+import { FOOT_VIEWS, TOP_VIEWS, UNLISTED_VIEWS, VIEWS, VIEW_LABELS, isMachineView, isTopView, type ViewName } from "@/lib/session";
 
 export interface NavItem {
   /** Stable id; the DOM key and the test hook. */
@@ -94,18 +94,20 @@ export const NAV_GROUPS: readonly NavGroup[] = [
   {
     id: "views",
     label: "Views",
-    items: VIEWS.filter((view) => !isTopView(view) && !isMachineView(view)).map(item),
+    items: VIEWS.filter((view) => !isTopView(view) && !isMachineView(view) && !UNLISTED_VIEWS.includes(view)).map(item),
   },
   {
     id: "machine",
     // The same words Settings uses for its computer-wide half.
     label: "This computer",
-    items: VIEWS.filter(isMachineView).map(item),
+    items: VIEWS.filter((view) => isMachineView(view) && !FOOT_VIEWS.includes(view)).map(item),
   },
+  // Under Integrations, at the very foot: what reads every workspace on this computer.
+  { id: "foot", label: "", items: FOOT_VIEWS.map(item) },
 ];
 
 /** A group of `NAV_GROUPS` by its id. */
-export function navGroup(id: "top" | "views" | "machine"): NavGroup {
+export function navGroup(id: "top" | "views" | "machine" | "foot"): NavGroup {
   return NAV_GROUPS.find((group) => group.id === id)!;
 }
 

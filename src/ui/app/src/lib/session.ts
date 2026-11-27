@@ -72,7 +72,20 @@ export const VIEW_LABELS: Record<ViewName, string> = {
  * lists them in their own "Machine" group (`components/nav/nav-model.ts`), apart from the
  * workspace's views.
  */
-export const MACHINE_VIEWS: readonly ViewName[] = ["budget"];
+export const MACHINE_VIEWS: readonly ViewName[] = ["budget", "analytics"];
+
+/**
+ * The machine views that sit at the very foot of the rail, under Integrations. Analytics reads
+ * every workspace on this computer (it has its own workspace filter), so it is not one
+ * workspace's view and not a provider reading either.
+ */
+export const FOOT_VIEWS: readonly ViewName[] = ["analytics"];
+
+/**
+ * Views that are reached through another view and so are not listed in the navigation. Estimates
+ * is a lens of Analytics; its own address keeps working.
+ */
+export const UNLISTED_VIEWS: readonly ViewName[] = ["calibration"];
 
 export function isMachineView(view: ViewName): boolean {
   return MACHINE_VIEWS.includes(view);
