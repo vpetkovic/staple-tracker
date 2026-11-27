@@ -172,3 +172,26 @@ describe.skipIf(Boolean(reason))("a queue row opens from the keyboard", () => {
     }
   });
 });
+
+describe.skipIf(Boolean(reason))("the queue page on a phone", () => {
+  /**
+   * The controls at a row's right edge carry touch hit areas that reach past the page. A box
+   * that scrolls down scrolls sideways too unless it says otherwise, and on a phone the whole
+   * list then slid left and right under a finger.
+   */
+  it("scrolls down and never sideways", async () => {
+    const { page, context } = await openQueue(PHONE);
+    try {
+      await expansion(page).getByRole("listitem").first().waitFor();
+      const pans = await page.evaluate(() => {
+        const canPan = (box: Element) =>
+          box.scrollWidth > box.clientWidth && /auto|scroll/.test(getComputedStyle(box).overflowX);
+        const board = document.querySelector("[data-queue-board]");
+        return { board: board === null ? null : canPan(board), page: canPan(document.documentElement) };
+      });
+      expect(pans).toEqual({ board: false, page: false });
+    } finally {
+      await context.close();
+    }
+  });
+});
