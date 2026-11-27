@@ -301,7 +301,7 @@ describe("the Plan files tray", () => {
     plan.ignoreDiscovered(root, "Plans/research/chat.html", true, "VP", PERSON);
     expect(store.ignoredPlanFiles()).toEqual([{ path: "Plans/research/chat.html", hash: expect.stringMatching(/^sha256:/) }]);
     // Not a registered setting, and not reported as an unknown one.
-    expect(store.unknownSettingKeys()).toEqual([]);
+    expect(new WorkspaceStore(store.db, "test", "TST").unknownSettingKeys()).toEqual([]);
     expect(states()["Plans/research/chat.html"]).toBe("ignored");
     // Its content at another path is ignored too; a change at its path stays ignored.
     put("Plans/archive/chat.html", "<html><head><title>Chat export</title></head></html>");
