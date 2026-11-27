@@ -911,12 +911,14 @@ export function resolvePeriod(workspaces: readonly WorkspaceRows[], query: Analy
   );
   const today = zone.dateOf(query.now);
   const explicit = query.from !== undefined && query.from !== "";
-  const to = query.to !== undefined && query.to !== "" ? requireDay(query.to, "to") : today;
+  const given = explicit ? requireDay(query.from!, "from") : null;
+  // A period named from a day still to come, with no end, is that one day.
+  const to = query.to !== undefined && query.to !== "" ? requireDay(query.to, "to") : given !== null && given > today ? given : today;
   // "All time" is clamped to the longest period one read covers; `firstActivity` before
   // `from` tells the page the history goes further back than the read.
   const earliest = addDays(to, -(MAX_PERIOD_DAYS - 1));
   const first = span.first ?? to;
-  const from = explicit ? requireDay(query.from!, "from") : first < earliest ? earliest : first > to ? to : first;
+  const from = given ?? (first < earliest ? earliest : first > to ? to : first);
   if (to < from) throw new StapleError("validation", `to (${to}) is before from (${from}).`);
   const days = daysInclusive(from, to);
   if (days > MAX_PERIOD_DAYS) throw new StapleError("validation", `A period covers at most ${MAX_PERIOD_DAYS} days; ${from} to ${to} is ${days}.`);

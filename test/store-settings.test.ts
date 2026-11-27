@@ -603,7 +603,12 @@ describe("registered workspace settings", () => {
     store.db
       .prepare("INSERT INTO meta (key, value) VALUES ('setting:kinds.default', ?)")
       .run(JSON.stringify({ v: 2, value: "bug" }));
-    expect(() => store.settingValues()).toThrow(/"kinds\.default" was written by a newer staple/);
+    // Refused by key, never reinterpreted; the rest of the workspace's settings stay readable.
+    expect(() => store.settingValue("kinds.default")).toThrow(/"kinds\.default" was written by a newer staple/);
+    expect(() => store.getSetting("kinds.default")).toThrow(/"kinds\.default" was written by a newer staple/);
+    expect(() => store.setSetting("kinds.default", "task")).toThrow(/"kinds\.default" was written by a newer staple/);
+    expect(store.settingValues().map((v) => v.key)).not.toContain("kinds.default");
+    expect(store.unknownSettingKeys()).toEqual(["kinds.default"]);
   });
 
   it("preserves and reports a stored key it has no definition for, and never rewrites it", () => {

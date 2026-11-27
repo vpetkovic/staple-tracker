@@ -172,7 +172,20 @@ describe("on one machine", () => {
     expect(store.getSetting("queue.policy")).toBe("advisory");
     expect(store.createIssue({ title: "Still works" }).title).toBe("Still works");
     expect(refusal(() => store.settingValue("analytics.roles")).message).toMatch(/unknown field "currency"/);
+    // The listing (and the Settings screen it feeds) still works, and says which row it could not read.
+    expect(store.settingValues().map((value) => value.key)).not.toContain("analytics.roles");
+    expect(store.unknownSettingKeys()).toEqual(["analytics.roles"]);
+    // Only alpha holds anything, so it is the home and the model cannot be read whole: refused, not mixed with a default.
     expect(refusal(() => readCostModel(candidates, null, home)).code).toBe("validation");
+    // Elsewhere, a newer save takes over and the unreadable row in alpha is neither read nor reset.
+    writeCostModel(candidates, { home: "beta", roles: ROLES }, { scopeSlug: null, actor: "ui", now: at(9), home });
+    // Alpha still holds an older save this build cannot read: named, never reset.
+    expect(readCostModel(candidates, null, home).home).toMatchObject({ slug: "beta", others: [{ slug: "alpha", savedAt: at(0) }] });
+    expect(store.unknownSettingKeys()).toEqual(["analytics.roles"]);
+    // Resetting the row is the repair.
+    store.resetSetting("analytics.roles");
+    expect(store.settingValue("analytics.roles").source).toBe("default");
+    expect(store.unknownSettingKeys()).toEqual([]);
   });
 
   it("keeps the cost model out of the Settings screen's registry, but in the workspace's settings", () => {

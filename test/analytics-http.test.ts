@@ -158,6 +158,7 @@ describe("the cost model over HTTP", () => {
     expect((await http(`/api/analytics/cost-model?scope=alpha`)).body.home.slug).toBe("beta");
 
     expect((await http(`/api/analytics/cost-model`, { reset: 5 })).status).toBe(409);
+    expect((await http(`/api/analytics/cost-model`, null)).status).toBe(409);
     const bad = await http(`/api/analytics/cost-model`, { roles: { roles: [] } });
     expect(bad.status).toBe(409);
     expect(bad.body).toMatchObject({ code: "validation", message: expect.stringMatching(/1 to 30/) });

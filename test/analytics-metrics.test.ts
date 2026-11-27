@@ -366,6 +366,10 @@ describe("the period", () => {
     expect(report.period.from > "2012-03-01").toBe(true);
   });
 
+  it("reads a period named from a day still to come, with no end, as that one day", () => {
+    expect(read([ws("w", [])], { from: "2026-12-01" }).period).toMatchObject({ from: "2026-12-01", to: "2026-12-01", days: 1 });
+  });
+
   it("refuses an inverted period, a bad day and an unknown bucket", () => {
     const rows = [ws("w", [])];
     expect(() => read(rows, { from: "2026-09-05", to: "2026-09-01" })).toThrow(/before/);

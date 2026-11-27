@@ -2300,18 +2300,31 @@ export class WorkspaceStore {
   }
 
   /** Every registered workspace setting with its provenance, in registry order. */
+  /**
+   * Every registered workspace setting with its provenance, in registry order. A key whose
+   * stored row this build cannot read is left out (and listed by `unknownSettingKeys`), so one
+   * such row never takes the whole listing, and the Settings screen with it, down.
+   */
   settingValues(): SettingValueView[] {
-    return settingDefinitionsFor("workspace").map((definition) => {
-      const stored = this.storedSetting(definition.key);
-      return stored
-        ? settingValueView(definition, stored.value, "workspace")
-        : settingValueView(definition, definition.default, "default");
-    });
+    const snapshot = this.settings();
+    return settingDefinitionsFor("workspace")
+      .filter((definition) => !snapshot.unreadable.has(definition.key))
+      .map((definition) => {
+        const stored = snapshot.values.get(definition.key);
+        return stored
+          ? settingValueView(definition, stored.value, "workspace")
+          : settingValueView(definition, definition.default, "default");
+      });
   }
 
-  /** `setting:*` rows this binary has no definition for. Reported, preserved, never rewritten. */
+  /**
+   * `setting:*` rows this binary does not read: keys it has no definition for, and registered
+   * keys whose row it cannot read (malformed, or written by a newer build). Reported, preserved,
+   * never rewritten; an unreadable registered row can be reset.
+   */
   unknownSettingKeys(): string[] {
-    return [...this.settings().unknownSettingKeys];
+    const snapshot = this.settings();
+    return [...snapshot.unknownSettingKeys, ...snapshot.unreadable.keys()].sort();
   }
 
   /**
@@ -2365,14 +2378,16 @@ export class WorkspaceStore {
     if (key === "features.planning" && !person) throw new StapleError("validation", "Only a person can change features.planning, in Settings → Experimental or with `staple settings set features.planning false --person`. The UI is the person and its token is the person's; agents are trusted not to impersonate the person through that token or --person.");
     const definition = requireSettingDefinition(key, "workspace");
     return this.atomically(() => {
-      const stored = this.storedSetting(key);
-      if (stored) {
+      const snapshot = this.settings();
+      const stored = snapshot.values.get(key);
+      // An unreadable row can be reset: deleting it is the one repair this build can make.
+      if (stored || snapshot.unreadable.has(key)) {
         this.db.prepare("DELETE FROM meta WHERE key = ?").run(settingMetaKey(key));
         this.bumpSettingsRevision();
         this.emitEvent({
           kind: "setting_changed",
           actor: actor ?? null,
-          payload: { action: "reset", key, from: stored.value, to: definition.default },
+          payload: { action: "reset", key, from: stored?.value ?? null, to: definition.default },
         });
         this.journal.record({
           entity: "setting",

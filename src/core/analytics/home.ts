@@ -29,6 +29,7 @@ import { readConnection } from "../cloud/connection.js";
 import { listConflicts } from "../cloud/conflicts.js";
 import { readStoredRepositoryId } from "../repo-identity.js";
 import type { WorkspaceStore } from "../store.js";
+import { settingMetaKey } from "../settings-registry.js";
 import { StapleError } from "../types.js";
 import type { CostModelHome, CostModelResponse, CostModelValue, CostModelWrite } from "./contract.js";
 import { AGENT_TYPES } from "./agent-type.js";
@@ -53,23 +54,48 @@ interface HeldModel {
    */
   readonly savedAtMs: number;
   readonly savedAt: string | null;
+  /** Parts saved here that this build cannot read (a newer device's value), with the refusal. */
+  readonly unreadable: ReadonlyMap<CostModelPart, StapleError>;
 }
 
 /** The model one workspace holds: each part saved there, or its default. `assumed` is always present. */
 function readHeldModel(store: WorkspaceStore): HeldModel {
   const source = {} as Record<CostModelPart, "saved" | "default">;
   const parts = {} as Record<CostModelPart, unknown>;
+  const unreadable = new Map<CostModelPart, StapleError>();
   for (const part of COST_MODEL_PARTS) {
-    const view = store.settingValue(COST_MODEL_KEYS[part]);
+    let view;
+    try {
+      view = store.settingValue(COST_MODEL_KEYS[part]);
+    } catch (error) {
+      if (!(error instanceof StapleError)) throw error;
+      // Never carried or reset; ranked by the stamp its raw row still names, and refused if it is the home's.
+      unreadable.set(part, error);
+      view = { source: "default" as const, value: DEFAULT_COST_MODEL[part] };
+    }
     const saved = view.source === "workspace";
     source[part] = saved ? "saved" : "default";
     const value = (saved ? view.value : DEFAULT_COST_MODEL[part]) as { assumed?: readonly string[] };
     parts[part] = { ...value, assumed: value.assumed ?? [] };
   }
   const model = parts as unknown as CostModel;
-  const stamps = COST_MODEL_PARTS.filter((part) => source[part] === "saved").map((part) => Date.parse(model[part].savedAt ?? ""));
+  const stamps = [
+    ...COST_MODEL_PARTS.filter((part) => source[part] === "saved").map((part) => Date.parse(model[part].savedAt ?? "")),
+    ...[...unreadable.keys()].map((part) => rawSavedAt(store, part)),
+  ];
   const savedAtMs = stamps.length === 0 ? Number.NEGATIVE_INFINITY : Math.max(0, ...stamps.filter((at) => Number.isFinite(at)));
-  return { model, source, saved: stamps.length > 0, savedAtMs, savedAt: stamps.length === 0 ? null : new Date(savedAtMs).toISOString() };
+  return { model, source, saved: stamps.length > 0, savedAtMs, savedAt: stamps.length === 0 ? null : new Date(savedAtMs).toISOString(), unreadable };
+}
+
+/** The `savedAt` a stored row names, read from its raw JSON (for a row the registry cannot read), as epoch ms; NaN when none. */
+function rawSavedAt(store: WorkspaceStore, part: CostModelPart): number {
+  const row = store.db.prepare("SELECT value FROM meta WHERE key = ?").get(settingMetaKey(COST_MODEL_KEYS[part])) as { value: string } | undefined;
+  try {
+    const savedAt = (JSON.parse(row?.value ?? "null") as { value?: { savedAt?: unknown } } | null)?.value?.savedAt;
+    return typeof savedAt === "string" ? Date.parse(savedAt) : Number.NaN;
+  } catch {
+    return Number.NaN;
+  }
 }
 
 /** True when this machine holds a live cloud connection for the workspace: its saves reach other devices. */
@@ -111,6 +137,9 @@ function resolveHome(candidates: readonly HomeCandidate[], scopeSlug: string | n
 }
 
 function responseOf(resolved: Resolved): CostModelResponse {
+  // The home's model is incomplete without a part this build cannot read: say so rather than mix in a default.
+  const refusal = resolved.home?.unreadable.values().next().value;
+  if (refusal) throw refusal;
   const held = resolved.home ?? { model: DEFAULT_COST_MODEL, source: Object.fromEntries(COST_MODEL_PARTS.map((part) => [part, "default"])) as Record<CostModelPart, "saved" | "default"> };
   // Every default carries `assumed`, and `readHeldModel` filled it for a save without one.
   return { model: held.model as unknown as CostModelValue, source: held.source, home: resolved.view, agentTypes: [...AGENT_TYPES] };

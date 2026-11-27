@@ -4494,6 +4494,7 @@ export function startUiServer(options: UiOptions): UiHandle {
         const scope = analyticsScope(url.searchParams.get("scope"));
         if (req.method === "POST") {
           const body = await readBody(req);
+          if (body === null || typeof body !== "object" || Array.isArray(body)) throw new StapleError("validation", "The cost model write must be a JSON object.");
           const { response, written } = writeCostModel(costModelCandidates(), body as unknown as CostModelWrite, {
             scopeSlug: scopeSlugOf(scope),
             actor: bodyActor(body),
