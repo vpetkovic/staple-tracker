@@ -1,5 +1,5 @@
 /**
- * STA-175 (R3e) — the Milestones outline against a REAL server payload.
+ * The Milestones outline against a REAL server payload.
  *
  * WHAT "BROWSER TEST" MEANS HERE. There is no jsdom in this repo, no screenshot harness,
  * and no new dependency was added for this file. A browser test is the real HTTP server
