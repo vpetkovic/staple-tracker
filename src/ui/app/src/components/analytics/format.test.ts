@@ -130,11 +130,14 @@ describe("changeRatio", () => {
     expect(changeRatio(92, 100)).toBeCloseTo(-0.08);
     expect(changeRatio(0, 50)).toBe(-1);
   });
-  it("is null with no base, a zero base or no value, never Infinity or NaN", () => {
-    expect(changeRatio(10, 0)).toBeNull();
-    expect(changeRatio(0, 0)).toBeNull();
+  it("is null only when one side is missing, never NaN", () => {
     expect(changeRatio(10, null)).toBeNull();
     expect(changeRatio(null, 10)).toBeNull();
+  });
+  it("an earlier figure of zero is a real period: no change from 0 to 0, and a change from nothing has no percentage", () => {
+    expect(changeRatio(0, 0)).toBe(0);
+    expect(changeRatio(10, 0)).toBe(Number.POSITIVE_INFINITY);
+    expect(changeRatio(-3, 0)).toBe(Number.NEGATIVE_INFINITY);
   });
 });
 
@@ -153,5 +156,13 @@ describe("niceTicks", () => {
   });
   it("takes a different target number of steps", () => {
     expect(niceTicks(10, 2)).toEqual([0, 5, 10]);
+  });
+  it("never steps by less than 1 on an axis that counts things", () => {
+    expect(niceTicks(1, 4, true)).toEqual([0, 1]);
+    expect(niceTicks(2, 4, true)).toEqual([0, 1, 2]);
+    expect(niceTicks(3, 4, true)).toEqual([0, 1, 2, 3]);
+    expect(niceTicks(9, 4, true)).toEqual([0, 3, 6, 9]);
+    // A larger count keeps its clean steps.
+    expect(niceTicks(100, 4, true)).toEqual(niceTicks(100));
   });
 });

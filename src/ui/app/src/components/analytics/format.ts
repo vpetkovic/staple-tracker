@@ -68,18 +68,27 @@ export function formatDayRange(from: string, to: string): string {
   return sameYear ? `${formatDay(from)} – ${formatDay(to)}` : `${formatDay(from)}, ${from.slice(0, 4)} – ${formatDay(to)}, ${to.slice(0, 4)}`;
 }
 
-/** The change against the period before, as a signed share: +32%, −8%. Null when there is no base. */
+/**
+ * The change against the period before, as a signed share: +32%, −8%. Null when there is no earlier
+ * figure to compare. An earlier figure of zero has no percentage: the answer is 0 when this one is
+ * zero too, and otherwise infinite (`DeltaMark` says "from 0").
+ */
 export function changeRatio(value: number | null, previous: number | null): number | null {
-  if (value === null || previous === null || previous === 0) return null;
+  if (value === null || previous === null) return null;
+  if (previous === 0) return value === 0 ? 0 : value > 0 ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY;
   return (value - previous) / previous;
 }
 
-/** Round axis ticks: 0 and three or four clean steps up to at least `max`. */
-export function niceTicks(max: number, target = 4): number[] {
+/**
+ * Round axis ticks: 0 and three or four clean steps up to at least `max`. With `whole` the steps
+ * are never smaller than 1, for an axis that counts things (a count of 2 reads 0, 1, 2).
+ */
+export function niceTicks(max: number, target = 4, whole = false): number[] {
   if (!(max > 0)) return [0, 1];
   const rough = max / target;
   const power = 10 ** Math.floor(Math.log10(rough));
-  const step = [1, 2, 2.5, 5, 10].map((m) => m * power).find((s) => s >= rough) ?? 10 * power;
+  const clean = [1, 2, 2.5, 5, 10].map((m) => m * power).find((s) => s >= rough) ?? 10 * power;
+  const step = whole ? Math.max(1, Math.ceil(clean)) : clean;
   const ticks: number[] = [];
   for (let value = 0; value < max + step * 0.999; value += step) ticks.push(Number(value.toFixed(6)));
   return ticks;

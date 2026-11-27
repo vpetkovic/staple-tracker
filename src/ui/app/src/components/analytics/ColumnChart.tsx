@@ -35,7 +35,7 @@ export function ColumnChart({
   points,
   height = 168,
   format = (value) => formatNumber(value),
-  axisFormat = (value) => formatNumber(value, 0),
+  axisFormat,
   totalLabel = "Total",
   ariaLabel,
   legend = true,
@@ -55,8 +55,12 @@ export function ColumnChart({
   const [active, setActive] = useState<number | null>(null);
   const hintId = useId();
   const totals = points.map((point) => series.reduce((sum, item) => sum + (point.values[item.id] ?? 0), 0));
-  const ticks = niceTicks(Math.max(...totals, 0));
+  // A chart of counts gets whole-number ticks; any other axis gets as many decimals as its step needs,
+  // so two gridlines never wear the same label.
+  const ticks = niceTicks(Math.max(...totals, 0), 4, totals.every(Number.isInteger));
   const top = ticks[ticks.length - 1] ?? 1;
+  const step = ticks[1] ?? 1;
+  const sayTick = axisFormat ?? ((value: number) => formatNumber(value, step >= 1 ? 0 : step >= 0.1 ? 1 : 2));
   const current = active !== null ? points[active] : undefined;
   const tickOrder = new Map(points.flatMap((point, index) => (point.tick ? [index] : [])).map((index, order) => [index, order]));
   const crowded = tickOrder.size > 6;
@@ -79,8 +83,8 @@ export function ColumnChart({
       <div className="flex min-w-0 gap-2">
         <div aria-hidden className="relative w-7 shrink-0 text-right text-caption text-text-tertiary tabular-nums" style={{ height }}>
           {ticks.map((tick) => (
-            <span key={tick} className="absolute right-0 translate-y-1/2 leading-none" style={{ bottom: `${(tick / top) * 100}%` }}>
-              {axisFormat(tick)}
+            <span key={tick} data-axis-tick className="absolute right-0 translate-y-1/2 leading-none" style={{ bottom: `${(tick / top) * 100}%` }}>
+              {sayTick(tick)}
             </span>
           ))}
         </div>

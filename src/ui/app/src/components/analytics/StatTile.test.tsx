@@ -102,6 +102,14 @@ describe("the delta's tone", () => {
     expect(html).toContain("No earlier period to compare");
     expect(html).not.toContain("data-delta");
   });
+  it("says a change from an empty earlier period as from 0, not as a percentage and not as no period", () => {
+    const html = delta(Number.POSITIVE_INFINITY, "up");
+    expect(html).toContain("From 0");
+    expect(html).toContain('data-delta="up"');
+    expect(html).toContain("vs the 30 days before");
+    expect(html).not.toContain("%");
+    expect(html).not.toContain("No earlier period");
+  });
 });
 
 describe("the sparkline", () => {

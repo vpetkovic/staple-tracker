@@ -24,6 +24,10 @@ export function daysBefore(day: string, days: number): string {
 }
 export const todayKey = (now: Date = new Date()): string => dayKey(now);
 
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+/** Two calendar days that make a range: both written as days, the first not after the second. */
+export const isRange = (from: string | undefined, to: string | undefined): boolean => from !== undefined && to !== undefined && DAY.test(from) && DAY.test(to) && from <= to;
+
 /**
  * The query for a period and a workspace ("" is every workspace on this computer). "All time"
  * sends no `from`, so the server starts at the first activity.

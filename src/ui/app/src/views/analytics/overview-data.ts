@@ -7,7 +7,7 @@
  * families, document keys, caveats), so a label reads the same on a chart, its table and the
  * method notes.
  */
-import { seriesColor, type ChartSeries } from "@/components/analytics/chart-parts";
+import { SERIES_SLOTS, seriesColor, type ChartSeries } from "@/components/analytics/chart-parts";
 import type { BarListItem } from "@/components/analytics/BarList";
 import type { Burst } from "@/components/analytics/BurstCards";
 import type { ColumnPoint } from "@/components/analytics/ColumnChart";
@@ -16,6 +16,7 @@ import { changeRatio, formatDay, formatDayRange, formatEffortHours, formatHours 
 import type { SegmentPart } from "@/components/analytics/SegmentedBar";
 import type { Coverage } from "@/components/analytics/Widget";
 import type { AnalyticsHeadline, AnalyticsQuery, AnalyticsReport, Bucket, Caveat, CaveatCode, RoiResponse } from "@/lib/analytics-api";
+import { assumedFigures } from "./return-model";
 
 // ---------------------------------------------------------------- the read itself
 
@@ -93,11 +94,19 @@ export function workspaceLanes(report: AnalyticsReport, order: readonly string[]
     .sort(([a, x], [b, y]) => y.done - x.done || y.hours - x.hours || position(a) - position(b))
     .map(([slug]) => slug);
   const own = new Set(report.scope.workspaces.length > 4 ? ranked.slice(0, 3) : ranked);
-  const colorOf = (slug: string) => {
-    const index = order.indexOf(slug);
-    return seriesColor(index === -1 ? 0 : index + 1);
-  };
-  const series: ChartSeries[] = [...own].sort((a, b) => position(a) - position(b)).map((slug) => ({ id: slug, label: slug, color: colorOf(slug) }));
+  // A workspace's slot is its place in the list, going round again past the sixth: grey is kept
+  // for "Other workspaces". Two drawn lanes never share a colour: the later one takes the next free slot.
+  const slotOf = (slug: string) => (position(slug) % SERIES_SLOTS) + 1;
+  const lanes = [...own].sort((a, b) => position(a) - position(b));
+  const taken = new Map<string, number>();
+  for (const slug of lanes) {
+    let slot = slotOf(slug);
+    const used = new Set(taken.values());
+    for (let tries = 0; used.has(slot) && tries < SERIES_SLOTS; tries += 1) slot = (slot % SERIES_SLOTS) + 1;
+    taken.set(slug, slot);
+  }
+  const colorOf = (slug: string) => seriesColor(taken.get(slug) ?? slotOf(slug));
+  const series: ChartSeries[] = lanes.map((slug) => ({ id: slug, label: slug, color: colorOf(slug) }));
   if (ranked.length > own.size) series.push({ id: OTHER_LANE, label: "Other workspaces", color: seriesColor(0) });
   return { series, laneOf: (slug) => (own.has(slug) ? slug : OTHER_LANE), colorOf };
 }
@@ -369,10 +378,11 @@ export interface ReturnTile {
 
 export function returnTile(roi: RoiResponse): ReturnTile {
   const model = roi.model.model;
-  const profile = model[model.scenario.mode];
   return {
     measured: roi.measured.returnOnTotalCost,
-    planned: roi.planned.returnOnTotalCost,
-    assumed: profile.assumed.length > 0,
+    // With no estimated ticket there is no planned count: the server's 0 is "nothing counted", not a return of 0×.
+    planned: roi.planned.valueHours > 0 ? roi.planned.returnOnTotalCost : null,
+    // Only figures that still exist: a removed role's rate is not something left to set.
+    assumed: assumedFigures(model).length > 0,
   };
 }

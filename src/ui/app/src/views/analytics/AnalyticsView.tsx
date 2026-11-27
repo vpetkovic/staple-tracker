@@ -34,7 +34,7 @@ import { cn } from "@/lib/utils";
 import { EstimatesLens } from "./EstimatesLens";
 import { OverviewBoard } from "./OverviewBoard";
 import { answers, isEmptyScope } from "./overview-data";
-import { toQuery, type PeriodAsk, type PeriodPreset } from "./period";
+import { isRange, toQuery, todayKey, type PeriodAsk, type PeriodPreset } from "./period";
 import { ReturnLens } from "./ReturnLens";
 
 export type Lens = "overview" | "return" | "estimates";
@@ -52,18 +52,17 @@ const PRESETS: readonly { id: Exclude<PeriodPreset, "custom">; label: string; sh
   { id: "all", label: "All time", short: "All" },
 ];
 const PERIOD_KEY = "staple:analytics-period";
-const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 function readPeriod(): PeriodAsk {
   const params = new URLSearchParams(window.location.search);
   const preset = params.get("period");
   const from = params.get("from") ?? "";
   const to = params.get("to") ?? "";
-  if (preset === "custom" && DAY.test(from) && DAY.test(to)) return { preset: "custom", from, to };
+  if (preset === "custom" && isRange(from, to)) return { preset: "custom", from, to };
   if (PRESETS.some((item) => item.id === preset)) return { preset: preset as PeriodPreset };
   try {
     const saved = JSON.parse(window.localStorage.getItem(PERIOD_KEY) ?? "null") as PeriodAsk | null;
-    if (saved && (PRESETS.some((item) => item.id === saved.preset) || (saved.preset === "custom" && DAY.test(saved.from ?? "") && DAY.test(saved.to ?? "")))) return saved;
+    if (saved && (PRESETS.some((item) => item.id === saved.preset) || (saved.preset === "custom" && isRange(saved.from, saved.to)))) return saved;
   } catch {
     /* a per-browser preference, best effort */
   }
@@ -142,9 +141,10 @@ export function AnalyticsView({ onAuthError }: { onAuthError: (error: AuthError)
   }, [lens, period, ws]);
 
   const key = periodKey(period);
-  // The same period and workspace, as the query the routes take. "Today" is read when the period changes.
+  // The same period and workspace, as the query the routes take. A page left open past midnight moves on to the new day.
+  const today = useToday();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const query = useMemo(() => toQuery(period, ws), [key, ws]);
+  const query = useMemo(() => toQuery(period, ws, today), [key, ws, today]);
   const report = useAnalytics(query, onAuthError);
 
   // Each lens keeps its own place: switching away and back lands where you were.
@@ -155,7 +155,30 @@ export function AnalyticsView({ onAuthError }: { onAuthError: (error: AuthError)
     setLens(next);
   };
   useLayoutEffect(() => {
-    if (scroller.current) scroller.current.scrollTop = places.current[lens];
+    const box = scroller.current;
+    if (!box) return;
+    const want = places.current[lens];
+    box.scrollTop = want;
+    if (box.scrollTop >= want - 1) return;
+    // A lens that reads its own data opens short, so the place cannot be reached yet: finish the
+    // move when its content has grown, unless the reader scrolls first.
+    const content = box.firstElementChild;
+    if (!content || typeof ResizeObserver === "undefined") return;
+    const stop = () => {
+      observer.disconnect();
+      box.removeEventListener("wheel", stop);
+      box.removeEventListener("touchmove", stop);
+      window.clearTimeout(timer);
+    };
+    const observer = new ResizeObserver(() => {
+      box.scrollTop = want;
+      if (box.scrollTop >= want - 1) stop();
+    });
+    observer.observe(content);
+    box.addEventListener("wheel", stop, { passive: true });
+    box.addEventListener("touchmove", stop, { passive: true });
+    const timer = window.setTimeout(stop, 8000);
+    return stop;
   }, [lens]);
 
   const slot = usePhoneHeaderSlot();
@@ -178,7 +201,7 @@ export function AnalyticsView({ onAuthError }: { onAuthError: (error: AuthError)
     ) : (
       <PageState report={data} error={report.error} stale={stale} onRetry={report.reload}>
         {lens === "overview" ? (
-          <OverviewLens report={data} query={query} order={session.workspaces.map((workspace) => workspace.slug)} onAuthError={onAuthError} onOpenReturn={() => chooseLens("return")} onOpenTicket={session.open} />
+          <OverviewLens report={data} query={query} hubMode={hubMode} order={session.workspaces.map((workspace) => workspace.slug)} onAuthError={onAuthError} onOpenReturn={() => chooseLens("return")} onOpenTicket={session.open} />
         ) : (
           <ReturnLens workspace={ws} period={period} query={query} onAuthError={onAuthError} onOpenTicket={session.open} />
         )}
@@ -216,7 +239,8 @@ export function AnalyticsView({ onAuthError }: { onAuthError: (error: AuthError)
  * own loading and "nothing in this period" states.
  */
 export function PageState({ report, error, stale, onRetry, children }: { report: AnalyticsReport | undefined; error: Error | undefined; stale: boolean; onRetry: () => void; children: ReactNode }) {
-  if (error && !report) {
+  // No answer for this period and workspace: none at all, or only an earlier one the failed read left behind.
+  if (error && (!report || stale)) {
     return <ProblemState title="Analytics could not be loaded" message={error.message} action={<button type="button" onClick={onRetry} className="focus-ring min-h-0 rounded-md border px-2.5 py-1 text-label font-medium">Try again</button>} />;
   }
   if (report && !stale && isEmptyScope(report)) {
@@ -234,9 +258,26 @@ export function PageState({ report, error, stale, onRetry, children }: { report:
  * and read again each time it opens, so a rate changed on the Return lens shows here. Like the
  * report, the previous answer stays on screen while a new period loads.
  */
-function OverviewLens({ report, query, order, onAuthError, onOpenReturn, onOpenTicket }: { report: AnalyticsReport | undefined; query: AnalyticsQuery; order: readonly string[]; onAuthError: (error: AuthError) => void; onOpenReturn: () => void; onOpenTicket: (workspace: string, ref: string) => void }) {
+function OverviewLens({ report, query, hubMode, order, onAuthError, onOpenReturn, onOpenTicket }: { report: AnalyticsReport | undefined; query: AnalyticsQuery; hubMode: boolean; order: readonly string[]; onAuthError: (error: AuthError) => void; onOpenReturn: () => void; onOpenTicket: (workspace: string, ref: string) => void }) {
   const roi = useRoi(query, onAuthError);
-  return <OverviewBoard report={report} roi={roi.data ?? (roi.error ? null : undefined)} order={order} onOpenReturn={onOpenReturn} onOpenTicket={onOpenTicket} />;
+  // The tile never shows another period's return as this one's: it waits, or says it could not be worked out.
+  const current = roi.data !== undefined && answers(roi.data, query, hubMode) ? roi.data : undefined;
+  return <OverviewBoard report={report} roi={current ?? (roi.error ? null : undefined)} order={order} onOpenReturn={onOpenReturn} onOpenTicket={onOpenTicket} />;
+}
+
+/** The reader's calendar day, kept current while the page stays open. */
+function useToday(): string {
+  const [today, setToday] = useState(() => todayKey());
+  useEffect(() => {
+    const check = () => setToday(todayKey());
+    const timer = window.setInterval(check, 60_000);
+    document.addEventListener("visibilitychange", check);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", check);
+    };
+  }, []);
+  return today;
 }
 
 const CONTROL = "focus-ring relative inline-flex h-control-md min-h-0 shrink-0 items-center gap-1.5 rounded-md border bg-card px-2.5 text-body font-medium transition-colors hover:bg-surface-hover before:absolute before:-inset-y-1 before:inset-x-0 before:content-['']";
@@ -285,7 +326,7 @@ function PeriodPicker({ value, onChange, compact, resolved }: { value: PeriodAsk
   }, [open]);
   const custom = value.preset === "custom";
   const range = resolved ? formatDayRange(resolved.from, resolved.to) : custom && value.from && value.to ? formatDayRange(value.from, value.to) : null;
-  const valid = DAY.test(from) && DAY.test(to) && from <= to;
+  const valid = isRange(from, to);
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>

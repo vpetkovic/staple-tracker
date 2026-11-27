@@ -120,13 +120,15 @@ export function DeltaMark({ delta }: { delta: StatDelta }) {
   if (delta.ratio === null) return <span className="text-label text-text-tertiary">No earlier period to compare</span>;
   const flat = Math.abs(delta.ratio) < 0.005;
   const up = delta.ratio > 0;
+  // The period before had none of it: a change from nothing has no percentage.
+  const fromZero = !Number.isFinite(delta.ratio);
   const good = delta.goodWhen === "neutral" || delta.goodWhen === undefined || flat ? null : (delta.goodWhen === "up") === up;
   const Icon = flat ? ArrowRight : up ? ArrowUpRight : ArrowDownRight;
   return (
     <span className="inline-flex items-center gap-1 text-label text-muted-foreground" data-delta={flat ? "flat" : up ? "up" : "down"}>
       <span className={cn("inline-flex items-center gap-0.5 font-medium", good === true && "text-[var(--plain-ok-fg)]", good === false && "text-[var(--plain-risk-fg)]", good === null && "text-foreground")}>
         <Icon aria-hidden className="size-3.5" />
-        {flat ? "No change" : `${up ? "+" : "−"}${formatPercent(Math.min(Math.abs(delta.ratio), 9.99))}`}
+        {flat ? "No change" : fromZero ? "From 0" : `${up ? "+" : "−"}${formatPercent(Math.min(Math.abs(delta.ratio), 9.99))}`}
       </span>
       {delta.against}
     </span>

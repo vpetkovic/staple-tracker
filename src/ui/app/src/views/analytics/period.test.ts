@@ -3,7 +3,7 @@
  * today, a custom range passes through, and "all time" names no start.
  */
 import { describe, expect, it } from "vitest";
-import { daysBefore, toQuery, todayKey } from "./period";
+import { daysBefore, isRange, toQuery, todayKey } from "./period";
 
 const TODAY = "2026-11-26";
 
@@ -46,6 +46,20 @@ describe("a custom range and the workspace", () => {
   it("asks for one workspace by its slug, and for the hub with none chosen", () => {
     expect(toQuery({ preset: "30d" }, "staple", TODAY).scope).toBe("staple");
     expect(toQuery({ preset: "30d" }, "", TODAY).scope).toBe("hub");
+  });
+
+  it("takes two days as a range only when both are days and the first is not after the second", () => {
+    expect(isRange("2026-11-01", "2026-11-20")).toBe(true);
+    expect(isRange("2026-11-20", "2026-11-20")).toBe(true);
+    expect(isRange("2026-11-20", "2026-11-01")).toBe(false);
+    expect(isRange("2026-11-01", undefined)).toBe(false);
+    expect(isRange("", "2026-11-20")).toBe(false);
+    expect(isRange("11/01/2026", "2026-11-20")).toBe(false);
+  });
+
+  it("moves a preset on with the day it is asked on", () => {
+    expect(toQuery({ preset: "7d" }, "", "2026-11-26")).toMatchObject({ from: "2026-11-20", to: "2026-11-26" });
+    expect(toQuery({ preset: "7d" }, "", "2026-11-27")).toMatchObject({ from: "2026-11-21", to: "2026-11-27" });
   });
 
   it("reads today as the browser's own calendar day", () => {

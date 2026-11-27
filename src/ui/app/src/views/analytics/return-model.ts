@@ -211,13 +211,25 @@ export const shareWords = (share: number, whose: string): string => ` × ${share
  * spent over hiring, as plain amounts (never a range of two minus signs). One of each: both ends,
  * signed, joined by "to".
  */
-export function netFigure(low: number, high: number | null, say: (amount: number) => string): { label: string; value: string; sentence: string } {
+export function netFigure(one: number, other: number | null, say: (amount: number) => string): { label: string; value: string; sentence: string } {
   const span = (a: number, b: number) => (say(a) === say(b) ? say(a) : `${say(a)}–${say(b)}`);
-  if (low >= 0 && (high === null || high >= 0)) return { label: "Saved against hiring", value: high === null ? say(low) : span(low, high), sentence: "The team's cost, less what this cost." };
-  if (high === null || high < 0) {
-    return { label: "Spent over hiring", value: high === null ? say(-low) : span(-high, -low), sentence: high === null ? "This cost more than the team would have." : "By both counts this cost more than the team would have." };
+  if (other === null) {
+    return one >= 0 ? { label: "Saved against hiring", value: say(one), sentence: "The team's cost, less what this cost." } : { label: "Spent over hiring", value: say(-one), sentence: "This cost more than the team would have." };
   }
-  return { label: "Against hiring", value: `${say(low)} to ${say(high)}`, sentence: "By the conservative count this cost more than the team; by estimates it cost less." };
+  // Either count can be the smaller one: estimates come out below agent time when few tickets carry one.
+  const low = Math.min(one, other);
+  const high = Math.max(one, other);
+  if (low >= 0) return { label: "Saved against hiring", value: span(low, high), sentence: "The team's cost, less what this cost." };
+  if (high < 0) return { label: "Spent over hiring", value: span(-high, -low), sentence: "By both counts this cost more than the team would have." };
+  return { label: "Against hiring", value: `${say(low)} to ${say(high)}`, sentence: "By one count this cost more than the team; by the other it cost less." };
+}
+
+/**
+ * The two counts in the order a range is read, the smaller value of the work first. Agent time is
+ * usually the smaller one, but estimates come out below it when few tickets carry one (`crossed`).
+ */
+export function orderedEnds<T extends { value: number }>(measured: T, planned: T | null): { low: T; high: T | null; crossed: boolean } {
+  return planned !== null && planned.value < measured.value ? { low: planned, high: measured, crossed: true } : { low: measured, high: planned, crossed: false };
 }
 
 /** A count of full-time people: "2.7", and "under 0.1" where rounding would say nobody. */

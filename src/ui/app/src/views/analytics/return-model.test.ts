@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import type { CostModelValue, RoiLens, RoiResponse, RoiRoleValue } from "@/lib/analytics-api";
 import { readCostModel } from "../../../../../core/analytics/home.ts";
-import { aiDetail, assumedFigures, assumedWords, currencySymbol, entryDates, netFigure, peopleWords, returnView, sharePercent, shareWords } from "./return-model";
+import { aiDetail, assumedFigures, assumedWords, currencySymbol, entryDates, netFigure, orderedEnds, peopleWords, returnView, sharePercent, shareWords } from "./return-model";
 
 const MODEL = readCostModel([], null, "/nonexistent-staple-home");
 
@@ -210,5 +210,28 @@ describe("hiring against AI, in one tile", () => {
 
   it("one count behind and one ahead says both ends, signed", () => {
     expect(netFigure(-300, 900, say)).toMatchObject({ label: "Against hiring", value: "minus $300 to $900" });
+  });
+
+  it("reads low to high whichever count is the smaller: estimates below agent time is not a loss by both", () => {
+    // Agent time saves $1,000 and the few estimated tickets come out $500 short.
+    const crossed = netFigure(1000, -500, say);
+    expect(crossed.label).toBe("Against hiring");
+    expect(crossed.value).toBe("minus $500 to $1000");
+    expect(crossed.sentence).not.toContain("both");
+    expect(netFigure(114, 28, say)).toMatchObject({ label: "Saved against hiring", value: "$28–$114" });
+    expect(netFigure(-1944, -11000, say)).toMatchObject({ label: "Spent over hiring", value: "$1944–$11000" });
+  });
+});
+
+describe("the two counts as a range", () => {
+  const side = (value: number) => ({ value, name: String(value) });
+
+  it("keeps agent time first when it is the smaller, as it usually is", () => {
+    expect(orderedEnds(side(40), side(130))).toMatchObject({ low: { value: 40 }, high: { value: 130 }, crossed: false });
+    expect(orderedEnds(side(40), null)).toMatchObject({ low: { value: 40 }, high: null, crossed: false });
+  });
+
+  it("puts the estimates first when they come out below agent time", () => {
+    expect(orderedEnds(side(129), side(43))).toMatchObject({ low: { value: 43 }, high: { value: 129 }, crossed: true });
   });
 });

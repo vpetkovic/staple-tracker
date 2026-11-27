@@ -28,10 +28,12 @@ import { CostSetupDialog, SCENARIOS } from "./CostSetupDialog";
 import { costEdits } from "./cost-edits";
 import { AssumedTag, Segmented, type CostApi } from "./return-parts";
 import { RolePage } from "./RolePage";
-import { ATTEMPT_CAP_HOURS, aiDetail, assumedFigures, assumedWords, isAssumed, netFigure, peopleWords, returnView, scenarioWords, shareWords, type ReturnView, type RoleView } from "./return-model";
+import { ATTEMPT_CAP_HOURS, aiDetail, assumedFigures, assumedWords, isAssumed, netFigure, orderedEnds, peopleWords, returnView, scenarioWords, sharePercent, shareWords, type ReturnView, type RoleView } from "./return-model";
 
-export function ReturnPage({ roi, cost, error, onRetry, query, onAuthError, onOpenTicket }: {
+export function ReturnPage({ roi, stale = false, cost, error, onRetry, query, onAuthError, onOpenTicket }: {
   roi: RoiResponse | undefined;
+  /** `roi` answers an earlier period or workspace while the new one loads: shown dimmed, and never kept past a failed read. */
+  stale?: boolean;
   cost: CostApi | null;
   error: Error | undefined;
   onRetry: () => void;
@@ -59,21 +61,21 @@ export function ReturnPage({ roi, cost, error, onRetry, query, onAuthError, onOp
       replaceUrl(url.toString());
     });
   }, [roleId]);
-  if (error && !roi) return <ProblemState title="The return could not be worked out" message={error.message} action={<button type="button" onClick={onRetry} className="focus-ring min-h-0 rounded-md border px-2.5 py-1 text-label font-medium">Try again</button>} />;
+  if (error && (!roi || stale)) return <ProblemState title="The return could not be worked out" message={error.message} action={<button type="button" onClick={onRetry} className="focus-ring min-h-0 rounded-md border px-2.5 py-1 text-label font-medium">Try again</button>} />;
   if (!roi || !cost) return <ReturnSkeleton />;
   const view = returnView(roi, cost.model);
   const role = view.all.find((item) => item.roleId === roleId);
   const dialog = <CostSetupDialog open={setup} onOpenChange={setSetup} view={view} cost={cost} />;
   if (role) {
     return (
-      <div ref={root}>
+      <div ref={root} className={cn("transition-opacity", stale && "opacity-60")} aria-busy={stale || undefined} data-stale={stale ? "" : undefined}>
         <RolePage role={role} view={view} cost={cost} query={query} onAuthError={onAuthError} onBack={() => setRoleId(null)} onSetup={() => setSetup(true)} onOpenTicket={onOpenTicket} />
         {dialog}
       </div>
     );
   }
   return (
-    <div ref={root} className="flex flex-col gap-5" data-return>
+    <div ref={root} className={cn("flex flex-col gap-5 transition-opacity", stale && "opacity-60")} aria-busy={stale || undefined} data-stale={stale ? "" : undefined} data-return>
       <Answer view={view} cost={cost} onSetup={() => setSetup(true)} />
       <Figures view={view} />
       <RoleByRole view={view} cost={cost} onOpenRole={openRole} onSetup={() => setSetup(true)} />
@@ -87,19 +89,20 @@ export function ReturnPage({ roi, cost, error, onRetry, query, onAuthError, onOp
 
 type Verdict = { tone: "ok" | "tight" | "risk"; icon: LucideIcon; word: string };
 function verdictOf(view: ReturnView): Verdict | null {
-  const low = view.measured.multiple;
-  const high = view.planned?.multiple ?? null;
+  const ends = orderedEnds(view.measured, view.planned);
+  const low = ends.low.multiple;
+  const high = ends.high?.multiple ?? null;
   if (low === null) return null;
   if (low >= 1) return { tone: "ok", icon: CircleCheck, word: "Paid for itself" };
-  if (high !== null && high >= 1) return { tone: "tight", icon: TriangleAlert, word: "Paid for itself by planned effort only" };
+  if (high !== null && high >= 1) return { tone: "tight", icon: TriangleAlert, word: ends.crossed ? "Paid for itself by agent time only" : "Paid for itself by planned effort only" };
   return { tone: "risk", icon: OctagonAlert, word: "Cost more than it returned" };
 }
 
 function Answer({ view, cost, onSetup }: { view: ReturnView; cost: CostApi; onSetup: () => void }) {
   const money = (value: number) => formatMoney(value, view.sign);
   const words = scenarioWords(view.mode);
-  const low = view.measured;
-  const high = view.planned;
+  // Every range reads low to high, whichever count is the smaller.
+  const { low, high, crossed } = orderedEnds(view.measured, view.planned);
   const verdict = verdictOf(view);
   const figures = assumedFigures(cost.model);
   const assumed = assumedWords(figures, scenarioWords(cost.model.scenario.mode).whose);
@@ -152,7 +155,7 @@ function Answer({ view, cost, onSetup }: { view: ReturnView; cost: CostApi; onSe
               of work. Hiring people for it would have cost <b className="font-semibold text-foreground">{money(low.value)}{high ? <> to {money(high.value)}</> : null}</b>; with AI it cost <b className="font-semibold text-foreground">{money(view.cost)}</b>.
               {view.breakEvenRate !== null ? <> It pays for itself whenever the same work by hand costs more than {money(view.breakEvenRate)} an hour.</> : null}
             </p>
-            <ReturnRange className="mt-4" low={{ value: low.multiple, label: "by measured agent time (conservative)" }} high={high?.multiple != null ? { value: high.multiple, label: "by planned effort (estimates)" } : null} />
+            <ReturnRange className="mt-4" low={view.measured.multiple !== null ? { value: view.measured.multiple, label: crossed ? "by measured agent time" : "by measured agent time (conservative)" } : null} high={view.planned?.multiple != null ? { value: view.planned.multiple, label: "by planned effort (estimates)" } : null} />
           </div>
         </div>
       )}
@@ -194,8 +197,7 @@ function Figures({ view }: { view: ReturnView }) {
   const money = (value: number) => formatMoney(value, view.sign);
   const solo = view.mode === "solo";
   const words = scenarioWords(view.mode);
-  const low = view.measured;
-  const high = view.planned;
+  const { low, high } = orderedEnds(view.measured, view.planned);
   const range = (a: string, b: string | null) => (b && b !== a ? `${a}–${b}` : a);
   // In a range the cents of a thousand are noise: $43K–$129K, not $43.3K–$129.2K.
   const round = (value: number) => (Math.abs(value) >= 10_000 && Math.abs(value) < 1_000_000 ? `${value < 0 ? "−" : ""}${view.sign}${Math.round(Math.abs(value) / 1000)}K` : money(value));
@@ -485,7 +487,7 @@ function ReturnMethod({ view }: { view: ReturnView }) {
         <li>AI spend is what you assign in Cost setup: each subscription (its price × how many) and each monthly API bill belongs to a role or to the whole team, counted by the day over the period. Nothing is divided between roles. Staple does not record token use, so it cannot price API usage itself.</li>
         {view.share < 1 ? (
           <li data-method-share>
-            This is one workspace: it carries {formatPercent(view.share)} of the shared AI spend and of the directing time, its share of agent time on this computer. A role&apos;s own AI counts for that role&apos;s share of its agent time here.
+            This is one workspace: it carries {sharePercent(view.share)} of the shared AI spend and of the directing time, its share of agent time on this computer. A role&apos;s own AI counts for that role&apos;s share of its agent time here.
           </li>
         ) : null}
         <li>The role of a ticket is read from the kind of agent work it was and from your rules (labels, title words, agent names, kinds, workspaces). You can see and change that by opening the role; it is not a recorded fact.</li>

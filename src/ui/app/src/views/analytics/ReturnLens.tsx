@@ -14,6 +14,7 @@ import { ApiError, type AuthError } from "@/lib/api";
 import { useSession } from "@/lib/session";
 import { saveCostModel, useCostModel, useRoi } from "@/lib/use-analytics";
 import { refusalSentence, withHome, type CostEdit } from "./cost-edits";
+import { answers } from "./overview-data";
 import type { PeriodAsk } from "./period";
 import type { CostApi, SaveStatus } from "./return-parts";
 import { ReturnPage } from "./ReturnPage";
@@ -28,14 +29,17 @@ export function ReturnLens({ workspace, query, onAuthError, onOpenTicket }: {
   onOpenTicket: (workspace: string, ref: string) => void;
 }) {
   const scope = query.scope ?? (workspace || "hub");
+  const session = useSession();
   const roi = useRoi(query, onAuthError);
   const stored = useCostModel(scope, onAuthError);
-  const cost = useCostEditor(stored.data ?? roi.data?.model, scope, useSession().workspaces);
+  const cost = useCostEditor(stored.data ?? roi.data?.model, scope, session.workspaces);
+  // While a new period or workspace loads the hook keeps the previous answer; the page dims it and never calls it current.
+  const stale = roi.data !== undefined && !answers(roi.data, query, session.mode === "hub");
   const retry = useCallback(() => {
     roi.reload();
     stored.reload();
   }, [roi.reload, stored.reload]);
-  return <ReturnPage roi={roi.data} cost={cost} error={roi.error ?? (roi.data ? undefined : stored.error)} onRetry={retry} query={query} onAuthError={onAuthError} onOpenTicket={onOpenTicket} />;
+  return <ReturnPage roi={roi.data} stale={stale} cost={cost} error={roi.error ?? (roi.data ? undefined : stored.error)} onRetry={retry} query={query} onAuthError={onAuthError} onOpenTicket={onOpenTicket} />;
 }
 
 /**
@@ -79,7 +83,8 @@ export function useCostEditor(read: CostModelResponse | undefined, scope: string
           (error: unknown) => {
             const reason = error instanceof ApiError && (error.code === "conflict" || error.code === "validation") ? error.code : "other";
             const message = error instanceof Error ? error.message : String(error);
-            refused.current = { state: "failed", reason, message: reason === "validation" ? refusalSentence(message) : message, field };
+            // The first refusal of a burst is the one to read: a later one does not replace it.
+            refused.current ??= { state: "failed", reason, message: reason === "validation" ? refusalSentence(message) : message, field };
             // The latest save already settled: this refusal must not hide behind its "Saved".
             if (sequence !== latest.current && inFlight.current > 1) return;
             setDraft(null);
@@ -88,6 +93,11 @@ export function useCostEditor(read: CostModelResponse | undefined, scope: string
         )
         .finally(() => {
           inFlight.current -= 1;
+          // Answers can come back in any order: once the burst has settled, a refusal in it is on screen whatever came last.
+          if (inFlight.current === 0 && refused.current) {
+            setDraft(null);
+            setSave(refused.current);
+          }
         });
     },
     [scope],

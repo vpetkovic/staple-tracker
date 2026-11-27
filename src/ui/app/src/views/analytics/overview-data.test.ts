@@ -165,6 +165,27 @@ describe("workspaces as series", () => {
     expect(one.series).toEqual([{ id: "st", label: "st", color: seriesColor(4) }]);
   });
 
+  it("gives a busy workspace past the sixth a colour of its own, never the grey of Other workspaces", () => {
+    const many = ["ai", "ex", "fd", "st", "vp", "wo", "zz", "yy"];
+    const late = report(
+      {
+        series: [point("2026-11-01", { zz: { done: 9, agentHours: 9 }, ai: { done: 5, agentHours: 5 }, yy: { done: 4, agentHours: 4 }, ex: { done: 1, agentHours: 1 } })],
+      },
+      many,
+    );
+    const lanes = workspaceLanes(late, many);
+    expect(lanes.series.map((series) => series.id)).toEqual(["ai", "zz", "yy", OTHER_LANE]);
+    const colours = lanes.series.map((series) => series.color);
+    // Three drawn workspaces and Other: four different colours, and only Other is grey.
+    expect(new Set(colours).size).toBe(4);
+    expect(colours.slice(0, 3)).not.toContain(seriesColor(0));
+    // "zz" is seventh in the list, the same slot as "ai": it moves to the next free one.
+    expect(lanes.colorOf("ai")).toBe(seriesColor(1));
+    expect(lanes.colorOf("zz")).toBe(seriesColor(2));
+    // What a chart draws and what a list dots agree.
+    expect(lanes.series.find((series) => series.id === "zz")?.color).toBe(lanes.colorOf("zz"));
+  });
+
   it("draws every active workspace on its own when the scope has four or fewer", () => {
     const small = report({ series: busy.series }, ["ai", "ex", "st", "wo"]);
     expect(workspaceLanes(small, ["ai", "ex", "st", "wo"]).series.map((series) => series.id)).toEqual(["ai", "ex", "st", "wo"]);
@@ -381,16 +402,26 @@ describe("caveats", () => {
 });
 
 describe("the Return tile", () => {
-  const roi = (assumed: string[], measured: number | null, planned: number | null) =>
+  const roi = (assumed: string[], measured: number | null, planned: number | null, plannedHours = 100) =>
     ({
-      model: { model: { scenario: { mode: "solo" }, solo: { assumed }, company: { assumed: ["director.hourlyRate"] }, roles: { assumed: [] } } },
+      model: { model: { scenario: { mode: "solo" }, solo: { assumed, entries: [] }, company: { assumed: ["director.hourlyRate"], entries: [] }, roles: { roles: [{ id: "software-engineer", title: "Software Engineer" }], assumed: [] } } },
       measured: { returnOnTotalCost: measured },
-      planned: { returnOnTotalCost: planned },
+      planned: { returnOnTotalCost: planned, valueHours: plannedHours },
     }) as unknown as RoiResponse;
 
   it("reads both ends from the ROI route and says whether the profile in use still holds defaults", () => {
     expect(returnTile(roi(["director.hourlyRate"], 2.7, 8))).toEqual({ measured: 2.7, planned: 8, assumed: true });
     // The company profile's defaults do not mark the solo profile's figure.
     expect(returnTile(roi([], 2.7, null))).toEqual({ measured: 2.7, planned: null, assumed: false });
+  });
+
+  it("has no planned end when no finished ticket carries an estimate, whatever the route divides out", () => {
+    // The route answers 0 for the planned return when nothing was estimated; that is no count, not a return of 0.
+    expect(returnTile(roi([], 2.4, 0, 0))).toEqual({ measured: 2.4, planned: null, assumed: false });
+  });
+
+  it("does not call a removed role's unset rate a default still to set", () => {
+    expect(returnTile(roi(["roles.technical-writer.hourlyRate"], 2.7, 8)).assumed).toBe(false);
+    expect(returnTile(roi(["roles.software-engineer.hourlyRate"], 2.7, 8)).assumed).toBe(true);
   });
 });

@@ -60,6 +60,22 @@ describe("the columns", () => {
     expect(html.match(/data-gridline/g)).toHaveLength(5);
     expect(html).toContain("bottom:0%;background:var(--viz-baseline)");
   });
+
+  const axis = (html: string) => [...html.matchAll(/data-axis-tick[^>]*>([^<]*)</g)].map((match) => match[1]);
+
+  it("a small count is labelled in whole numbers, each gridline once", () => {
+    const one = [{ key: "d1", label: "Nov 1", values: { a: 1, b: 0 } }];
+    const two = [{ key: "d1", label: "Nov 1", values: { a: 1, b: 1 } }];
+    expect(axis(render({ points: one }))).toEqual(["0", "1"]);
+    expect(axis(render({ points: two }))).toEqual(["0", "1", "2"]);
+  });
+
+  it("an axis of fractions gets the decimals its step needs, so no two labels are the same", () => {
+    const small = [{ key: "d1", label: "Nov 1", values: { a: 0.3, b: 0.1 } }];
+    const labels = axis(render({ points: small }));
+    expect(labels).toEqual(["0", "0.1", "0.2", "0.3", "0.4"]);
+    expect(new Set(labels).size).toBe(labels.length);
+  });
 });
 
 describe("the legend", () => {

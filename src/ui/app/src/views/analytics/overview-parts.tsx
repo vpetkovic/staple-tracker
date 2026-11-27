@@ -96,8 +96,11 @@ export function KpiRow({ report, roi, onOpenReturn, className }: Pick<OverviewPr
   const headline = report?.headline;
   const lead = report?.speed.lead;
   const ret = roi ? returnTile(roi) : null;
-  const low = ret?.measured ?? null;
-  const high = ret?.planned ?? null;
+  const measured = ret?.measured ?? null;
+  const planned = ret?.planned ?? null;
+  // The figure reads low to high, whichever count is the smaller.
+  const low = measured !== null && planned !== null ? Math.min(measured, planned) : measured;
+  const high = measured !== null && planned !== null ? Math.max(measured, planned) : planned;
   return (
     <div className={className} data-kpi-row>
       <StatTile
@@ -144,7 +147,7 @@ export function KpiRow({ report, roi, onOpenReturn, className }: Pick<OverviewPr
         openLabel="Open the return on AI spend"
         emptyText={roi === null ? "Could not be worked out" : "Set rates and AI spend to see it"}
       >
-        {low !== null ? <ReturnRange compact className="mt-1" low={{ value: low, label: "measured agent time" }} high={high !== null ? { value: high, label: "planned effort" } : null} /> : null}
+        {measured !== null ? <ReturnRange compact className="mt-1" low={{ value: measured, label: "measured agent time" }} high={planned !== null ? { value: planned, label: "planned effort" } : null} /> : null}
       </StatTile>
     </div>
   );

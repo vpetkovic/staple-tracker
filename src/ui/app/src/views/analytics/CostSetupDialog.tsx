@@ -36,6 +36,8 @@ export const SCENARIOS: readonly { id: ProfileId; label: string }[] = [
 export function CostSetupDialog({ open, onOpenChange, view, cost }: { open: boolean; onOpenChange: (open: boolean) => void; view: ReturnView; cost: CostApi }) {
   const model = cost.model;
   const mode = model.scenario.mode;
+  // Reset clears both profiles and cannot be undone, so it asks once before it does.
+  const [confirmReset, setConfirmReset] = useState(false);
   const words = scenarioWords(mode);
   const solo = mode === "solo";
   const profile = activeProfile(model);
@@ -164,9 +166,29 @@ export function CostSetupDialog({ open, onOpenChange, view, cost }: { open: bool
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t px-5 py-3 max-sm:px-4 max-sm:pb-[max(0.75rem,env(safe-area-inset-bottom))]">
           <SavedWhere cost={cost} className="min-w-0 flex-1 basis-56" />
           <div className="flex items-center gap-2">
-            <button type="button" onClick={() => cost.apply(resetProfiles())} className="focus-ring h-control-md min-h-0 rounded-md px-2.5 text-body text-muted-foreground hover:bg-surface-hover hover:text-foreground">
-              Reset both profiles
-            </button>
+            {confirmReset ? (
+              <span role="group" aria-label="Reset both profiles" className="flex flex-wrap items-center gap-1.5 text-body" data-reset-confirm>
+                <span className="text-muted-foreground">Clear every figure in both profiles?</span>
+                <button
+                  type="button"
+                  autoFocus
+                  onClick={() => {
+                    setConfirmReset(false);
+                    cost.apply(resetProfiles());
+                  }}
+                  className="focus-ring h-control-md min-h-0 rounded-md border border-[var(--plain-risk-border)] px-2.5 text-body font-medium text-[var(--plain-risk-fg)] hover:bg-[var(--plain-risk-bg)]"
+                >
+                  Reset
+                </button>
+                <button type="button" onClick={() => setConfirmReset(false)} className="focus-ring h-control-md min-h-0 rounded-md px-2.5 text-body text-muted-foreground hover:bg-surface-hover hover:text-foreground">
+                  Keep
+                </button>
+              </span>
+            ) : (
+              <button type="button" onClick={() => setConfirmReset(true)} className="focus-ring h-control-md min-h-0 rounded-md px-2.5 text-body text-muted-foreground hover:bg-surface-hover hover:text-foreground" data-reset>
+                Reset both profiles
+              </button>
+            )}
             <button type="button" onClick={() => onOpenChange(false)} className="focus-ring h-control-md min-h-0 rounded-md bg-primary px-3 text-body font-medium text-primary-foreground">
               Done
             </button>
