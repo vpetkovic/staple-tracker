@@ -126,6 +126,11 @@ staple new "Rate-limit reset requests per address" --parent APP-1 \
 staple comment APP-3 "filed APP-6 for rate limiting; out of scope here"
 ```
 
+Without rate limiting the feature the epic builds can be abused, so the gap is a defect in
+it, and a defect is a ticket. A capability nobody planned, even one that extends what the
+epic builds, is an idea sparked by the ticket when planning is on
+([Idea or ticket](plan.md#idea-or-ticket)).
+
 The new ticket is part of the feature from that moment: it shows in the tree, the
 inbox and the web UI, and the epic is not finished until it is. If other work must
 wait for it, add it with `staple blocked-by`.

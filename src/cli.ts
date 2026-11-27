@@ -1276,8 +1276,10 @@ The plan (experimental; features.planning defaults off)
               --horizon H (identifier or name) lists what H carries, sub-ideas
               following a parent on H included, and the dropped ideas on H
   idea new <title> [--brief T] [--parent REF] [--sparked-by TICKET]
-              capture a raw idea (an agent captures raw ideas only); --sparked-by names
-              the ticket whose work turned it up, shown on both records. Writing its plan
+              capture a raw idea (an agent captures raw ideas only): a brainstorm, or a new
+              capability nobody planned (--sparked-by names the ticket whose work turned it
+              up, shown on both records); a defect is a ticket (new), and what the ticket you
+              hold needs is fixed in it. Only the person marks an idea shaped. Writing its plan
               sections, task rows, questions, decisions or linked research (anyone's) moves
               a raw idea to exploring; capture, import and title or brief edits do not
   idea show <ref>                       stage, windows, plan sections, questions, decisions, links
