@@ -84,9 +84,10 @@
   background: var(--st-status-active);
 }
 
+/* Blue and amber: two hues nobody confuses, in either theme. */
 .swatchApi,
 .segApi {
-  background: var(--st-status-review);
+  background: var(--st-status-ready);
 }
 
 /* The plot: ten days on one baseline. Every column has its final height from the start and

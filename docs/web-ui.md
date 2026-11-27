@@ -36,9 +36,9 @@ machine only and stops on Ctrl-C.
 
 On a wide screen the **rail** on the left starts with *Inbox* (what waits on you,
 with a count) and *Autopilot* (agent runs, with a line per live run). Under them are
-the workspaces and the views: *Tasks*, *Queue*, *Graph*, *Milestones* and
-*Estimates*, then *Usage* under *This computer*, and *Settings* with the dark-mode
-switch at the foot. The **top bar** names where you
+the workspaces and the views: *Tasks*, *Queue*, *Graph* and *Milestones*, then
+*Usage* under *This computer*, *Integrations* and *Analytics*, and *Settings* with
+the dark-mode switch at the foot. The **top bar** names where you
 are, shows the sync state if the workspace uses [cloud sync](cloud-sync.md), and
 holds the search field and **New task**.
 
@@ -176,11 +176,14 @@ The rail shows a line per live run, and a phone's *Autopilot* tab a dot while on
 is live. When a run stops, open pages say why and link to what needs you and to
 the run. Agents start runs; the web UI watches, pauses and stops them.
 
-## 9. Estimates and Usage
+## 9. Analytics and Usage
 
-**Estimates** shows how long work really takes against its estimate, per kind of
-work. **Usage** shows this computer's provider limits and whether your pace keeps
-a reserve. Both are covered in [Budget and estimates](budget-and-estimates.md).
+**Analytics** is about the whole computer: what agents delivered across every
+workspace, the return on your AI spend against hiring, and, under its *Estimates*
+lens, how long work really takes against its estimate. See [Analytics](analytics.md).
+
+**Usage** shows this computer's provider limits and whether your pace keeps a
+reserve. It is covered in [Budget and estimates](budget-and-estimates.md).
 
 ## 10. Settings
 
@@ -198,7 +201,8 @@ Open **Settings** from the foot of the rail, or `⌘K` then *Settings*.
 
 ## Next
 
-- [Budget and estimates](budget-and-estimates.md): the Estimates and Usage views.
+- [Analytics](analytics.md): what the work delivered, the return on AI spend, and estimate accuracy.
+- [Budget and estimates](budget-and-estimates.md): estimating tickets, and the Usage view.
 - [Several repositories](hub.md): one page over every workspace.
 - [Configuration](configuration.md): every setting the Settings sheet edits.
 

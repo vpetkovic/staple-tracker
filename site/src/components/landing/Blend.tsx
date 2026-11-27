@@ -612,8 +612,8 @@ export default function Blend(): ReactNode {
                 and the time you spent directing it. You set the rates and assign the subscriptions; every figure says
                 how it was worked out, and what it does not know.
               </p>
-              <Link to="/docs/web-ui" className={styles.more}>
-                Analytics in the web UI
+              <Link to="/docs/analytics" className={styles.more}>
+                Analytics
                 <Arrow />
               </Link>
             </div>

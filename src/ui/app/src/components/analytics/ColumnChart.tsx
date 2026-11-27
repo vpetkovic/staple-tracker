@@ -122,7 +122,8 @@ export function ColumnChart({
                           key={item.id}
                           data-mark
                           className={cn("min-h-[2px] w-full", order === drawn.length - 1 && "rounded-t-[4px]")}
-                          style={{ flexGrow: point.values[item.id], flexBasis: 0, background: item.color }}
+                          // A share of the stack, not the raw value: grow factors that add up to under 1 would leave the box part empty.
+                          style={{ flexGrow: Number((((point.values[item.id] ?? 0) / (totals[index] || 1)) * 100).toFixed(4)), flexBasis: 0, background: item.color }}
                         />
                       ))}
                   </div>

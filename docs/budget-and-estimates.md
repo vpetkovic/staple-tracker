@@ -96,8 +96,9 @@ usually take about a fifth of the estimate*. A group needs at least five finishe
 estimated tickets with exact figures, so a new workspace reports `no_samples` like
 this one. Keep estimating and it fills in.
 
-The **Estimates** view in the web UI is the same report in plain sentences, one
-card per group, with how confident each figure is.
+The **Estimates** lens of [Analytics](analytics.md) in the web UI is the same
+report made easy to read: one sentence, a box to try an estimate in, and one row
+per kind of work on a shared scale, with how confident each figure is.
 
 ## 5. Forecast what is left
 
@@ -170,7 +171,8 @@ the web UI shows the same per limit, with a gauge and a plain verdict.
 
 ## Next
 
-- [Web UI tour](web-ui.md): the Estimates and Usage views, and the Time tab.
+- [Analytics](analytics.md): the Estimates lens, and what the work delivered and cost.
+- [Web UI tour](web-ui.md): the Usage view and the Time tab.
 - [CLI reference](cli.md#budget-and-estimates): every estimate, timing and budget
   command.
 - [Configuration](configuration.md): budget capture settings.

@@ -68,6 +68,7 @@ the reference pages at the end are for looking things up.
 | Page | What it is for |
 |---|---|
 | [Tour](web-ui.md) | Every view of the local web UI and what you do there |
+| [Analytics](analytics.md) | What agent work delivered, the return on your AI spend against hiring, and how far off estimates run |
 | [Budget and estimates](budget-and-estimates.md) | Estimate work, compare it with what it took, watch your provider budget |
 
 ## Reference

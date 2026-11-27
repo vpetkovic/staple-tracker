@@ -66,8 +66,9 @@ export default function Analytics(options: SceneOptions): ReactNode {
               {DAYS.map(([app, api], i) => (
                 <span key={i} className={styles.slot}>
                   <span className={styles.column} style={{'--i': i, height: `${(app + api) * 100}%`, transform: `scaleY(${step >= 4 ? 1 : 0})`} as CSSProperties}>
-                    <span className={styles.segApi} style={{flexGrow: api}} />
-                    <span className={styles.segApp} style={{flexGrow: app}} />
+                    {/* Shares of the column: grow factors that add up to under 1 would leave it part empty, and the bar would float. */}
+                    <span className={styles.segApi} style={{flexGrow: Math.round((api / (app + api)) * 100)}} />
+                    <span className={styles.segApp} style={{flexGrow: Math.round((app / (app + api)) * 100)}} />
                   </span>
                 </span>
               ))}

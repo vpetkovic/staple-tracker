@@ -48,7 +48,7 @@ export function SegmentedBar({ parts, tone = "categorical", format = (value) => 
               data-mark
               title={`${part.label}: ${format(part.value)} (${formatPercent(share)})`}
               className={cn("flex min-w-[3px] items-center overflow-hidden rounded-[4px] px-1.5 text-caption font-semibold", lightBlock ? "text-foreground" : "text-white")}
-              style={{ flexGrow: part.value, flexBasis: 0, background: colorOf(part, index) }}
+              style={{ flexGrow: Number((share * 100).toFixed(4)), flexBasis: 0, background: colorOf(part, index) }}
             >
               {share >= 0.09 ? formatPercent(share) : null}
             </span>

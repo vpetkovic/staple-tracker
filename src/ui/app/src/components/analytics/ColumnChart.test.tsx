@@ -27,10 +27,19 @@ describe("the columns", () => {
     expect(slots(render()).map((slot) => /height:([\d.]+)%/.exec(slot)?.[1])).toEqual(["25", "50", "100"]);
   });
 
-  it("each segment grows by its own value, bottom series first", () => {
+  it("each segment takes its share of the stack, bottom series first", () => {
     const third = slots(render())[2] ?? "";
-    expect([...third.matchAll(/flex-grow:(\d+)/g)].map((match) => match[1])).toEqual(["6", "2"]);
+    expect([...third.matchAll(/flex-grow:([\d.]+)/g)].map((match) => Number(match[1]))).toEqual([75, 25]);
     expect(third.indexOf("viz-series-1")).toBeLessThan(third.indexOf("viz-series-2"));
+  });
+
+  it("a stack of values under 1 still fills its whole height", () => {
+    // Flex-grow factors that add up to less than 1 leave part of the box empty, so a quiet day
+    // (0.3 h and 0.2 h) would draw shorter than its total. Shares always add up to 100.
+    const quiet: ColumnPoint[] = [{ key: "d1", label: "Nov 1", values: { a: 0.3, b: 0.2 } }];
+    const grows = [...(slots(render({ points: quiet }))[0] ?? "").matchAll(/flex-grow:([\d.]+)/g)].map((match) => Number(match[1]));
+    expect(grows).toEqual([60, 40]);
+    expect(grows.reduce((sum, grow) => sum + grow, 0)).toBe(100);
   });
 
   it("a series at zero draws no segment, and only the top segment is rounded", () => {

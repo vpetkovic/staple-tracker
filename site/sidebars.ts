@@ -36,7 +36,7 @@ const sidebars: SidebarsConfig = {
       type: 'category',
       label: 'The web UI',
       collapsible: false,
-      items: ['web-ui', 'budget-and-estimates'],
+      items: ['web-ui', 'analytics', 'budget-and-estimates'],
     },
     {
       type: 'category',
