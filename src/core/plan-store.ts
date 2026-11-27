@@ -881,7 +881,7 @@ export class PlanStore {
       .prepare(
         `SELECT id, identifier, kind, plan_idea_number FROM issues
           WHERE plan_maturity IS NOT NULL
-            AND ((kind = ? AND substr(identifier, 1, 2) <> 'I-') OR (kind <> ? AND plan_idea_number IS NULL))
+            AND ((kind = ? AND identifier NOT GLOB 'I-[A-Z]*-[0-9]*') OR (kind <> ? AND plan_idea_number IS NULL))
           ORDER BY created_at, id`,
       )
       .all(IDEA_KIND, IDEA_KIND) as Array<{ id: string; identifier: string; kind: string; plan_idea_number: string | null }>;

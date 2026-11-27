@@ -244,6 +244,13 @@ describe("identity: an idea holds its own number, I-<PREFIX>-<n>, and no ticket 
     expect(store.getIssue(idea("Captured after")).identifier).toBe("I-TST-4");
   });
 
+  it("numbers a legacy idea holding a ticket number of a workspace prefixed I, which looks like no idea number", () => {
+    const id = idea("Numbered I-77 by v1");
+    store.db.prepare("UPDATE issues SET identifier = 'I-77' WHERE id = ?").run(id);
+    store.plan().upgradeRecords();
+    expect(store.getIssue(id).identifier).toBe("I-TST-2");
+  });
+
   it("numbers nothing while planning is off, and hides nothing it numbered once turned off", () => {
     const id = idea("Before off");
     store.db.prepare("UPDATE issues SET identifier = ? WHERE id = ?").run(`~${id.replace(/-/g, "")}`, id);
