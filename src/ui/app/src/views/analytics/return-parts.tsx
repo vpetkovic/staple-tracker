@@ -34,11 +34,11 @@ export const edits = {
   personRate: (model: CostModel, rate: number): CostModel => inProfile(model, (profile) => ({ person: { ...profile.person, rate } }), "person.rate"),
   personHours: (model: CostModel, hoursPerActiveDay: number): CostModel => inProfile(model, (profile) => ({ person: { ...profile.person, hoursPerActiveDay } }), "person.hoursPerActiveDay"),
   spendLine: (model: CostModel, id: string, patch: Partial<SpendLine>): CostModel => inProfile(model, (profile) => ({ spend: profile.spend.map((line) => (line.id === id ? { ...line, ...patch } : line)) }), ...("label" in patch ? [] : ["spend"])),
-  spendAdd: (model: CostModel): CostModel => inProfile(model, (profile) => ({ spend: [...profile.spend, { id: `spend-${Date.now().toString(36)}`, label: "Subscription", perMonth: 0, quantity: 1 }] }), "spend"),
+  /** A new line for a role (or, with null, shared by the whole team). */
+  spendAdd: (model: CostModel, roleId: string | null, kind: Billing): CostModel =>
+    inProfile(model, (profile) => ({ spend: [...profile.spend, { id: `spend-${Date.now().toString(36)}`, label: kind === "api" ? "API bill" : "Subscription", kind, perMonth: 0, quantity: 1, roleId }] }), "spend"),
   spendRemove: (model: CostModel, id: string): CostModel => inProfile(model, (profile) => ({ spend: profile.spend.filter((line) => line.id !== id) }), "spend"),
-  apiBill: (model: CostModel, apiPerMonth: number): CostModel => inProfile(model, () => ({ apiPerMonth }), "api"),
   roleRate: (model: CostModel, id: string, rate: number): CostModel => inProfile(model, (profile) => ({ rates: { ...profile.rates, [id]: rate } }), `roles.${id}.rate`),
-  roleBilling: (model: CostModel, id: string, billing: Billing): CostModel => inProfile(model, (profile) => ({ billing: { ...profile.billing, [id]: billing } })),
   // The role list and its rules are shared by both profiles: the work is the same whoever pays.
   roleTitle: (model: CostModel, id: string, title: string): CostModel => ({ ...model, roles: model.roles.map((role) => (role.id === id ? { ...role, title } : role)) }),
   roleMatch: (model: CostModel, id: string, match: RoleMatch): CostModel => ({ ...model, roles: model.roles.map((role) => (role.id === id ? { ...role, match } : role)) }),
@@ -56,7 +56,7 @@ export function assumedWords(model: CostModel, whose: string): string[] {
   const words: string[] = [];
   if (assumed.includes("person.rate")) words.push(`${whose} hourly rate`);
   if (assumed.includes("person.hoursPerActiveDay")) words.push(`${whose} hours a day`);
-  if (assumed.includes("spend") && spend.length > 0) words.push("AI subscriptions");
+  if (assumed.includes("spend") && spend.length > 0) words.push("AI spend");
   if (model.roles.some((role) => assumed.includes(`roles.${role.id}.rate`))) words.push("role rates");
   return words;
 }
@@ -184,9 +184,10 @@ export function coversWords(match: RoleMatch): string {
  * this period, each with why. Roles are tried top to bottom and the last takes everything else,
  * so a ticket lands on exactly one; this is where a wrong guess gets noticed and fixed.
  */
-export function RoleDetail({ model, role, last, hours, onChange, className }: { model: CostModel; role: CostRole; last: boolean; hours: ReturnReport["roles"][number] | undefined; onChange: ReturnProps["onChange"]; className?: string }) {
+export function RoleDetail({ model, role, last, hours, onChange, className, explain }: { model: CostModel; role: CostRole; last: boolean; hours: ReturnReport["roles"][number] | undefined; onChange: ReturnProps["onChange"]; className?: string; /** How this role's figures were worked out, in sentences. */ explain?: ReactNode }) {
   return (
     <div className={cn("grid gap-4 rounded-lg bg-surface-sunken p-3 @min-[640px]/roles:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]", className)} data-role-detail>
+      {explain ? <div className="min-w-0 @min-[640px]/roles:col-span-2">{explain}</div> : null}
       {last ? null : (
         <div className="flex min-w-0 flex-col gap-2">
           <p className="text-label font-medium">A ticket counts as {role.title} when it has any of</p>

@@ -2,11 +2,15 @@
  * Cost setup: every figure the return rests on, in one dialog opened from the Return lens and
  * from nowhere else (it is not part of the app's Settings).
  *
- * There are two PROFILES, one per payer: "Just me" and "A company". Each keeps its own figures
- * (the directing person's rate and hours, what each role costs to hire, how each role's agents are
- * billed, the subscriptions and the API bill), so setting up the company never disturbs your own
- * numbers. The profile switch at the top says whose figures are on screen and in use. The role
- * list itself is shared: the work is the same whoever pays.
+ * There are two PROFILES, one per payer: "Just me" and "A company". Each keeps its own figures,
+ * so setting up the company never disturbs your own numbers. The profile switch at the top says
+ * whose figures are on screen and in use. The role list itself is shared: the work is the same
+ * whoever pays.
+ *
+ * The team is the centre of it. Each role is a card: what that person costs an hour, and the AI
+ * that does the job instead, as lines you assign to it (a subscription with its price and how
+ * many, or a monthly API bill). Nothing is split between roles by a formula; a line that serves
+ * everyone goes under "Shared by the whole team".
  *
  * A change is saved as it is made and the page behind recomputes at once. Figures still at their
  * shipped default wear the "assumed" mark until they are changed.
@@ -15,14 +19,10 @@ import { X } from "lucide-react";
 import type { ReactNode } from "react";
 import { formatEffortHours, formatMoney } from "@/components/analytics/format";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { resetCostModel, type Billing, type CostModel, type ReturnReport, type Scenario } from "./proto-api";
+import { resetCostModel, type CostModel, type ReturnReport, type Scenario, type SpendLine } from "./proto-api";
 import { AddButton, AmountField, AssumedTag, IconButton, SaveState, Segmented, TextField, edits, type ReturnProps } from "./return-parts";
-import { billingOf, lineCost, profileOf, rateOf, scenarioWords, type ReturnResult } from "./return-model";
+import { lineCost, profileOf, rateOf, scenarioWords, type ReturnResult } from "./return-model";
 
-const BILLING: readonly { id: Billing; label: string }[] = [
-  { id: "subscription", label: "Subscription" },
-  { id: "api", label: "API" },
-];
 export const SCENARIOS: readonly { id: Scenario; label: string }[] = [
   { id: "solo", label: "Just me" },
   { id: "company", label: "A company" },
@@ -32,11 +32,12 @@ export function CostSetupDialog({ open, onOpenChange, returns, model, result, on
   const words = scenarioWords(model.scenario);
   const profile = profileOf(model);
   const money = (value: number) => formatMoney(value, model.currency);
-  const apiRoles = model.roles.filter((role) => billingOf(model, role.id) === "api");
-  const subscriptions = profile.spend.reduce((sum, line) => sum + lineCost(line), 0);
+  const known = new Set(model.roles.map((role) => role.id));
+  const shared = profile.spend.filter((line) => line.roleId === null || !known.has(line.roleId));
+  const monthly = profile.spend.reduce((sum, line) => sum + lineCost(line), 0);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[min(48rem,92dvh)] w-[min(42rem,calc(100vw-1.5rem))] max-w-none flex-col gap-0 p-0 sm:max-w-none" data-cost-setup-dialog>
+      <DialogContent className="flex max-h-[min(50rem,92dvh)] w-[min(44rem,calc(100vw-1.5rem))] max-w-none flex-col gap-0 p-0 sm:max-w-none" data-cost-setup-dialog>
         <DialogHeader className="shrink-0 gap-3 border-b px-5 py-4">
           <div>
             <DialogTitle>Cost setup</DialogTitle>
@@ -58,64 +59,44 @@ export function CostSetupDialog({ open, onOpenChange, returns, model, result, on
             </div>
           </Section>
 
-          <Section title="The team" assumed={model.roles.some((role) => profile.assumed.includes(`roles.${role.id}.rate`))} hint="The people this work would need without AI, what each costs an hour in this profile, and how that role's agents are billed. The roles are the same in both profiles; what counts as each role's work is set on the page, by opening the role.">
-            <ul className="flex flex-col gap-2">
+          <Section
+            title="The team"
+            assumed={model.roles.some((role) => profile.assumed.includes(`roles.${role.id}.rate`)) || (profile.assumed.includes("spend") && profile.spend.length > 0)}
+            hint="Each person this work would need without AI: what they cost an hour, and the AI you pay for to do that job instead. Add a subscription (its price and how many) or a monthly API bill to the role that uses it."
+          >
+            <ul className="flex flex-col gap-2.5">
               {model.roles.map((role, index) => {
                 const last = index === model.roles.length - 1;
                 return (
-                  <li key={role.id} className="grid grid-cols-[minmax(0,1fr)_6.5rem_auto_1.5rem] items-center gap-2 max-sm:grid-cols-[minmax(0,1fr)_6.5rem_1.5rem]" data-role-setup={role.id}>
-                    <TextField label="Role title" value={role.title} onCommit={(title) => onChange(edits.roleTitle(model, role.id, title))} className="w-full" />
-                    <AmountField hideLabel label={`${role.title} hourly rate`} prefix={model.currency} suffix="/h" value={rateOf(model, role.id)} onCommit={(rate) => onChange(edits.roleRate(model, role.id, rate))} />
-                    <Segmented label={`How ${role.title} agents are billed`} value={billingOf(model, role.id)} options={BILLING} onChange={(billing) => onChange(edits.roleBilling(model, role.id, billing))} className="max-sm:order-last max-sm:col-span-3 max-sm:w-fit" />
-                    {last ? <span /> : <IconButton label={`Remove ${role.title}`} onClick={() => onChange(edits.roleRemove(model, role.id), { rematch: true })}><X aria-hidden className="size-3.5" /></IconButton>}
+                  <li key={role.id} className="flex flex-col gap-2.5 rounded-lg border p-3" data-role-setup={role.id}>
+                    <div className="grid grid-cols-[minmax(0,1fr)_7rem_1.5rem] items-end gap-2">
+                      <div className="min-w-0">
+                        <span className="mb-1 block text-label text-muted-foreground">Role</span>
+                        <TextField label="Role title" value={role.title} onCommit={(title) => onChange(edits.roleTitle(model, role.id, title))} className="w-full font-medium" />
+                      </div>
+                      <AmountField label="To hire, an hour" prefix={model.currency} suffix="/h" value={rateOf(model, role.id)} onCommit={(rate) => onChange(edits.roleRate(model, role.id, rate))} />
+                      {last ? <span /> : <IconButton label={`Remove ${role.title}`} onClick={() => onChange(edits.roleRemove(model, role.id), { rematch: true })} className="mb-1"><X aria-hidden className="size-3.5" /></IconButton>}
+                    </div>
+                    <SpendLines heading={`AI that does the ${role.title} work`} empty="No AI cost assigned to this role yet." lines={profile.spend.filter((line) => line.roleId === role.id)} roleId={role.id} model={model} onChange={onChange} />
                   </li>
                 );
               })}
-            </ul>
-            <AddButton onClick={() => onChange(edits.roleAdd(model), { rematch: true })}>Add a role</AddButton>
-          </Section>
-
-          <Section title="Subscriptions" assumed={profile.assumed.includes("spend") && profile.spend.length > 0} hint="Flat monthly plans: the price of one, and how many are paid for. Their total is shared out over the roles billed by subscription.">
-            {profile.spend.length > 0 ? (
-              <div className="flex flex-col gap-2" data-subscriptions>
-                <div aria-hidden className="grid grid-cols-[minmax(0,1fr)_6.5rem_4.25rem_5rem_1.5rem] gap-2 text-caption text-text-tertiary max-sm:hidden">
-                  <span>Plan</span>
-                  <span>Price each</span>
-                  <span>How many</span>
-                  <span className="text-right">A month</span>
-                  <span />
+              <li className="flex flex-col gap-2.5 rounded-lg border border-dashed p-3" data-role-setup="shared">
+                <div>
+                  <p className="text-body font-medium">Shared by the whole team</p>
+                  <p className="text-label text-muted-foreground">AI that every role uses, such as one plan you do all the work on. It is counted once and not divided between roles.</p>
                 </div>
-                <ul className="flex flex-col gap-2">
-                  {profile.spend.map((line) => (
-                    <li key={line.id} className="grid grid-cols-[minmax(0,1fr)_6.5rem_4.25rem_5rem_1.5rem] items-center gap-2 max-sm:grid-cols-[minmax(0,1fr)_4.25rem_1.5rem]">
-                      <TextField label="What this subscription is" value={line.label} onCommit={(label) => onChange(edits.spendLine(model, line.id, { label }))} className="w-full max-sm:col-span-3" />
-                      <AmountField hideLabel label={`${line.label}, price of one a month`} prefix={model.currency} suffix="/mo" max={10_000_000} value={line.perMonth} onCommit={(perMonth) => onChange(edits.spendLine(model, line.id, { perMonth }))} />
-                      <AmountField hideLabel label={`${line.label}, how many`} prefix="×" max={100000} value={line.quantity} onCommit={(quantity) => onChange(edits.spendLine(model, line.id, { quantity: Math.round(quantity) }))} />
-                      <span className="text-right text-body font-medium tabular-nums max-sm:hidden">{money(lineCost(line))}</span>
-                      <IconButton label={`Remove ${line.label}`} onClick={() => onChange(edits.spendRemove(model, line.id))}><X aria-hidden className="size-3.5" /></IconButton>
-                    </li>
-                  ))}
-                </ul>
-                <p className="flex items-baseline justify-between border-t pt-2 text-body">
-                  <span className="text-muted-foreground">Subscriptions a month</span>
-                  <span className="font-semibold tabular-nums">{money(subscriptions)}</span>
-                </p>
-              </div>
-            ) : (
-              <p className="text-label text-muted-foreground italic">No subscription in this profile.</p>
-            )}
-            <AddButton onClick={() => onChange(edits.spendAdd(model))}>Add a subscription</AddButton>
-          </Section>
-
-          <Section
-            title="API bill"
-            hint={
-              apiRoles.length > 0
-                ? `The monthly invoice from your provider. It is shared out over the roles billed by API (${apiRoles.map((role) => role.title).join(", ")}) by their agent time. Staple does not record token use yet, so it cannot price API usage itself.`
-                : "No role in this profile is billed by API. Set a role to API above and enter the monthly invoice here."
-            }
-          >
-            <AmountField className="max-w-[12rem]" label="API bill a month" prefix={model.currency} suffix="/mo" max={100_000_000} value={profile.apiPerMonth ?? 0} onCommit={(amount) => onChange(edits.apiBill(model, amount))} />
+                <SpendLines heading="Shared AI" empty="Nothing shared." lines={shared} roleId={null} model={model} onChange={onChange} />
+              </li>
+            </ul>
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+              <AddButton onClick={() => onChange(edits.roleAdd(model), { rematch: true })}>Add a role</AddButton>
+              <p className="text-body">
+                <span className="text-muted-foreground">All AI spend in this profile </span>
+                <span className="font-semibold tabular-nums" data-ai-monthly>{money(monthly)} a month</span>
+              </p>
+            </div>
+            <p className="text-label text-pretty text-muted-foreground">The roles are the same in both profiles. What counts as each role&apos;s work is set on the page, by opening the role. An API bill is the figure on your provider&apos;s invoice: Staple does not record token use yet, so it cannot price API usage itself.</p>
           </Section>
         </div>
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t px-5 py-3">
@@ -131,6 +112,39 @@ export function CostSetupDialog({ open, onOpenChange, returns, model, result, on
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** The AI lines of one role (or the shared ones): a subscription is a price × how many, an API bill is a monthly amount. */
+function SpendLines({ heading, empty, lines, roleId, model, onChange }: { heading: string; empty: string; lines: readonly SpendLine[]; roleId: string | null; model: CostModel; onChange: ReturnProps["onChange"] }) {
+  const money = (value: number) => formatMoney(value, model.currency);
+  return (
+    <div className="flex flex-col gap-2" data-spend-lines={roleId ?? "shared"}>
+      <p className="sr-only">{heading}</p>
+      {lines.length > 0 ? (
+        <ul className="flex flex-col gap-2">
+          {lines.map((line) => (
+            <li key={line.id} className="grid grid-cols-[minmax(0,1fr)_6.5rem_4.25rem_4.75rem_1.5rem] items-center gap-2 max-sm:grid-cols-[minmax(0,1fr)_4.25rem_1.5rem]" data-spend-line={line.kind}>
+              <TextField label={line.kind === "api" ? "What this API bill is" : "What this subscription is"} value={line.label} onCommit={(label) => onChange(edits.spendLine(model, line.id, { label }))} className="w-full max-sm:col-span-3" />
+              <AmountField hideLabel label={line.kind === "api" ? `${line.label}, the bill a month` : `${line.label}, price of one a month`} prefix={model.currency} suffix="/mo" max={100_000_000} value={line.perMonth} onCommit={(perMonth) => onChange(edits.spendLine(model, line.id, { perMonth }))} />
+              {line.kind === "api" ? (
+                <span className="text-center text-label text-muted-foreground">API bill</span>
+              ) : (
+                <AmountField hideLabel label={`${line.label}, how many`} prefix="×" max={100000} value={line.quantity} onCommit={(quantity) => onChange(edits.spendLine(model, line.id, { quantity: Math.round(quantity) }))} />
+              )}
+              <span className="text-right text-body font-medium whitespace-nowrap tabular-nums max-sm:hidden">{money(lineCost(line))}/mo</span>
+              <IconButton label={`Remove ${line.label}`} onClick={() => onChange(edits.spendRemove(model, line.id))}><X aria-hidden className="size-3.5" /></IconButton>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-label text-muted-foreground italic">{empty}</p>
+      )}
+      <div className="flex flex-wrap gap-x-4 gap-y-1">
+        <AddButton onClick={() => onChange(edits.spendAdd(model, roleId, "subscription"))}>Subscription</AddButton>
+        <AddButton onClick={() => onChange(edits.spendAdd(model, roleId, "api"))}>API bill</AddButton>
+      </div>
+    </div>
   );
 }
 

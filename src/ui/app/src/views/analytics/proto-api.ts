@@ -133,28 +133,30 @@ export interface CostRole {
   title: string;
   match: RoleMatch;
 }
+/** One thing paid for AI, assigned to the role whose agents use it. */
 export interface SpendLine {
   id: string;
   label: string;
-  /** The price of ONE subscription a month. */
+  /** A flat monthly plan, or the monthly API invoice. */
+  kind: Billing;
+  /** The price of ONE subscription a month, or the API bill a month. */
   perMonth: number;
-  /** How many of them are paid for (seats). */
+  /** How many subscriptions are paid for (seats). An API bill has none. */
   quantity: number;
+  /** The role this is for; null is shared by the whole team. */
+  roleId: string | null;
 }
 /**
  * One payer's figures. "Just me" and "A company" each keep their own, so setting up the company
  * never disturbs your own numbers: the directing person's rate and hours, what each role costs to
- * hire, how each role's agents are billed, the subscriptions and the API bill.
+ * hire, and the AI subscriptions and API bills assigned to each role.
  */
 export interface CostProfile {
   person: { rate: number; hoursPerActiveDay: number };
   /** Hourly rate per role id. */
   rates: Record<string, number>;
-  /** How each role's agents are billed; a role not listed follows the profile (solo = subscription, company = API). */
-  billing: Record<string, Billing>;
+  /** What is paid for AI, each line assigned to a role or shared by the whole team. */
   spend: SpendLine[];
-  /** The monthly API invoice, shared out over API-billed roles by their agent time. */
-  apiPerMonth: number;
   /** Figures still holding a shipped default, shown as assumptions until the person changes them. */
   assumed: string[];
 }

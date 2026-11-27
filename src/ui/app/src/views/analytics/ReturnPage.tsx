@@ -16,7 +16,6 @@ import { useState, type ReactNode } from "react";
 import { formatDayRange, formatEffortHours, formatMoney, formatMultiple, formatNumber, formatPercent } from "@/components/analytics/format";
 import { ReturnRange } from "@/components/analytics/ReturnRange";
 import { StatTile } from "@/components/analytics/StatTile";
-import { CoverageNote } from "@/components/analytics/Widget";
 import { HelpToggle, ShowDetails } from "@/components/plain/PlainCard";
 import { ProblemState } from "@/components/plain/States";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -24,7 +23,7 @@ import { cn } from "@/lib/utils";
 import { CostSetupDialog, SCENARIOS } from "./CostSetupDialog";
 import type { CostModel, ReturnReport } from "./proto-api";
 import { AssumedTag, RoleDetail, Segmented, assumedWords, coversWords, edits, type ReturnProps } from "./return-parts";
-import { computeReturn, profileOf, scenarioWords, type ReturnResult } from "./return-model";
+import { computeReturn, profileOf, scenarioWords, type AiLine, type ReturnResult } from "./return-model";
 
 export function ReturnPage({ returns, model, error, onRetry, onChange, saving }: ReturnProps) {
   const [setup, setSetup] = useState(false);
@@ -114,9 +113,9 @@ function Answer({ returns, model, result, onChange, onSetup }: { returns: Return
           </div>
         </div>
       )}
-      {result.apiBillMissing ? (
-        <Notice tone="tight" action={<NoticeButton onClick={onSetup}>Enter the API bill</NoticeButton>}>
-          Some roles are billed by API and no API bill is entered, so the AI cost here is too low and the return too high.
+      {result.aiMissing ? (
+        <Notice tone="tight" action={<NoticeButton onClick={onSetup}>Assign AI cost</NoticeButton>}>
+          No AI spend is entered in this profile, so the cost here is only {words.personShort} and the return is too high.
         </Notice>
       ) : null}
       {assumed.length > 0 ? (
@@ -185,144 +184,197 @@ function Figures({ returns, model, result }: { returns: ReturnReport; model: Cos
 
 // ---------------------------------------------------------------- role by role
 
-const GRID = "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 @min-[760px]/roles:grid-cols-[minmax(0,1fr)_4.5rem_10rem_10rem_9.5rem_1.5rem]";
+/** Role | rate | the two counts of the work, each with its hours and what hiring would cost | the AI instead | open. */
+const ROW = "grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-5 gap-y-2 @min-[820px]/roles:grid-cols-[minmax(9rem,1fr)_6rem_minmax(18rem,23rem)_minmax(10rem,15rem)_1.5rem]";
+const LEDGER = "grid grid-cols-[minmax(0,1fr)_4.5rem_5.5rem] gap-x-3";
 
 function RoleByRole({ returns, model, result, onChange, onSetup }: { returns: ReturnReport; model: CostModel; result: ReturnResult; onChange: ReturnProps["onChange"]; onSetup: () => void }) {
   const money = (value: number) => formatMoney(value, model.currency);
   const words = scenarioWords(model.scenario);
+  const profile = profileOf(model);
   const high = result.planned;
   const [open, setOpen] = useState<string | null>(null);
-  const profile = profileOf(model);
   const rateAssumed = profile.assumed.includes("person.rate") || profile.assumed.includes("person.hoursPerActiveDay");
+  const months = formatNumber(result.months, 1);
+  const plan = (line: AiLine) => `${line.label} ${model.currency}${line.perMonth}${line.kind === "subscription" ? ` × ${line.quantity}` : ""} a month`;
+  const estimatedAll = result.roles.reduce((sum, role) => sum + role.estimatedTickets, 0);
+  const ticketsAll = result.roles.reduce((sum, role) => sum + role.tickets, 0);
   return (
     <section aria-label="Role by role" className="@container/roles rounded-xl border bg-card p-4" data-role-table>
-      <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1">
-        <div className="min-w-0 flex-1 basis-80">
-          <h3 className="text-title font-semibold">Role by role</h3>
-          <p className="mt-0.5 text-label text-pretty text-muted-foreground">The people this work would have needed, what hiring them costs, and what their agents cost instead. Open a role to see the tickets Staple gave it and why.</p>
-        </div>
-      </header>
-      <div aria-hidden className={cn(GRID, "mt-3 hidden border-b pb-1.5 text-caption font-medium tracking-[var(--tracking-eyebrow)] text-text-tertiary uppercase @min-[760px]/roles:grid")}>
+      <h3 className="text-title font-semibold">Role by role</h3>
+      <p className="mt-0.5 max-w-4xl text-label text-pretty text-muted-foreground">
+        For each person this work would have needed: the hours of their work that got done, what hiring them for those hours costs, and what you paid for AI to do it instead. The hours are counted two ways, on two lines:{" "}
+        <b className="font-medium text-foreground">agent time</b> is what the agents&apos; sessions recorded, and <b className="font-medium text-foreground">estimates</b> is what was planned for the same tickets.
+      </p>
+      <div aria-hidden className={cn(ROW, "mt-3 hidden border-b pb-1.5 text-caption font-medium tracking-[var(--tracking-eyebrow)] text-text-tertiary uppercase @min-[820px]/roles:grid")}>
         <span>Role</span>
-        <span className="text-right">Rate</span>
-        <span className="text-right">To hire · agent time</span>
-        <span className="text-right">To hire · planned effort</span>
-        <span className="text-right">With AI</span>
+        <span className="text-right">Hourly rate</span>
+        <span className={LEDGER}>
+          <span>Counted by</span>
+          <span className="text-right">Hours</span>
+          <span className="text-right">To hire</span>
+        </span>
+        <span className="text-right">With AI instead</span>
         <span />
       </div>
-      <ul className="@max-[760px]/roles:mt-2">
+      <ul className="@max-[820px]/roles:mt-2">
         {result.roles.map((role, index) => {
           const fallback = index === result.roles.length - 1;
           const source = model.roles.find((item) => item.id === role.roleId);
           const expanded = open === role.roleId;
           const covers = source ? coversWords(source.match) : "";
+          const without = role.tickets - role.estimatedTickets;
           return (
-            <li key={role.roleId} className="border-b">
-              <div className={cn(GRID, "py-2.5")}>
+            <li key={role.roleId} className="border-b" data-role-row={role.roleId}>
+              <div className={cn(ROW, "py-3")}>
                 <div className="min-w-0">
                   <p className="truncate text-body font-medium">{role.title}</p>
-                  <p className="truncate text-label text-muted-foreground" title={fallback ? undefined : covers}>
-                    {role.tickets.toLocaleString("en-US")} tickets · {fallback ? "everything else" : covers || "no rule yet"}
+                  <p className="text-label text-muted-foreground tabular-nums">
+                    {role.tickets.toLocaleString("en-US")} tickets
+                    <span className="@min-[820px]/roles:hidden"> · {model.currency}{role.rate}/h</span>
                   </p>
                 </div>
-                <Cell caption="Rate" className="@max-[760px]/roles:order-3">
+                <p className="flex items-center justify-end gap-1.5 text-body tabular-nums @max-[820px]/roles:hidden">
                   <span className="font-medium">{model.currency}{role.rate}<span className="font-normal text-muted-foreground">/h</span></span>
                   {profile.assumed.includes(`roles.${role.roleId}.rate`) ? <AssumedDot /> : null}
-                </Cell>
-                <Cell caption="To hire, by agent time" className="@max-[760px]/roles:order-4"><Pair hours={role.measuredHours} value={money(role.measuredValue)} /></Cell>
-                <Cell caption="To hire, by planned effort" className="@max-[760px]/roles:order-5"><Pair hours={role.plannedHours} value={high ? money(role.plannedValue) : "—"} /></Cell>
-                <Cell caption="With AI" className="@max-[760px]/roles:order-6">
-                  <span className="text-muted-foreground">{role.billing === "api" ? "API" : "Subscription"}</span>
-                  <span className="ml-2 inline-block min-w-[3.5rem] text-right font-medium">{role.billing === "api" && result.apiBillMissing ? "not set" : money(role.aiCost)}</span>
-                </Cell>
+                </p>
+                <Ledger className="@max-[820px]/roles:order-3 @max-[820px]/roles:col-span-2" measured={{ hours: role.measuredHours, cost: money(role.measuredValue) }} planned={{ hours: role.plannedHours, cost: high ? money(role.plannedValue) : "—", note: role.tickets > 0 ? `${role.estimatedTickets} of ${role.tickets} tickets` : undefined }} />
+                <AiCell className="@max-[820px]/roles:order-4 @max-[820px]/roles:col-span-2" amount={role.aiLines.length > 0 ? money(role.aiCost) : "—"} detail={role.aiLines.length > 0 ? role.aiLines.map(plan).join(", ") : "No AI cost assigned"} muted={role.aiLines.length === 0} />
                 <button
                   type="button"
                   aria-expanded={expanded}
-                  aria-label={`${expanded ? "Close" : "Open"} ${role.title}: its rule and tickets`}
+                  aria-label={`${expanded ? "Close" : "Open"} ${role.title}: how it is worked out, its rule and its tickets`}
                   onClick={() => setOpen(expanded ? null : role.roleId)}
-                  className="focus-ring relative inline-flex size-6 min-h-0 items-center justify-center justify-self-end rounded-md text-text-tertiary transition-colors before:absolute before:-inset-1.5 before:content-[''] hover:bg-surface-hover hover:text-foreground @max-[760px]/roles:order-2"
+                  className="focus-ring relative inline-flex size-6 min-h-0 items-center justify-center justify-self-end rounded-md text-text-tertiary transition-colors before:absolute before:-inset-1.5 before:content-[''] hover:bg-surface-hover hover:text-foreground @max-[820px]/roles:order-2"
                 >
                   <ChevronDown aria-hidden className={cn("size-4 motion-safe:transition-transform", expanded && "rotate-180")} />
                 </button>
               </div>
-              {expanded && source ? <RoleDetail className="mb-3" model={model} role={source} last={fallback} hours={returns.roles.find((row) => row.roleId === role.roleId)} onChange={onChange} /> : null}
+              {expanded && source ? (
+                <RoleDetail
+                  className="mb-3"
+                  model={model}
+                  role={source}
+                  last={fallback}
+                  hours={returns.roles.find((row) => row.roleId === role.roleId)}
+                  onChange={onChange}
+                  explain={
+                    <div className="text-label text-text-secondary" data-role-explain>
+                      <p className="font-medium text-foreground">How this row is worked out</p>
+                      <ul className="mt-1 list-disc space-y-1 pl-4">
+                        <li>
+                          <b className="font-medium text-foreground">What counts as {role.title}:</b> {fallback ? "every ticket no other role matched." : covers ? `work ${covers}.` : "nothing yet. Add a rule below."}
+                        </li>
+                        <li>
+                          <b className="font-medium text-foreground">{formatEffortHours(role.measuredHours)} of agent time:</b> what the agents&apos; sessions recorded on this role&apos;s tickets in the period, each session capped at {returns.coverage.capHours} hours.
+                        </li>
+                        <li>
+                          <b className="font-medium text-foreground">{formatEffortHours(role.plannedHours)} by estimates:</b> the estimates on the {role.estimatedTickets} of its {role.tickets} finished tickets that have one.
+                          {without > 0 ? ` The other ${without} add nothing here, which is why this can come out lower than agent time.` : ""}
+                        </li>
+                        <li>
+                          <b className="font-medium text-foreground">To hire:</b> those hours × {model.currency}{role.rate} an hour: {money(role.measuredValue)} by agent time{high ? `, ${money(role.plannedValue)} by estimates` : ""}.
+                        </li>
+                        <li>
+                          <b className="font-medium text-foreground">With AI instead:</b>{" "}
+                          {role.aiLines.length > 0
+                            ? `${role.aiLines.map((line) => `${plan(line)} × ${months} months${result.share < 1 ? ` × ${formatPercent(result.share)}` : ""} = ${money(line.cost)}`).join("; ")}.`
+                            : "no AI cost is assigned to this role. Assign a subscription or an API bill to it in Cost setup."}
+                        </li>
+                      </ul>
+                    </div>
+                  }
+                />
+              ) : null}
             </li>
           );
         })}
-        <li className="border-b">
-          <div className={cn(GRID, "py-2.5")}>
+        {result.sharedLines.length > 0 ? (
+          <li className="border-b" data-role-row="shared">
+            <div className={cn(ROW, "py-3")}>
+              <div className="min-w-0">
+                <p className="truncate text-body font-medium">AI shared by the whole team</p>
+                <p className="text-label text-muted-foreground">Counted once, not divided between roles</p>
+              </div>
+              <span className="@max-[820px]/roles:hidden" />
+              <span className="@max-[820px]/roles:hidden" />
+              <AiCell className="@max-[820px]/roles:order-4 @max-[820px]/roles:col-span-2" amount={money(result.sharedAiCost)} detail={result.sharedLines.map(plan).join(", ")} />
+              <span className="@max-[820px]/roles:order-2" />
+            </div>
+          </li>
+        ) : null}
+        <li className="border-b" data-role-row="person">
+          <div className={cn(ROW, "py-3")}>
             <div className="min-w-0">
               <p className="truncate text-body font-medium">{words.person}, directing the agents</p>
-              <p className="truncate text-label text-muted-foreground">
-                {formatEffortHours(result.directingHours)}: {returns.directing.activeDays} days agents ran × {profile.person.hoursPerActiveDay} h a day{result.share < 1 ? ` × ${formatPercent(result.share)} of agent time` : ""}
+              <p className="text-label text-muted-foreground tabular-nums">
+                {returns.directing.activeDays} days agents ran × {profile.person.hoursPerActiveDay} h a day{result.share < 1 ? ` × ${formatPercent(result.share)} of agent time` : ""}
+                <span className="@min-[820px]/roles:hidden"> · {model.currency}{profile.person.rate}/h</span>
               </p>
             </div>
-            <Cell caption="Rate" className="@max-[760px]/roles:order-3">
+            <p className="flex items-center justify-end gap-1.5 text-body tabular-nums @max-[820px]/roles:hidden">
               <span className="font-medium">{model.currency}{profile.person.rate}<span className="font-normal text-muted-foreground">/h</span></span>
               {rateAssumed ? <AssumedDot /> : null}
-            </Cell>
-            <span className="text-right text-muted-foreground @max-[760px]/roles:hidden">—</span>
-            <span className="text-right text-muted-foreground @max-[760px]/roles:hidden">—</span>
-            <Cell caption="With AI" className="@max-[760px]/roles:order-6"><span className="font-medium">{money(result.personCost)}</span></Cell>
-            <span className="@max-[760px]/roles:order-2" />
+            </p>
+            <span className="@max-[820px]/roles:hidden" />
+            <AiCell className="@max-[820px]/roles:order-4 @max-[820px]/roles:col-span-2" amount={money(result.personCost)} detail={`${formatEffortHours(result.directingHours)} × ${model.currency}${profile.person.rate} an hour`} />
+            <span className="@max-[820px]/roles:order-2" />
           </div>
         </li>
-        {(["subscription", "api"] as const).map((kind) =>
-          result.unallocated[kind] > 0 ? (
-            <li key={kind} className="border-b" data-unallocated={kind}>
-              <div className={cn(GRID, "py-2.5")}>
-                <div className="min-w-0">
-                  <p className="truncate text-body font-medium">{kind === "subscription" ? "Subscriptions" : "API bill"} no role is billed by</p>
-                  <p className="truncate text-label text-muted-foreground">Paid for in this profile, but every role with agent time is billed {kind === "subscription" ? "by API" : "by subscription"}.</p>
-                </div>
-                <span className="@max-[760px]/roles:hidden" />
-                <span className="text-right text-muted-foreground @max-[760px]/roles:hidden">—</span>
-                <span className="text-right text-muted-foreground @max-[760px]/roles:hidden">—</span>
-                <Cell caption="With AI" className="@max-[760px]/roles:order-6"><span className="font-medium">{money(result.unallocated[kind])}</span></Cell>
-                <span className="@max-[760px]/roles:order-2" />
-              </div>
-            </li>
-          ) : null,
-        )}
-        <li>
-          <div className={cn(GRID, "pt-2.5")}>
+        <li data-role-row="total">
+          <div className={cn(ROW, "pt-3")}>
             <p className="text-body font-semibold">In total</p>
-            <span className="@max-[760px]/roles:hidden" />
-            <Cell caption="To hire, by agent time" strong className="@max-[760px]/roles:order-4"><Pair strong hours={result.measured.hours} value={money(result.measured.value)} /></Cell>
-            <Cell caption="To hire, by planned effort" strong className="@max-[760px]/roles:order-5"><Pair strong hours={high?.hours ?? 0} value={high ? money(high.value) : "—"} /></Cell>
-            <Cell caption="With AI" strong className="@max-[760px]/roles:order-6"><span className="font-semibold">{money(result.cost)}</span></Cell>
-            <span className="@max-[760px]/roles:order-2" />
+            <span className="@max-[820px]/roles:hidden" />
+            <Ledger strong className="@max-[820px]/roles:order-3 @max-[820px]/roles:col-span-2" measured={{ hours: result.measured.hours, cost: money(result.measured.value) }} planned={{ hours: high?.hours ?? 0, cost: high ? money(high.value) : "—", note: ticketsAll > 0 ? `${estimatedAll} of ${ticketsAll} tickets` : undefined }} />
+            <AiCell strong className="@max-[820px]/roles:order-4 @max-[820px]/roles:col-span-2" amount={money(result.cost)} detail={`${money(result.aiSpend)} AI + ${money(result.personCost)} ${words.personShort}`} />
+            <span className="@max-[820px]/roles:order-2" />
           </div>
         </li>
       </ul>
       <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2">
-        <CoverageNote coverage={{ ...returns.coverage.estimates, noun: "finished tickets", have: "have an estimate, so planned effort leaves the rest out" }} />
         <button type="button" onClick={onSetup} className="focus-ring relative inline-flex h-6 min-h-0 items-center gap-1 rounded-md text-label font-medium text-muted-foreground before:absolute before:-inset-y-1 before:inset-x-0 before:content-[''] hover:text-foreground">
           <Settings2 aria-hidden className="size-3.5" />
-          Rates, roles and AI spend
+          Change rates and assign AI cost
         </button>
         <HelpToggle dense>
-          Staple has no record of what kind of agent did a ticket, so it reads the ticket: its labels, words in its title, its kind, its workspace and the name the agent gave itself. Roles are tried top to bottom and the last takes everything else, so every ticket lands on exactly one. Agent time is what the agents&apos; sessions recorded, each capped at {returns.coverage.capHours} hours; it is the floor, because agents are fast and run in parallel. Planned effort is the estimate on each finished ticket, which is closer to what a person would need.
+          Agent time is the floor: agents are fast and run in parallel, so a person would have needed longer than the sessions recorded. Estimates are planning figures, close to what a person would need, but only tickets that carry one are counted, so that line can be lower when few tickets were estimated. Staple has no record of what kind of agent did a ticket, so it reads the ticket (labels, title, kind, workspace, agent name) to pick the role; open a role to see and change that.
         </HelpToggle>
       </div>
     </section>
   );
 }
 
-function Cell({ caption, children, className, strong = false }: { caption: string; children: ReactNode; className?: string; strong?: boolean }) {
+/** The two counts of one role's work, each on its own labelled line: the hours, and what hiring for them costs. */
+function Ledger({ measured, planned, strong = false, className }: { measured: { hours: number; cost: string }; planned: { hours: number; cost: string; note?: string }; strong?: boolean; className?: string }) {
+  const weight = strong ? "font-semibold" : "font-medium";
   return (
-    <p className={cn("flex items-center justify-end gap-1.5 text-right text-body whitespace-nowrap tabular-nums @max-[760px]/roles:col-span-2 @max-[760px]/roles:justify-between", strong && "font-semibold", className)}>
-      <span className="hidden text-label font-normal text-muted-foreground @max-[760px]/roles:inline">{caption}</span>
-      <span className="inline-flex items-center gap-1.5">{children}</span>
-    </p>
+    <dl className={cn("min-w-0 text-body tabular-nums", className)} data-ledger>
+      <div className={LEDGER}>
+        <dt className="truncate text-label leading-5 text-muted-foreground">Agent time</dt>
+        <dd className="text-right">{formatEffortHours(measured.hours)}</dd>
+        <dd className={cn("text-right", weight)}>{measured.cost}</dd>
+      </div>
+      <div className={LEDGER}>
+        <dt className="truncate text-label leading-5 text-muted-foreground">
+          Estimates{planned.note ? <span className="text-text-tertiary"> · {planned.note}</span> : null}
+        </dt>
+        <dd className="text-right">{formatEffortHours(planned.hours)}</dd>
+        <dd className={cn("text-right", weight)}>{planned.cost}</dd>
+      </div>
+    </dl>
   );
 }
-function Pair({ hours, value, strong = false }: { hours: number; value: string; strong?: boolean }) {
+
+/** What was paid instead: the amount for the period, and under it what that is made of. */
+function AiCell({ amount, detail, muted = false, strong = false, className }: { amount: string; detail: string; muted?: boolean; strong?: boolean; className?: string }) {
   return (
-    <>
-      <span className="font-normal text-muted-foreground">{formatEffortHours(hours)}</span>
-      <span className={cn("inline-block min-w-[4.25rem] text-right", strong ? "font-semibold" : "font-medium")}>{value}</span>
-    </>
+    <div className={cn("min-w-0 text-right @max-[820px]/roles:flex @max-[820px]/roles:items-baseline @max-[820px]/roles:justify-between @max-[820px]/roles:gap-3 @max-[820px]/roles:text-left", className)} data-ai-cell>
+      <p className="hidden shrink-0 text-label text-muted-foreground @max-[820px]/roles:block">With AI instead</p>
+      <div className="min-w-0 @max-[820px]/roles:text-right">
+        <p className={cn("text-body tabular-nums", strong ? "font-semibold" : "font-medium", muted && "font-normal text-muted-foreground")}>{amount}</p>
+        <p className={cn("text-label text-pretty text-muted-foreground", muted && "italic")}>{detail}</p>
+      </div>
+    </div>
   );
 }
 /** The assumed mark, small enough for a table cell; its words are in the title and for a screen reader. */
@@ -344,9 +396,10 @@ function ReturnMethod({ returns, result }: { returns: ReturnReport; result: Retu
         <li>Return = value of the work ÷ (AI spend + the directing person&apos;s time). Value = each role&apos;s hours × that role&apos;s rate.</li>
         <li>Agent time is recorded attempt time, each attempt capped at {returns.coverage.capHours} hours. Planned effort is the sum of estimates on finished tickets (epics left out, so nothing is counted twice).</li>
         <li>Directing time is the days on which agents ran × the hours a day you enter. Staple does not record a person&apos;s time, so this is your figure.</li>
-        <li>AI spend is the monthly subscriptions and API bill you enter × the months in the period. Each is shared out over the roles billed that way, by their agent time. Staple does not record token use, so it cannot price API usage itself.</li>
+        <li>AI spend is what you assign in Cost setup: each subscription (its price × how many) and each monthly API bill belongs to a role or to the whole team, × the months in the period. Nothing is divided between roles. Staple does not record token use, so it cannot price API usage itself.</li>
         {result.share < 1 ? <li>This is one workspace: it carries {formatPercent(result.share)} of the AI spend and directing time, its share of agent time on this computer.</li> : null}
         <li>The role of a ticket is read from its labels, title, kind, workspace and agent name. It is a rule you can see and change by opening the role, not a recorded fact.</li>
+        <li>Estimates cover {returns.coverage.estimates.covered.toLocaleString("en-US")} of {returns.coverage.estimates.total.toLocaleString("en-US")} finished tickets; the rest add nothing to the estimates line.</li>
       </ul>
     </ShowDetails>
   );
