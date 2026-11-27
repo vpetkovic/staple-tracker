@@ -1,26 +1,22 @@
 /**
- * The workspace switcher's rules (switcher-model.ts): what it lists, what each row says,
- * when it searches, and that its trigger says the whole selection.
+ * The workspace switcher's rules (switcher-model.ts): what it lists, what waits in each
+ * workspace, when it searches, and that its trigger says the whole selection.
  */
 import { describe, expect, it } from "vitest";
 import type { WorkspaceScope } from "@/lib/session";
-import type { IssueRow } from "@/lib/types";
 import {
   SWITCHER_SEARCH_THRESHOLD,
   filterSwitcherRows,
-  openCountsByWorkspace,
   switcherRows,
   switcherSearches,
   switcherTriggerLabel,
+  waitingByWorkspace,
 } from "./switcher-model";
 
 const ws = (slug: string, prefix: string) => ({ slug, prefix });
 const FEW = [ws("staple", "STA"), ws("ai-inbox-supabase", "AII")];
 const MANY = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf"].map((slug) => ws(slug, slug.slice(0, 3).toUpperCase()));
 const hub = (current: string, workspaces = FEW): WorkspaceScope => ({ mode: "hub", ws: current, workspaces });
-
-const row = (workspace: string, status: string): IssueRow =>
-  ({ workspace, issue: { status } }) as unknown as IssueRow;
 
 describe("the trigger", () => {
   it("says the whole selection — All workspaces, never an abbreviation, never the first workspace", () => {
@@ -38,24 +34,26 @@ describe("the rows", () => {
     expect(switcherRows(hub("")).filter((r) => r.current).map((r) => r.value)).toEqual([""]);
   });
 
-  it("caption every row in plain words", () => {
+  it("carry each workspace's name and task-number prefix, and none for All workspaces", () => {
     const rows = switcherRows(hub(""));
-    expect(rows[0]).toMatchObject({ name: "All workspaces", caption: "Everything from 2 workspaces", prefix: "" });
-    expect(rows[1]).toMatchObject({ name: "staple", caption: "Task numbers start with STA", prefix: "STA" });
-  });
-
-  it("count open tasks per workspace when every workspace's rows are on hand, resolved work excluded", () => {
-    const counts = openCountsByWorkspace(
-      [row("staple", "todo"), row("staple", "done"), row("staple", "in_progress"), row("ai-inbox-supabase", "todo")],
-      (status) => status === "done",
-    );
-    const rows = switcherRows(hub(""), counts);
-    expect(rows[1]!.caption).toBe("2 open tasks");
-    expect(rows[2]!.caption).toBe("1 open task");
+    expect(rows[0]).toEqual({ value: "", name: "All workspaces", prefix: "", current: true });
+    expect(rows[1]).toEqual({ value: "staple", name: "staple", prefix: "STA", current: false });
   });
 
   it("offer no All workspaces row outside a hub", () => {
     expect(switcherRows({ mode: "workspace", ws: "", workspaces: [ws("staple", "STA")] }).map((r) => r.value)).toEqual(["staple"]);
+  });
+});
+
+describe("what waits in each workspace", () => {
+  it("counts the Inbox's rows per workspace, and names no workspace that has none", () => {
+    const counts = waitingByWorkspace([{ workspace: "staple" }, { workspace: "pinecone" }, { workspace: "staple" }]);
+    expect([...counts]).toEqual([
+      ["staple", 2],
+      ["pinecone", 1],
+    ]);
+    expect(counts.has("aardvark")).toBe(false);
+    expect(waitingByWorkspace([]).size).toBe(0);
   });
 });
 

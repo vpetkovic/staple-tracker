@@ -4,11 +4,13 @@
  * views/tree/view-responsive.test.tsx uses), so the component under test is the shipped
  * one and only the browser's answer changes.
  */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
 import { AppShell } from "@/components/AppShell";
-import { NavRail } from "@/components/nav/NavRail";
+import { MoreSheetBody } from "@/components/nav/ViewTabBar";
 import { FilterChipStrip } from "@/components/filters/FilterChips";
 import { ProjectForm } from "@/components/projects/ProjectDialog";
 import { buildFilterContext } from "@/lib/filter-dimensions";
@@ -16,6 +18,7 @@ import { emptyFilters, withDimension } from "@/lib/filters";
 import { AttentionContext } from "@/lib/attention";
 import { SessionContext, TAB_VIEWS, VIEW_LABELS, type StapleSession } from "@/lib/session";
 import { DEFAULT_SORT } from "@/lib/sort-modes";
+import type { Project, ProjectRow } from "@/lib/types";
 
 const noop = () => {};
 const WORKSPACES = [
@@ -95,7 +98,7 @@ const shell = (width: number, over: Partial<StapleSession> = {}) =>
   );
 
 describe("on a phone", () => {
-  it("is an app: a top bar, the view, and a bottom tab bar — no rail column", () => {
+  it("is an app: a top bar, the view, and a bottom tab bar — no rail column and no drawer", () => {
     const markup = shell(390);
     expect(markup).toContain('data-shell="phone"');
     const bar = markup.indexOf("data-app-bar");
@@ -105,6 +108,9 @@ describe("on a phone", () => {
     expect(bar).toBeLessThan(view);
     expect(view).toBeLessThan(tabs);
     expect(markup).not.toContain('aria-label="Primary"');
+    expect(markup).not.toContain("data-nav-overlay");
+    expect(markup).not.toContain("data-nav-show");
+    expect(markup).not.toContain('aria-label="Menu"');
   });
 
   it("puts the four top views one tap away and every other view behind More, the current one marked", () => {
@@ -119,11 +125,20 @@ describe("on a phone", () => {
     expect(graph.match(/data-view-tab="[a-z]+" aria-current="page"/g)).toEqual(['data-view-tab="more" aria-current="page"']);
   });
 
-  it("reaches the switcher in one tap from the top bar, with the full selection on it", () => {
+  it("leads the top bar with the workspace pill, the full selection on it, drawn at its own size", () => {
     const markup = shell(390);
+    const bar = markup.slice(markup.indexOf("data-app-bar"), markup.indexOf("</header>"));
+    expect(bar.indexOf('data-workspace-switcher="bar"')).toBeLessThan(bar.indexOf("data-bar-search"));
+    expect(bar.indexOf("<button")).toBe(bar.indexOf('<button type="button" aria-label="Workspace: All workspaces.'));
     const trigger = /<button[^>]*data-workspace-switcher="bar"[^>]*>[\s\S]*?<\/button>/.exec(markup)?.[0] ?? "";
     expect(trigger).toContain(">All workspaces</span>");
-    expect(trigger).toContain("min-h-11");
+    expect(trigger).toContain('title="All workspaces — switch workspace"');
+    // A 32px pill: a long name truncates, and the 44px a thumb needs is an invisible area round it.
+    const cls = /<button[^>]*data-workspace-switcher="bar"[^>]*class="([^"]*)"/.exec(markup)?.[1] ?? "";
+    expect(cls).toContain("h-8");
+    expect(cls).toContain("min-h-0");
+    expect(cls).toContain("before:-inset-y-[7px]");
+    expect(trigger).toMatch(/data-workspace-name="true" class="[^"]*truncate/);
   });
 
   it("respects the safe areas and the dynamic viewport", () => {
@@ -133,33 +148,87 @@ describe("on a phone", () => {
     expect(markup).toMatch(/data-view-tabs[^>]*class="[^"]*env\(safe-area-inset-bottom\)/);
   });
 
-  it("makes the top bar's controls 44px targets", () => {
+  it("makes search and New task 44px targets with no box drawn round them at rest", () => {
     const markup = shell(390);
-    for (const hook of ["data-nav-show", "data-bar-search", "data-bar-new-task"]) {
+    for (const hook of ["data-bar-search", "data-bar-new-task"]) {
       const button = new RegExp(`<button[^>]*${hook}[^>]*>`).exec(markup)?.[0] ?? "";
       expect(button, hook).toContain("size-11");
+      expect(button, hook).toContain('data-variant="ghost"');
     }
   });
 });
 
-describe("the phone's menu drawer keeps its phone shape", () => {
-  const hub = { mode: "hub" as const, ws: "", workspaces: [{ slug: "aardvark", prefix: "AAR" }, { slug: "staple", prefix: "STA" }] };
+describe("the More sheet", () => {
+  const project = (over: Partial<Project>): Project =>
+    ({ kind: "unmanaged", sourceKind: null, source: null, createdAt: "2026-09-05T00:00:00.000Z", updatedAt: "2026-09-05T00:00:00.000Z", ...over }) as Project;
+  const rows: ProjectRow[] = [
+    { workspace: "aardvark", project: project({ id: "p-docs", slug: "docs", name: "Docs" }) },
+    { workspace: "staple", project: project({ id: "p-site", slug: "site", name: "Site" }) },
+  ];
+  const sheet = (over: Partial<StapleSession> = {}) => at(390, <MoreSheetBody onChoose={noop} onClose={noop} />, over);
+  const section = (markup: string, id: string) => new RegExp(`<section[^>]*data-more-section="${id}"[\\s\\S]*?</section>`).exec(markup)?.[0] ?? "";
 
-  it("has the switcher pill, no workspace list, and the views named for the scope", () => {
-    const drawer = at(390, <NavRail onHide={noop} />, hub);
-    expect(drawer).toContain('data-workspace-switcher="rail"');
-    expect(drawer).not.toContain("data-nav-workspace");
-    expect(drawer).not.toContain("data-nav-brand");
-    expect(drawer).toMatch(/data-nav-group-name="true" class="truncate">All workspaces</);
-    // The theme is a full row there, not the desk's icon switch.
-    expect(drawer).toMatch(/data-nav-theme[^>]*>[\s\S]*?Dark mode<\/button>/);
+  it("is the rest of the rail, in its order: the other views, then Projects, then This computer", () => {
+    const markup = sheet();
+    const at = (hook: string) => markup.indexOf(hook);
+    expect(at('data-more-view="graph"')).toBeLessThan(at('data-more-section="projects"'));
+    expect(at('data-more-view="calibration"')).toBeLessThan(at('data-more-section="projects"'));
+    expect(at('data-more-section="projects"')).toBeLessThan(at('data-more-section="machine"'));
+    expect(section(markup, "projects")).toContain(">Projects</h3>");
+    expect(section(markup, "machine")).toContain(">This computer</h3>");
   });
 
-  it("while the desk rail lists the workspaces and wears the mark instead", () => {
-    const desk = at(1440, <NavRail onHide={noop} />, hub);
-    expect(desk).toContain("data-nav-brand");
-    expect(desk.match(/data-nav-workspace=/g)).toHaveLength(3);
-    expect(desk).not.toContain('data-workspace-switcher="rail"');
+  it("lists the scope's projects, each with its open count and its settings, then New project", () => {
+    const markup = section(sheet({ projects: { data: rows, error: undefined, loading: false, reload: noop }, ws: "staple" }), "projects");
+    expect(markup).toContain('data-more-project="p-site"');
+    expect(markup).not.toContain('data-more-project="p-docs"');
+    expect(markup).toMatch(/data-more-project="p-site"[\s\S]*?aria-label="0 open"/);
+    expect(markup).toContain('aria-label="Project settings: Site"');
+    expect(markup.indexOf('data-more-project="p-site"')).toBeLessThan(markup.indexOf("data-more-new-project"));
+    // Rows are 48px; the gear beside a row is 44px with nothing drawn round it at rest.
+    expect(/<button[^>]*data-more-project="p-site"[^>]*class="([^"]*)"/.exec(markup)?.[1]).toContain("h-12");
+    expect(/<button[^>]*data-more-project-settings[^>]*class="([^"]*)"/.exec(markup)?.[1]).not.toMatch(/(^| )(bg-|border)/);
+  });
+
+  it("captions each project with its workspace when they span several, and marks the one Tasks shows", () => {
+    const all = sheet({ projects: { data: rows, error: undefined, loading: false, reload: noop }, ws: "" });
+    expect(section(all, "projects")).toMatch(/data-more-project="p-docs"[\s\S]*?>aardvark<\/span>/);
+    const one = sheet({ projects: { data: rows, error: undefined, loading: false, reload: noop }, ws: "staple" });
+    expect(section(one, "projects")).not.toContain(">staple</span>");
+    const narrowed = sheet({
+      projects: { data: rows, error: undefined, loading: false, reload: noop },
+      filters: { ...emptyFilters(), dims: { project: ["p-site"] } },
+    });
+    expect(narrowed).toMatch(/data-more-project="p-site" aria-current="true"/);
+    expect(narrowed).not.toMatch(/data-more-project="p-docs" aria-current/);
+  });
+
+  it("offers only New project under Projects while the scope has none", () => {
+    const markup = section(sheet(), "projects");
+    expect(markup).not.toContain("data-more-project=");
+    expect(markup).toContain("data-more-new-project");
+  });
+
+  it("ends with This computer: Usage, Integrations, Settings and Dark mode as a switch", () => {
+    const markup = section(sheet({ view: "budget" }), "machine");
+    const order = ['data-more-view="budget"', "data-more-integrations", "data-more-settings", "data-more-theme"].map((hook) => markup.indexOf(hook));
+    expect(order.every((position, i) => position > -1 && (i === 0 || position > order[i - 1]!))).toBe(true);
+    expect(markup).toMatch(/data-more-view="budget" aria-current="page"/);
+    expect(markup).toMatch(/<button[^>]*role="switch"[^>]*aria-checked="false"[^>]*data-more-theme/);
+    expect(markup).toContain(">Dark mode</span>");
+  });
+
+  it("closes itself before it opens any dialog", () => {
+    /*
+     * A dialog stacked on the open sheet would make Escape ambiguous. The click handlers cannot
+     * run without a DOM, so what is pinned is the source: every call in the sheet that opens a
+     * dialog is immediately preceded by the sheet's own close.
+     */
+    const text = readFileSync(fileURLToPath(new URL("./ViewTabBar.tsx", import.meta.url)), "utf8").replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g, "");
+    const opens = text.match(/(openProjectDialog|openSettings)\(/g) ?? [];
+    // A project's settings, New project, Integrations and Settings.
+    expect(opens.length).toBe(4);
+    expect((text.match(/onClose\(\);\s*(openProjectDialog|openSettings)\(/g) ?? []).length).toBe(opens.length);
   });
 });
 
@@ -173,18 +242,18 @@ describe("on a desk", () => {
 });
 
 describe("All workspaces never presents the first workspace as current", () => {
-  // The scope is now the top bar's crumb — the switcher itself — ahead of the view's name.
-  const scope = (markup: string) => /<button[^>]*data-scope-name="true"[^>]*>[\s\S]*?<\/button>/.exec(markup)?.[0] ?? "";
+  // The scope is the rail's head on a desk: the switcher itself, above the views.
+  const head = (markup: string) => /<button[^>]*data-workspace-switcher="head"[^>]*>[\s\S]*?<\/button>/.exec(markup)?.[0] ?? "";
 
-  it("the header says All workspaces beside the view's name", () => {
+  it("the rail's head says All workspaces, and the top bar does not say it again", () => {
     const markup = shell(1440);
-    expect(scope(markup)).toContain(">All workspaces</span>");
-    expect(scope(markup)).not.toContain(">aardvark<");
-    expect(markup.indexOf("data-scope-name")).toBeLessThan(markup.indexOf("<h1"));
+    expect(head(markup)).toContain(">All workspaces</span>");
+    expect(head(markup)).not.toContain(">aardvark<");
+    expect(markup).not.toContain("data-scope-name");
   });
 
-  it("the header names the workspace once one is chosen", () => {
-    expect(scope(shell(1440, { ws: "staple" }))).toContain(">staple</span>");
+  it("the head names the workspace once one is chosen", () => {
+    expect(head(shell(1440, { ws: "staple" }))).toContain(">staple</span>");
   });
 
   it("a new project from All workspaces asks which workspace, with none preselected", () => {

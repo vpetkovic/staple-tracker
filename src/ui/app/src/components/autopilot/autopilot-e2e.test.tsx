@@ -265,7 +265,7 @@ afterAll(() => {
 
 describe("a live run in the rail", () => {
   it("is a row under Autopilot that says what it is on, with the whole run in its title", () => {
-    const markup = render(<NavRail onHide={noop} />, 1440);
+    const markup = render(<NavRail mode="full" />, 1440);
     const row = runRow(markup, runIds.live!);
     const line = `Autopilot · ${refs.liveEpic} · 0 done this run · 3 left · working ${refs.working} · stops after 5 tickets (1 taken)`;
     expect(row).toContain(`title="${line}"`);
@@ -276,11 +276,12 @@ describe("a live run in the rail", () => {
   });
 
   it("is listed for every live run and no ended one, under Autopilot, which counts them", () => {
-    const markup = render(<NavRail onHide={noop} />, 1440);
+    const markup = render(<NavRail mode="full" />, 1440);
     const live = buildRunsState(entries).live;
     expect(markup.match(/data-nav-run="/g)).toHaveLength(live.length);
     for (const name of ["failed", "done", "stopped"]) expect(runRow(markup, runIds[name]!)).toBe("");
-    expect(markup).toMatch(new RegExp(`data-nav-autopilot-live="true"[^>]*>${live.length} live<`));
+    // The live mark is the runs' state dot, then "n live".
+    expect(markup).toMatch(new RegExp(`data-nav-autopilot-live="true"[^>]*>(<span[^>]*data-run-dot[^>]*></span>)?${live.length} live<`));
     const autopilot = markup.indexOf('data-nav-item="view:autopilot"');
     expect(markup.indexOf(`data-nav-run="${runIds.live}"`)).toBeGreaterThan(autopilot);
     expect(markup.indexOf(`data-nav-run="${runIds.live}"`)).toBeLessThan(markup.indexOf('data-nav-group="views"'));
@@ -288,7 +289,7 @@ describe("a live run in the rail", () => {
     const bare = renderToStaticMarkup(
       <SessionContext.Provider value={session()}>
         <AttentionContext value={NO_ATTENTION}>
-          <NavRail onHide={noop} />
+          <NavRail mode="full" />
         </AttentionContext>
       </SessionContext.Provider>,
     );
@@ -298,7 +299,7 @@ describe("a live run in the rail", () => {
   });
 
   it("leads to its run: the address of the run on the Autopilot page, from the page it is on", () => {
-    const href = /href="([^"]+)"/.exec(runRow(render(<NavRail onHide={noop} />, 1440), runIds.live!))?.[1]?.replaceAll("&amp;", "&") ?? "";
+    const href = /href="([^"]+)"/.exec(runRow(render(<NavRail mode="full" />, 1440), runIds.live!))?.[1]?.replaceAll("&amp;", "&") ?? "";
     const url = new URL(href);
     expect(url.searchParams.get("view")).toBe("autopilot");
     expect(url.searchParams.get("run")).toBe(runIds.live);
@@ -488,16 +489,16 @@ describe("a run started, paused or stopped elsewhere", () => {
     runs.continue({ actor: "opus-press" });
     database.store.db.close();
     await reload();
-    expect(runRow(render(<NavRail onHide={noop} />, 1440), id)).not.toBe("");
+    expect(runRow(render(<NavRail mode="full" />, 1440), id)).not.toBe("");
 
     expect((await post("/api/run/pause", { id, actor: "vp" })).status).toBe(200);
     await reload();
-    const paused = render(<NavRail onHide={noop} />, 1440);
+    const paused = render(<NavRail mode="full" />, 1440);
     expect(runRow(paused, id)).toContain('aria-label="Stop me, Paused"');
 
     expect((await post("/api/run/stop", { id, actor: "vp" })).status).toBe(200);
     await reload();
-    expect(runRow(render(<NavRail onHide={noop} />, 1440), id)).toBe("");
+    expect(runRow(render(<NavRail mode="full" />, 1440), id)).toBe("");
     const markup = render(
       <AutopilotLayout entries={entries} selectedRunId={null} onSelectRun={noop} onOpenTicket={noop} showWorkspace={false} loading={false} error={null} now={NOW} wide={false} />,
     );

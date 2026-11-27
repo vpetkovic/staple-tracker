@@ -98,13 +98,14 @@ describe("the theme", () => {
     });
   });
 
-  it("follows the system with the rail hidden, and the switch agrees when the rail comes back", async () => {
+  it("follows the system with the rail narrowed, and the switch agrees when the rail comes back", async () => {
     await withPage({ ...DESK, colorScheme: "light" }, async (page) => {
       await page.keyboard.press("[");
-      await page.locator("[data-nav-rail]").waitFor({ state: "detached" });
+      await page.locator('[data-nav-rail][data-rail-mode="narrow"]').waitFor();
       await page.emulateMedia({ colorScheme: "dark" });
       await expect.poll(() => dark(page)).toBe(true);
       await page.keyboard.press("[");
+      await page.locator('[data-nav-rail][data-rail-mode="full"]').waitFor();
       expect(await page.getByRole("switch", { name: "Dark mode" }).getAttribute("aria-checked")).toBe("true");
     });
   });
@@ -228,14 +229,18 @@ describe("choosing a workspace from Usage", () => {
     await withPage(
       DESK,
       async (page) => {
-        expect(await page.locator("[data-nav-workspace][aria-current]").count()).toBe(0);
-        await page.locator('[data-nav-workspace="navfocus"]').click();
+        // On Usage the rail's head steps back: the page is in no workspace.
+        const name = page.locator('[data-workspace-switcher="head"] [data-workspace-name]');
+        expect(await name.getAttribute("class")).toContain("text-text-secondary");
+        await page.locator('[data-workspace-switcher="head"]').click();
+        await page.locator('[data-workspace-option="navfocus"]').click();
         await expect.poll(() => new URL(page.url()).searchParams.get("view")).toBe("tasks");
         expect(new URL(page.url()).searchParams.get("ws")).toBe("navfocus");
-        expect(await page.locator('[data-nav-workspace="navfocus"]').getAttribute("aria-current")).toBe("true");
+        expect(await name.textContent()).toBe("navfocus");
+        expect(await name.getAttribute("class")).not.toContain("text-text-secondary");
         expect(await page.locator("[data-nav-item='view:tree']").getAttribute("aria-current")).toBe("page");
       },
-      { server: hubUi, search: "&view=budget", ready: (page) => page.locator('[data-nav-workspace="navfocus"]').waitFor() },
+      { server: hubUi, search: "&view=budget", ready: (page) => page.locator('[data-workspace-switcher="head"]').waitFor() },
     );
   });
 });
