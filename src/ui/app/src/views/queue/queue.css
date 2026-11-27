@@ -587,4 +587,10 @@
     height: max(100%, 44px);
     transform: translate(-50%, -50%);
   }
+  /*
+   * The areas still reach up and down past their row, which is what they are for; sideways
+   * they stop at the row's own edge, so nothing on the page is wider than the page. `clip`
+   * makes no scroll container and leaves `overflow-y` visible.
+   */
+  .q-row, .q-head, .q-allstrip, .q-next, .q-band-head { overflow-x: clip; }
 }

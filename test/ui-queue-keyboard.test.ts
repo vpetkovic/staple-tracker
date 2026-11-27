@@ -216,7 +216,8 @@ describe.skipIf(Boolean(reason))("the queue page on a phone", () => {
   /**
    * The controls at a row's right edge carry touch hit areas that reach past the page. A box
    * that scrolls down scrolls sideways too unless it says otherwise, and on a phone the whole
-   * list then slid left and right under a finger.
+   * list then slid left and right under a finger. Nothing is wider than the page either, so
+   * content that really overflows fails here even where the scroller would hide it.
    */
   it("scrolls down and never sideways", async () => {
     const { page, context } = await openQueue(PHONE);
@@ -229,6 +230,12 @@ describe.skipIf(Boolean(reason))("the queue page on a phone", () => {
         return { board: board === null ? null : canPan(board), page: canPan(document.documentElement) };
       });
       expect(pans).toEqual({ board: false, page: false });
+      const widths = await page.evaluate(() => {
+        const box = (element: Element | null) => (element === null ? null : { scroll: element.scrollWidth, client: element.clientWidth });
+        return { board: box(document.querySelector("[data-queue-board]")), page: box(document.documentElement) };
+      });
+      expect(widths.board!.scroll).toBeLessThanOrEqual(widths.board!.client);
+      expect(widths.page!.scroll).toBeLessThanOrEqual(widths.page!.client);
     } finally {
       await context.close();
     }
