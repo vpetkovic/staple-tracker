@@ -509,7 +509,8 @@
   .q-lead { width: 14px; }
   .q-chev { width: 14px; }
   .q-row[data-child]::before { left: 38px; }
-  .q-entry .q-main > .q-kind { display: none; }
+  /* Two-line rows drop the kind icon so every title starts on one edge; the caption rows keep theirs. */
+  .q-entry .q-main > .q-kind, .q-task .q-main > .q-kind { display: none; }
   .q-row .q-main .q-ref { display: none; }
   .q-row .q-title {
     display: -webkit-box;
