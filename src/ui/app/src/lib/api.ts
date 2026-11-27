@@ -1332,3 +1332,10 @@ export const integrationWrite = <T>(command: Record<string, unknown>, ws?: strin
   request<T>("/api/integrations/write", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...command, ws }) });
 export const integrationConfigure = <T>(command: Record<string, unknown>, ws?: string) =>
   request<T>("/api/integrations/configure", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...command, ws }) });
+
+/**
+ * The one authenticated request and the query-string builder, for a feature module that keeps
+ * its own routes beside its types (`lib/analytics-api.ts`). Same token header, refusals and
+ * auth broadcast as every call in this file.
+ */
+export { request as apiRequest, qs as queryString };

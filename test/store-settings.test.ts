@@ -4,6 +4,16 @@ import { migrateWorkspace } from "../src/core/schema.js";
 import { WorkspaceStore } from "../src/core/store.js";
 import { sanitizeSvg } from "../src/core/svg-sanitize.js";
 import { ISSUE_KINDS, ISSUE_STATUSES, StapleError } from "../src/core/types.js";
+import { DEFAULT_COST_MODEL } from "../src/core/analytics/cost-model.js";
+
+/** The Analytics cost model's four parts at their defaults (STA-575), as every settings read lists them. */
+const ANALYTICS_DEFAULTS = (["roles", "roleMapping", "scenario", "solo", "company"] as const).map((part) => ({
+  key: `analytics.${part}`,
+  scope: "workspace" as const,
+  value: DEFAULT_COST_MODEL[part],
+  source: "default" as const,
+  version: 1,
+}));
 
 /**
  * O7a (STA-140) — the workspace vocabulary is DATA.
@@ -548,6 +558,7 @@ describe("registered workspace settings", () => {
       { key: "queue.policy", scope: "workspace", value: "advisory", source: "default", version: 1 },
       { key: "queue.silentClaimMinutes", scope: "workspace", value: 30, source: "default", version: 1 },
       { key: "features.planning", scope: "workspace", value: false, source: "default", version: 1 },
+      ...ANALYTICS_DEFAULTS,
     ]);
     // Nothing is written by a read — the fresh-workspace meta table stays exactly as seeded.
     expect(metaRows()).toEqual([]);
@@ -592,7 +603,12 @@ describe("registered workspace settings", () => {
     store.db
       .prepare("INSERT INTO meta (key, value) VALUES ('setting:kinds.default', ?)")
       .run(JSON.stringify({ v: 2, value: "bug" }));
-    expect(() => store.settingValues()).toThrow(/"kinds\.default" was written by a newer staple/);
+    // Refused by key, never reinterpreted; the rest of the workspace's settings stay readable.
+    expect(() => store.settingValue("kinds.default")).toThrow(/"kinds\.default" was written by a newer staple/);
+    expect(() => store.getSetting("kinds.default")).toThrow(/"kinds\.default" was written by a newer staple/);
+    expect(() => store.setSetting("kinds.default", "task")).toThrow(/"kinds\.default" was written by a newer staple/);
+    expect(store.settingValues().map((v) => v.key)).not.toContain("kinds.default");
+    expect(store.unknownSettingKeys()).toEqual(["kinds.default"]);
   });
 
   it("preserves and reports a stored key it has no definition for, and never rewrites it", () => {
@@ -608,6 +624,7 @@ describe("registered workspace settings", () => {
       "queue.policy",
       "queue.silentClaimMinutes",
       "features.planning",
+      ...ANALYTICS_DEFAULTS.map((value) => value.key),
     ]);
     store.setSetting("kinds.default", "bug");
     store.resetSetting("kinds.default");
@@ -712,6 +729,7 @@ describe("registered workspace settings", () => {
       { key: "queue.policy", scope: "workspace", value: "advisory", source: "default", version: 1 },
       { key: "queue.silentClaimMinutes", scope: "workspace", value: 30, source: "default", version: 1 },
       { key: "features.planning", scope: "workspace", value: false, source: "default", version: 1 },
+      ...ANALYTICS_DEFAULTS,
     ]);
     expect(() => store.applySettingOps([{ op: "bogus", key: "kinds.default" } as never])).toThrow(
       /Unknown setting op "bogus"/,
