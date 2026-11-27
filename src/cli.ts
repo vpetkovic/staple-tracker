@@ -1277,7 +1277,9 @@ The plan (experimental; features.planning defaults off)
               following a parent on H included, and the dropped ideas on H
   idea new <title> [--brief T] [--parent REF] [--sparked-by TICKET]
               capture a raw idea (an agent captures raw ideas only); --sparked-by names
-              the ticket whose work turned it up, shown on both records
+              the ticket whose work turned it up, shown on both records. Writing its plan
+              sections, task rows, questions, decisions or linked research (anyone's) moves
+              a raw idea to exploring; capture, import and title or brief edits do not
   idea show <ref>                       stage, windows, plan sections, questions, decisions, links
   idea plan <ref> [--goal T] [--context T|-] [--acceptance T]... [--dependency T]...
               [--out-of-scope T] [--risks T] [--source T]...
@@ -1292,7 +1294,12 @@ The plan (experimental; features.planning defaults off)
               the agent's edits; with --person also --maturity raw|exploring|shaped|dropped,
               --horizon H|none, --parent REF|none, --start D|none, --target D|none,
               --before REF|end, and --delivered D [--note T] (it was delivered outside the
-              tracker on day D: it reads shipped with no ticket) or --undelivered
+              tracker on day D: it reads shipped with no ticket) or --undelivered;
+              --maturity shaped --person accepts a proposal, --dismiss-proposal --person
+              sets it aside
+  idea propose <ref> [--note T]         propose a raw or exploring idea shaped (anyone's, held
+              to the shaped gate): shown under Needs you until the person accepts or
+              dismisses it; it never shapes the idea
   idea promote <ref>                    the idea becomes an epic on the same record and takes
               its ticket number, keeping its idea number; only a shaped idea offers it
   idea scaffold <ref> [--confirm FP]   without --confirm, the preview: the epic and every task it
@@ -1303,7 +1310,8 @@ The plan (experimental; features.planning defaults off)
   idea adopt <ref> <issue> [--research] link existing work to the idea; an exploring or shaped
               idea offers it (it then reads started), a raw one does not. --research
               links it as research or a POC instead: listed on its own, it does not
-              start the idea or count toward its progress or horizon
+              start the idea or count toward its progress or horizon; a raw idea takes
+              research too, which moves it to exploring
   idea unlink <ref> <issue>             remove a link, work or research
   idea ask <ref> <question>             add an open question
   idea resolve <ref> <n> [--reopen]     resolve question n (1-based)

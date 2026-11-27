@@ -126,6 +126,15 @@ export function parseMaturity(value: string): Maturity {
   });
 }
 
+/**
+ * A record's maturity as every read sees it (design/plan.md, "Maturity moves by enrichment"): the
+ * person's `plan_maturity`, except that a raw record made more complete since it was captured
+ * (`plan_explored`, migration 028) reads `exploring`. One SQL expression, selected as
+ * `plan_maturity`, so a device that made the change and one that received it by sync read the
+ * same, and no read path can see the raw value by mistake.
+ */
+export const MATURITY_READ = "CASE WHEN plan_maturity = 'raw' AND plan_explored IS NOT NULL THEN 'exploring' ELSE plan_maturity END";
+
 /** An unknown stored value (a later build's) reads as `raw` here rather than failing a read. */
 export function readMaturity(value: string | null | undefined): Maturity {
   return (MATURITIES as readonly string[]).includes(value ?? "") ? (value as Maturity) : "raw";
@@ -260,6 +269,13 @@ export function isNotStarted(input: { plannedStart: string | null; links: number
 export const DELIVERED_NOTE_KEY = "delivered-note";
 
 /**
+ * The document an agent's proposal that a record is ready to be marked shaped is kept in: its body
+ * is the reason, its author and time who proposed it and when. Written only by the proposal, and
+ * emptied when the person moves the record's maturity or dismisses it.
+ */
+export const SHAPE_PROPOSAL_KEY = "shape-proposal";
+
+/**
  * The day a delivered-outside-the-tracker mark names: required, a calendar day, and not after
  * `today` (work is marked once it was delivered, not before).
  */
@@ -357,6 +373,10 @@ export function steeringRefusal(what: SteeringWrite, subject: string | null): St
         ? `Marking ${name} delivered outside the tracker, or clearing that mark, is the person's call, not an agent's. ` +
           "To record work that landed in the tracker, adopt its ticket onto the idea (start_idea with adopt, or staple idea adopt); " +
           "otherwise tell the person the idea looks delivered, and they mark it in the Plan view (or the CLI with --person)."
+      : what === "maturity"
+        ? `Changing the maturity of ${name} is the person's call, not an agent's. ` +
+          "Writing its plan sections, task rows, questions, decisions or linked research moves a raw idea to exploring on its own; " +
+          "when its plan passes the shaped gate, propose it shaped (update_idea with propose_shaped, or staple idea propose) and the person accepts it in the Plan view (or the CLI with --person)."
       : what === "status"
         ? `${Name} is an idea; its status does not move. Its maturity is its state, and the person sets it, or drops the idea, in the Plan view (or the CLI with --person). Promote it, or adopt work onto it, to track progress.`
         : `Changing ${what === "horizons" ? "horizons" : `the ${what} of ${name}`} is the person's call, not an agent's. ` +

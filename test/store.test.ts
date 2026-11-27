@@ -441,6 +441,8 @@ describe("schema migration against a live database", () => {
       // 026's column and its index.
       legacyDb.exec("DROP INDEX IF EXISTS issues_plan_idea_number");
       legacyDb.exec("ALTER TABLE issues DROP COLUMN plan_idea_number");
+      // 028's column.
+      legacyDb.exec("ALTER TABLE issues DROP COLUMN plan_explored");
       legacyDb.prepare("UPDATE meta SET value = '1' WHERE key = 'schema_version'").run();
       legacyDb.close();
 

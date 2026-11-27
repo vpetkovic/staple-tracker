@@ -66,6 +66,11 @@ export function IdeaStatusLine({ record, className, children }: { record: IdeaDe
             <Amber data-idea-plan-incomplete="">plan incomplete</Amber>
           </>
         ) : null}
+        {idea.shapeProposal ? (
+          <Flag tone="you" data-idea-proposed="">
+            proposed shaped
+          </Flag>
+        ) : null}
         {idea.late && idea.state !== "shipped" ? <Flag tone="late" /> : null}
         {idea.notStarted ? <Flag tone="notStarted" /> : null}
       </p>
@@ -88,7 +93,7 @@ function statusWords(record: IdeaDetailData): string {
 /** The idea's one primary action (the step forward its state offers) as a button. */
 export function PlanPrimary({ workspace, idea, controller, size = "sm", className }: { workspace: string; idea: IdeaData; controller: IssueActionsController; size?: "sm" | "lg"; className?: string }) {
   const choose = useChoose(workspace, controller, idea.identifier);
-  const primary = planPrimary(planActionItems(workspace, idea));
+  const primary = proposedPrimary(idea, planActionItems(workspace, idea));
   if (!primary) return null;
   return (
     <Button
@@ -105,12 +110,18 @@ export function PlanPrimary({ workspace, idea, controller, size = "sm", classNam
   );
 }
 
+/** With an agent's proposal standing, the step forward is accepting it: Mark shaped, named so. */
+function proposedPrimary(idea: IdeaData, items: readonly PlanItem[]): PlanItem | null {
+  const shape = idea.shapeProposal ? items.find((item) => item.id === "shape") : undefined;
+  return shape ? { ...shape, label: "Accept shaped" } : planPrimary(items);
+}
+
 /** Every other one-click action the idea's state offers, in ⋯. Absent when there are none. */
 export function PlanOverflow({ workspace, idea, controller, triggerClassName }: { workspace: string; idea: IdeaData; controller: IssueActionsController; triggerClassName?: string }) {
   const [open, setOpen] = useState(false);
   const choose = useChoose(workspace, controller, idea.identifier);
   const items = planActionItems(workspace, idea);
-  const primary = planPrimary(items);
+  const primary = proposedPrimary(idea, items);
   const rest = items.filter((item) => item.id !== primary?.id);
   if (rest.length === 0) return null;
   return (

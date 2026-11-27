@@ -32,6 +32,8 @@ import { MILESTONE_KIND, MILESTONE_MEMBERSHIP, rankBetween, renumberedRanks } fr
 import {
   DEFAULT_HORIZONS,
   DELIVERED_NOTE_KEY,
+  MATURITY_READ,
+  SHAPE_PROPOSAL_KEY,
   aKind,
   IDEA_KIND,
   PLAN_KINDS_MISSING_MESSAGE,
@@ -285,6 +287,12 @@ export interface IdeaView {
   /** Its lifecycle state, and the actions that state offers (`plan-lifecycle.ts`). */
   state: IdeaState;
   actions: OfferedAction[];
+  /**
+   * An agent's standing proposal that it is ready to be marked shaped (`propose_shape`): shown
+   * under Needs you while the record can still be marked shaped, accepted by the person with Mark
+   * shaped. Null otherwise.
+   */
+  shapeProposal: ShapeProposal | null;
   /** What it needs next from planning, while a horizon carries it (`plan-steps.ts`); else null. */
   nextStep: PlanStep | null;
   createdAt: string;
@@ -330,6 +338,11 @@ interface PlanFacts {
   links: Map<string, string[]>;
   /** Each record's exploration links, read in the same pass: shown, never measured. */
   explorations: Map<string, string[]>;
+  /**
+   * Each record's standing proposal to be marked shaped (`shape-proposal`), read in one statement
+   * on the first view that asks: a pull that re-derives only the horizons never reads it.
+   */
+  proposals: () => Map<string, ShapeProposal>;
   /** The workspace's status categories, read once for the build. */
   categoryOf: (status: string) => StatusCategory | null;
   records: Map<string, RecordFacts>;
@@ -490,6 +503,13 @@ export interface IdeaPatch {
    * else by key).
    */
   breakdownBase?: string;
+  /**
+   * Propose it shaped: anyone's, held to the shaped gate as the plan stands after this write. The
+   * note says why; the person accepts it with Mark shaped or dismisses it (`shapeProposal`).
+   */
+  proposeShaped?: { note?: string | null };
+  /** The person sets a standing proposal aside without shaping it. */
+  dismissProposal?: boolean;
 }
 
 export interface HorizonPatch {
@@ -521,6 +541,8 @@ interface PlanRow {
   plan_delivered_on: string | null;
   /** The idea number a promoted record kept (migration 026); null on an unpromoted idea, which holds it as its identifier. */
   plan_idea_number: string | null;
+  /** 1 once a write made it more complete while raw (migration 028); `plan_maturity` already reads it (`MATURITY_READ`). */
+  plan_explored: number | null;
 }
 
 interface HorizonRow extends PlanRow {
@@ -540,8 +562,9 @@ interface WorkRow {
 }
 
 const RANK_STEP = 1024;
+// `plan_maturity` is read as every surface sees it: a raw record made more complete reads exploring.
 const PLAN_COLUMNS = `id, identifier, title, description, kind, status, parent_id, depth, created_at, updated_at,
-  plan_maturity, plan_horizon_id, plan_start, plan_target, plan_baseline_start, plan_baseline_target, plan_rank, plan_run_mode, plan_delivered_on, plan_idea_number`;
+  ${MATURITY_READ} AS plan_maturity, plan_horizon_id, plan_start, plan_target, plan_baseline_start, plan_baseline_target, plan_rank, plan_run_mode, plan_delivered_on, plan_idea_number, plan_explored`;
 
 /** Column name to the payload field the issue entity carries it as. */
 const FIELD_OF: Record<string, string> = {
@@ -554,12 +577,30 @@ const FIELD_OF: Record<string, string> = {
   plan_rank: "planRank",
   plan_run_mode: "planRunMode",
   plan_delivered_on: "planDeliveredOn",
+  plan_explored: "planExplored",
   parent_id: "parentId",
 };
 
 const QUESTIONS_KEY = "questions";
 const DECISIONS_KEY = "decisions";
 const BRIEF_KEY = "brief";
+
+/**
+ * The document keys whose write makes a record more complete (design/plan.md, "Maturity moves by
+ * enrichment"): its plan sections, questions and decisions. Not its brief, which a capture writes,
+ * and not the delivered note or a proposal, which are not the plan.
+ */
+const ENRICHING_KEYS: ReadonlySet<string> = new Set([...DOCUMENT_SECTIONS.map((name) => SECTION_KEYS[name]), QUESTIONS_KEY, DECISIONS_KEY]);
+
+/** An agent's proposal that a record is ready to be marked shaped: who, when, and why. */
+export interface ShapeProposal {
+  by: string | null;
+  at: string;
+  note: string | null;
+}
+
+/** What a proposal says when its author gave no reason. */
+const PROPOSAL_DEFAULT_NOTE = "Ready to be marked shaped.";
 
 export { scaffoldTaskId };
 
@@ -625,6 +666,7 @@ function ideaNumberOf(row: { identifier: string; plan_idea_number?: string | nul
 const STEERED_AS: Partial<Record<IdeaAction, SteeringWrite>> = {
   explore: "maturity",
   shape: "maturity",
+  dismiss_proposal: "maturity",
   unshape: "maturity",
   drop: "maturity",
   restore: "maturity",
@@ -715,10 +757,51 @@ export class PlanStore {
         { key },
       );
     }
+    if (key === SHAPE_PROPOSAL_KEY) {
+      throw new StapleError(
+        "validation",
+        `The shaped proposal of ${displayRef(row)} is written by proposing it (update_idea with propose_shaped, or staple idea propose), and the person accepts or dismisses it.`,
+        { key },
+      );
+    }
     if (LIST_KEYS.has(key)) assertListBody(key, body);
     if (key === QUESTIONS_KEY && body.split("\n").some((line) => line.trim() !== "" && !/^\s*[-*]\s+\[( |x|X|~)\]\s+\S/.test(line))) {
       throw new StapleError("validation", `The questions of ${displayRef(row)} are a checklist, one "- [ ] question" per line ("- [x]" resolved, "- [~]" deferred).`, { key });
     }
+  }
+
+  /**
+   * A raw document write on a record (`put_document`, `staple doc put`, a restore) that wrote one
+   * of its plan sections, its questions or its decisions made it more complete: a raw idea moves to
+   * exploring (`explore`). Called by the store after the write, in its transaction; the plan
+   * layer's own writes move it themselves.
+   */
+  noteDocumentWrite(id: string, key: string, actor: string | null): void {
+    if (!ENRICHING_KEYS.has(key) || !this.enabled()) return;
+    this.explore(id, actor, "document");
+  }
+
+  /**
+   * A write that made a raw idea more complete moves it to exploring, whoever made it (design/plan.md,
+   * "Maturity moves by enrichment"): its plan sections or rows, a question, a decision, linked research.
+   * Capture, import and title or brief edits never do, and nothing moves an idea to shaped.
+   *
+   * It writes the synced flag `plan_explored`, never `plan_maturity`, which stays the person's:
+   * two devices that enrich one idea offline write the same value, and one that enriches it while
+   * the person shapes or drops it on another touches a different field, so every device, a fresh
+   * one included, reads the person's maturity with no conflict. Read fresh, after the write it
+   * follows: a write that also set the maturity is read as set, and moves nothing.
+   */
+  private explore(id: string, actor: string | null, cause: string): void {
+    const row = this.db.prepare(`SELECT ${PLAN_COLUMNS} FROM issues WHERE id = ?`).get(id) as unknown as PlanRow | undefined;
+    if (!row || row.kind !== IDEA_KIND || row.plan_maturity !== "raw") return;
+    this.write(row.id, { plan_explored: 1 }, actor, "idea_explored", { from: "raw", to: "exploring", cause });
+  }
+
+  /** Its standing proposal to be marked shaped, or null (an emptied `shape-proposal` is none). */
+  private proposalOf(id: string): string | null {
+    const body = this.documentBody(id, SHAPE_PROPOSAL_KEY);
+    return body && body.trim() !== "" ? body : null;
   }
 
   private horizonStateOf(id: string): HorizonState {
@@ -1310,7 +1393,23 @@ export class PlanStore {
       carried.set(horizonId, list);
     }
     const stepInputs = this.stepInputsOf(rows, byId, records, sizes, carrier, breakdowns);
-    return { rows, byId, childIds, horizons, horizonDates, work, links, explorations, categoryOf, records, sizes, carried, carrier, stepInputs, steps: null, accounting: new Map() };
+    let proposals: Map<string, ShapeProposal> | null = null;
+    return { rows, byId, childIds, horizons, horizonDates, work, links, explorations, proposals: () => (proposals ??= this.proposals()), categoryOf, records, sizes, carried, carrier, stepInputs, steps: null, accounting: new Map() };
+  }
+
+  /** Every record's standing proposal to be marked shaped, in one statement: an emptied one is none. */
+  private proposals(): Map<string, ShapeProposal> {
+    const out = new Map<string, ShapeProposal>();
+    for (const row of this.db
+      .prepare(
+        `SELECT d.issue_id, r.body, r.author, r.created_at FROM documents d
+           JOIN document_revisions r ON r.issue_id = d.issue_id AND r.key = d.key AND r.revision = d.current_revision
+          WHERE d.key = ? AND trim(r.body) <> ''`,
+      )
+      .all(SHAPE_PROPOSAL_KEY) as Array<{ issue_id: string; body: string; author: string | null; created_at: string }>) {
+      out.set(row.issue_id, { by: row.author, at: row.created_at, note: row.body.trim() === PROPOSAL_DEFAULT_NOTE ? null : row.body.trim() });
+    }
+    return out;
   }
 
   /**
@@ -1328,7 +1427,8 @@ export class PlanStore {
   ): Map<string, Omit<PlanStepInput, "today">> {
     const out = new Map<string, Omit<PlanStepInput, "today">>();
     if (carrier.size === 0) return out;
-    const keys = [QUESTIONS_KEY, ...DOCUMENT_SECTIONS.map((name) => SECTION_KEYS[name])];
+    // A standing proposal rides the same statement: it makes the step the person's.
+    const keys = [QUESTIONS_KEY, SHAPE_PROPOSAL_KEY, ...DOCUMENT_SECTIONS.map((name) => SECTION_KEYS[name])];
     const heads = new Map<string, Map<string, string>>();
     for (const row of this.db
       .prepare(
@@ -1374,6 +1474,7 @@ export class PlanStore {
         scheduled: scheduledOn !== null,
         state,
         maturity,
+        proposed: (heads.get(id)?.get(SHAPE_PROPOSAL_KEY) ?? "").trim() !== "",
         ownWork: ownWork.length > 0,
         openQuestions: questions.filter((q) => !q.resolved && !q.deferred).map((q) => q.text),
         gate: () => shapedGate(sections, questions, { subIdea }),
@@ -1485,6 +1586,17 @@ export class PlanStore {
         (sections.breakdown.length === 0 ? subIdea : planRowsOf(this.db, row.id).some((planRow) => this.issueExists(scaffoldTaskId(row.id, planRow.id))));
       // A shaped plan is held to the gate again before anything is built from it.
       const planIncomplete = maturity === "shaped" && (state === "shaped" || scaffolded) ? this.gateOf(row.id, undefined, subIdea) : [];
+      const lifecycle = ideaLifecycle({
+        state,
+        promoted,
+        maturity,
+        delivered: delivered !== null,
+        ownLinks: ownLinks.length,
+        gate: maturity === "raw" || maturity === "exploring" ? () => this.gateOf(row.id, undefined, subIdea) : () => [],
+        scaffolded,
+        planIncomplete,
+        proposed: facts.proposals().has(row.id),
+      });
       return {
         id: row.id,
         identifier: shownIdentifier(row.identifier),
@@ -1531,16 +1643,9 @@ export class PlanStore {
         completeness: completeness(sections, questions, parseDecisions(this.documentBody(row.id, DECISIONS_KEY))),
         dependsOn: dependsOn(row.id, sections),
         planIncomplete,
-        ...ideaLifecycle({
-          state,
-          promoted,
-          maturity,
-          delivered: delivered !== null,
-          ownLinks: ownLinks.length,
-          gate: maturity === "raw" || maturity === "exploring" ? () => this.gateOf(row.id, undefined, subIdea) : () => [],
-          scaffolded,
-          planIncomplete,
-        }),
+        ...lifecycle,
+        // A proposal stands while the record can still be marked shaped; once shaped or dropped it is history.
+        shapeProposal: lifecycle.actions.some((action) => action.id === "shape") ? (facts.proposals().get(row.id) ?? null) : null,
         nextStep: steps.get(row.id) ?? null,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
@@ -1838,7 +1943,8 @@ export class PlanStore {
       // Shaped only when the plan, as this write leaves it, passes the gate: marked shaped, or restored into shaped.
       if (action === "shape" || (action === "restore" && maturity === "shaped")) assertShaped(displayRef(row), this.gateOf(row.id, sections));
       // Restored into raw, it is raw: what it holds follows the table, as a capture into raw does (never scheduled, no dates).
-      if (action === "restore" && maturity === "raw") assertRestorableToRaw(row, this.listedHorizon(row.plan_horizon_id), planLinksOf(this.db, row.id, "exploration").length > 0);
+      // A record made more complete reads exploring once restored into raw, which may hold them.
+      if (action === "restore" && maturity === "raw" && row.plan_explored === null) assertRestorableToRaw(row, this.listedHorizon(row.plan_horizon_id), planLinksOf(this.db, row.id, "exploration").length > 0);
       // The rest of one write is held to the state its maturity change leads to: shaping a raw idea
       // and scheduling it is one decision. A started or shipped record keeps its state.
       if (before !== "started" && before !== "shipped") state = maturity;
@@ -1852,10 +1958,22 @@ export class PlanStore {
     const delivery = patch.delivered === undefined || (patch.delivered === null && !marked) ? undefined : patch.delivered;
     if (delivery !== undefined) allow(delivery === null ? "clear_delivered" : "mark_delivered");
     const deliveredOn = delivery ? parseDeliveredOn(delivery.on, this.today()) : null;
+    if (patch.proposeShaped !== undefined) {
+      allow("propose_shape");
+      const missing = this.gateOf(row.id, sections);
+      if (missing.length > 0) {
+        throw new StapleError("validation", `${capitalized(displayRef(row))} cannot be proposed shaped yet: ${gateSentence(missing)}.`, { missing });
+      }
+    }
+    const proposed = this.proposalOf(row.id) !== null;
+    if (patch.dismissProposal) {
+      allow("dismiss_proposal");
+      if (!proposed) throw new StapleError("validation", `Nothing is proposed for ${displayRef(row)}; there is no proposal to dismiss.`);
+    }
     this.store.journaled(() => {
       if (patch.title !== undefined) this.store.updateIssue(row.id, { title: oneLine(patch.title, "An idea's title") }, actor);
       if (patch.brief !== undefined) this.store.putDocument(row.id, BRIEF_KEY, patch.brief ?? "", { author: actor }, { plan: true });
-      if (planPatch) this.writeSections(row.id, current, sections, planPatch, actor);
+      const enriched = planPatch ? this.writeSections(row.id, current, sections, planPatch, actor) : false;
       const columns: Record<string, unknown> = {};
       if (moves) columns.plan_maturity = maturity;
       if (patch.horizon !== undefined) columns.plan_horizon_id = patch.horizon === null ? null : this.horizonRow(patch.horizon).id;
@@ -1876,6 +1994,13 @@ export class PlanStore {
         if (note !== "" || this.documentBody(row.id, DELIVERED_NOTE_KEY)) this.store.putDocument(row.id, DELIVERED_NOTE_KEY, note, { author: actor }, { plan: true });
       }
       this.write(row.id, columns, actor, "idea_updated", { fields: Object.keys(columns) });
+      if (enriched) this.explore(row.id, actor, "plan");
+      // The person moved its maturity, or set the proposal aside: a proposal no longer stands.
+      if (proposed && (moves || patch.dismissProposal)) this.store.putDocument(row.id, SHAPE_PROPOSAL_KEY, "", { author: actor, changeSummary: moves ? "proposal settled" : "proposal dismissed" }, { plan: true });
+      if (patch.proposeShaped !== undefined) {
+        const note = typeof patch.proposeShaped.note === "string" && patch.proposeShaped.note.trim() !== "" ? patch.proposeShaped.note.trim() : PROPOSAL_DEFAULT_NOTE;
+        this.store.putDocument(row.id, SHAPE_PROPOSAL_KEY, note, { author: actor, changeSummary: "proposed shaped" }, { plan: true });
+      }
       if (patch.parent !== undefined) this.reparent(row, patch.parent, actor);
       this.keepBaselines(row.id, actor);
       this.settleMembership(actor);
@@ -1887,13 +2012,16 @@ export class PlanStore {
    * Each document section that changed, as its own revisioned document (an emptied one keeps an
    * empty revision); and the breakdown, when the patch names it, one row field at a time.
    */
-  private writeSections(id: string, before: PlanSections, after: PlanSections, patch: PlanPatch, actor: string | null): void {
+  private writeSections(id: string, before: PlanSections, after: PlanSections, patch: PlanPatch, actor: string | null): boolean {
+    let changed = false;
     for (const name of DOCUMENT_SECTIONS) {
       const body = renderSection(name, after);
       if (body === renderSection(name, before)) continue;
       this.store.putDocument(id, SECTION_KEYS[name], body, { author: actor, changeSummary: `${name} updated` }, { plan: true });
+      changed = true;
     }
-    if (patch.breakdown !== undefined) this.writeBreakdown(id, after.breakdown, actor);
+    if (patch.breakdown !== undefined && this.writeBreakdown(id, after.breakdown, actor)) changed = true;
+    return changed;
   }
 
   /**
@@ -1901,7 +2029,7 @@ export class PlanStore {
    * the idea's `milestone` entity (`plan-rows.ts`), a removed row a null. A row keeps its rank
    * while the order allows, so an edit to one row never rewrites the others. One operation.
    */
-  private writeBreakdown(id: string, rows: readonly BreakdownRow[], actor: string | null): void {
+  private writeBreakdown(id: string, rows: readonly BreakdownRow[], actor: string | null): boolean {
     const current = new Map(planRowsOf(this.db, id).map((row) => [row.id, row]));
     const payload: Record<string, PlanRowValue | null> = {};
     const counts = { added: 0, changed: 0, removed: 0 };
@@ -1930,9 +2058,10 @@ export class PlanStore {
       payload[planRowField(rowId)] = null;
       counts.removed += 1;
     }
-    if (Object.keys(payload).length === 0) return;
+    if (Object.keys(payload).length === 0) return false;
     this.store.journal.record({ entity: "milestone", entityId: id, verb: "update", payload, actor: actor ?? null });
     insertEvent(this.db, { kind: "idea_breakdown_updated", issueId: id, actor, payload: counts });
+    return true;
   }
 
   /** Re-file a record under another record (or at the top), moving its subtree's depth with it. */
@@ -1961,7 +2090,10 @@ export class PlanStore {
     this.allowIdea(row, "ask", {});
     const questions = parseQuestions(this.documentBody(row.id, QUESTIONS_KEY));
     questions.push({ text: oneLine(text, "A question"), resolved: false });
-    this.store.putDocument(row.id, QUESTIONS_KEY, renderQuestions(questions), { author: actor, changeSummary: "question added" }, { plan: true });
+    this.store.journaled(() => {
+      this.store.putDocument(row.id, QUESTIONS_KEY, renderQuestions(questions), { author: actor, changeSummary: "question added" }, { plan: true });
+      this.explore(row.id, actor, "question");
+    });
     return this.detail(row.id);
   }
 
@@ -1975,7 +2107,10 @@ export class PlanStore {
       throw new StapleError("validation", `${displayRef(row)} has ${questions.length} question${questions.length === 1 ? "" : "s"}; there is no #${position}.`);
     }
     question.resolved = resolved;
-    this.store.putDocument(row.id, QUESTIONS_KEY, renderQuestions(questions), { author: actor, changeSummary: resolved ? "question resolved" : "question reopened" }, { plan: true });
+    this.store.journaled(() => {
+      this.store.putDocument(row.id, QUESTIONS_KEY, renderQuestions(questions), { author: actor, changeSummary: resolved ? "question resolved" : "question reopened" }, { plan: true });
+      this.explore(row.id, actor, "question");
+    });
     return this.detail(row.id);
   }
 
@@ -1990,7 +2125,10 @@ export class PlanStore {
     }
     question.deferred = deferred;
     if (deferred) question.resolved = false;
-    this.store.putDocument(row.id, QUESTIONS_KEY, renderQuestions(questions), { author: actor, changeSummary: deferred ? "question deferred" : "question reopened" }, { plan: true });
+    this.store.journaled(() => {
+      this.store.putDocument(row.id, QUESTIONS_KEY, renderQuestions(questions), { author: actor, changeSummary: deferred ? "question deferred" : "question reopened" }, { plan: true });
+      this.explore(row.id, actor, "question");
+    });
     return this.detail(row.id);
   }
 
@@ -1999,7 +2137,10 @@ export class PlanStore {
     this.allowIdea(row, "decide", {});
     const decisions = parseDecisions(this.documentBody(row.id, DECISIONS_KEY));
     decisions.push(`${this.today()}: ${oneLine(text, "A decision")}`);
-    this.store.putDocument(row.id, DECISIONS_KEY, decisions.map((line) => `- ${line}`).join("\n") + "\n", { author: actor, changeSummary: "decision added" }, { plan: true });
+    this.store.journaled(() => {
+      this.store.putDocument(row.id, DECISIONS_KEY, decisions.map((line) => `- ${line}`).join("\n") + "\n", { author: actor, changeSummary: "decision added" }, { plan: true });
+      this.explore(row.id, actor, "decision");
+    });
     return this.detail(row.id);
   }
 
@@ -2283,6 +2424,7 @@ export class PlanStore {
     if (planLinkPurposeOf(this.db, row.id, target.id) === purpose) return this.ideaView(row.id);
     this.store.journaled(() => {
       this.link(row, target.id, actor, purpose);
+      if (purpose === "exploration") this.explore(row.id, actor, "research");
       this.settleMembership(actor);
     });
     return this.ideaView(row.id);
@@ -2550,17 +2692,24 @@ function ideaLifecycle(input: {
   scaffolded: boolean;
   /** A shaped plan that no longer passes the gate: Scaffold and Promote are held back, saying why. */
   planIncomplete: readonly string[];
+  /** A proposal to be marked shaped stands: only then is it offered for dismissal. */
+  proposed: boolean;
 }): { state: IdeaState; actions: OfferedAction[] } {
   const actions: OfferedAction[] = [];
+  // Mark shaped and Propose shaped read the same gate: once.
+  let gated: string[] | null = null;
+  const gate = (): string[] => (gated ??= input.gate());
   for (const id of ideaOffered(input.state, input.promoted, input.maturity, input.delivered)) {
     if (id === "open_epic" && !input.promoted) continue;
     // A started record that was promoted or linked some other way has nothing to scaffold into.
     if (id === "scaffold" && input.state === "started" && !input.scaffolded) continue;
+    // Nothing to dismiss while nothing is proposed.
+    if (id === "dismiss_proposal" && !input.proposed) continue;
     const rule = IDEA_ACTIONS[id];
     const offered: OfferedAction = { id, label: rule.label, who: rule.who };
     if (id === "unlink" && input.ownLinks === 0) offered.disabledReason = "Nothing is linked to it.";
-    if (id === "shape") {
-      const missing = input.gate();
+    if (id === "shape" || id === "propose_shape") {
+      const missing = gate();
       if (missing.length > 0) offered.disabledReason = `It needs ${gateSentence(missing).replace(/^it needs /, "")}.`;
     }
     if ((id === "scaffold" || id === "promote") && input.planIncomplete.length > 0) {
@@ -2681,6 +2830,10 @@ function assertRestorableToRaw(row: Pick<PlanRow, "identifier" | "title" | "plan
 }
 
 /** The shaped gate as a refusal: what the plan still needs, named. */
+function capitalized(text: string): string {
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
+}
+
 function assertShaped(subject: string, missing: readonly string[]): void {
   if (missing.length === 0) return;
   throw new StapleError("validation", `${subject.charAt(0).toUpperCase()}${subject.slice(1)} cannot be marked shaped yet: ${gateSentence(missing)}.`, { missing });

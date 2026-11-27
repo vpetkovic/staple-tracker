@@ -171,6 +171,8 @@ export const ISSUE_FIELDS: Record<string, Column> = {
   baseCommit: col("base_commit"),
   // The number a promoted idea keeps (migration 026, idea-numbers.ts).
   planIdeaNumber: col("plan_idea_number"),
+  // An idea made more complete while raw: it reads exploring (migration 028, plan.ts `MATURITY_READ`).
+  planExplored: col("plan_explored"),
 };
 
 /**
@@ -193,6 +195,7 @@ export const SPARSE_ISSUE_FIELDS: ReadonlySet<string> = new Set([
   "branch",
   "baseCommit",
   "planIdeaNumber",
+  "planExplored",
 ]);
 
 export const COMMENT_FIELDS: Record<string, Column> = {

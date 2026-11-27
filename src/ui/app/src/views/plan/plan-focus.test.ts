@@ -25,6 +25,7 @@ function idea(id: string, extra: Partial<IdeaData> = {}): IdeaData {
     rank: 0,
     links: [],
     explorations: [],
+    shapeProposal: null,
     missingLinks: [],
     linkCount: 0,
     resolvedLinks: 0,
@@ -105,6 +106,13 @@ describe("narrowing the plan", () => {
 
   it("keeps the ideas that match and every ancestor of each, in plan order", () => {
     expect(ids(focusPlan(plan(), "late", ""))).toEqual(["root", "middle", "late"]);
+  });
+
+  it("keeps an idea an agent proposed shaped under Needs you, whether or not a horizon carries it", () => {
+    const proposed = idea("proposed", { title: "Proposed", state: "exploring", shapeProposal: { by: "agent", at: "2026-11-27T10:00:00.000Z", note: null } });
+    const withIt = { ...plan(), ideas: [...plan().ideas, proposed] };
+    expect(ids(focusPlan(withIt, "you", ""))).toEqual(["asks", "proposed"]);
+    expect(focusCounts(withIt).you).toBe(focusCounts(plan()).you + 1);
   });
 
   it("reads each focus from its own flag, never a shipped late idea or a dropped one", () => {

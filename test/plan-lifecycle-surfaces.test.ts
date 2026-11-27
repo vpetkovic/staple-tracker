@@ -181,6 +181,13 @@ const maturityWrite = (target: string): Write => ({
 const WRITES: Write[] = [
   { key: "edit", action: () => "edit", http: (ref) => ["update", { ref, title: unique("Renamed") }], mcp: (ref) => ["update_idea", { ref, title: unique("Renamed") }], cli: (ref) => ["idea", "set", ref, "--title", unique("Renamed")] },
   { key: "ask", action: () => "ask", http: (ref) => ["question", { ref, text: "Why?" }], mcp: (ref) => ["update_idea", { ref, add_question: "Why?" }], cli: (ref) => ["idea", "ask", ref, "Why?"] },
+  {
+    key: "propose_shape",
+    action: () => "propose_shape",
+    http: (ref) => ["update", { ref, proposeShaped: { note: "Ready" } }],
+    mcp: (ref) => ["update_idea", { ref, propose_shaped: { note: "Ready" } }],
+    cli: (ref) => ["idea", "propose", ref, "--note", "Ready"],
+  },
   { key: "decide", action: () => "decide", http: (ref) => ["decision", { ref, text: "This way" }], mcp: (ref) => ["update_idea", { ref, add_decision: "This way" }], cli: (ref) => ["idea", "decide", ref, "This way"] },
   ...["raw", "exploring", "shaped", "dropped"].map(maturityWrite),
   { key: "schedule", action: () => "schedule", http: (ref, c) => ["update", { ref, horizon: c.horizon }], mcp: (ref, c) => ["update_idea", { ref, horizon: c.horizon }], cli: (ref, c) => ["idea", "set", ref, "--horizon", c.horizon] },
@@ -254,7 +261,8 @@ describe("the idea lifecycle on every surface", () => {
       const row = (await plan()).ideas.find((idea) => idea.id === id)!;
       expect(row.state).toBe(state);
       // The epic opens once promoted; a started record scaffolds again only if it was scaffolded.
-      const table = ideaOffered(state, row.promoted).filter((action) => (action !== "open_epic" || row.promoted) && !(action === "scaffold" && state === "started"));
+      // Dismissing a proposal is offered only while one stands, and none does here.
+      const table = ideaOffered(state, row.promoted).filter((action) => (action !== "open_epic" || row.promoted) && !(action === "scaffold" && state === "started") && action !== "dismiss_proposal");
       expect(row.actions.map((action) => action.id), state).toEqual(table);
       for (const action of row.actions) expect(action.who, `${state}/${action.id}`).toBe(IDEA_ACTIONS[action.id as IdeaAction].who);
     }
@@ -317,7 +325,8 @@ describe("the idea lifecycle on every surface", () => {
             const adoptable = write.key === "adopt" || write.key === "link_research" || (write.key === "unlink" && linked === null) ? await task() : "";
             // Research to unlink, linked as the person first where the state offers linking it.
             let research: string | null = null;
-            if (write.key === "unlink_research" && ideaOffers(state, "link_research")) {
+            // A raw idea takes research, which explores it: there is research to unlink only where unlinking it is offered.
+            if (write.key === "unlink_research" && ideaOffers(state, "unlink_research")) {
               research = await task();
               expect((await http("/api/plan/adopt", { ref: id, issue: research, purpose: "exploration" })).status).toBe(200);
             }
@@ -365,7 +374,7 @@ describe("promoted records and parents with sub-ideas on every surface", () => {
       if (parent === "dropped") expect((await http("/api/plan/update", { ref: id, maturity: "dropped" })).status).toBe(200);
       const row = (await plan()).ideas.find((idea) => idea.id === id)!;
       expect(row.state, `${parent} parent, ${child} child`).toBe(parent);
-      expect(row.actions.map((action) => action.id)).toEqual([...IDEA_LIFECYCLE[parent]]);
+      expect(row.actions.map((action) => action.id)).toEqual(IDEA_LIFECYCLE[parent].filter((action) => action !== "dismiss_proposal"));
       // And on the agent's surface too.
       const got = toolPayload(await mcpCall("get_idea", { ref: id })) as { idea: { state: string } };
       expect(got.idea.state).toBe(parent);
@@ -377,7 +386,7 @@ describe("promoted records and parents with sub-ideas on every surface", () => {
     expect((await mcpCall("start_idea", { ref: id, adopt: await task() })).isError).toBeFalsy();
     const row = (await plan()).ideas.find((idea) => idea.id === id)!;
     expect(row).toMatchObject({ state: "started", maturity: "exploring", promoted: false });
-    const table = ideaOffered("started", false, "exploring").filter((action) => action !== "open_epic" && action !== "scaffold");
+    const table = ideaOffered("started", false, "exploring").filter((action) => action !== "open_epic" && action !== "scaffold" && action !== "dismiss_proposal");
     expect(row.actions.map((action) => action.id)).toEqual(table);
     const got = toolPayload(await mcpCall("get_idea", { ref: id })) as { idea: { state: string; actions: Offered[] } };
     expect(got.idea.actions.map((action) => action.id)).toEqual(table);

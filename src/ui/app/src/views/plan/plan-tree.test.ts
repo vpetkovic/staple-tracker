@@ -51,6 +51,7 @@ function idea(id: string, title: string, extra: Partial<IdeaData> = {}): IdeaDat
     state: "shaped",
     actions: [],
     nextStep: null,
+    shapeProposal: null,
     createdAt: "2026-11-01T00:00:00.000Z",
     updatedAt: "2026-11-01T00:00:00.000Z",
     ...extra,

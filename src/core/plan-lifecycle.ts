@@ -41,9 +41,12 @@ function list(words: readonly string[]): string {
   return `${words.slice(0, -1).join(", ")} or ${words.at(-1)}`;
 }
 
+/** Offered only while the data allows (an epic to open, a proposal to dismiss): never named as an alternative. */
+const DATA_HELD: ReadonlySet<string> = new Set(["open_epic", "dismiss_proposal"]);
+
 /** What a state offers instead, for a refusal: the labels, lower-cased. */
 function offeredWords(actions: readonly string[], rules: Record<string, ActionRule>): string {
-  return list(actions.filter((id) => id !== "open_epic").map((id) => rules[id]!.label.toLowerCase()));
+  return list(actions.filter((id) => !DATA_HELD.has(id)).map((id) => rules[id]!.label.toLowerCase()));
 }
 
 /**

@@ -11,7 +11,8 @@ export type PlanFocus = "all" | "you" | "late" | "notStarted";
 
 /** What each focus keeps, from the payload's own flags. */
 const FOCUS: Record<Exclude<PlanFocus, "all">, (idea: IdeaData) => boolean> = {
-  you: (idea) => idea.nextStep?.who === "person",
+  // Its next step is the person's, or an agent proposed it shaped and the person has not answered.
+  you: (idea) => idea.nextStep?.who === "person" || idea.shapeProposal != null,
   late: (idea) => idea.late && idea.state !== "shipped",
   notStarted: (idea) => idea.notStarted,
 };

@@ -17,6 +17,7 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { isIdeaNumber } from "./idea-numbers.js";
+import { MATURITY_READ } from "./plan.js";
 
 export const SCAFFOLD_ORIGIN_KIND = "plan-row";
 export const SPARKED_ORIGIN_KIND = "sparked";
@@ -91,7 +92,7 @@ interface OriginRow {
   origin_id: string | null;
 }
 
-const RECORD_COLUMNS = "id, identifier, title, kind, status, plan_maturity, plan_idea_number";
+const RECORD_COLUMNS = `id, identifier, title, kind, status, ${MATURITY_READ} AS plan_maturity, plan_idea_number`;
 
 function ideaNumberOf(row: RecordRow): string | null {
   return row.plan_idea_number ?? (isIdeaNumber(row.identifier) ? row.identifier : null);

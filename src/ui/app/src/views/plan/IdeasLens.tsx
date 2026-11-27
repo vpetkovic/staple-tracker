@@ -431,10 +431,15 @@ function SubIdeas({ entry, onOpen, filtering }: { entry: BoardEntry; onOpen: (id
   );
 }
 
-/** Late and not started, as the server flags them: what the Late and Not started pills pick a card by. */
+/** Proposed shaped, late and not started, as the server flags them: what the Needs you, Late and Not started pills pick a card by. */
 function RiskFlags({ idea }: { idea: IdeaData }) {
   return (
     <>
+      {idea.shapeProposal ? (
+        <Flag tone="you" data-plan-card-flag="proposed">
+          proposed shaped
+        </Flag>
+      ) : null}
       {idea.late ? <Flag tone="late" data-plan-card-flag="late" /> : null}
       {idea.notStarted ? <Flag tone="notStarted" data-plan-card-flag="notStarted" /> : null}
     </>

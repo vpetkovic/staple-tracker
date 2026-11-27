@@ -153,10 +153,13 @@ describe("an exploration link on one device", () => {
     expect(payloads.at(-1)).toMatchObject({ issue: ticket, purpose: "exploration", from: "delivery" });
   });
 
-  it("refuses research on a raw idea, naming its state", () => {
+  it("takes research on a raw idea, which moves it to exploring, and refuses it on a dropped one", () => {
     const idea = plan.capture({ title: "Raw thought" }, "agent").id;
     const spike = store.createIssue({ title: "Spike" }).identifier;
-    expect(refused(() => plan.adopt(idea, spike, "agent", { purpose: "exploration" })).message).toMatch(/is raw; it cannot be linked to research/);
+    expect(plan.adopt(idea, spike, "agent", { purpose: "exploration" })).toMatchObject({ maturity: "exploring", state: "exploring", linkCount: 0 });
+    const dropped = plan.capture({ title: "Dropped thought" }, "agent").id;
+    plan.update(dropped, { maturity: "dropped" }, "vp", PERSON);
+    expect(refused(() => plan.adopt(dropped, spike, "agent", { purpose: "exploration" })).message).toMatch(/is dropped; it cannot be linked to research/);
   });
 
   it("is hidden with planning off and kept for when it is back on", () => {
