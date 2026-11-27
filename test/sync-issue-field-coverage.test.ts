@@ -67,6 +67,7 @@ const EXCLUDED: Record<string, string> = {
   base_commit: "as branch",
   plan_idea_number: "null at create; promotion journals the number a promoted idea keeps, and the plan layer journals a legacy record's (test/cloud-idea-numbers.test.ts)",
   plan_ticket_number: "null at create; converting a ticket into an idea journals the ticket number it keeps (test/plan-convert-ticket.test.ts)",
+  plan_explored: "null at create; the plan layer journals it when a write makes a raw idea more complete (test/plan-maturity-enrichment.test.ts)",
 };
 
 function armed(): WorkspaceStore {

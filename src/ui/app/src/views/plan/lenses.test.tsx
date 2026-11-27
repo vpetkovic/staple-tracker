@@ -33,6 +33,7 @@ function idea(id: string, extra: Partial<IdeaData> = {}): IdeaData {
     rank: 0,
     links: [],
     explorations: [],
+    shapeProposal: null,
     missingLinks: [],
     linkCount: 0,
     resolvedLinks: 0,

@@ -626,6 +626,7 @@ const ONE_CLICK: Record<string, (ref: string) => { verb: string; body: Record<st
   unshape: (ref) => ({ verb: "update", body: { ref, maturity: "exploring" } }),
   drop: (ref) => ({ verb: "update", body: { ref, maturity: "dropped" } }),
   restore: (ref) => ({ verb: "update", body: { ref, maturity: "exploring" } }),
+  dismiss_proposal: (ref) => ({ verb: "update", body: { ref, dismissProposal: true } }),
   promote: (ref) => ({ verb: "promote", body: { ref } }),
   reset_baseline: (ref) => ({ verb: "reset-baseline", body: { ref } }),
 };

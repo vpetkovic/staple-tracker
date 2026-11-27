@@ -42,6 +42,7 @@ function idea(id: string, extra: Partial<IdeaData> = {}): IdeaData {
     // Carried where it is scheduled, unless a fixture says otherwise.
     carriedBy: extra.horizonId ?? null,
     nextStep: null,
+    shapeProposal: null,
     progress: null,
     percent: null,
     actual: { start: null, end: null, forecastEnd: null },

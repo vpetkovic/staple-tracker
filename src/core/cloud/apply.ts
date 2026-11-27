@@ -173,6 +173,8 @@ export const ISSUE_FIELDS: Record<string, Column> = {
   planIdeaNumber: col("plan_idea_number"),
   // The ticket number a ticket converted into an idea keeps (migration 028, design/plan.md).
   planTicketNumber: col("plan_ticket_number"),
+  // An idea made more complete while raw: it reads exploring (migration 029, plan.ts `MATURITY_READ`).
+  planExplored: col("plan_explored"),
 };
 
 /**
@@ -196,6 +198,7 @@ export const SPARSE_ISSUE_FIELDS: ReadonlySet<string> = new Set([
   "baseCommit",
   "planIdeaNumber",
   "planTicketNumber",
+  "planExplored",
 ]);
 
 export const COMMENT_FIELDS: Record<string, Column> = {

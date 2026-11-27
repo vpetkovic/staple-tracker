@@ -38,6 +38,7 @@ function idea(patch: Partial<IdeaData> = {}): IdeaData {
     rank: 1024,
     links: [],
     explorations: [],
+    shapeProposal: null,
     missingLinks: [],
     linkCount: 0,
     resolvedLinks: 0,
@@ -161,6 +162,27 @@ describe("Where it stands, for an idea being shaped", () => {
     const dropped = standing(tab(record(idea({ state: "dropped", maturity: "dropped", stage: "dropped", actions: [act("restore")] }))));
     expect(text(dropped)).toContain("Dropped");
     expect(dropped).not.toContain("To shape it");
+  });
+});
+
+describe("Where it stands, proposed shaped", () => {
+  const proposal = { by: "agent-7", at: "2026-11-26T09:30:00.000Z", note: "Goal, breakdown and acceptance are settled." };
+  it("says who proposed it, when and why, with Accept shaped and Dismiss, and flags it on the status line", () => {
+    const rec = record(idea({ state: "exploring", maturity: "exploring", shapeProposal: proposal, actions: [...EDITS, act("shape"), act("dismiss_proposal")] }), { missingForShaped: [] });
+    const html = tab(rec);
+    const words = text(block(standing(html), "data-plan-proposal="));
+    expect(words).toBe("proposed shaped agent-7 proposed it shaped on Nov 26: Goal, breakdown and acceptance are settled. Accept shaped Dismiss");
+    expect(block(html, "data-plan-proposal-accept=")).not.toMatch(/ disabled=""/);
+    expect(text(renderToStaticMarkup(<IdeaStatusLine record={rec} />))).toContain("proposed shaped");
+  });
+
+  it("holds Accept back with the gate's reason while the plan fails it, and shows nothing without a proposal", () => {
+    const held = record(idea({ state: "exploring", maturity: "exploring", shapeProposal: { ...proposal, note: null }, actions: [...EDITS, act("shape", { disabledReason: "It needs a goal." })] }), { missingForShaped: ["a goal"] });
+    const html = standing(tab(held));
+    expect(text(block(html, "data-plan-proposal-held="))).toBe("It needs a goal.");
+    expect(block(html, "data-plan-proposal-accept=")).toMatch(/ disabled=""/);
+    expect(text(block(html, "data-plan-proposal="))).toContain("proposed it shaped on Nov 26.");
+    expect(standing(tab(record(idea())))).not.toContain("data-plan-proposal");
   });
 });
 

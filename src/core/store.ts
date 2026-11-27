@@ -8249,6 +8249,8 @@ export class WorkspaceStore {
         },
         actor: opts.author ?? null,
       });
+      // A plan section, questions or decisions written on a raw idea move it to exploring (design/plan.md).
+      if (!internal.plan && row.kind === IDEA_KIND) this.plan().noteDocumentWrite(row.id, cleanKey, opts.author ?? null);
       return { key: cleanKey, revision, instructions };
     });
   }

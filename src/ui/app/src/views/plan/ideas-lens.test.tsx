@@ -29,6 +29,7 @@ function idea(id: string, extra: Partial<IdeaData> = {}): IdeaData {
     rank: 0,
     links: [],
     explorations: [],
+    shapeProposal: null,
     missingLinks: [],
     linkCount: 0,
     resolvedLinks: 0,
@@ -82,6 +83,18 @@ describe("a raw idea", () => {
     expect(planActionItems("", offered).find((item) => item.id === "explore")?.call).toMatchObject({ verb: "update", body: { ref: "r", maturity: "exploring" } });
   });
 
+  it("gives a raw idea an agent proposed shaped Accept shaped in place of Explore, held back with the gate's reason", () => {
+    const proposal = { by: "agent-7", at: "2026-11-27T10:00:00.000Z", note: null };
+    const ready = idea("ready", { shapeProposal: proposal, actions: [{ id: "explore", label: "Start exploring", who: "person" }, { id: "shape", label: "Mark shaped", who: "person" }] });
+    const held = idea("held", { shapeProposal: proposal, actions: [{ id: "explore", label: "Start exploring", who: "person" }, { id: "shape", label: "Mark shaped", who: "person", disabledReason: "It needs a goal before it is shaped." }] });
+    const html = board([ready, held]);
+    expect(card(html, "ready")).toContain('data-plan-action="shape"');
+    expect(card(html, "ready")).not.toContain('data-plan-action="explore"');
+    expect(text(card(html, "ready"))).toContain("Accept shaped");
+    expect(card(html, "held")).toMatch(/data-plan-action="shape"[^>]*>|disabled=""[^>]*data-plan-action="shape"/);
+    expect(card(html, "held")).toContain('title="It needs a goal"');
+  });
+
   it("lists the newest capture first", () => {
     const html = board([idea("old", { createdAt: "2026-11-01T00:00:00.000Z" }), idea("new", { createdAt: "2026-11-24T00:00:00.000Z" })]);
     expect(html.indexOf('data-plan-card="new"')).toBeLessThan(html.indexOf('data-plan-card="old"'));
@@ -110,6 +123,18 @@ describe("an exploring card", () => {
     const result = shaping(ready);
     expect(result?.ready && result.item.call).toMatchObject({ verb: "update", body: { ref: "ok", maturity: "shaped" } });
     expect(card(board([exploring("none")]), "none")).not.toContain("data-plan-shaping");
+  });
+
+  it("flags a card an agent proposed shaped, and its Mark shaped reads Accept shaped, the same write", () => {
+    const proposed = exploring("pr", { actions: [{ id: "shape", label: "Mark shaped", who: "person" }], shapeProposal: { by: "agent-7", at: "2026-11-27T10:00:00.000Z", note: null } });
+    const html = card(board([proposed, exploring("plain", { actions: [{ id: "shape", label: "Mark shaped", who: "person" }] })]), "pr");
+    expect(html).toContain('data-plan-card-flag="proposed"');
+    expect(text(html)).toContain("proposed shaped");
+    expect(text(html)).toContain("Accept shaped");
+    expect(html).toContain('data-plan-action="shape"');
+    const plain = card(board([exploring("plain", { actions: [{ id: "shape", label: "Mark shaped", who: "person" }] })]), "plain");
+    expect(plain).not.toContain('data-plan-card-flag="proposed"');
+    expect(text(plain)).toContain("Mark shaped");
   });
 
   it("shows the brief's first line when the payload has one", () => {
