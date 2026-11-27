@@ -112,6 +112,8 @@ next     APP-10 (queue position 1)
   `cancelled`.
 - **next** is the ticket an agent would take first inside this milestone, with its
   position in the pickup queue (`staple queue`), not its place among the members.
+  Queued work comes first; after it, the milestone's own work in the member order
+  you set.
 
 `staple milestone ls` lists every open milestone on one line each. In the web UI, the
 **Milestones** view shows the same, and a milestone's detail shows the goal with its

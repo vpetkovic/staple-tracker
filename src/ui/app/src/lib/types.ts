@@ -1612,6 +1612,21 @@ export interface MilestoneGoal {
   /** Every criterion met; true when the milestone has none. */
   met: boolean;
   pace: GoalPace;
+  /**
+   * Present only while a mark counts for nothing: judged on one device while another removed its
+   * criterion (`removed`), or an earlier of two concurrent judgements of one criterion
+   * (`superseded`). The next criteria edit clears it. Mirrors core.
+   */
+  cleared?: ClearedCriterionMark[];
+}
+
+/** A mark that counts for nothing, and why. Mirrors core `ClearedCriterionMark`. */
+export interface ClearedCriterionMark {
+  criterion: string;
+  verdict: CriterionVerdict;
+  markedBy: string;
+  markedAt: string;
+  reason: "removed" | "superseded";
 }
 
 // ---------- the pickup queue (R2c / STA-168) ----------
@@ -1697,6 +1712,16 @@ export interface QueueView {
   effective: EffectiveQueueRow[];
   /** Only on an enqueue: the issue was already in the plan and nothing was written. */
   replayed?: boolean;
+  /** The workspace's `queue.policy`: under `strict` a later row cannot be claimed. */
+  policy?: QueuePolicy;
+}
+
+export type QueuePolicy = "advisory" | "strict";
+
+/** `GET /api/queues`: every workspace's plan, one section each, and the ones that could not be read. */
+export interface HubQueues {
+  workspaces: Array<QueueView & { slug: string; prefix: string; policy: QueuePolicy }>;
+  failed: Array<{ workspace: string; message: string }>;
 }
 
 /** `GET /api/queue/next`: the one row an agent should take, and what it stepped over. */

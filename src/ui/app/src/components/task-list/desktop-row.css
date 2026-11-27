@@ -401,16 +401,12 @@
 }
 
 /*
- * From 1600px the list holds the shell's page width (`max-w-page`, the toolbar's width) and
- * spends the extra room on a real "who" column: the name beside the avatar, so who is on
+ * From 1600px the list spends the extra room on a real "who" column:
+ * the name beside the avatar, so who is on
  * each task reads down the list without hovering. A long name widens its own row's slot
  * rather than being cut short.
  */
 @media (min-width: 1600px) {
-  .staple-tree[data-desk] {
-    max-width: var(--container-page, 1600px);
-    margin-inline: auto;
-  }
   .staple-row[data-desk] {
     --desk-who-w: 184px;
   }

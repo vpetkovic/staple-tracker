@@ -360,7 +360,7 @@ export function RunDetail({
   const open: Open = (ref) => onOpenTicket(entry.workspace, ref);
   const changed = instructionsLine(entry);
   return (
-    <article data-run-detail={entry.run.id} aria-label={runTitle(entry)} className="flex max-w-[920px] flex-col gap-4 px-4 pt-3 pb-8 @min-[900px]/auto:gap-5 @min-[900px]/auto:px-7 @min-[900px]/auto:pt-5 @min-[900px]/auto:pb-10">
+    <article data-run-detail={entry.run.id} aria-label={runTitle(entry)} className="flex flex-col gap-4 px-4 pt-3 pb-8 @min-[900px]/auto:gap-5 @min-[900px]/auto:px-7 @min-[900px]/auto:pt-5 @min-[900px]/auto:pb-10">
       <BackLink onBack={onBack} />
       <Header entry={entry} showWorkspace={showWorkspace} open={open} />
       {live ? <LiveNow entry={entry} open={open} now={now} /> : <EndedNow entry={entry} open={open} now={now} />}

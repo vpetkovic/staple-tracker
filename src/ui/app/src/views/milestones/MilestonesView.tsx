@@ -84,6 +84,7 @@ import {
   hiddenMemberCount,
   isFinishedMilestone,
   memberListRows,
+  selectedMilestone,
   visibleMilestones,
   milestoneRisk,
   movedOrder,
@@ -1123,7 +1124,6 @@ export function MilestonesView({ onAuthError }: { onAuthError: (error: AuthError
 function WorkspaceMilestones({ workspace, onAuthError }: { workspace: string; onAuthError: (error: AuthError) => void }) {
   const session = useSession();
   const layout = useLayout();
-  const [selectedRef, setSelectedRef] = useState<string | null>(session.milestoneFocus);
   const [fullScreen, setFullScreen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<MemberWriteFailure | null>(null);
@@ -1147,8 +1147,21 @@ function WorkspaceMilestones({ workspace, onAuthError }: { workspace: string; on
   // The milestone the page is pointed at or has open stays listed even when finished and Done
   // is hidden: a link to it shows it, never quietly another one.
   const { rows: sorted, hiddenFinished } = useMemo(
-    () => visibleMilestones(everything, showDone, [selectedRef, session.milestoneFocus]),
-    [everything, showDone, selectedRef, session.milestoneFocus],
+    () => visibleMilestones(everything, showDone, [session.milestoneFocus]),
+    [everything, showDone, session.milestoneFocus],
+  );
+  // The milestone on screen is the address's focus (`selectedMilestone`): selecting one, a
+  // row's milestone marker, Back and Forward all move it, and a reload lands on it.
+  const selectedRef = selectedMilestone({
+    focus: session.milestoneFocus,
+    listed: sorted,
+    fillPane: layout === "split" || fullScreen,
+  });
+  const onSelect = useCallback(
+    (identifier: string) => {
+      if (identifier !== selectedRef) session.focusMilestone(identifier);
+    },
+    [session, selectedRef],
   );
   const onShowFinished = useCallback(() => session.setFilters(withShowDone(session.filters, true)), [session]);
 
@@ -1159,20 +1172,6 @@ function WorkspaceMilestones({ workspace, onAuthError }: { workspace: string; on
   const loadQueue = useCallback(() => getQueue({ ws }), [ws]);
   const queue = useResource(loadQueue, [ws, session.version], onAuthError);
   const effective = queue.data?.effective ?? [];
-
-  // Nothing selected, or the selection left the list: fall to the first row on a split
-  // layout, where an empty right pane would be a page saying nothing.
-  useEffect(() => {
-    if (sorted.length === 0) return;
-    if (selectedRef && sorted.some((row) => row.milestone.identifier === selectedRef)) return;
-    // A row cue that opened this view names the milestone to focus; honour it before falling to the first row.
-    const focus = session.milestoneFocus;
-    if (focus && sorted.some((row) => row.milestone.identifier === focus)) {
-      setSelectedRef(focus);
-      return;
-    }
-    if (layout === "split" || fullScreen) setSelectedRef(sorted[0]!.milestone.identifier);
-  }, [sorted, selectedRef, layout, fullScreen, session.milestoneFocus]);
 
   const loadDetail = useCallback(
     () => (selectedRef ? getMilestone({ ws, ref: selectedRef }) : Promise.resolve(null)),
@@ -1320,13 +1319,14 @@ function WorkspaceMilestones({ workspace, onAuthError }: { workspace: string; on
       hiddenFinished={hiddenFinished}
       onShowFinished={onShowFinished}
       selectedRef={selectedRef}
-      onSelect={setSelectedRef}
+      onSelect={onSelect}
       desk={desk}
     />
   );
 
-  // No milestone listed: the list pane already says why and what to do; the right pane stays quiet.
-  const detailPane = sorted.length === 0 && list.data !== undefined ? null : !selectedRef ? (
+  // No milestone listed and none asked for: the list pane already says why and what to do; the
+  // right pane stays quiet. A focused milestone the list does not carry still shows.
+  const detailPane = sorted.length === 0 && list.data !== undefined && !selectedRef ? null : !selectedRef ? (
     desk ? (
       <PlainEmptyState compact icon={Milestone} title="Pick a milestone">
         Choose one on the left to see what is in it and how far it has got.
@@ -1372,7 +1372,7 @@ function WorkspaceMilestones({ workspace, onAuthError }: { workspace: string; on
       hasSelection={selectedRef !== null}
       list={listPane}
       detail={detailPane}
-      onBack={() => setSelectedRef(null)}
+      onBack={() => session.focusMilestone(null)}
     />
   );
 }

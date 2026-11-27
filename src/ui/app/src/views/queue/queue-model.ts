@@ -260,6 +260,21 @@ export function nextEligible(
   return rows.find((row) => row.eligibility === "eligible" && !(isOtherMembers?.(row.identifier) ?? false)) ?? null;
 }
 
+/**
+ * WHAT THE NEXT PICK STEPPED OVER: every row ahead of it in effective order, with the
+ * eligibility and reason that made the resolver pass it. The same list `queue next` answers
+ * as `skipped` — resolved rows included, and the whole order when nothing is pickable — read
+ * off the payload the page already holds rather than a second fetch.
+ */
+export function skippedBefore(
+  effective: readonly EffectiveQueueRow[],
+  next: EffectiveQueueRow | null,
+): EffectiveQueueRow[] {
+  if (next === null) return [...effective];
+  const at = effective.findIndex((row) => row.issueId === next.issueId);
+  return at < 0 ? [] : effective.slice(0, at);
+}
+
 /** "next: STA-67 (#2)", or the honest sentence when the whole order is waiting on something. */
 export const NOTHING_PICKABLE_LABEL = "nothing is pickable right now";
 

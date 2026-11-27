@@ -63,10 +63,11 @@ import {
   isGoalMet,
   judgeCriterion,
   parseEvidence,
+  placeCriterionMarks,
 } from "./milestone-goal.js";
 import { COMPARE_MAX_REFS } from "./plan-rollup.js";
 import type { PlanStep } from "./plan-steps.js";
-import { writeCriterionMark } from "./milestone-marks.js";
+import { placeMarksBeforeMark, writeCriterionMark } from "./milestone-marks.js";
 import { withPlannedUnits } from "./plan-accounting.js";
 import type { WorkspaceStore } from "./store.js";
 import { type Issue, MAX_TREE_DEPTH, StapleError, type StatusCategory, nowIso } from "./types.js";
@@ -176,6 +177,22 @@ export interface MilestoneGoal {
   /** Every criterion met; true when the milestone has none. */
   met: boolean;
   pace: GoalPace;
+  /**
+   * Present only while a stored mark counts for nothing (`placeCriterionMarks`): judged on one
+   * device while another removed its criterion (`removed`), or a second judgement of a criterion
+   * made concurrently on another device, where the later one reads (`superseded`). It stays
+   * reported until the next criteria edit clears it.
+   */
+  cleared?: ClearedCriterionMark[];
+}
+
+/** A mark that counts for nothing: what was judged, how, by whom, when, and why it does not count. */
+export interface ClearedCriterionMark {
+  criterion: string;
+  verdict: CriterionVerdict;
+  markedBy: string;
+  markedAt: string;
+  reason: "removed" | "superseded";
 }
 
 /** Just the criteria half of {@link MilestoneGoal}: what the run's stop rules read. */
@@ -712,17 +729,28 @@ export class MilestoneStore {
    * hands it to each row rather than resolving the queue per milestone.
    */
   private queueFacts(): QueueFacts {
-    const view = this.store.queue().view({ all: true });
-    const nextOf = new Map<string, { identifier: string; position: number }>();
-    for (const row of view.effective) {
+    const queue = this.store.queue();
+    const effective = queue.effectiveQueue({ memberOrder: true });
+    /**
+     * `next` is the row a pickup scoped to the milestone takes (`queue next --scope`,
+     * `run continue`): the plan's rows in effective order first, then its unqueued work
+     * in the milestone's own order, members by rank. The unqueued band of the whole
+     * queue is in presentation sort, which a `milestone mv` does not move.
+     */
+    const nextOf = new Map<string, { identifier: string; position: number; rank: number }>();
+    for (const row of effective.rows) {
       if (row.eligibility !== "eligible") continue;
       for (const milestone of row.milestonePath) {
-        if (!nextOf.has(milestone)) nextOf.set(milestone, { identifier: row.identifier, position: row.position });
+        const rank = row.unqueued
+          ? (effective.memberOrder?.get(milestone)?.get(row.issueId) ?? Number.MAX_SAFE_INTEGER)
+          : -1;
+        const held = nextOf.get(milestone);
+        if (held === undefined || rank < held.rank) nextOf.set(milestone, { identifier: row.identifier, position: row.position, rank });
       }
     }
     return {
-      planPositionOf: new Map(view.entries.map((entry) => [entry.issueId, entry.planPosition])),
-      nextOf,
+      planPositionOf: new Map(queue.entries({ all: true }).map((entry) => [entry.issueId, entry.planPosition])),
+      nextOf: new Map([...nextOf].map(([milestone, { identifier, position }]) => [milestone, { identifier, position }])),
     };
   }
 
@@ -1025,13 +1053,27 @@ export class MilestoneStore {
   criteriaCheck(ref: string): MilestoneCriteriaCheck {
     this.assertKindConfigured();
     const issue = this.requireMilestone(ref, false);
-    const marks = this.marksOf(issue.id);
-    const criteria = (issue.acceptanceCriteria ?? []).map((text, index) => {
-      const mark = marks.get(index + 1) ?? null;
+    const texts = issue.acceptanceCriteria ?? [];
+    const { placed, superseded, cleared } = placeCriterionMarks(texts, this.marksOf(issue.id).values());
+    const reported = [
+      ...cleared.map((mark) => ({ mark, reason: "removed" as const })),
+      ...superseded.map((mark) => ({ mark, reason: "superseded" as const })),
+    ].sort((a, b) => a.mark.position - b.mark.position);
+    const criteria = texts.map((text, index) => {
+      const mark = placed.get(index + 1) ?? null;
       return judgeCriterion(index + 1, text, mark, (mark?.evidence ?? []).map((value) => this.evidenceItem(value, mark!.markedAt)));
     });
     const counts = goalCounts(criteria);
-    return { criteria, counts, met: isGoalMet(counts) };
+    return {
+      criteria,
+      counts,
+      met: isGoalMet(counts),
+      ...(reported.length > 0
+        ? {
+            cleared: reported.map(({ mark: { criterion, verdict, markedBy, markedAt }, reason }) => ({ criterion, verdict, markedBy, markedAt, reason })),
+          }
+        : {}),
+    };
   }
 
   /**
@@ -1154,6 +1196,9 @@ export class MilestoneStore {
         runId: run?.id ?? null,
         markedAt: this.journal.mutationAt(),
       });
+      // Each mark stored where it reads first, so this one cannot land on a mark judged
+      // elsewhere by an old position (`placeMarksBeforeMark`); the moves journal with it.
+      const placedFields = placeMarksBeforeMark(this.db, milestone.id, criteria, position);
       writeCriterionMark(this.db, milestone.id, position, mark);
       // A mark is a change to the milestone, and says when, as a date edit does: the row diff
       // carries `updatedAt` with it, so a device hydrating from the log holds the same time.
@@ -1169,7 +1214,7 @@ export class MilestoneStore {
         entity: "milestone",
         entityId: milestone.id,
         verb: "update",
-        payload: { [criterionMarkField(position)]: mark },
+        payload: { ...placedFields, [criterionMarkField(position)]: mark },
         actor: actor ?? null,
       });
       // The event names no issue: it is this device's note of the judgement, never transported.

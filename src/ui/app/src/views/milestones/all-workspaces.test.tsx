@@ -110,8 +110,21 @@ describe("every workspace's milestones, grouped", () => {
 
   it("opens a milestone by switching to its workspace, then pointing the page at it", () => {
     const calls: string[] = [];
-    openMilestoneIn({ setWs: (ws) => calls.push(`ws:${ws}`), focusMilestone: (ref) => calls.push(`focus:${ref}`) }, "marketing-site", "MAR-4");
-    expect(calls).toEqual(["ws:marketing-site", "focus:MAR-4"]);
+    const recorder = (mode: "hub" | "workspace", ws: string) => ({
+      mode,
+      ws,
+      setWs: (slug: string) => calls.push(`ws:${slug}`),
+      focusMilestone: (ref: string | null) => calls.push(`focus:${ref}`),
+    });
+    // All workspaces, and another workspace's page: switch, then focus.
+    openMilestoneIn(recorder("hub", ""), "marketing-site", "MAR-4");
+    openMilestoneIn(recorder("hub", "staple"), "marketing-site", "MAR-4");
+    expect(calls.splice(0)).toEqual(["ws:marketing-site", "focus:MAR-4", "ws:marketing-site", "focus:MAR-4"]);
+    // Already there, or a single workspace with nowhere to switch: the focus moves alone, so the
+    // page takes one history step and keeps the workspace it is on.
+    openMilestoneIn(recorder("hub", "marketing-site"), "marketing-site", "MAR-4");
+    openMilestoneIn(recorder("workspace", ""), "marketing-site", "MAR-4");
+    expect(calls).toEqual(["focus:MAR-4", "focus:MAR-4"]);
   });
 
   it("is read-only: a row is one button that opens, with no reorder or remove controls", () => {

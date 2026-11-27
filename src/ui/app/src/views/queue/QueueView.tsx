@@ -81,7 +81,7 @@
  * `queue-render.test.tsx` renders them to static markup.
  */
 import { ChevronRight, ListOrdered, RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import { GuardRefusal } from "@/components/GuardRefusal";
 import { QueueRowMenu, queueRowMenuState } from "@/components/QueueRowMenu";
 import type { RowMenuControl } from "@/components/task-list/TaskRowLine";
@@ -96,47 +96,32 @@ import {
 } from "@/components/task-list";
 import { Button } from "@/components/ui/button";
 import { SearchableSelect, type SelectOption } from "@/components/ui/searchable-select";
-import { taskOption, withoutValues } from "@/components/createIssueForm";
 import { ReorderList } from "@/settings/form/ReorderList";
-import {
-  dequeueTask,
-  enqueueTask,
-  getQueue,
-  isRevisionConflict,
-  pruneQueue,
-  reorderQueue,
-  type AuthError,
-} from "@/lib/api";
-import { describeRefusal, type Refusal } from "@/lib/refusal";
+import type { AuthError } from "@/lib/api";
 import { useSession } from "@/lib/session";
-import { useOtherMembersRule } from "@/lib/members";
 import type { EffectiveQueueRow, IssueRow, QueueEligibility, QueueView as QueueViewData } from "@/lib/types";
-import { useResource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
 import { EmptyState, ErrorState, LoadingState } from "@/views/ViewChrome";
 import { ChooseWorkspace } from "@/views/ChooseWorkspace";
 import "./queue.css";
 import { workspaceScope } from "@/views/workspace-scope";
 import {
-  effectivePreview,
   ELIGIBILITY_PRESENTATION,
   EXPANSION_PREVIEW_LIMIT,
-  movedOrder,
-  orderForPosition,
-  planRows,
   previewOf,
   reasonLabel,
-  retryOrder,
   rowOrdinal,
+  UNQUEUED_PREVIEW_LIMIT,
   type EffectivePreview,
   type PlanRow,
 } from "./queue-model";
-import { knownRows, queueTreeRows, type QueueTreeRow } from "./queue-tree";
+import { nestedRowKey } from "./queue-keys";
+import { queueTreeRows, type QueueTreeRow } from "./queue-tree";
+import { useWorkspaceQueue, type QueueWriteFailure } from "./use-workspace-queue";
 import { BUCKET_ORDER, BUCKET_WORDS, queueSummary, summarySentence, type QueueBucket } from "./queue-summary";
 import { ProgressStrip } from "@/views/ProgressStrip";
 import { PROGRESS_COLOR } from "@/views/progress-palette";
 import { EmptyState as PlainEmptyState } from "@/components/plain/States";
-import { idsOf, pinnedRef } from "@/lib/write-ref";
 
 /**
  * THE ROW, EVERYWHERE ON THIS VIEW.
@@ -175,13 +160,7 @@ export function queueCaption(
   return reasonLabel(effective) ?? undefined;
 }
 
-/** What the view shows when a write went wrong, and how it went wrong. */
-export interface QueueWriteFailure {
-  kind: "conflict" | "refusal";
-  refusal: Refusal;
-  /** The order the refused write wanted, so a conflict can offer to re-apply it. */
-  intended: readonly string[] | null;
-}
+export type { QueueWriteFailure } from "./use-workspace-queue";
 
 /** Everything the `⋯` on a queue row can do. Built by the view, one closure per row. */
 export type QueueRowActions = (row: TaskRow, trigger: ReactNode, control?: RowMenuControl) => ReactNode;
@@ -463,16 +442,15 @@ function QueueRowList({
             registerRef={focus.register(identifier)}
             onKeyDown={(event) => {
               const at = (i: number) => keys[clampIndex(i, keys.length)]!;
-              if (event.key === "ArrowDown") {
-                event.preventDefault();
-                focus.go(at(index + 1));
-              } else if (event.key === "ArrowUp") {
-                event.preventDefault();
-                focus.go(at(index - 1));
-              } else if ((event.key === "Enter" || event.key === " ") && onRowItself(event)) {
-                event.preventDefault();
-                onOpen(identifier);
-              }
+              const action = nestedRowKey(event, onRowItself(event));
+              if (action === null) return;
+              event.preventDefault();
+              // Alt and an arrow is a move of the plan entry this list hangs under (its
+              // reorder row listens for it); a nested row is not that entry (queue-keys.ts).
+              if (action === "swallow") event.stopPropagation();
+              else if (action === "next") focus.go(at(index + 1));
+              else if (action === "previous") focus.go(at(index - 1));
+              else onOpen(identifier);
             }}
           />
         );
@@ -1022,160 +1000,29 @@ export function QueueView({ onAuthError }: { onAuthError: (error: AuthError) => 
   return <WorkspaceQueue key={scope.slug} workspace={scope.slug} onAuthError={onAuthError} />;
 }
 
+/**
+ * ONE WORKSPACE'S PAGE. The data, the derived plan and every write are `useWorkspaceQueue`'s
+ * (use-workspace-queue.ts); this keeps only what is the view's own: folds, the unqueued
+ * section's state, the layout, and the row menu built from the section's writes.
+ */
 function WorkspaceQueue({ workspace, onAuthError }: { workspace: string; onAuthError: (error: AuthError) => void }) {
   const session = useSession();
+  const queue = useWorkspaceQueue(workspace, onAuthError);
+  const layout = useRowPlan().layout;
   // The desktop page from 720px up; the phone keeps the board exactly as it shipped.
-  const desk = useRowPlan().layout === "line";
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<QueueWriteFailure | null>(null);
+  const desk = layout === "line";
+  /**
+   * On a phone the row's own up/down arrows are not drawn (queue.css) — they cost the title
+   * its width — so the one-step moves join the `⋯`, which long-press also opens.
+   */
+  const compact = layout === "compact";
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const [unqueuedOpen, setUnqueuedOpen] = useState(false);
-  /** The last write's answer, shown until the next read lands — a writer redraws from its result. */
-  const [written, setWritten] = useState<QueueViewData | null>(null);
-
-  // Always the workspace the page names — never the server's own first (workspace-scope.ts).
-  const ws = workspace || undefined;
-
-  /*
-   * `all: true`, ALWAYS — see the file header. The plan's positions are the plan's, and a view
-   * that drops a resolved entry shows a numbered list with a hole in it and hides the Prune
-   * button that would fix it.
-   */
-  const load = useCallback(() => getQueue({ ws, all: true }), [ws]);
-  const queue = useResource(load, [ws, session.version], onAuthError);
-  useEffect(() => setWritten(null), [queue.data]);
-
-  const view = written ?? queue.data ?? null;
-  const issues = session.issues.data ?? [];
-  const now = useMemo(() => new Date(), [view]);
-  const known = useMemo(() => knownRows(issues), [issues]);
-  const rows = useMemo(() => (view ? planRows(view, issues, workspace) : []), [view, issues, workspace]);
-  // The member rule, as `queue next` applies it on this machine: another member's ticket is never next.
-  const isOtherMembers = useOtherMembersRule(workspace, session.version, onAuthError as (error: Error) => void, session.issues.data);
-  const preview = useMemo(() => (view ? effectivePreview(view, undefined, isOtherMembers) : null), [view, isOtherMembers]);
-  /**
-   * WHAT YOU MAY QUEUE: this workspace's work, minus what is already in the plan.
-   *
-   * The MAPPING is the create dialog's (`taskOption`) and the EXCLUSION is its
-   * `withoutValues` — the same helper that keeps Blocked by and Blocking out of each other's
-   * way, doing the same job here. The FILTERING is `SearchableSelect`'s own, which is why
-   * there is no query state left in this view.
-   *
-   * Restricted to the workspace because a plan IS one: `/api/queue` answers for a single
-   * workspace (design/queue.md), so a foreign identifier is a ref the store would refuse.
-   *
-   * Excluding what is queued is not a policy the store shares — enqueuing twice is a replay
-   * it answers with `replayed: true` and no write. Offering it would be offering a no-op.
-   */
-  const candidates = useMemo<SelectOption[]>(
-    () =>
-      view
-        ? withoutValues(
-            issues.filter((row) => row.workspace === workspace).map(taskOption),
-            view.entries.map((entry) => entry.identifier),
-          )
-        : [],
-    [issues, view, workspace],
-  );
-  /** The plan's identifiers, once — not a scan per row. See `queueRowMenuState`. */
-  const queuedIds = useMemo(
-    () => new Set((view?.entries ?? []).map((entry) => entry.identifier)),
-    [view],
-  );
-
-  const write = useCallback(
-    async (run: () => Promise<QueueViewData>, intended: readonly string[] | null) => {
-      setBusy(true);
-      try {
-        const next = await run();
-        setWritten(next);
-        setFailure(null);
-        session.refresh();
-      } catch (error) {
-        const conflict = isRevisionConflict(error);
-        // The store changed nothing, so what is on screen is now the OLDER order. Drop it and
-        // re-read: the banner's promise is that the list under it is the server's.
-        if (conflict) {
-          setWritten(null);
-          queue.reload();
-        }
-        setFailure({ kind: conflict ? "conflict" : "refusal", refusal: describeRefusal(error), intended });
-      } finally {
-        setBusy(false);
-      }
-    },
-    [queue, session],
-  );
-
-  /** THE ONE ATOMIC PATH. Drag, alt+arrow, alt+Home/End and the menu's moves all land here. */
-  const applyOrder = useCallback(
-    (order: readonly string[] | null) => {
-      if (!view || !order) return;
-      // The order the reader made, as the ids of the entries it shows (`lib/write-ref.ts`).
-      void write(() => reorderQueue({ ws, order: idsOf(view.entries.map((entry) => ({ identifier: entry.identifier, id: entry.issueId })), order), baseRevision: view.revision }), order);
-    },
-    [view, ws, write],
-  );
-
-  const onMove = useCallback(
-    (from: number, to: number) => applyOrder(view ? movedOrder(view.entries, from, to) : null),
-    [applyOrder, view],
-  );
-
-  const indexOf = useCallback(
-    (identifier: string) => view?.entries.findIndex((entry) => entry.identifier === identifier) ?? -1,
-    [view],
-  );
-
-  const onMoveToEdge = useCallback(
-    (identifier: string, edge: "first" | "last") =>
-      applyOrder(
-        view ? orderForPosition(view.entries, indexOf(identifier), edge === "first" ? 1 : view.entries.length) : null,
-      ),
-    [applyOrder, indexOf, view],
-  );
-
-  const onRemove = useCallback(
-    (identifier: string) => {
-      if (!view) return;
-      void write(() => dequeueTask({ ws, ref: idsOf(view.entries.map((entry) => ({ identifier: entry.identifier, id: entry.issueId })), [identifier])[0]!, baseRevision: view.revision }), null);
-    },
-    [view, ws, write],
-  );
-
-  /** `at` is the wire's own "put it in front" — not a reorder computed here. */
-  const onAdd = useCallback(
-    (ref: string, at?: number) => {
-      if (!view) return;
-      void write(() => enqueueTask({ ws, ref: pinnedRef(issues, workspace, ref), at, baseRevision: view.revision }), null);
-    },
-    [issues, view, workspace, ws, write],
-  );
-
-  const onPrune = useCallback(() => {
-    if (!view) return;
-    void write(() => pruneQueue({ ws, baseRevision: view.revision }), null);
-  }, [view, ws, write]);
-
-  const onReload = useCallback(() => {
-    setFailure(null);
-    setWritten(null);
-    queue.reload();
-  }, [queue]);
-
-  /**
-   * The deliberate retry: re-apply the intent against the order the reload brought back.
-   * `retryOrder` is what keeps it from undoing the other writer — see queue-model.ts.
-   */
-  const onRetry = useCallback(() => {
-    if (!view || !failure?.intended) return;
-    const order = retryOrder(failure.intended, view.entries);
-    if (!order) {
-      setFailure(null);
-      return;
-    }
-    applyOrder(order);
-  }, [applyOrder, failure, view]);
+  const { view, busy, queuedIds, indexOf, add, remove, move, moveToEdge } = queue;
+  const preview = useMemo<EffectivePreview>(() => {
+    const band = previewOf(queue.unqueued, UNQUEUED_PREVIEW_LIMIT);
+    return { unqueued: band.shown, unqueuedHidden: band.hidden, next: queue.next };
+  }, [queue.unqueued, queue.next]);
 
   const onOpen = useCallback(
     (rowWorkspace: string, identifier: string) => session.open(rowWorkspace || workspace, identifier),
@@ -1195,12 +1042,6 @@ function WorkspaceQueue({ workspace, onAuthError }: { workspace: string; onAuthE
    * THE `⋯`, on every row of this view — the same menu the tree hangs, plus the two moves,
    * which are offered here because here there IS an order on screen to move within.
    */
-  /**
-   * On a phone the row's own up/down arrows are not drawn (queue.css) — they cost the title
-   * its width — so the one-step moves join the `⋯`, which long-press also opens.
-   */
-  const compact = useRowPlan().layout === "compact";
-
   const actions = useCallback<QueueRowActions>(
     (row, trigger, control) => {
       const ref = row.issue.identifier;
@@ -1215,46 +1056,46 @@ function WorkspaceQueue({ workspace, onAuthError }: { workspace: string; onAuthE
           state={queueRowMenuState(row, queuedIds)}
           disabled={busy || view === null}
           onOpen={() => onOpen(row.workspace, ref)}
-          onQueueNext={() => onAdd(ref, 1)}
-          onQueueLast={() => onAdd(ref)}
-          onDequeue={() => onRemove(ref)}
-          onMoveToTop={() => onMoveToEdge(ref, "first")}
-          onMoveToBottom={() => onMoveToEdge(ref, "last")}
-          onMoveUp={at > 0 ? () => onMove(at, at - 1) : undefined}
-          onMoveDown={at >= 0 && at < count - 1 ? () => onMove(at, at + 1) : undefined}
+          onQueueNext={() => add(ref, 1)}
+          onQueueLast={() => add(ref)}
+          onDequeue={() => remove(ref)}
+          onMoveToTop={() => moveToEdge(ref, "first")}
+          onMoveToBottom={() => moveToEdge(ref, "last")}
+          onMoveUp={at > 0 ? () => move(at, at - 1) : undefined}
+          onMoveDown={at >= 0 && at < count - 1 ? () => move(at, at + 1) : undefined}
         />
       );
     },
-    [busy, compact, indexOf, onAdd, onMove, onMoveToEdge, onOpen, onRemove, queuedIds, view],
+    [add, busy, compact, indexOf, move, moveToEdge, onOpen, queuedIds, remove, view],
   );
 
   if (queue.error) return <ErrorState error={queue.error} />;
-  if (!view || !preview) return <LoadingState />;
+  if (!view) return <LoadingState />;
 
   return (
     <QueueBoard
       view={view}
-      rows={rows}
+      rows={queue.rows}
       preview={preview}
-      known={known}
+      known={queue.known}
       workspace={workspace}
-      now={now}
+      now={queue.now}
       busy={busy}
-      failure={failure}
-      candidates={candidates}
+      failure={queue.failure}
+      candidates={queue.candidates}
       collapsed={collapsed}
       unqueuedOpen={unqueuedOpen}
       actions={actions}
       onOpen={onOpen}
       onToggleCollapsed={onToggleCollapsed}
       onToggleUnqueued={() => setUnqueuedOpen((on) => !on)}
-      onMove={onMove}
-      onMoveToEdge={onMoveToEdge}
-      onAdd={onAdd}
-      onPrune={onPrune}
-      onReload={onReload}
-      onRetry={onRetry}
-      onDismissFailure={() => setFailure(null)}
+      onMove={move}
+      onMoveToEdge={moveToEdge}
+      onAdd={add}
+      onPrune={queue.prune}
+      onReload={queue.reload}
+      onRetry={queue.retry}
+      onDismissFailure={queue.dismissFailure}
       desk={desk}
     />
   );
