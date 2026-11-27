@@ -115,6 +115,7 @@ export function readRoi(input: {
   return {
     asOf: input.query.now,
     period: report.period,
+    definitions: report.definitions,
     scope: report.scope,
     model: input.model,
     measured: lens("measured"),

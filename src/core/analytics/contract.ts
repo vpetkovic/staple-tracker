@@ -532,6 +532,8 @@ export interface RoiLens {
 export interface RoiResponse {
   readonly asOf: string;
   readonly period: AnalyticsPeriod;
+  /** The constants the figures were computed with (the attempt cap, the FTE week), as on `/api/analytics`. */
+  readonly definitions: AnalyticsDefinitions;
   readonly scope: AnalyticsReport["scope"];
   readonly model: CostModelResponse;
   readonly measured: RoiLens;
