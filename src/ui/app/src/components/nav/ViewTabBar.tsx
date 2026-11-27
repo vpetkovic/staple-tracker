@@ -21,7 +21,7 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useInboxBadge } from "@/lib/attention";
 import { useBackToClose } from "@/lib/back-to-close";
 import { useRuns } from "@/lib/runs";
-import { TAB_VIEWS, VIEW_LABELS, VIEW_SHORT_LABELS, useSession, type ViewName } from "@/lib/session";
+import { TAB_VIEWS, VIEW_LABELS, VIEW_SHORT_LABELS, navigateTo, useSession, type ViewName } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { BottomSheet } from "./BottomSheet";
 import { viewIcon } from "./nav-model";
@@ -231,7 +231,7 @@ export function ViewTabBar() {
         live={live.length}
         liveTone={liveDotTone(live)}
         moreOpen={moreOpen}
-        onSelect={session.setView}
+        onSelect={(view) => navigateTo(session, view)}
         onMore={() => setMoreOpen(true)}
       />
       <BottomSheet open={moreOpen} onOpenChange={setMoreOpen} title="More" name="more-views">
@@ -240,7 +240,7 @@ export function ViewTabBar() {
           planningEnabled={session.planningEnabled}
           onChoose={(view) => {
             setMoreOpen(false);
-            session.setView(view);
+            navigateTo(session, view);
           }}
         />
       </BottomSheet>

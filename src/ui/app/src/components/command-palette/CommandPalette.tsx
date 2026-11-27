@@ -50,7 +50,7 @@ import { EmptyState } from "@/components/plain/States";
 import { personActor } from "@/detail/parts/person";
 import { action, getIssues, getPlan, planWrite } from "@/lib/api";
 import { withDimension } from "@/lib/filters";
-import { useSession, type Selection } from "@/lib/session";
+import { navigateTo, useSession, type Selection } from "@/lib/session";
 import { workspaceSettings } from "@/lib/settings";
 import { openLinkExternal, openSettings } from "@/lib/shell-events";
 import type { IssueStatus } from "@/lib/types";
@@ -249,7 +249,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           close();
           return;
         case "view":
-          session.setView(next.view);
+          navigateTo(session, next.view);
           close();
           return;
         case "workspace":

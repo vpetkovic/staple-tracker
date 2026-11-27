@@ -38,7 +38,8 @@ On a wide screen the **rail** on the left starts with *Inbox* (what waits on you
 with a count) and *Autopilot* (agent runs, with a line per live run). Under them are
 the workspaces and the views: *Tasks*, *Queue*, *Graph*, *Milestones* and
 *Estimates*, then *Usage* under *This computer*, and *Settings* with the dark-mode
-switch at the foot. The **top bar** names where you
+switch at the foot. The page follows your system's light or dark setting until you
+use that switch. The **top bar** names where you
 are, shows the sync state if the workspace uses [cloud sync](cloud-sync.md), and
 holds the search field and **New task**.
 

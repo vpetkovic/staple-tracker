@@ -95,6 +95,7 @@ import {
   sortForScope,
   sortScopeKey,
   withFiltersForScope,
+  withScopeProjects,
   withSortForScope,
   type GroupBy,
   type ViewPrefs,
@@ -533,27 +534,24 @@ export function App() {
    * graph and then left it. Replaces the project selection rather than toggling it, for
    * the reason the palette's dimension command gives: a click is an absolute request.
    */
-  const focusProject = useCallback(
-    (projectId: string) => {
-      const scope = sortScopeKey(ws, "tree");
-      setFilterPrefs((current) =>
-        withFiltersForScope(
-          current,
-          scope,
-          withDimension(filtersForScope(current, scope, legacyFilters), "project", [projectId]),
-        ),
-      );
+  const showTasksOf = useCallback(
+    (projects: readonly string[]) => {
+      setFilterPrefs((current) => withScopeProjects(current, sortScopeKey(ws, "tree"), legacyFilters, projects));
       setMilestoneFocus(null);
       setRun(null);
       setView("tree");
     },
     [ws, legacyFilters],
   );
+  const focusProject = useCallback((projectId: string) => showTasksOf([projectId]), [showTasksOf]);
+  /** The rail's Tasks row: Tasks with no project narrowing it, whatever else is filtered. */
+  const showAllTasks = useCallback(() => showTasksOf([]), [showTasksOf]);
 
   /**
    * SWITCHING WORKSPACE KEEPS THE PAGE — `afterWorkspaceSwitch` in lib/session-url.ts. The
-   * view stays; the milestone focus (a milestone of the workspace being left) does not; the
-   * filters are the target scope's own, which `filtersForScope` resolves on the next render.
+   * view stays (except Usage, which is in no workspace and gives way to Tasks); the milestone
+   * focus (a milestone of the workspace being left) does not; the filters are the target
+   * scope's own, which `filtersForScope` resolves on the next render.
    * A chosen workspace is also remembered as the default for "which workspace?" questions
    * asked later from All workspaces (lib/session-workspace.ts).
    */
@@ -561,6 +559,7 @@ export function App() {
     (next: string) => {
       const landing = afterWorkspaceSwitch({ view }, next, () => filters);
       setWsState(landing.ws);
+      setView(landing.view);
       setMilestoneFocus(landing.focus);
       setRun(landing.run);
       if (next) rememberWorkspace(next);
@@ -718,6 +717,7 @@ export function App() {
       openHorizon,
       projects,
       focusProject,
+      showAllTasks,
       ws,
       setWs,
       issues,
@@ -755,6 +755,7 @@ export function App() {
     openHorizon,
     projects,
     focusProject,
+    showAllTasks,
     ws,
     issues,
     filters,
