@@ -59,7 +59,7 @@ and an instruction. The \`horizon-plan\` instruction on its tickets says the sam
 
 1. Tickets first. While \`next\` names a ticket, take it.
 2. With no ticket left, take the first step whose \`who\` is \`agent\`
-   (\`brainstorm\`, \`write_plan\`, \`fix_plan\` or \`scaffold\`) and do what it says.
+   (\`brainstorm\`, \`classify\`, \`write_plan\`, \`fix_plan\` or \`scaffold\`) and do what it says.
 3. Stop for the person on the rest: carry an \`answer_questions\` step's questions
    to them and record each answer; tell them when a \`mark_shaped\` idea is ready,
    or propose it shaped (\`staple idea propose\`) so it waits under Needs you.

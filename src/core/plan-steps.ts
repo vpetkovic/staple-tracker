@@ -9,7 +9,7 @@
 import type { IdeaState } from "./plan-lifecycle-table.js";
 import type { Maturity } from "./plan.js";
 
-export const PLAN_STEP_NEEDS = ["answer_questions", "write_plan", "mark_shaped", "fix_plan", "wait", "scaffold", "brainstorm"] as const;
+export const PLAN_STEP_NEEDS = ["answer_questions", "write_plan", "mark_shaped", "fix_plan", "wait", "scaffold", "brainstorm", "classify"] as const;
 export type PlanStepNeed = (typeof PLAN_STEP_NEEDS)[number];
 
 /** Who must act next: the person, an agent, or nobody yet (a waiting idea). */
@@ -26,8 +26,11 @@ export interface PlanStep {
   title: string;
   parentId: string | null;
   parentTitle: string | null;
-  /** The horizon that carries the record: the one it is scheduled on, or its nearest scheduled ancestor's. */
-  horizonId: string;
+  /**
+   * The horizon that carries the record: the one it is scheduled on, or its nearest scheduled
+   * ancestor's. Null only on a `classify` step of a record no horizon carries.
+   */
+  horizonId: string | null;
   state: IdeaState;
   need: PlanStepNeed;
   who: PlanStepWho;
@@ -55,6 +58,8 @@ export interface PlanStepInput {
   maturity: Maturity;
   /** An agent proposed it shaped and the proposal stands (`shape-proposal`). */
   proposed?: boolean;
+  /** It was imported from this file with no maturity chosen, and no agent has classified it yet (`classify`). */
+  classify?: string | null;
   /** It has own work: it was promoted, or links issues. */
   ownWork: boolean;
   /** Its questions neither resolved nor deferred. */
@@ -110,7 +115,7 @@ export function planStepOf(input: PlanStepInput): PlanStep | null {
       return step("mark_shaped", "person", `"${input.title}" was proposed shaped and passes the shaped gate: the person accepts it with Mark shaped, or dismisses the proposal. Accepting is theirs.`);
     }
   }
-  if (input.maturity === "raw") return brainstorm();
+  if (input.maturity === "raw") return input.state === "raw" && input.classify ? classifyStep(input) : brainstorm();
   if (input.maturity === "exploring") {
     if (!input.scheduled && !input.ownWork) return brainstorm();
     if (input.openQuestions.length > 0) {
@@ -153,6 +158,36 @@ export function planStepOf(input: PlanStepInput): PlanStep | null {
     "agent",
     `Its turn has come. First re-check the breakdown of "${input.title}" against what has landed since it was written and bring the person any change. Then preview and confirm Scaffold (staple idea scaffold ${ref}, then --confirm <fingerprint>), or link existing tickets with Adopt (staple idea adopt ${ref} <issue>) where its recorded decisions say its tickets come from elsewhere.`,
   );
+}
+
+/**
+ * An idea imported from a file with no maturity chosen, which no agent has classified yet: read
+ * the file and give the idea its stage. Its record's step wherever a horizon carries it (in place
+ * of `brainstorm`), and its `nextStep` when none does, with `horizonId` null. Settled by filling
+ * the plan (which moves it to exploring), by proposing it shaped, or by leaving it raw on purpose.
+ */
+export function classifyStep(input: {
+  id: string;
+  ref: string;
+  title: string;
+  parentId: string | null;
+  parentTitle: string | null;
+  horizonId: string | null;
+  state: IdeaState;
+  classify?: string | null;
+}): PlanStep {
+  const ref = input.ref;
+  return {
+    ideaId: input.id,
+    title: input.title,
+    parentId: input.parentId,
+    parentTitle: input.parentTitle,
+    horizonId: input.horizonId,
+    state: input.state,
+    need: "classify",
+    who: "agent",
+    instruction: `"${input.title}" was imported from ${input.classify ?? "a file"} with no maturity chosen. Read the original (staple file ls ${ref}, then staple file get <id> --out <path>) and classify it: fill its plan from the file (staple idea plan ${ref}, staple idea task ${ref} add, staple idea ask ${ref}, staple idea decide ${ref}), which moves it to exploring, and propose it shaped (staple idea propose ${ref}) once it passes the gate. When it is only a raw thought, leave it raw with staple idea set ${ref} --classified. Scheduling it and marking it shaped stay the person's.`,
+  };
 }
 
 /**

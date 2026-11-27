@@ -833,6 +833,7 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/plan/horizon-remove",
       "/api/plan/horizon-run",
       "/api/plan/horizon-update",
+      "/api/plan/import",
       "/api/plan/promote",
       "/api/plan/question",
       "/api/plan/reset-baseline",

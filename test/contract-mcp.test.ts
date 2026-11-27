@@ -324,8 +324,9 @@ describe("tool inventory", () => {
   // The ticket card added show_ticket: 70 -> 71. The progress view added show_progress: 71 -> 72.
   // The queue view added show_queue: 72 -> 73. A person's click in a view added the app-only
   // approve_gate_from_view and request_changes_from_view: 73 -> 75. The ticket branch added
-  // set_branch: 88 -> 89. The one-call handoff added checkpoint: 89 -> 90.
-  it("exposes exactly these 91 tools with these annotations and output schemas", async () => {
+  // set_branch: 88 -> 89. The one-call handoff added checkpoint: 89 -> 90. Creating an idea from a
+  // file added import_idea: 91 -> 92.
+  it("exposes exactly these 92 tools with these annotations and output schemas", async () => {
     const tools = await harness.listTools();
     const inventory = tools.map((t) => ({
       name: t.name,
@@ -852,8 +853,8 @@ describe("tool inventory", () => {
         annotations: { title: "List horizons", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
         hasOutputSchema: false,
       },
-      ...["Capture idea", "Update idea", "Scaffold idea", "Start idea", "Unlink idea", "Convert ticket to idea", "Reset idea baseline (from a view)"].map((title, index) => ({
-        name: ["capture_idea", "update_idea", "scaffold_idea", "start_idea", "unlink_idea", "convert_to_idea", "reset_idea_baseline"][index]!,
+      ...["Capture idea", "Import idea", "Update idea", "Scaffold idea", "Start idea", "Unlink idea", "Convert ticket to idea", "Reset idea baseline (from a view)"].map((title, index) => ({
+        name: ["capture_idea", "import_idea", "update_idea", "scaffold_idea", "start_idea", "unlink_idea", "convert_to_idea", "reset_idea_baseline"][index]!,
         annotations: { title, readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
         hasOutputSchema: false,
       })),
@@ -2037,13 +2038,14 @@ describe("tool response shapes (31/31)", () => {
       "remove_milestone_member",
       "move_milestone_member",
       "reorder_milestone_members",
-      // The plan layer's ten are pinned in test/plan-surfaces.test.ts (convert_to_idea in test/plan-convert-ticket.test.ts) and, for Scaffold, in
+      // The plan layer's eleven are pinned in test/plan-surfaces.test.ts (convert_to_idea in test/plan-convert-ticket.test.ts, import_idea in test/plan-import-file-surfaces.test.ts) and, for Scaffold, in
       // test/plan-scaffold-surfaces.test.ts, against the CLI and HTTP projections of the same
       // plan, refusals and the app-only baseline reset included.
       "list_ideas",
       "get_idea",
       "list_horizons",
       "capture_idea",
+      "import_idea",
       "update_idea",
       "scaffold_idea",
       "start_idea",

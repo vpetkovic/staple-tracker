@@ -5431,6 +5431,15 @@ export function startUiServer(options: UiOptions): UiHandle {
               person,
             ).id;
             break;
+          case "/api/plan/import":
+            // A file the person picked: its name and its bytes, base64. A maturity left out leaves it for an agent to classify.
+            idea = plan.importPlan(
+              { name: typeof body.filename === "string" ? body.filename : "", content: Buffer.from(typeof body.contentBase64 === "string" ? body.contentBase64 : "", "base64") },
+              { parent: optional<string | null>("parent") ?? null, horizon: optional<string | null>("horizon") ?? null, maturity: optional<string>("maturity") },
+              actor,
+              person,
+            ).idea.idea.id;
+            break;
           case "/api/plan/update":
             plan.update(
               ref,
@@ -5448,6 +5457,7 @@ export function startUiServer(options: UiOptions): UiHandle {
                 delivered: optional<{ on: string; note?: string | null } | null>("delivered"),
                 dismissProposal: optional<boolean>("dismissProposal"),
                 proposeShaped: optional<{ note?: string | null }>("proposeShaped"),
+                classified: optional<boolean>("classified"),
               },
               actor,
               person,

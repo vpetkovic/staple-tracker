@@ -59,7 +59,7 @@ describe("enrichment on one device", () => {
   /** An import: a capture that comes with its plan, questions and decisions (and its file attached). */
   const imported = (title: string) =>
     plan.importPlan(
-      { name: `${title}.md`, markdown: `# ${title}\n\n## Goal\n\nSign in without a password.\n\n## Open questions\n\n- [ ] Which browsers?\n\n## Decisions\n\n- WebAuthn only\n` },
+      { name: `${title}.md`, content: `# ${title}\n\n## Goal\n\nSign in without a password.\n\n## Open questions\n\n- [ ] Which browsers?\n\n## Decisions\n\n- WebAuthn only\n` },
       {},
       "agent",
     ).idea.idea.id;

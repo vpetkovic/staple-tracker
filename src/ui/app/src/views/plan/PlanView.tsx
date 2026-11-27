@@ -37,6 +37,7 @@ import { ErrorState } from "@/views/ViewChrome";
 import { workspaceScope } from "@/views/workspace-scope";
 import { AddHorizon, FoldAll, HorizonsBoard, NONE } from "./HorizonsLens";
 import { IdeasBoard, IdeasNothing } from "./IdeasLens";
+import { ImportIdea } from "./ImportIdea";
 import { PlanTimeline } from "./PlanTimeline";
 import type { BoardProps, Write } from "./plan-board";
 import { focusCounts, focusing, focusPlan, type PlanFocus } from "./plan-focus";
@@ -188,6 +189,7 @@ function WorkspacePlan({ workspace, onAuthError }: { workspace: string; onAuthEr
         text={text}
         onText={setText}
         onCapture={capture}
+        onImport={(body) => write("import", body)}
         onViewIdeas={() => chooseLens("ideas")}
         tools={
           lens === "horizons" ? (
@@ -294,12 +296,12 @@ const PILLS: ReadonlyArray<{ id: Exclude<PlanFocus, "all">; label: string; dot: 
 
 /**
  * The one toolbar: lens tabs with their counts, the "Show only" pills, the lens's own tools, the
- * filter and, outside Ideas (whose capture sits at the top of Raw), the capture button. On a phone
+ * filter, Import (an idea from a file) and, outside Ideas (whose capture sits at the top of Raw), the capture button. On a phone
  * the tabs sit beside the page name in the shell's header (a portal keeps them in the `Tabs` root),
  * and under 620px of the Plan container the rest is one 44px row of compact controls, each with a
  * 40px tap through an invisible inset.
  */
-export function PlanBar({ lens, plan, focus, onFocus, text, onText, onCapture, onViewIdeas, tools }: {
+export function PlanBar({ lens, plan, focus, onFocus, text, onText, onCapture, onImport, onViewIdeas, tools }: {
   lens: Lens;
   plan: PlanData;
   focus: PlanFocus;
@@ -307,6 +309,8 @@ export function PlanBar({ lens, plan, focus, onFocus, text, onText, onCapture, o
   text: string;
   onText: (text: string) => void;
   onCapture: (title: string) => Promise<boolean>;
+  /** Import an idea from a file (`ImportIdea`); left out, the bar offers no import. */
+  onImport?: (body: Record<string, unknown>) => Promise<boolean>;
   onViewIdeas: () => void;
   tools: ReactNode;
 }) {
@@ -355,6 +359,7 @@ export function PlanBar({ lens, plan, focus, onFocus, text, onText, onCapture, o
       {/* Under 900px a lens's tools move into the lens (Horizons draws + Horizon at its end). */}
       {tools ? <span className="contents @max-[900px]/plan:hidden">{tools}</span> : null}
       <PlanSearch text={text} onText={onText} />
+      {onImport ? <ImportIdea onImport={onImport} onViewIdeas={onViewIdeas} /> : null}
       {lens === "ideas" ? null : <CapturePopover onCapture={onCapture} onViewIdeas={onViewIdeas} />}
     </div>
   );

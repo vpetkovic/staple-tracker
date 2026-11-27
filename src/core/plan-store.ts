@@ -34,6 +34,7 @@ import {
   DELIVERED_NOTE_KEY,
   MATURITY_READ,
   SHAPE_PROPOSAL_KEY,
+  CLASSIFY_KEY,
   aKind,
   IDEA_KIND,
   PLAN_KINDS_MISSING_MESSAGE,
@@ -97,7 +98,6 @@ import {
   estimateSeconds,
   gateSentence,
   normalizeRow,
-  parsePlanMarkdown,
   planWarnings,
   readSection,
   renderSection,
@@ -109,7 +109,9 @@ import {
   type PlanSections,
 } from "./plan-sections.js";
 import { LISTED_HORIZON, rebuildPlanMembers } from "./plan-members.js";
-import { heldBySubIdeas, orderPlanSteps, planStepOf, type PlanStep, type PlanStepInput } from "./plan-steps.js";
+import { readImportFile } from "./plan-import.js";
+import { cleanFilename } from "./attachments.js";
+import { classifyStep, heldBySubIdeas, orderPlanSteps, planStepOf, type PlanStep, type PlanStepInput } from "./plan-steps.js";
 import { holdsHorizon, horizonAccounting, isUmbrella, ownUnits, unitPercent, unitProgress, units, type HorizonAccounting, type OwnUnits, type RecordCounts, type RecordSize, type ScheduledRecord, type Units } from "./plan-accounting.js";
 import type { MilestoneProgress } from "./milestones.js";
 import type { WorkspaceStore } from "./store.js";
@@ -344,6 +346,11 @@ interface PlanFacts {
    * on the first view that asks: a pull that re-derives only the horizons never reads it.
    */
   proposals: () => Map<string, ShapeProposal>;
+  /**
+   * Each record imported from a file that waits to be classified (`classify`): the file's name, by
+   * record id, read in one statement on the first view that asks.
+   */
+  classifications: () => Map<string, string>;
   /** The workspace's status categories, read once for the build. */
   categoryOf: (status: string) => StatusCategory | null;
   records: Map<string, RecordFacts>;
@@ -511,6 +518,11 @@ export interface IdeaPatch {
   proposeShaped?: { note?: string | null };
   /** The person sets a standing proposal aside without shaping it. */
   dismissProposal?: boolean;
+  /**
+   * Anyone's: the idea imported from a file was read and stays raw on purpose, which settles its
+   * `classify` step. Refused when no classify step stands.
+   */
+  classified?: boolean;
 }
 
 export interface HorizonPatch {
@@ -765,6 +777,13 @@ export class PlanStore {
         { key },
       );
     }
+    if (key === CLASSIFY_KEY) {
+      throw new StapleError(
+        "validation",
+        `The classify request of ${displayRef(row)} is written by importing a file, and settled by filling its plan, proposing it shaped, or leaving it raw (update_idea with classified, or staple idea set --classified).`,
+        { key },
+      );
+    }
     if (LIST_KEYS.has(key)) assertListBody(key, body);
     if (key === QUESTIONS_KEY && body.split("\n").some((line) => line.trim() !== "" && !/^\s*[-*]\s+\[( |x|X|~)\]\s+\S/.test(line))) {
       throw new StapleError("validation", `The questions of ${displayRef(row)} are a checklist, one "- [ ] question" per line ("- [x]" resolved, "- [~]" deferred).`, { key });
@@ -797,6 +816,12 @@ export class PlanStore {
     const row = this.db.prepare(`SELECT ${PLAN_COLUMNS} FROM issues WHERE id = ?`).get(id) as unknown as PlanRow | undefined;
     if (!row || row.kind !== IDEA_KIND || row.plan_maturity !== "raw") return;
     this.write(row.id, { plan_explored: 1 }, actor, "idea_explored", { from: "raw", to: "exploring", cause });
+  }
+
+  /** The file it waits to be classified from, or null (an emptied `classify` is none). */
+  private classifyOf(id: string): string | null {
+    const body = this.documentBody(id, CLASSIFY_KEY);
+    return body && body.trim() !== "" ? body.trim() : null;
   }
 
   /** Its standing proposal to be marked shaped, or null (an emptied `shape-proposal` is none). */
@@ -1395,7 +1420,23 @@ export class PlanStore {
     }
     const stepInputs = this.stepInputsOf(rows, byId, records, sizes, carrier, breakdowns);
     let proposals: Map<string, ShapeProposal> | null = null;
-    return { rows, byId, childIds, horizons, horizonDates, work, links, explorations, proposals: () => (proposals ??= this.proposals()), categoryOf, records, sizes, carried, carrier, stepInputs, steps: null, accounting: new Map() };
+    let classifications: Map<string, string> | null = null;
+    return { rows, byId, childIds, horizons, horizonDates, work, links, explorations, proposals: () => (proposals ??= this.proposals()), classifications: () => (classifications ??= this.classifications()), categoryOf, records, sizes, carried, carrier, stepInputs, steps: null, accounting: new Map() };
+  }
+
+  /** Every record that waits to be classified, with its file's name, in one statement: an emptied one is none. */
+  private classifications(): Map<string, string> {
+    const out = new Map<string, string>();
+    for (const row of this.db
+      .prepare(
+        `SELECT d.issue_id, r.body FROM documents d
+           JOIN document_revisions r ON r.issue_id = d.issue_id AND r.key = d.key AND r.revision = d.current_revision
+          WHERE d.key = ? AND trim(r.body) <> ''`,
+      )
+      .all(CLASSIFY_KEY) as Array<{ issue_id: string; body: string }>) {
+      out.set(row.issue_id, row.body.trim());
+    }
+    return out;
   }
 
   /** Every record's standing proposal to be marked shaped, in one statement: an emptied one is none. */
@@ -1429,7 +1470,7 @@ export class PlanStore {
     const out = new Map<string, Omit<PlanStepInput, "today">>();
     if (carrier.size === 0) return out;
     // A standing proposal rides the same statement: it makes the step the person's.
-    const keys = [QUESTIONS_KEY, SHAPE_PROPOSAL_KEY, ...DOCUMENT_SECTIONS.map((name) => SECTION_KEYS[name])];
+    const keys = [QUESTIONS_KEY, SHAPE_PROPOSAL_KEY, CLASSIFY_KEY, ...DOCUMENT_SECTIONS.map((name) => SECTION_KEYS[name])];
     const heads = new Map<string, Map<string, string>>();
     for (const row of this.db
       .prepare(
@@ -1476,6 +1517,7 @@ export class PlanStore {
         state,
         maturity,
         proposed: (heads.get(id)?.get(SHAPE_PROPOSAL_KEY) ?? "").trim() !== "",
+        classify: (heads.get(id)?.get(CLASSIFY_KEY) ?? "").trim() || null,
         ownWork: ownWork.length > 0,
         openQuestions: questions.filter((q) => !q.resolved && !q.deferred).map((q) => q.text),
         gate: () => shapedGate(sections, questions, { subIdea }),
@@ -1647,10 +1689,29 @@ export class PlanStore {
         ...lifecycle,
         // A proposal stands while the record can still be marked shaped; once shaped or dropped it is history.
         shapeProposal: lifecycle.actions.some((action) => action.id === "shape") ? (facts.proposals().get(row.id) ?? null) : null,
-        nextStep: steps.get(row.id) ?? null,
+        // A horizon carries most steps; an import waiting to be classified has its step wherever it is.
+        nextStep: steps.get(row.id) ?? this.uncarriedClassifyStep(facts, row, state),
         createdAt: row.created_at,
         updatedAt: row.updated_at,
       };
+    });
+  }
+
+  /** The `classify` step of a raw record no horizon carries, imported and not classified yet; else null. */
+  private uncarriedClassifyStep(facts: PlanFacts, row: PlanRow, state: IdeaState): PlanStep | null {
+    if (state !== "raw" || facts.carrier.has(row.id)) return null;
+    const file = facts.classifications().get(row.id);
+    if (file === undefined) return null;
+    const parentId = row.parent_id !== null && facts.byId.has(row.parent_id) ? row.parent_id : null;
+    return classifyStep({
+      id: row.id,
+      ref: shownIdentifier(row.identifier) ?? ideaNumberOf(row) ?? row.id,
+      title: row.title,
+      parentId,
+      parentTitle: parentId === null ? null : facts.byId.get(parentId)!.title,
+      horizonId: null,
+      state,
+      classify: file,
     });
   }
 
@@ -1973,6 +2034,11 @@ export class PlanStore {
       allow("dismiss_proposal");
       if (!proposed) throw new StapleError("validation", `Nothing is proposed for ${displayRef(row)}; there is no proposal to dismiss.`);
     }
+    // An import waiting to be classified: while it reads raw. Proposing it shaped classifies it too.
+    const classifying = before === "raw" && this.classifyOf(row.id) !== null;
+    if (patch.classified && !classifying) {
+      throw new StapleError("validation", `Nothing waits to be classified on ${displayRef(row)}: only an idea imported from a file with no maturity chosen, still raw, is classified.`);
+    }
     this.store.journaled(() => {
       if (patch.title !== undefined) this.store.updateIssue(row.id, { title: oneLine(patch.title, "An idea's title") }, actor);
       if (patch.brief !== undefined) this.store.putDocument(row.id, BRIEF_KEY, patch.brief ?? "", { author: actor }, { plan: true });
@@ -2000,6 +2066,9 @@ export class PlanStore {
       if (enriched) this.explore(row.id, actor, "plan");
       // The person moved its maturity, marked it delivered (or cleared that), or set the proposal aside: a proposal no longer stands.
       if (proposed && (moves || delivery !== undefined || patch.dismissProposal)) this.store.putDocument(row.id, SHAPE_PROPOSAL_KEY, "", { author: actor, changeSummary: moves ? "proposal settled" : "proposal dismissed" }, { plan: true });
+      if (classifying && (patch.classified || patch.proposeShaped !== undefined)) {
+        this.store.putDocument(row.id, CLASSIFY_KEY, "", { author: actor, changeSummary: patch.classified ? "classified: stays raw" : "classified: proposed shaped" }, { plan: true });
+      }
       if (patch.proposeShaped !== undefined) {
         const note = typeof patch.proposeShaped.note === "string" && patch.proposeShaped.note.trim() !== "" ? patch.proposeShaped.note.trim() : PROPOSAL_DEFAULT_NOTE;
         this.store.putDocument(row.id, SHAPE_PROPOSAL_KEY, note, { author: actor, changeSummary: "proposed shaped" }, { plan: true });
@@ -2297,21 +2366,25 @@ export class PlanStore {
   // ---------- import: a plan file becomes an idea ----------
 
   /**
-   * Import a plan written as markdown (`staple idea import`): one idea captured with the file's
-   * title, its sections, open questions and decisions, and the file itself attached as its source.
+   * Import a file as an idea (`staple idea import`, `import_idea`, the Plan view's Import): a plan
+   * written as Markdown maps to the idea's title, sections, open questions and decisions; an HTML
+   * page gives its title, a JSX file its name. The original is attached under Files as given.
    * Captured raw unless a maturity is given (a person's call, held to the shaped gate like any:
-   * the gate reads everything the import writes, its open questions included). One transaction.
-   * Answers the idea, how many breakdown rows were read, and what the parser kept elsewhere.
+   * the gate reads everything the import writes, its open questions included). With none given,
+   * the idea waits to be classified (`classify`): its plan step asks an agent to read the file,
+   * fill the plan and set or propose its stage. One transaction. Answers the idea, how many
+   * breakdown rows were read, and what the parser kept elsewhere.
    */
   importPlan(
-    file: { name: string; markdown: string },
+    file: { name: string; content: string | Uint8Array },
     input: { parent?: string | null; horizon?: string | null; maturity?: string },
     actor: string | null,
     options: PlanWriteOptions = {},
   ): { idea: IdeaDetail; rows: number; warnings: string[] } {
     this.assertEnabled();
-    const parsed = parsePlanMarkdown(file.markdown, file.name.replace(/\.md$/i, ""));
-    const sources = [`${file.name} (attached)`, ...parsed.sections.sources];
+    const name = cleanFilename(file.name);
+    const { bytes, parsed } = readImportFile(name, file.content);
+    const sources = [`${name} (attached)`, ...parsed.sections.sources];
     const id = this.store.journaled(() => {
       const idea = this.captureWith(
         {
@@ -2326,7 +2399,8 @@ export class PlanStore {
         actor,
         options,
       );
-      this.store.attachFile(idea.id, { filename: file.name, bytes: new TextEncoder().encode(file.markdown), caption: "The plan this idea was imported from", author: actor });
+      this.store.attachFile(idea.id, { filename: name, bytes, caption: "The file this idea was imported from", author: actor });
+      if (input.maturity === undefined) this.store.putDocument(idea.id, CLASSIFY_KEY, name, { author: actor, changeSummary: "imported: to classify" }, { plan: true });
       return idea.id;
     });
     return { idea: this.detail(id), rows: parsed.sections.breakdown.length, warnings: parsed.warnings };
