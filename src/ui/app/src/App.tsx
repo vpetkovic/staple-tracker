@@ -1,4 +1,4 @@
-import { browserStorage, loadPlanMemory, withPlanLens } from "./views/plan/plan-memory";
+import { browserStorage, loadPlanMemory, savePlanMemory, withPlanLens } from "./views/plan/plan-memory";
 /**
  * The root: bootstrap, session state, and the mount points that sit above the shell.
  *
@@ -513,7 +513,7 @@ export function App() {
     setView(next);
   }, []);
 
-  const focusMilestone = useCallback((ref: string) => {
+  const focusMilestone = useCallback((ref: string | null) => {
     setMilestoneFocus(ref);
     setRun(null);
     setView("milestones");
@@ -566,6 +566,29 @@ export function App() {
       if (next) rememberWorkspace(next);
     },
     [view, filters],
+  );
+
+  /**
+   * lib/session.ts `openHorizon`: Plan's Horizons lens, landing on the horizon. Planning is the
+   * horizon's workspace's feature, read from there (on All workspaces `planningEnabled` speaks
+   * for no workspace): with it off the horizon is a milestone, opened on Milestones.
+   */
+  const openHorizon = useCallback(
+    (workspace: string, ref: string) => {
+      const switching = bootstrap.data?.mode === "hub" && workspace !== "" && workspace !== ws;
+      if (switching) setWs(workspace);
+      const home = workspace || featureWorkspace || "";
+      setMilestoneFocus(ref);
+      setRun(null);
+      if (bootstrap.data?.features?.[home]?.planning !== true) {
+        setView("milestones");
+        return;
+      }
+      // The lens PlanView opens on, and the one the navigation writes into the address.
+      savePlanMemory(home, { ...loadPlanMemory(home), lens: "horizons" });
+      setView("plan");
+    },
+    [bootstrap.data, ws, featureWorkspace, setWs],
   );
 
   /**
@@ -692,6 +715,7 @@ export function App() {
       focusMilestone,
       run,
       openRun,
+      openHorizon,
       projects,
       focusProject,
       ws,
@@ -728,6 +752,7 @@ export function App() {
     focusMilestone,
     run,
     openRun,
+    openHorizon,
     projects,
     focusProject,
     ws,

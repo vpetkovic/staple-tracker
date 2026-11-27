@@ -11,7 +11,7 @@
  *
  * Readable on purpose: one parameter per filter dimension, repeated for each value (so a
  * label with a comma in it survives), `q` for the search box, `done=1` when finished work
- * is shown, `focus` for the milestone the Milestones view was pointed at, `run` for the run
+ * is shown, `focus` for the milestone the Milestones view is on, `run` for the run
  * the Autopilot page is on (`?view=autopilot&run=<run id>`). `ws` absent means
  * every workspace. `view` is the one parameter the app ALWAYS writes, and its presence is
  * what says "this address describes a page": a bare `/` (a fresh tab, the printed launch
@@ -68,7 +68,7 @@ export interface ShellUrlState {
   ws: string;
   view: ViewName;
   filters: FilterState;
-  /** The milestone the Milestones view is pointed at, or null. */
+  /** The milestone the Milestones view is on, or null (the list, or any other view). */
   focus: string | null;
   /** The run the Autopilot page is on (its full id), or null: the page, or any other view. */
   run: string | null;
@@ -176,5 +176,7 @@ export function afterWorkspaceSwitch(
 export function isNavigation(before: ShellUrlState | null, after: ShellUrlState): boolean {
   if (before === null) return false;
   // Opening a run and going back to the runs are places too: Back from a run returns to the list.
-  return before.ws !== after.ws || before.view !== after.view || before.run !== after.run;
+  // So is opening a milestone, moving to another and going back to the list: the focus is the
+  // milestone the Milestones view is on.
+  return before.ws !== after.ws || before.view !== after.view || before.run !== after.run || before.focus !== after.focus;
 }

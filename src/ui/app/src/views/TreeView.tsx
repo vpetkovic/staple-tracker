@@ -62,6 +62,7 @@ import { buildPickupIndex, EMPTY_PICKUP_INDEX } from "./tree/pickup-model";
 import { rowQueueMenu, type RowQueue } from "./tree/row-queue";
 import { TreeGrid } from "./tree/TreeGrid";
 import { EmptyState, ViewState } from "./ViewChrome";
+import { openMilestoneMarker } from "./tree/milestone-marker";
 import { MineToggle } from "@/components/members/MineToggle";
 import { otherMembersRule, partitionMine, useMembersCache, useMineToggle } from "@/lib/members";
 
@@ -605,7 +606,7 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
                  * header tabs and the palette's "Go to …" commands use; the row knows only
                  * that it has somewhere to send a click.
                  */
-                onOpenMilestone={session.focusMilestone}
+                onOpenMilestone={(identifier, workspace, horizon) => openMilestoneMarker(session, workspace, identifier, horizon)}
                 /*
                  * The `⋯` menu, built per row. Passed as a BUILDER rather than as data so the
                  * grid never has to know what a menu is — see `TaskRowLine.actionsMenu`.

@@ -922,6 +922,26 @@ describe("the queue's two fields on the view", () => {
     expect(milestones.get(m).next).toBeNull();
   });
 
+  it("an unqueued milestone's next follows its member order, as a pickup scoped to it does", () => {
+    const m = newMilestone();
+    const a = store.createIssue({ title: "A" }).identifier;
+    const b = store.createIssue({ title: "B" }).identifier;
+    milestones.addMember(m, a, {}, "vp");
+    milestones.addMember(m, b, {}, "vp");
+    // The whole queue's unqueued band is in presentation sort (a before b); the person's
+    // order puts b first, and that is what `next`, `list` and `queue next --scope` all name.
+    milestones.moveMember(b, { before: a }, "vp");
+    const scoped = store.queue().effectiveQueue({ scope: m }).next;
+    expect(scoped?.identifier).toBe(b);
+    expect(milestones.get(m).next).toEqual({ identifier: b, position: scoped!.position });
+    expect(milestones.list()[0]!.next).toEqual({ identifier: b, position: scoped!.position });
+
+    // A queued member is the plan's statement and comes before the milestone's own order.
+    store.queue().enqueue(a, {}, "vp");
+    expect(milestones.get(m).next).toEqual({ identifier: a, position: 1 });
+    expect(store.queue().effectiveQueue({ scope: m }).next?.identifier).toBe(a);
+  });
+
   it("sorts the list by plan position first, then by date", () => {
     const early = newMilestone("early");
     const late = newMilestone("late");

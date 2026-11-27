@@ -969,18 +969,27 @@ export class QueueStore {
      * `out_of_order` speaks) need not rise monotonically through the unqueued
      * part of a scoped answer: the array order is the answer.
      */
-    let answer = rows;
-    if (scope !== null) {
+    /**
+     * The order queueing `container` would give its leaves, as leaf id → index: a
+     * milestone's membership order, then the tree rule. A walk of its own, so it
+     * neither reads nor marks what the plan already emitted.
+     */
+    const shapeRank = (container: IssueNode): Map<string, number> => {
       const walked: string[] = [];
       const seen = new Set<string>();
       const walk = (leaf: IssueNode): void => {
         walked.push(leaf.id);
       };
       // A milestone expands over its membership; any other container over its
-      // open children — never the scope node itself, which is not inside itself.
-      const starts = scope.kind === MILESTONE_KIND ? [scope] : (openChildren.get(scope.id) ?? []);
+      // open children — never the container itself, which is not inside itself.
+      const starts = container.kind === MILESTONE_KIND ? [container] : (openChildren.get(container.id) ?? []);
       for (const start of starts) expand(start, null, null, null, 0, seen, walk);
-      const scopeRank = new Map(walked.map((id, index) => [id, index]));
+      return new Map(walked.map((id, index) => [id, index]));
+    };
+
+    let answer = rows;
+    if (scope !== null) {
+      const scopeRank = shapeRank(scope);
       const inside = insideScope(scope.id, nodes, seam.membersOf);
       const scoped = rows.filter((row) => inside(row.issueId));
       const unqueued = scoped
@@ -999,6 +1008,15 @@ export class QueueStore {
       rows: answer,
       next: nextIndex < 0 ? null : answer[nextIndex]!,
       skipped: nextIndex < 0 ? answer : answer.slice(0, nextIndex),
+      ...(opts.memberOrder
+        ? {
+            memberOrder: new Map(
+              [...nodes.values()]
+                .filter((node) => node.kind === MILESTONE_KIND)
+                .map((node) => [node.identifier, shapeRank(node)] as const),
+            ),
+          }
+        : {}),
       ...(scope === null
         ? {}
         : {
@@ -1200,6 +1218,12 @@ export interface EffectiveQueue {
    * no non-resolved row in `skipped` means the scope has no open work left.
    */
   scope?: QueueScope;
+  /**
+   * Present only when asked (`memberOrder: true`): per milestone identifier, the order
+   * queueing that milestone would give its leaves (leaf issue id → index), the order a
+   * scoped answer puts its unqueued rows in.
+   */
+  memberOrder?: ReadonlyMap<string, ReadonlyMap<string, number>>;
 }
 
 /** The container a scoped answer was limited to, as `queue next --scope` echoes it. */
@@ -1269,6 +1293,8 @@ export interface EffectiveQueueOptions {
    * `store.members()`; absent or null is the single-person answer, unchanged.
    */
   pickup?: MemberLens | null;
+  /** Also answer `memberOrder`: each milestone's own order over its leaves. */
+  memberOrder?: boolean;
 }
 
 interface IssueNode {

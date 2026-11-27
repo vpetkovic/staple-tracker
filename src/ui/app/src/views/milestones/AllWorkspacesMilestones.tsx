@@ -124,17 +124,19 @@ export function AllWorkspacesMilestones({
 }
 
 /**
- * Opening a milestone from the All-workspaces list: switch to its workspace, then point the
- * page at it. In this order, in one handler, so React applies both together — the switch
- * clears any milestone focus (it belonged to the workspace being left), and the focus then
- * names this one.
+ * Opening a milestone that lives in `workspace` (the All-workspaces list, a row's milestone
+ * marker, the detail drawer): switch to its workspace when the page is on another (All
+ * workspaces included), then point the page at it. In this order, in one handler, so React
+ * applies both together — the switch clears any milestone focus (it belonged to the workspace
+ * being left), and the focus then names this one. A page already on that workspace, or a
+ * single-workspace page (which has nowhere to switch to), only moves the focus.
  */
 export function openMilestoneIn(
-  session: Pick<StapleSession, "setWs" | "focusMilestone">,
+  session: Pick<StapleSession, "mode" | "ws" | "setWs" | "focusMilestone">,
   workspace: string,
   ref: string,
 ): void {
-  session.setWs(workspace);
+  if (session.mode === "hub" && workspace !== "" && workspace !== session.ws) session.setWs(workspace);
   session.focusMilestone(ref);
 }
 
