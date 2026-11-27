@@ -52,6 +52,7 @@ afterAll(async () => {
 });
 
 const DESK = { viewport: { width: 1440, height: 900 } } satisfies BrowserContextOptions;
+const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true } satisfies BrowserContextOptions;
 
 /** Opens the single-workspace page on Tasks, or `at.search` on `at.server` (the hub page), and waits for `at.ready`. */
 async function withPage(
@@ -72,7 +73,7 @@ async function withPage(
 }
 
 describe("the theme", () => {
-  const stored = (page: Page) => page.evaluate(() => localStorage.getItem("staple:theme"));
+  const stored = (page: Page, key = "staple:theme:v2") => page.evaluate((name) => localStorage.getItem(name), key);
   const dark = (page: Page) => page.evaluate(() => document.documentElement.classList.contains("dark"));
 
   it("follows the system, live, until a person chooses, and records only that choice", async () => {
@@ -95,6 +96,48 @@ describe("the theme", () => {
       await page.reload({ waitUntil: "networkidle" });
       expect(await dark(page)).toBe(true);
     });
+  });
+
+  it("follows the system with the rail hidden, and the switch agrees when the rail comes back", async () => {
+    await withPage({ ...DESK, colorScheme: "light" }, async (page) => {
+      await page.keyboard.press("[");
+      await page.locator("[data-nav-rail]").waitFor({ state: "detached" });
+      await page.emulateMedia({ colorScheme: "dark" });
+      await expect.poll(() => dark(page)).toBe(true);
+      await page.keyboard.press("[");
+      expect(await page.getByRole("switch", { name: "Dark mode" }).getAttribute("aria-checked")).toBe("true");
+    });
+  });
+
+  it("follows the system on a phone, where no theme switch is on screen", async () => {
+    await withPage({ ...PHONE, colorScheme: "dark" }, async (page) => {
+      expect(await page.getByRole("switch", { name: "Dark mode" }).count()).toBe(0);
+      await page.emulateMedia({ colorScheme: "light" });
+      await expect.poll(() => dark(page)).toBe(false);
+    });
+  });
+
+  it("does not read the old key as a pick, and removes it", async () => {
+    // Builds before this one wrote the first visit's system answer to `staple:theme` on every load.
+    const context = await browser.newContext({ ...DESK, colorScheme: "light" });
+    try {
+      await context.addInitScript(() => {
+        if (!sessionStorage.getItem("seeded")) {
+          localStorage.setItem("staple:theme", "dark");
+          sessionStorage.setItem("seeded", "1");
+        }
+      });
+      const page = await context.newPage();
+      await page.goto(`http://127.0.0.1:${(ui.server.address() as AddressInfo).port}/?token=${ui.token}`, { waitUntil: "networkidle" });
+      await page.getByText("A task to list").first().waitFor();
+      expect(await dark(page)).toBe(false);
+      expect(await stored(page, "staple:theme")).toBeNull();
+      expect(await stored(page)).toBeNull();
+      await page.emulateMedia({ colorScheme: "dark" });
+      await expect.poll(() => dark(page)).toBe(true);
+    } finally {
+      await context.close();
+    }
   });
 });
 
