@@ -7,7 +7,7 @@ import { ISSUE_KINDS, ISSUE_STATUSES, StapleError } from "../src/core/types.js";
 import { DEFAULT_COST_MODEL } from "../src/core/analytics/cost-model.js";
 
 /** The Analytics cost model's four parts at their defaults (STA-575), as every settings read lists them. */
-const ANALYTICS_DEFAULTS = (["roles", "roleMapping", "scenario", "aiSpend"] as const).map((part) => ({
+const ANALYTICS_DEFAULTS = (["roles", "roleMapping", "scenario", "solo", "company"] as const).map((part) => ({
   key: `analytics.${part}`,
   scope: "workspace" as const,
   value: DEFAULT_COST_MODEL[part],

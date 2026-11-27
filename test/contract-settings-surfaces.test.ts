@@ -181,7 +181,7 @@ describe("the queue policy is the same object on every surface", () => {
       "queue.silentClaimMinutes = 30  (default)",
       "features.planning = false  (default)",
       // The Analytics cost model (STA-575) is structured, so each part prints as JSON.
-      ...(["roles", "roleMapping", "scenario", "aiSpend"] as const).map((part) => `analytics.${part} = ${JSON.stringify(DEFAULT_COST_MODEL[part])}  (default)`),
+      ...(["roles", "roleMapping", "scenario", "solo", "company"] as const).map((part) => `analytics.${part} = ${JSON.stringify(DEFAULT_COST_MODEL[part])}  (default)`),
     ]);
   });
 });

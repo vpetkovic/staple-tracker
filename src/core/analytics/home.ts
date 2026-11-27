@@ -33,7 +33,7 @@ import { settingMetaKey } from "../settings-registry.js";
 import { StapleError } from "../types.js";
 import type { CostModelHome, CostModelResponse, CostModelValue, CostModelWrite } from "./contract.js";
 import { AGENT_TYPES } from "./agent-type.js";
-import { COST_MODEL_KEYS, COST_MODEL_PARTS, DEFAULT_COST_MODEL, type CostModel, type CostModelPart } from "./cost-model.js";
+import { COST_MODEL_KEYS, COST_MODEL_PARTS, DEFAULT_COST_MODEL, DEFAULT_ROLE_RATE, kindOf, type CostModel, type CostModelPart, type ProfileValue } from "./cost-model.js";
 
 /** A registered workspace that could hold the model. */
 export interface HomeCandidate {
@@ -141,10 +141,26 @@ function responseOf(resolved: Resolved): CostModelResponse {
   const refusal = resolved.home?.unreadable.values().next().value;
   if (refusal) throw refusal;
   const held = resolved.home ?? { model: DEFAULT_COST_MODEL, source: Object.fromEntries(COST_MODEL_PARTS.map((part) => [part, "default"])) as Record<CostModelPart, "saved" | "default"> };
-  // Every default carries `assumed`, and `readHeldModel` filled it for a save without one. A
-  // spend entry reads with its bill here only, so a move carries the stored entries as they are.
-  const aiSpend = { ...held.model.aiSpend, entries: held.model.aiSpend.entries.map((entry) => ({ ...entry, kind: entry.kind ?? "subscription" })) };
-  return { model: { ...held.model, aiSpend } as unknown as CostModelValue, source: held.source, home: resolved.view, agentTypes: [...AGENT_TYPES] };
+  // Every default carries `assumed`, and `readHeldModel` filled it for a save without one. The
+  // read-time defaults below are applied here only, so a move carries stored values as they are.
+  const model = { ...held.model, solo: profileView(held.model.solo, held.model), company: profileView(held.model.company, held.model) };
+  return { model: model as unknown as CostModelValue, source: held.source, home: resolved.view, agentTypes: [...AGENT_TYPES] };
+}
+
+/**
+ * A profile as a read answers it: every role in the list has a rate (one the profile does not
+ * set reads at `DEFAULT_ROLE_RATE` and is listed as assumed), and every entry has its kind, its
+ * quantity (null for an API bill) and its role (null for shared spend).
+ */
+function profileView(profile: ProfileValue, model: CostModel): ProfileValue {
+  const missing = model.roles.roles.filter((role) => profile.rates[role.id] === undefined).map((role) => role.id);
+  const rates = { ...profile.rates, ...Object.fromEntries(missing.map((id) => [id, DEFAULT_ROLE_RATE])) };
+  const assumed = [...new Set([...(profile.assumed ?? []), ...missing.map((id) => `roles.${id}.hourlyRate`)])];
+  const entries = profile.entries.map((entry) => {
+    const kind = kindOf(entry);
+    return { ...entry, kind, quantity: kind === "subscription" ? (entry.quantity ?? 1) : null, roleId: entry.roleId ?? null };
+  });
+  return { ...profile, rates, assumed, entries } as unknown as ProfileValue;
 }
 
 /** `GET /api/analytics/cost-model`. */

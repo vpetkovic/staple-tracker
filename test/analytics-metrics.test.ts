@@ -345,7 +345,7 @@ describe("hours and tickets by the role they are priced at", () => {
     const resolved = resolvePeriod([rows], { now: "2026-09-30T12:00:00.000Z", from: "2026-09-01", to: "2026-09-01" });
     const tallies = roleTallies([rows], resolved, [{ title: "qa", roleId: "qa-engineer" }], roleOf);
     expect(Object.fromEntries([...tallies.measured].map(([id, t]) => [id, [t.hours, t.tickets]]))).toEqual({ writer: [4, 1], "qa-engineer": [2, 1], engineer: [0, 1] });
-    expect(Object.fromEntries([...tallies.planned].map(([id, t]) => [id, [t.hours, t.tickets, t.plannedTickets]]))).toEqual({
+    expect(Object.fromEntries([...tallies.planned].map(([id, t]) => [id, [t.hours, t.tickets, t.estimatedTickets]]))).toEqual({
       writer: [3, 1, 1],
       "qa-engineer": [1, 1, 1],
       engineer: [2, 1, 1],

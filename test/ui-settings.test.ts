@@ -491,7 +491,7 @@ describe("registered settings on /api/settings", () => {
       "queue.silentClaimMinutes": { key: "queue.silentClaimMinutes", scope: "workspace", value: 30, source: "default", version: 1 },
       // The Analytics cost model (STA-575): its values are served, its definitions are not (edited on the ROI page).
       ...Object.fromEntries(
-        (["roles", "roleMapping", "scenario", "aiSpend"] as const).map((part) => [
+        (["roles", "roleMapping", "scenario", "solo", "company"] as const).map((part) => [
           `analytics.${part}`,
           { key: `analytics.${part}`, scope: "workspace", value: DEFAULT_COST_MODEL[part], source: "default", version: 1 },
         ]),

@@ -1,19 +1,27 @@
 /**
  * The cost model: what the ROI page prices agent work with, and what it compares it against.
  *
- * Four parts, each one registered workspace setting (`settings-registry.ts`, category
+ * Five parts, each one registered workspace setting (`settings-registry.ts`, category
  * `analytics`), so each syncs through the workspace's operation log as an ordinary `setting`
- * entity and each is its own conflict unit: editing rates on one device and AI spend on
- * another never collides.
+ * entity and each is its own conflict unit.
  *
- *  - `analytics.roles`: the human roles, each with an hourly rate.
+ * Shared by whoever pays, because the work is the same:
+ *  - `analytics.roles`: the human roles, ids and titles.
  *  - `analytics.roleMapping`: which role each agent type stands in for, and the person's own
  *    agent-type rules (`agent-type.ts`).
- *  - `analytics.scenario`: who pays. `solo`: one person directs the agents and their time is
- *    an opportunity cost. `company`: an employee directs them and their time is a wage. Both
- *    price the director's time the same way; the scenario says which question the page asks.
- *  - `analytics.aiSpend`: what the AI costs per month, as entries with a start month, so a plan
- *    change mid-period is priced at the plan in force each day.
+ *  - `analytics.scenario`: the profile in use (`solo` or `company`) and the currency.
+ *
+ * One PROFILE per payer (VP's ruling, 2026-11-26: "a company's setup can differ from mine"),
+ * each its own setting so that editing the company profile on one device can never change a
+ * solo figure, a sync merge included:
+ *  - `analytics.solo`, `analytics.company`: the director (rate, hours per active day), each
+ *    role's hourly rate, and the AI spend entries, each assigned to a role or shared by the team
+ *    (VP's ruling, 2026-11-26: "assign the AI subscription cost to each team member, with the
+ *    quantity"). Nothing is split between roles by a hidden rule.
+ *
+ * `solo`: one person directs the agents and their time is an opportunity cost. `company`: an
+ * employee directs them and their time is a wage. Both price the director's time the same way;
+ * the profile says which question the page asks. Switching profiles copies nothing.
  *
  * ## Defaults are assumptions
  *
@@ -25,38 +33,34 @@
  *
  * ## Validation is the registry's
  *
- * `costModelPartProblem` is the registry's validator for the `costModel` schema arm, so the
- * store refuses a malformed value on write and the read boundary refuses one on read, by the
- * same sentence.
+ * `costModelPartProblem` is the registry's validator for these settings, so the store refuses
+ * a malformed value on write and the read boundary refuses one on read, by the same sentence.
  */
 import { AGENT_TYPES, isAgentType, type AgentType, type AgentTypeRule } from "./agent-type.js";
 
-export const COST_MODEL_PARTS = ["roles", "roleMapping", "scenario", "aiSpend"] as const;
+export const SCENARIO_MODES = ["solo", "company"] as const;
+export type ScenarioMode = (typeof SCENARIO_MODES)[number];
+
+export const COST_MODEL_PARTS = ["roles", "roleMapping", "scenario", "solo", "company"] as const;
 export type CostModelPart = (typeof COST_MODEL_PARTS)[number];
 
 export const COST_MODEL_KEYS: Readonly<Record<CostModelPart, string>> = {
   roles: "analytics.roles",
   roleMapping: "analytics.roleMapping",
   scenario: "analytics.scenario",
-  aiSpend: "analytics.aiSpend",
+  solo: "analytics.solo",
+  company: "analytics.company",
 };
 
-/**
- * How the agents standing in for a role are paid for: a flat `subscription` (a plan), or
- * metered `api` usage. VP's ruling (2026-11-26): companies pay API prices by default, and each
- * role can be set either way.
- */
-export const BILLING_KINDS = ["subscription", "api"] as const;
-export type Billing = (typeof BILLING_KINDS)[number];
+/** What a spend entry is: a flat `subscription` (a plan, bought in some quantity), or a metered `api` bill. */
+export const SPEND_KINDS = ["subscription", "api"] as const;
+export type SpendKind = (typeof SPEND_KINDS)[number];
 
+/** A role: shared by both profiles. Its rate is each profile's. */
 export interface Role {
-  /** Stable id the mapping refers to: lowercase letters, digits and dashes. */
+  /** Stable id the mapping and the profiles refer to: lowercase letters, digits and dashes. */
   readonly id: string;
   readonly title: string;
-  /** What an hour of this role costs, in the scenario's currency. */
-  readonly hourlyRate: number;
-  /** How this role's agents are billed. Unset follows the scenario (`billingOf`). */
-  readonly billing?: Billing;
 }
 
 /** Figure ids still at their shipped default (see the module comment). */
@@ -76,13 +80,34 @@ export interface RoleMappingValue {
   readonly savedAt: string | null;
 }
 
-export const SCENARIO_MODES = ["solo", "company"] as const;
-export type ScenarioMode = (typeof SCENARIO_MODES)[number];
-
 export interface ScenarioValue {
+  /** The profile in use. */
   readonly mode: ScenarioMode;
   /** ISO 4217 code every amount in the model is in. */
   readonly currency: string;
+  readonly assumed?: Assumed;
+  readonly savedAt: string | null;
+}
+
+export interface AiSpendEntry {
+  readonly id: string;
+  readonly label: string;
+  /** The price of one, per month. */
+  readonly monthlyAmount: number;
+  /** First month it applies, `YYYY-MM`. */
+  readonly from: string;
+  /** Last month it applies, `YYYY-MM`, or null for "still paying". */
+  readonly to: string | null;
+  /** Which bill this is. Unset is `subscription`. */
+  readonly kind?: SpendKind;
+  /** Subscriptions only: how many are bought (default 1, also for null). The month costs `monthlyAmount × quantity`. */
+  readonly quantity?: number | null;
+  /** The role this spend is for, or null (the default) for spend shared by the whole team. A role no longer in the list reads as shared. */
+  readonly roleId?: string | null;
+}
+
+/** One payer's figures. */
+export interface ProfileValue {
   /** The person directing the agents. */
   readonly director: {
     readonly title: string;
@@ -91,23 +116,8 @@ export interface ScenarioValue {
     /** Staple does not record a person's time, so it is estimated per day agents ran. */
     readonly hoursPerActiveDay: number;
   };
-  readonly assumed?: Assumed;
-  readonly savedAt: string | null;
-}
-
-export interface AiSpendEntry {
-  readonly id: string;
-  readonly label: string;
-  readonly monthlyAmount: number;
-  /** First month it applies, `YYYY-MM`. */
-  readonly from: string;
-  /** Last month it applies, `YYYY-MM`, or null for "still paying". */
-  readonly to: string | null;
-  /** Which bill this is. Unset is `subscription`. */
-  readonly kind?: Billing;
-}
-
-export interface AiSpendValue {
+  /** Each role's hourly rate, by role id. A role without one is priced at `DEFAULT_ROLE_RATE`, assumed. */
+  readonly rates: Readonly<Record<string, number>>;
   readonly entries: readonly AiSpendEntry[];
   readonly assumed?: Assumed;
   readonly savedAt: string | null;
@@ -117,18 +127,25 @@ export interface CostModel {
   readonly roles: RolesValue;
   readonly roleMapping: RoleMappingValue;
   readonly scenario: ScenarioValue;
-  readonly aiSpend: AiSpendValue;
+  readonly solo: ProfileValue;
+  readonly company: ProfileValue;
 }
 
 // ------------------------------------------------------------------ defaults
 
+/** The rate a role without one in the active profile is priced at, and listed as assumed. */
+export const DEFAULT_ROLE_RATE = 100;
+
+const SHIPPED_RATES: Readonly<Record<string, number>> = Object.freeze({ "software-engineer": 100, "design-engineer": 95, "technical-writer": 70 });
+const RATE_ASSUMED = Object.keys(SHIPPED_RATES).map((id) => `roles.${id}.hourlyRate`);
+
 export const DEFAULT_ROLES: RolesValue = Object.freeze({
   roles: Object.freeze([
-    Object.freeze({ id: "software-engineer", title: "Software Engineer", hourlyRate: 100 }),
-    Object.freeze({ id: "design-engineer", title: "Design Engineer", hourlyRate: 95 }),
-    Object.freeze({ id: "technical-writer", title: "Technical Writer", hourlyRate: 70 }),
+    Object.freeze({ id: "software-engineer", title: "Software Engineer" }),
+    Object.freeze({ id: "design-engineer", title: "Design Engineer" }),
+    Object.freeze({ id: "technical-writer", title: "Technical Writer" }),
   ]),
-  assumed: Object.freeze(["roles.software-engineer.hourlyRate", "roles.design-engineer.hourlyRate", "roles.technical-writer.hourlyRate"]),
+  assumed: Object.freeze([]),
   savedAt: null,
 });
 
@@ -146,17 +163,23 @@ export const DEFAULT_ROLE_MAPPING: RoleMappingValue = Object.freeze({
   savedAt: null,
 });
 
-export const DEFAULT_SCENARIO: ScenarioValue = Object.freeze({
-  mode: "solo",
-  currency: "USD",
+export const DEFAULT_SCENARIO: ScenarioValue = Object.freeze({ mode: "solo", currency: "USD", assumed: Object.freeze([]), savedAt: null });
+
+/** Just me: one $200 subscription. */
+export const DEFAULT_SOLO: ProfileValue = Object.freeze({
   director: Object.freeze({ title: "You", hourlyRate: 100, hoursPerActiveDay: 8 }),
-  assumed: Object.freeze(["director.hourlyRate", "director.hoursPerActiveDay"]),
+  rates: SHIPPED_RATES,
+  entries: Object.freeze([Object.freeze({ id: "ai-plan", label: "AI subscription", monthlyAmount: 200, from: "2000-01", to: null, kind: "subscription" as const, quantity: 1, roleId: null })]),
+  assumed: Object.freeze(["director.hourlyRate", "director.hoursPerActiveDay", ...RATE_ASSUMED, "entries.ai-plan.monthlyAmount"]),
   savedAt: null,
 });
 
-export const DEFAULT_AI_SPEND: AiSpendValue = Object.freeze({
-  entries: Object.freeze([Object.freeze({ id: "ai-plan", label: "AI subscriptions", monthlyAmount: 200, from: "2000-01", to: null })]),
-  assumed: Object.freeze(["entries.ai-plan.monthlyAmount"]),
+/** A company: no spend entered yet, so a fresh company profile says there is none. */
+export const DEFAULT_COMPANY: ProfileValue = Object.freeze({
+  director: Object.freeze({ title: "Employee", hourlyRate: 100, hoursPerActiveDay: 8 }),
+  rates: SHIPPED_RATES,
+  entries: Object.freeze([]),
+  assumed: Object.freeze(["director.hourlyRate", "director.hoursPerActiveDay", ...RATE_ASSUMED]),
   savedAt: null,
 });
 
@@ -164,7 +187,8 @@ export const DEFAULT_COST_MODEL: CostModel = Object.freeze({
   roles: DEFAULT_ROLES,
   roleMapping: DEFAULT_ROLE_MAPPING,
   scenario: DEFAULT_SCENARIO,
-  aiSpend: DEFAULT_AI_SPEND,
+  solo: DEFAULT_SOLO,
+  company: DEFAULT_COMPANY,
 });
 
 // ------------------------------------------------------------------ validation
@@ -177,6 +201,7 @@ const MAX_RULES = 50;
 const MAX_SPEND_ENTRIES = 50;
 const MAX_RATE = 100_000;
 const MAX_MONTHLY = 100_000_000;
+const MAX_QUANTITY = 100_000;
 
 const isObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
 const isText = (value: unknown, max: number): value is string => typeof value === "string" && value.trim() !== "" && value.length <= max && !/[\x00-\x1f\x7f]/.test(value);
@@ -204,15 +229,13 @@ function rolesProblem(value: unknown): string | null {
   if (!Array.isArray(value.roles) || value.roles.length === 0 || value.roles.length > MAX_ROLES) return `roles must list 1 to ${MAX_ROLES} roles`;
   const seen = new Set<string>();
   for (const [index, role] of value.roles.entries()) {
-    if (!isObject(role)) return `role ${index + 1} must be an object {id, title, hourlyRate}`;
-    const roleExtra = unknownField(role, ["id", "title", "hourlyRate", "billing"], `role ${index + 1}`);
+    if (!isObject(role)) return `role ${index + 1} must be an object {id, title}`;
+    const roleExtra = unknownField(role, ["id", "title"], `role ${index + 1}`);
     if (roleExtra) return roleExtra;
     if (typeof role.id !== "string" || !ROLE_ID.test(role.id)) return `role ${index + 1}'s id must be lowercase letters, digits and dashes`;
     if (seen.has(role.id)) return `role id "${role.id}" appears twice`;
     seen.add(role.id);
     if (!isText(role.title, 80)) return `role "${role.id}" needs a title of at most 80 characters`;
-    if (!isAmount(role.hourlyRate, MAX_RATE)) return `role "${role.id}"'s hourlyRate must be a number from 0 to ${MAX_RATE}`;
-    if (role.billing !== undefined && !(BILLING_KINDS as readonly unknown[]).includes(role.billing)) return `role "${role.id}"'s billing must be one of ${BILLING_KINDS.join(", ")}`;
   }
   return savedAtProblem(value);
 }
@@ -251,11 +274,56 @@ function roleMappingProblem(value: unknown): string | null {
 }
 
 function scenarioProblem(value: unknown): string | null {
-  if (!isObject(value)) return "an object {mode, currency, director, savedAt}";
-  const extra = unknownField(value, ["mode", "currency", "director", "assumed", "savedAt"], "the scenario");
+  if (!isObject(value)) return "an object {mode, currency, savedAt}";
+  const extra = unknownField(value, ["mode", "currency", "assumed", "savedAt"], "the scenario");
   if (extra) return extra;
   if (typeof value.mode !== "string" || !(SCENARIO_MODES as readonly string[]).includes(value.mode)) return `mode must be one of ${SCENARIO_MODES.join(", ")}`;
   if (typeof value.currency !== "string" || !CURRENCY.test(value.currency)) return "currency must be a three-letter ISO 4217 code such as USD";
+  return savedAtProblem(value);
+}
+
+/** A by-role-id map: at most `MAX_ROLES` keys, each a role id, each value passing `valid`. */
+function byRoleProblem(value: unknown, where: string, valid: (entry: unknown) => boolean, expected: string): string | null {
+  if (!isObject(value)) return `${where} must map role ids to ${expected}`;
+  const keys = Object.keys(value);
+  if (keys.length > MAX_ROLES) return `${where} names at most ${MAX_ROLES} roles`;
+  for (const key of keys) {
+    if (!ROLE_ID.test(key)) return `${where} names "${key}", which is not a role id`;
+    if (!valid(value[key])) return `${where}.${key} must be ${expected}`;
+  }
+  return null;
+}
+
+function entryProblem(entry: unknown, index: number, seen: Set<string>): string | null {
+  const where = `spend entry ${index + 1}`;
+  if (!isObject(entry)) return `${where} must be an object {id, label, monthlyAmount, from, to, kind}`;
+  const entryExtra = unknownField(entry, ["id", "label", "monthlyAmount", "from", "to", "kind", "quantity", "roleId"], where);
+  if (entryExtra) return entryExtra;
+  if (typeof entry.id !== "string" || !ROLE_ID.test(entry.id)) return `${where}'s id must be lowercase letters, digits and dashes`;
+  if (seen.has(entry.id)) return `spend entry id "${entry.id}" appears twice`;
+  seen.add(entry.id);
+  if (!isText(entry.label, 80)) return `${where} needs a label of at most 80 characters`;
+  if (!isAmount(entry.monthlyAmount, MAX_MONTHLY)) return `${where}'s monthlyAmount must be a number from 0 to ${MAX_MONTHLY}`;
+  if (typeof entry.from !== "string" || !MONTH.test(entry.from)) return `${where}'s from must be a month YYYY-MM`;
+  if (entry.to !== null && (typeof entry.to !== "string" || !MONTH.test(entry.to))) return `${where}'s to must be a month YYYY-MM or null`;
+  if (typeof entry.to === "string" && entry.to < entry.from) return `${where} ends (${entry.to}) before it starts (${entry.from})`;
+  if (entry.kind !== undefined && !(SPEND_KINDS as readonly unknown[]).includes(entry.kind)) return `${where}'s kind must be one of ${SPEND_KINDS.join(", ")}`;
+  if (entry.roleId !== undefined && entry.roleId !== null && (typeof entry.roleId !== "string" || !ROLE_ID.test(entry.roleId))) return `${where}'s roleId must name a role id, or be null for spend the team shares`;
+  // null is a read's "no quantity" echoed back: the same as leaving it out.
+  if (entry.quantity !== undefined && entry.quantity !== null) {
+    if (entry.kind === "api") return `${where} is an API bill, which has no quantity`;
+    if (typeof entry.quantity !== "number" || !Number.isInteger(entry.quantity) || entry.quantity < 0 || entry.quantity > MAX_QUANTITY) {
+      return `${where}'s quantity must be a whole number from 0 to ${MAX_QUANTITY}`;
+    }
+  }
+  return null;
+}
+
+function profileProblem(value: unknown, mode: ScenarioMode): string | null {
+  const name = `the ${mode} profile`;
+  if (!isObject(value)) return `an object {director, rates, entries, savedAt}`;
+  const extra = unknownField(value, ["director", "rates", "entries", "assumed", "savedAt"], name);
+  if (extra) return extra;
   const director = value.director;
   if (!isObject(director)) return "director must be an object {title, hourlyRate, hoursPerActiveDay}";
   const directorExtra = unknownField(director, ["title", "hourlyRate", "hoursPerActiveDay"], "the director");
@@ -263,34 +331,18 @@ function scenarioProblem(value: unknown): string | null {
   if (!isText(director.title, 80)) return "director.title must be text of at most 80 characters";
   if (!isAmount(director.hourlyRate, MAX_RATE)) return `director.hourlyRate must be a number from 0 to ${MAX_RATE}`;
   if (!isAmount(director.hoursPerActiveDay, 24)) return "director.hoursPerActiveDay must be a number from 0 to 24";
-  return savedAtProblem(value);
-}
-
-function aiSpendProblem(value: unknown): string | null {
-  if (!isObject(value)) return "an object {entries, savedAt}";
-  const extra = unknownField(value, ["entries", "assumed", "savedAt"], "the AI spend");
-  if (extra) return extra;
+  const rates = byRoleProblem(value.rates, "rates", (rate) => isAmount(rate, MAX_RATE), `a number from 0 to ${MAX_RATE}`);
+  if (rates) return rates;
   if (!Array.isArray(value.entries) || value.entries.length > MAX_SPEND_ENTRIES) return `entries must be a list of at most ${MAX_SPEND_ENTRIES}`;
   const seen = new Set<string>();
   for (const [index, entry] of value.entries.entries()) {
-    const where = `spend entry ${index + 1}`;
-    if (!isObject(entry)) return `${where} must be an object {id, label, monthlyAmount, from, to}`;
-    const entryExtra = unknownField(entry, ["id", "label", "monthlyAmount", "from", "to", "kind"], where);
-    if (entryExtra) return entryExtra;
-    if (typeof entry.id !== "string" || !ROLE_ID.test(entry.id)) return `${where}'s id must be lowercase letters, digits and dashes`;
-    if (seen.has(entry.id)) return `spend entry id "${entry.id}" appears twice`;
-    seen.add(entry.id);
-    if (!isText(entry.label, 80)) return `${where} needs a label of at most 80 characters`;
-    if (!isAmount(entry.monthlyAmount, MAX_MONTHLY)) return `${where}'s monthlyAmount must be a number from 0 to ${MAX_MONTHLY}`;
-    if (typeof entry.from !== "string" || !MONTH.test(entry.from)) return `${where}'s from must be a month YYYY-MM`;
-    if (entry.to !== null && (typeof entry.to !== "string" || !MONTH.test(entry.to))) return `${where}'s to must be a month YYYY-MM or null`;
-    if (typeof entry.to === "string" && entry.to < entry.from) return `${where} ends (${entry.to}) before it starts (${entry.from})`;
-    if (entry.kind !== undefined && !(BILLING_KINDS as readonly unknown[]).includes(entry.kind)) return `${where}'s kind must be one of ${BILLING_KINDS.join(", ")}`;
+    const problem = entryProblem(entry, index, seen);
+    if (problem) return problem;
   }
   return savedAtProblem(value);
 }
 
-/** Why `value` is not a valid `part`, or null. The registry's validator for the `costModel` arm. */
+/** Why `value` is not a valid `part`, or null. The registry's validator for these settings. */
 export function costModelPartProblem(part: CostModelPart, value: unknown): string | null {
   switch (part) {
     case "roles":
@@ -299,56 +351,61 @@ export function costModelPartProblem(part: CostModelPart, value: unknown): strin
       return roleMappingProblem(value);
     case "scenario":
       return scenarioProblem(value);
-    case "aiSpend":
-      return aiSpendProblem(value);
+    case "solo":
+    case "company":
+      return profileProblem(value, part);
   }
-}
-
-/** The newest `savedAt` across the parts, or null when every part is a default. */
-export function costModelSavedAt(model: CostModel): string | null {
-  let newest: string | null = null;
-  for (const part of COST_MODEL_PARTS) {
-    const at = model[part].savedAt;
-    if (at !== null && (newest === null || at > newest)) newest = at;
-  }
-  return newest;
 }
 
 // ------------------------------------------------------------------ pricing
 
-/** An entry's bill: `subscription` unless it says `api`. */
-export const kindOf = (entry: AiSpendEntry): Billing => entry.kind ?? "subscription";
+/** The profile in use. */
+export const activeProfile = (model: CostModel): ProfileValue => model[model.scenario.mode];
 
-/** How a role's agents are billed: its own setting, else the scenario's default (solo: subscription; company: API). */
-export function billingOf(role: Role, scenario: ScenarioValue): Billing {
-  return role.billing ?? (scenario.mode === "company" ? "api" : "subscription");
-}
+/** An entry's kind: `subscription` unless it says `api`. */
+export const kindOf = (entry: AiSpendEntry): SpendKind => entry.kind ?? "subscription";
+
+/** What one month of an entry costs: a subscription's price times how many are bought; an API bill as entered. */
+export const monthlyCostOf = (entry: AiSpendEntry): number => (kindOf(entry) === "subscription" ? entry.monthlyAmount * (entry.quantity ?? 1) : entry.monthlyAmount);
 
 const inForce = (entry: AiSpendEntry, month: string): boolean => month >= entry.from && (entry.to === null || month <= entry.to);
 
 /**
- * The AI spend that falls inside `days` (calendar days): each day costs its month's amount
- * divided by the days in that month, summed over every entry in force that month (of `kind`
- * only, when given). Proration by day is what makes a two-week period cost half a month.
+ * The AI spend that falls inside `days` (calendar days): each day costs its month's cost
+ * divided by the days in that month, summed over every entry in force that month. Proration by
+ * day is what makes a two-week period cost half a month.
  */
-export function aiSpendFor(spend: AiSpendValue, days: readonly string[], kind?: Billing): number {
+export function aiSpendFor(entries: readonly AiSpendEntry[], days: readonly string[]): number {
   let total = 0;
   for (const day of days) {
     const month = day.slice(0, 7);
     const [year, monthNumber] = month.split("-").map(Number) as [number, number];
     const daysInMonth = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
-    for (const entry of spend.entries) {
-      if (!inForce(entry, month) || (kind !== undefined && kindOf(entry) !== kind)) continue;
-      total += entry.monthlyAmount / daysInMonth;
-    }
+    for (const entry of entries) if (inForce(entry, month)) total += monthlyCostOf(entry) / daysInMonth;
   }
   return total;
 }
 
-/** True when some entry of `kind` with a non-zero amount is in force on at least one of `days`. */
-export function spendCovers(spend: AiSpendValue, days: readonly string[], kind: Billing): boolean {
+/** True when some entry that costs anything is in force on at least one of `days`. */
+export function spendCovers(entries: readonly AiSpendEntry[], days: readonly string[]): boolean {
   const months = new Set(days.map((day) => day.slice(0, 7)));
-  return spend.entries.some((entry) => kindOf(entry) === kind && entry.monthlyAmount > 0 && [...months].some((month) => inForce(entry, month)));
+  return entries.some((entry) => monthlyCostOf(entry) > 0 && [...months].some((month) => inForce(entry, month)));
+}
+
+/** A role as the active profile prices it. */
+export interface PricedRole extends Role {
+  readonly hourlyRate: number;
+}
+
+/** One spend line on a role's row (or the shared row): the entry, and what it cost in the period for this scope. */
+export interface AiEntryCost {
+  readonly id: string;
+  readonly label: string;
+  readonly kind: SpendKind;
+  readonly monthlyAmount: number;
+  /** Subscriptions: how many (default 1). API bills: null. */
+  readonly quantity: number | null;
+  readonly cost: number;
 }
 
 /** One role's share of the value: the hours attributed to it and what they cost at its rate. */
@@ -363,14 +420,10 @@ export interface RoleValue {
   /** Done tickets in the period that landed on this role. */
   readonly tickets: number;
   /** Planned lens: of those, the ones whose estimate counts. Null on the measured lens. */
-  readonly plannedTickets: number | null;
-  /** How this role's agents are billed (`billingOf`). */
-  readonly billing: Billing;
-  /**
-   * This role's share of the AI spend of its kind: that spend split over the roles billed the
-   * same way, by their (measured) agent-hours. 0 when no role of the kind ran.
-   */
+  readonly estimatedTickets: number | null;
+  /** The sum of the spend entries assigned to this role. */
   readonly aiCost: number;
+  readonly aiEntries: readonly AiEntryCost[];
 }
 
 /** The ROI under one lens. Every input is echoed so a surface can print the formula. */
@@ -381,7 +434,11 @@ export interface RoiResult {
   /** valueHours priced at each role's rate: what the equivalent team would have cost. */
   readonly value: number;
   readonly byRole: readonly RoleValue[];
+  /** Every spend entry's cost: the roles' plus the shared. */
   readonly aiCost: number;
+  /** The entries assigned to no role (or to a role no longer in the list). */
+  readonly sharedAiCost: number;
+  readonly sharedAiEntries: readonly AiEntryCost[];
   readonly director: { readonly hours: number; readonly hourlyRate: number; readonly cost: number };
   /** aiCost + director.cost. */
   readonly totalCost: number;
@@ -408,17 +465,24 @@ export interface MappingFallback {
 }
 
 /**
- * The role each agent type and each role-naming rule is priced at. Either can name a role
- * that is not in the list: the list and the mapping are separate settings and sync
- * separately, so a role deleted on one device can still be named by a mapping saved on
- * another. That one is priced at the first role and reported, never dropped (dropping it would
- * silently undercount the value).
+ * The role each agent type and each role-naming rule is priced at, with the active profile's
+ * rate. Either can name a role that is not in the list: the list and the mapping are separate
+ * settings and sync separately, so a role deleted on one device can still be named by a mapping
+ * saved on another. That one is priced at the first role and reported, never dropped (dropping
+ * it would silently undercount the value).
  */
-export function resolveRoles(model: CostModel): { roleOf: (type: AgentType) => Role; role: (id: string) => Role; fallbacks: MappingFallback[] } {
-  const roles = new Map(model.roles.roles.map((role) => [role.id, role]));
-  const first = model.roles.roles[0]!;
+export function resolveRoles(model: CostModel): {
+  roleOf: (type: AgentType) => PricedRole;
+  role: (id: string) => PricedRole;
+  has: (id: string) => boolean;
+  fallbacks: MappingFallback[];
+} {
+  const profile = activeProfile(model);
+  const priced = (role: Role): PricedRole => ({ ...role, hourlyRate: profile.rates[role.id] ?? DEFAULT_ROLE_RATE });
+  const roles = new Map(model.roles.roles.map((role) => [role.id, priced(role)]));
+  const first = roles.get(model.roles.roles[0]!.id)!;
   const fallbacks: MappingFallback[] = [];
-  const resolved = new Map<AgentType, Role>();
+  const resolved = new Map<AgentType, PricedRole>();
   for (const type of AGENT_TYPES) {
     const wanted = model.roleMapping.types[type];
     const role = roles.get(wanted);
@@ -428,7 +492,7 @@ export function resolveRoles(model: CostModel): { roleOf: (type: AgentType) => R
   for (const [index, rule] of model.roleMapping.rules.entries()) {
     if (rule.roleId !== undefined && !roles.has(rule.roleId)) fallbacks.push({ type: null, rule: index, missingRoleId: rule.roleId, usedRoleId: first.id });
   }
-  return { roleOf: (type) => resolved.get(type)!, role: (id) => roles.get(id) ?? first, fallbacks };
+  return { roleOf: (type) => resolved.get(type)!, role: (id) => roles.get(id) ?? first, has: (id) => roles.has(id), fallbacks };
 }
 
 /** What one role collected under one lens, before pricing. Keyed by the role id it was priced to. */
@@ -436,28 +500,32 @@ export interface RoleTally {
   readonly hours: number;
   readonly types: ReadonlySet<AgentType>;
   readonly tickets: number;
-  readonly plannedTickets: number | null;
+  readonly estimatedTickets: number | null;
+}
+
+/** An entry's line for this scope and period: `cost` is its prorated cost already times the scope's share. */
+export function entryCost(entry: AiSpendEntry, cost: number): AiEntryCost {
+  const kind = kindOf(entry);
+  return { id: entry.id, label: entry.label, kind, monthlyAmount: entry.monthlyAmount, quantity: kind === "subscription" ? (entry.quantity ?? 1) : null, cost };
 }
 
 export function roi(input: {
   readonly lens: "measured" | "planned";
   /** Hours by role id. A role id the list does not hold is priced at the first role (see `resolveRoles`). */
   readonly byRole: ReadonlyMap<string, RoleTally>;
-  /** The scope's AI spend for the period, by bill. `aiCost` is their sum. */
-  readonly aiCostByKind: Readonly<Record<Billing, number>>;
-  /** Measured agent-hours by role id: what each kind's spend is split by, on both lenses. */
-  readonly agentHoursByRole: ReadonlyMap<string, number>;
+  /** Every spend entry of the active profile with its cost for this scope and period. */
+  readonly aiEntries: ReadonlyArray<{ readonly entry: AiSpendEntry; readonly cost: number }>;
   readonly directorHours: number;
   readonly model: CostModel;
 }): RoiResult {
-  const { role: roleById } = resolveRoles(input.model);
-  type Held = { role: Role; hours: number; types: Set<AgentType>; tickets: number; plannedTickets: number | null; agentHours: number };
+  const roles = resolveRoles(input.model);
+  type Held = { role: PricedRole; hours: number; types: Set<AgentType>; tickets: number; estimatedTickets: number | null; aiEntries: AiEntryCost[] };
   const merged = new Map<string, Held>();
   const hold = (id: string): Held => {
-    const role = roleById(id);
+    const role = roles.role(id);
     let held = merged.get(role.id);
     if (!held) {
-      held = { role, hours: 0, types: new Set<AgentType>(), tickets: 0, plannedTickets: input.lens === "planned" ? 0 : null, agentHours: 0 };
+      held = { role, hours: 0, types: new Set<AgentType>(), tickets: 0, estimatedTickets: input.lens === "planned" ? 0 : null, aiEntries: [] };
       merged.set(role.id, held);
     }
     return held;
@@ -468,35 +536,35 @@ export function roi(input: {
     held.hours += tally.hours;
     for (const type of tally.types) held.types.add(type);
     held.tickets += tally.tickets;
-    if (held.plannedTickets !== null) held.plannedTickets += tally.plannedTickets ?? 0;
+    if (held.estimatedTickets !== null) held.estimatedTickets += tally.estimatedTickets ?? 0;
   }
-  // A role that ran carries its share of the spend on both lenses, planned hours or not.
-  for (const [id, hours] of input.agentHoursByRole) if (hours > 0) hold(id).agentHours += hours;
-  const scenario = input.model.scenario;
-  const hoursOfKind: Record<Billing, number> = { subscription: 0, api: 0 };
-  for (const held of merged.values()) hoursOfKind[billingOf(held.role, scenario)] += held.agentHours;
+  // Each entry lands whole on the role it names (that role gets a row even if it did not run), or on the shared row.
+  const sharedAiEntries: AiEntryCost[] = [];
+  for (const { entry, cost } of input.aiEntries) {
+    const line = entryCost(entry, cost);
+    if (typeof entry.roleId === "string" && roles.has(entry.roleId)) hold(entry.roleId).aiEntries.push(line);
+    else sharedAiEntries.push(line);
+  }
+  const sum = (lines: readonly AiEntryCost[]): number => lines.reduce((total, line) => total + line.cost, 0);
   const byRole: RoleValue[] = [...merged.values()]
-    .map(({ role, hours, types, tickets, plannedTickets, agentHours }) => {
-      const billing = billingOf(role, scenario);
-      return {
-        roleId: role.id,
-        title: role.title,
-        hourlyRate: role.hourlyRate,
-        hours,
-        value: hours * role.hourlyRate,
-        types: AGENT_TYPES.filter((type) => types.has(type)),
-        tickets,
-        plannedTickets,
-        billing,
-        aiCost: hoursOfKind[billing] > 0 ? (input.aiCostByKind[billing] * agentHours) / hoursOfKind[billing] : 0,
-      };
-    })
+    .map(({ role, hours, types, tickets, estimatedTickets, aiEntries }) => ({
+      roleId: role.id,
+      title: role.title,
+      hourlyRate: role.hourlyRate,
+      hours,
+      value: hours * role.hourlyRate,
+      types: AGENT_TYPES.filter((type) => types.has(type)),
+      tickets,
+      estimatedTickets,
+      aiCost: sum(aiEntries),
+      aiEntries,
+    }))
     .sort((a, b) => b.value - a.value || b.hours - a.hours || a.roleId.localeCompare(b.roleId));
-  const valueHours = byRole.reduce((sum, role) => sum + role.hours, 0);
-  const value = byRole.reduce((sum, role) => sum + role.value, 0);
-  // Every bill counts, whether or not a role billed that way ran.
-  const aiCost = input.aiCostByKind.subscription + input.aiCostByKind.api;
-  const rate = scenario.director.hourlyRate;
+  const valueHours = byRole.reduce((total, role) => total + role.hours, 0);
+  const value = byRole.reduce((total, role) => total + role.value, 0);
+  const sharedAiCost = sum(sharedAiEntries);
+  const aiCost = byRole.reduce((total, role) => total + role.aiCost, 0) + sharedAiCost;
+  const rate = activeProfile(input.model).director.hourlyRate;
   const directorCost = input.directorHours * rate;
   const totalCost = aiCost + directorCost;
   return {
@@ -505,6 +573,8 @@ export function roi(input: {
     value,
     byRole,
     aiCost,
+    sharedAiCost,
+    sharedAiEntries,
     director: { hours: input.directorHours, hourlyRate: rate, cost: directorCost },
     totalCost,
     net: value - totalCost,

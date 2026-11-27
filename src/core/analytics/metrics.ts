@@ -975,8 +975,8 @@ export interface PricedTicket {
 }
 
 export interface RoleTallies {
-  readonly measured: Map<string, { hours: number; types: Set<AgentType>; tickets: number; plannedTickets: null }>;
-  readonly planned: Map<string, { hours: number; types: Set<AgentType>; tickets: number; plannedTickets: number }>;
+  readonly measured: Map<string, { hours: number; types: Set<AgentType>; tickets: number; estimatedTickets: null }>;
+  readonly planned: Map<string, { hours: number; types: Set<AgentType>; tickets: number; estimatedTickets: number }>;
   /** The done tickets priced at each role, most agent-hours first. */
   readonly tickets: Map<string, PricedTicket[]>;
   /** Measured hours priced at each role on tickets not done in the window. */
@@ -985,8 +985,6 @@ export interface RoleTallies {
   readonly agentHours: number;
   /** Days of the window on which any attempt ran. */
   readonly activeDays: number;
-  /** The months (`YYYY-MM`) each priced role's attempts ran in, inside the window. */
-  readonly monthsByRole: Map<string, Set<string>>;
 }
 
 /**
@@ -1003,11 +1001,10 @@ export function roleTallies(workspaces: readonly WorkspaceRows[], resolved: Reso
   const planned: RoleTallies["planned"] = new Map();
   const tickets: RoleTallies["tickets"] = new Map();
   const otherHours: RoleTallies["otherHours"] = new Map();
-  const measuredOf = (id: string) => upsert(measured, id, () => ({ hours: 0, types: new Set<AgentType>(), tickets: 0, plannedTickets: null }));
-  const plannedOf = (id: string) => upsert(planned, id, () => ({ hours: 0, types: new Set<AgentType>(), tickets: 0, plannedTickets: 0 }));
+  const measuredOf = (id: string) => upsert(measured, id, () => ({ hours: 0, types: new Set<AgentType>(), tickets: 0, estimatedTickets: null }));
+  const plannedOf = (id: string) => upsert(planned, id, () => ({ hours: 0, types: new Set<AgentType>(), tickets: 0, estimatedTickets: 0 }));
   let agentHours = 0;
   const activeDays = new Set<number>();
-  const monthsByRole: RoleTallies["monthsByRole"] = new Map();
   const done = scope.issues.filter((issue) => isWork(issue) && issue.category === "done" && within(issue.completedAt, window));
   const doneKeys = new Set(done.map((issue) => keyOf(issue.workspace, issue.id)));
   for (const attempt of scope.attempts) {
@@ -1020,11 +1017,7 @@ export function roleTallies(workspaces: readonly WorkspaceRows[], resolved: Reso
     agentHours += hours(seconds);
     const first = Math.max(0, dayIndex(window, Math.max(attempt.startMs, window.startMs)));
     const last = attempt.endMs === attempt.startMs ? first : dayIndex(window, Math.min(attempt.endMs, window.endMs) - 1);
-    const months = upsert(monthsByRole, id, () => new Set<string>());
-    for (let index = first; index <= (last < 0 ? first : last); index += 1) {
-      activeDays.add(index);
-      months.add(window.days[index]!.slice(0, 7));
-    }
+    for (let index = first; index <= (last < 0 ? first : last); index += 1) activeDays.add(index);
     if (!doneKeys.has(keyOf(attempt.workspace, attempt.issueId))) otherHours.set(id, (otherHours.get(id) ?? 0) + hours(seconds));
   }
   for (const issue of done) {
@@ -1037,7 +1030,7 @@ export function roleTallies(workspaces: readonly WorkspaceRows[], resolved: Reso
     plan.types.add(pricing.type);
     if (counted) {
       plan.hours += hours(issue.estimatedSeconds!);
-      plan.plannedTickets += 1;
+      plan.estimatedTickets += 1;
     }
     upsert(tickets, id, () => []).push({
       workspace: issue.workspace,
@@ -1050,5 +1043,5 @@ export function roleTallies(workspaces: readonly WorkspaceRows[], resolved: Reso
     });
   }
   for (const list of tickets.values()) list.sort((a, b) => b.agentSeconds - a.agentSeconds || a.identifier.localeCompare(b.identifier));
-  return { measured, planned, tickets, otherHours, agentHours, activeDays: activeDays.size, monthsByRole };
+  return { measured, planned, tickets, otherHours, agentHours, activeDays: activeDays.size };
 }

@@ -311,7 +311,7 @@ const definitions: SettingDefinition[] = [
       version: 1,
       sensitivity: "normal",
       ui: {
-        label: { roles: "Roles and rates", roleMapping: "Agent types to roles", scenario: "Who pays", aiSpend: "AI spend" }[part],
+        label: { roles: "Roles", roleMapping: "Agent types to roles", scenario: "Profile in use", solo: "Just me: rates and AI spend", company: "A company: rates and AI spend" }[part],
         description: "Part of the Analytics cost model. A JSON value; edit it on the ROI page.",
         control: "text",
         order: 10 + index,

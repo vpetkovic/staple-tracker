@@ -132,29 +132,41 @@ describe("GET /api/analytics", () => {
 });
 
 describe("the cost model over HTTP", () => {
+  const SOLO = {
+    director: { title: "You", hourlyRate: 100, hoursPerActiveDay: 8 },
+    rates: { engineer: 70, writer: 50 },
+    entries: [{ id: "plan", label: "Plan", monthlyAmount: 300, from: "2026-09", to: null }],
+    assumed: ["director.hoursPerActiveDay"],
+  };
+
   it("reads defaults, saves to the suggested home, and refuses a write from a foreign page", async () => {
     const before = await http(`/api/analytics/cost-model?scope=beta`);
     expect(before.status).toBe(200);
     expect(before.body.home).toMatchObject({ slug: null, suggested: "beta" });
-    expect(before.body.model.roles.assumed).toEqual(["roles.software-engineer.hourlyRate", "roles.design-engineer.hourlyRate", "roles.technical-writer.hourlyRate"]);
+    expect(before.body.model.solo.assumed).toEqual(expect.arrayContaining(["roles.software-engineer.hourlyRate", "director.hourlyRate"]));
+    expect(before.body.model.solo.entries).toEqual([{ id: "ai-plan", label: "AI subscription", kind: "subscription", monthlyAmount: 200, quantity: 1, roleId: null, from: "2000-01", to: null }]);
+    expect(before.body.model.company.entries).toEqual([]);
 
     const foreign = await fetch(`${origin}/api/analytics/cost-model`, {
       method: "POST",
       headers: { "content-type": "application/json", origin: "https://elsewhere.example" },
-      body: JSON.stringify({ home: "beta", roles: { roles: [{ id: "engineer", title: "Engineer", hourlyRate: 1 }] } }),
+      body: JSON.stringify({ home: "beta", roles: { roles: [{ id: "engineer", title: "Engineer" }] } }),
     });
     expect([401, 403]).toContain(foreign.status);
 
     const saved = await http(`/api/analytics/cost-model?scope=beta`, {
       home: "beta",
-      roles: { roles: [{ id: "engineer", title: "Engineer", hourlyRate: 70 }, { id: "writer", title: "Writer", hourlyRate: 50 }] },
+      roles: { roles: [{ id: "engineer", title: "Engineer" }, { id: "writer", title: "Writer" }] },
       roleMapping: { types: { engineering: "engineer", design: "engineer", documentation: "writer", research: "engineer", orchestration: "engineer" }, rules: [{ title: "build", roleId: "writer" }] },
-      scenario: { mode: "solo", currency: "USD", director: { title: "You", hourlyRate: 100, hoursPerActiveDay: 8 }, assumed: ["director.hoursPerActiveDay"] },
-      aiSpend: { entries: [{ id: "plan", label: "Plan", monthlyAmount: 300, from: "2026-09", to: null }] },
+      scenario: { mode: "solo", currency: "USD" },
+      solo: SOLO,
     });
     expect(saved.status).toBe(200);
     expect(saved.body.home).toMatchObject({ slug: "beta", synced: false });
-    expect(saved.body.source).toEqual({ roles: "saved", roleMapping: "saved", scenario: "saved", aiSpend: "saved" });
+    expect(saved.body.source).toEqual({ roles: "saved", roleMapping: "saved", scenario: "saved", solo: "saved", company: "default" });
+    // Every role has a rate on a read, in both profiles; the company's are the shipped default, assumed.
+    expect(saved.body.model.company.rates).toEqual({ "software-engineer": 100, "design-engineer": 95, "technical-writer": 70, engineer: 100, writer: 100 });
+    expect(saved.body.model.company.assumed).toEqual(expect.arrayContaining(["roles.engineer.hourlyRate", "roles.writer.hourlyRate"]));
     expect((await http(`/api/analytics/cost-model?scope=alpha`)).body.home.slug).toBe("beta");
 
     expect((await http(`/api/analytics/cost-model`, { reset: 5 })).status).toBe(409);
@@ -169,40 +181,34 @@ describe("the cost model over HTTP", () => {
     const roi = await http(`/api/analytics/roi?scope=alpha&${QUERY}`);
     expect(roi.status).toBe(200);
     expect(roi.body.measured.byRole).toEqual([
-      expect.objectContaining({ roleId: "writer", hours: 2, value: 100, tickets: 2, plannedTickets: null }),
+      expect.objectContaining({ roleId: "writer", hours: 2, value: 100, tickets: 2, estimatedTickets: null, aiCost: 0, aiEntries: [] }),
     ]);
-    expect(roi.body.planned.byRole).toEqual([expect.objectContaining({ roleId: "writer", hours: 4, tickets: 2, plannedTickets: 2 })]);
+    expect(roi.body.planned.byRole).toEqual([expect.objectContaining({ roleId: "writer", hours: 4, tickets: 2, estimatedTickets: 2 })]);
     // Alpha ran 2 of the hub's 3 agent-hours: it carries two thirds of a week of $300/month and of 2 active days × 8 h.
     expect(roi.body.basis).toMatchObject({ share: 2 / 3, scopeAgentHours: 2, hubAgentHours: 3, activeDaysHub: 1, hoursPerActiveDay: 8, directorHoursHub: 8 });
     expect(roi.body.basis.aiSpendHub).toBeCloseTo(70);
+    // The plan is shared by the team: its line is on the shared row.
+    expect(roi.body.measured.sharedAiCost).toBeCloseTo(70 * (2 / 3));
+    expect(roi.body.measured.sharedAiEntries).toEqual([{ id: "plan", label: "Plan", kind: "subscription", monthlyAmount: 300, quantity: 1, cost: expect.closeTo(70 * (2 / 3), 6) }]);
     expect(roi.body.measured.aiCost).toBeCloseTo(70 * (2 / 3));
     expect(roi.body.measured.director).toMatchObject({ hours: 8 * (2 / 3), hourlyRate: 100 });
     expect(roi.body.caveats.map((caveat: { code: string }) => caveat.code)).toContain("home_not_synced");
+    expect(roi.body.caveats.map((caveat: { code: string }) => caveat.code)).not.toContain("no_ai_spend");
 
-    expect(roi.body.basis.aiSpendHubByKind.subscription).toBeCloseTo(70);
-    expect(roi.body.basis.aiSpendHubByKind.api).toBe(0);
-    // Solo: roles bill by subscription, so all of alpha's AI cost lands on its one role.
-    expect(roi.body.measured.byRole[0]).toMatchObject({ billing: "subscription" });
-    expect(roi.body.measured.byRole[0].aiCost).toBeCloseTo(70 * (2 / 3));
-    expect(roi.body.caveats.map((caveat: { code: string }) => caveat.code)).not.toContain("api_bill_missing");
-    expect(roi.body.model.model.aiSpend.entries[0].kind).toBe("subscription");
+    // Assigned to the writer, the same plan moves to the writer's row.
+    expect((await http(`/api/analytics/cost-model`, { solo: { ...SOLO, entries: [{ ...SOLO.entries[0], roleId: "writer", quantity: 2 }] } })).status).toBe(200);
+    const assigned = await http(`/api/analytics/roi?scope=alpha&${QUERY}`);
+    expect(assigned.body.measured.byRole[0]).toMatchObject({ roleId: "writer", aiCost: expect.closeTo(140 * (2 / 3), 6) });
+    expect(assigned.body.measured.sharedAiCost).toBe(0);
 
-    // A company bills its roles by API by default: with only a subscription entry, the API bill is missing.
-    expect(
-      (await http(`/api/analytics/cost-model`, { scenario: { mode: "company", currency: "USD", director: { title: "Employee", hourlyRate: 100, hoursPerActiveDay: 8 } } })).status,
-    ).toBe(200);
+    // The company profile is its own: switching to it prices nothing it has not been given.
+    expect((await http(`/api/analytics/cost-model`, { scenario: { mode: "company", currency: "USD" } })).status).toBe(200);
     const company = await http(`/api/analytics/roi?scope=alpha&${QUERY}`);
-    expect(company.body.measured.byRole[0]).toMatchObject({ billing: "api", aiCost: 0 });
-    expect(company.body.measured.aiCost).toBeCloseTo(70 * (2 / 3));
-    expect(company.body.caveats).toContainEqual({ code: "api_bill_missing", count: 1, of: null });
-    expect(
-      (await http(`/api/analytics/cost-model`, { aiSpend: { entries: [{ id: "plan", label: "Plan", monthlyAmount: 300, from: "2026-09", to: null }, { id: "metered", label: "API", monthlyAmount: 600, from: "2026-09", to: null, kind: "api" }] } })).status,
-    ).toBe(200);
-    const billed = await http(`/api/analytics/roi?scope=alpha&${QUERY}`);
-    expect(billed.body.caveats.map((caveat: { code: string }) => caveat.code)).not.toContain("api_bill_missing");
-    expect(billed.body.measured.byRole[0].aiCost).toBeCloseTo(140 * (2 / 3));
-    // Back to solo for the rest of the file.
-    await http(`/api/analytics/cost-model`, { scenario: { mode: "solo", currency: "USD", director: { title: "You", hourlyRate: 100, hoursPerActiveDay: 8 } }, aiSpend: { entries: [{ id: "plan", label: "Plan", monthlyAmount: 300, from: "2026-09", to: null }] } });
+    expect(company.body.measured.aiCost).toBe(0);
+    expect(company.body.measured.byRole[0]).toMatchObject({ hourlyRate: 100 });
+    expect(company.body.caveats).toContainEqual({ code: "no_ai_spend", count: 1, of: null });
+    // Back to the solo profile, as it was.
+    await http(`/api/analytics/cost-model`, { scenario: { mode: "solo", currency: "USD" }, solo: SOLO });
 
     const hub = await http(`/api/analytics/roi?${QUERY}`);
     expect(hub.body.basis.share).toBe(1);

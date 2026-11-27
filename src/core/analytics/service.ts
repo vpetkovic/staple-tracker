@@ -7,7 +7,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { StapleError } from "../types.js";
 import type { AgentTypeRule } from "./agent-type.js";
 import type { AnalyticsReport, AnalyticsWorkspaceRef, Caveat, CostModelResponse, RoiResponse, RoiTicketsResponse } from "./contract.js";
-import { COST_MODEL_PARTS, aiSpendFor, billingOf, resolveRoles, roi, spendCovers, type Billing, type CostModel } from "./cost-model.js";
+import { COST_MODEL_PARTS, activeProfile, aiSpendFor, resolveRoles, roi, spendCovers, type CostModel } from "./cost-model.js";
 import type { AgentType } from "./agent-type.js";
 import { analyticsReport, resolvePeriod, roleTallies, round2, type AnalyticsQuery } from "./metrics.js";
 import { readWorkspaceRows, type WorkspaceRows } from "./rows.js";
@@ -68,53 +68,22 @@ export function readRoi(input: {
   const hub = hubRows === scopeRows ? scoped : roleTallies(hubRows, resolved, rules, roleOf);
   const share = hubRows === scopeRows ? 1 : hub.agentHours > 0 ? scoped.agentHours / hub.agentHours : 0;
   const days = resolved.window.days;
-  const aiSpendHubByKind: Record<Billing, number> = {
-    subscription: aiSpendFor(costModel.aiSpend, days, "subscription"),
-    api: aiSpendFor(costModel.aiSpend, days, "api"),
-  };
-  const aiSpendHub = aiSpendHubByKind.subscription + aiSpendHubByKind.api;
-  const hoursPerActiveDay = costModel.scenario.director.hoursPerActiveDay;
+  const profile = activeProfile(costModel);
+  // Each entry is the person's or the team's whole bill; a single workspace carries its share of it.
+  const aiEntries = profile.entries.map((entry) => ({ entry, cost: aiSpendFor([entry], days) * share }));
+  const aiSpendHub = aiSpendFor(profile.entries, days);
+  const hoursPerActiveDay = profile.director.hoursPerActiveDay;
   const directorHoursHub = hub.activeDays * hoursPerActiveDay;
-  // Each bill is split over the roles billed that way by the agent-hours they ran in this scope.
-  const agentHoursByRole = new Map([...scoped.measured].map(([id, tally]) => [id, tally.hours]));
-  const billOf = (id: string): Billing => billingOf(roles.role(id), costModel.scenario);
-  const hoursBilled = (tallies: typeof scoped, kind: Billing): number =>
-    [...tallies.measured].filter(([id]) => billOf(id) === kind).reduce((sum, [, tally]) => sum + tally.hours, 0);
-  /**
-   * The scope's share of one bill: its hours in roles billed that way over the hub's, so API
-   * spend follows the API-billed work. A bill no role of its kind ran against anywhere is
-   * shared like the director's time, by all agent-hours, so every workspace's costs still
-   * add up to the hub's.
-   */
-  const shareOf = (kind: Billing): number => {
-    if (hubRows === scopeRows) return 1;
-    const hubHours = hoursBilled(hub, kind);
-    return hubHours > 0 ? hoursBilled(scoped, kind) / hubHours : share;
-  };
-  const kindShare: Record<Billing, number> = { subscription: shareOf("subscription"), api: shareOf("api") };
   const lens = (name: "measured" | "planned") =>
-    roi({
-      lens: name,
-      byRole: scoped[name],
-      aiCostByKind: { subscription: aiSpendHubByKind.subscription * kindShare.subscription, api: aiSpendHubByKind.api * kindShare.api },
-      agentHoursByRole,
-      directorHours: directorHoursHub * share,
-      model: costModel,
-    });
+    roi({ lens: name, byRole: scoped[name], aiEntries, directorHours: directorHoursHub * share, model: costModel });
   const { fallbacks } = roles;
-  // Roles billed by API that ran in a month no (non-zero) API bill covers: the AI cost is understated.
-  const unbilled = new Set(
-    [...scoped.monthsByRole]
-      .filter(([id, months]) => (agentHoursByRole.get(id) ?? 0) > 0 && billOf(id) === "api" && [...months].some((month) => !spendCovers(costModel.aiSpend, [`${month}-01`], "api")))
-      .map(([id]) => roles.role(id).id),
-  );
   const caveats: Caveat[] = [...report.caveats];
   const defaults = COST_MODEL_PARTS.filter((part) => input.model.source[part] === "default").length;
   if (defaults > 0) caveats.push({ code: "default_cost_model", count: defaults, of: COST_MODEL_PARTS.length });
   if (fallbacks.length > 0) caveats.push({ code: "mapping_fallback", count: fallbacks.length, of: null });
   if (input.model.home.slug !== null && !input.model.home.synced) caveats.push({ code: "home_not_synced", count: 1, of: null });
   if (input.model.home.others.length > 0) caveats.push({ code: "several_homes", count: input.model.home.others.length + 1, of: null });
-  if (unbilled.size > 0) caveats.push({ code: "api_bill_missing", count: unbilled.size, of: null });
+  if (!spendCovers(profile.entries, days)) caveats.push({ code: "no_ai_spend", count: 1, of: null });
   return {
     asOf: input.query.now,
     period: report.period,
@@ -124,12 +93,10 @@ export function readRoi(input: {
     planned: lens("planned"),
     basis: {
       aiSpendHub,
-      aiSpendHubByKind,
       directorHoursHub,
       activeDaysHub: hub.activeDays,
       hoursPerActiveDay,
       share,
-      shareByKind: kindShare,
       scopeAgentHours: round2(scoped.agentHours),
       hubAgentHours: round2(hub.agentHours),
     },

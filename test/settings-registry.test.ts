@@ -75,11 +75,12 @@ describe("the registered set", () => {
       "queue.policy",
       "queue.silentClaimMinutes",
       "features.planning",
-      // The Analytics cost model (STA-575): four parts, edited on the ROI page.
+      // The Analytics cost model (STA-575): five parts, edited on the ROI page.
       "analytics.roles",
       "analytics.roleMapping",
       "analytics.scenario",
-      "analytics.aiSpend",
+      "analytics.solo",
+      "analytics.company",
     ]);
   });
 

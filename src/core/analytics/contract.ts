@@ -298,8 +298,8 @@ export type CaveatCode =
   | "default_cost_model"
   | "home_not_synced"
   | "several_homes"
-  /** Roles (`count`) that ran and are billed by API, with no API spend entry in force in the period: the AI cost is understated. */
-  | "api_bill_missing";
+  /** The profile in use has no spend entry that costs anything in force in the period (a fresh company profile): the AI cost reads 0. */
+  | "no_ai_spend";
 
 /** One limit on what the figures can claim: `count` of `of` records are affected. */
 export interface Caveat {
@@ -335,15 +335,14 @@ export interface AnalyticsReport {
 
 // ------------------------------------------------------------------ the cost model
 
-/** How agents are paid for: a flat plan, or metered API usage. */
-export type BillingKind = "subscription" | "api";
+/** What a spend entry is: a flat plan bought in some quantity, or a metered API bill. */
+export type SpendKind = "subscription" | "api";
+export type ProfileId = "solo" | "company";
 
+/** A role, shared by both profiles. Its rate is each profile's. */
 export interface CostRole {
   readonly id: string;
   readonly title: string;
-  readonly hourlyRate: number;
-  /** How this role's agents are billed. Unset follows the scenario: solo is `subscription`, company is `api`. */
-  readonly billing?: BillingKind;
 }
 
 /** A person's rule: every matcher given must match (at least one); exactly one of `type` and `roleId`. */
@@ -361,44 +360,71 @@ export interface CostTypeRule {
 }
 
 /**
+ * One AI spend line. On a read every field is present: `kind` is `subscription` when stored
+ * without one, `quantity` is 1 for a subscription stored without one and null for an API bill,
+ * and `roleId` is null for spend the whole team shares. On a write `kind`, `quantity` and
+ * `roleId` are optional, and an API bill carries no quantity.
+ */
+export interface AiSpendEntryValue {
+  readonly id: string;
+  readonly label: string;
+  readonly kind: SpendKind;
+  /** The price of one, per month. */
+  readonly monthlyAmount: number;
+  /** Subscriptions: how many are bought; the month costs `monthlyAmount × quantity`. API bills: null. */
+  readonly quantity: number | null;
+  /** The role this spend is for, or null when the team shares it. A role no longer in the list counts as shared. */
+  readonly roleId: string | null;
+  readonly from: string;
+  readonly to: string | null;
+}
+
+/** An entry as a write may send it. */
+export interface AiSpendEntryWrite {
+  readonly id: string;
+  readonly label: string;
+  readonly kind?: SpendKind;
+  readonly monthlyAmount: number;
+  readonly quantity?: number;
+  readonly roleId?: string | null;
+  readonly from: string;
+  readonly to: string | null;
+}
+
+/** One payer's figures (VP's ruling, 2026-11-26: "a company's setup can differ from mine"). */
+export interface CostProfileValue {
+  readonly director: { readonly title: string; readonly hourlyRate: number; readonly hoursPerActiveDay: number };
+  /** Every role's hourly rate, by role id. On a read every role in the list is present; one the profile did not set reads at 100 and is listed in `assumed`. */
+  readonly rates: Readonly<Record<string, number>>;
+  readonly entries: readonly AiSpendEntryValue[];
+  readonly assumed: readonly string[];
+  readonly savedAt: string | null;
+}
+
+/**
  * Every part carries `assumed`: the ids of the figures still at their shipped default
  * (`roles.<id>.hourlyRate`, `director.hourlyRate`, `director.hoursPerActiveDay`,
  * `entries.<id>.monthlyAmount`). The server fills it for an unsaved part; the page drops an id
  * when the person changes that figure, and sends the rest back on save.
  */
 export interface CostModelValue {
+  /** Shared by both profiles. */
   readonly roles: { readonly roles: readonly CostRole[]; readonly assumed: readonly string[]; readonly savedAt: string | null };
+  /** Shared by both profiles. */
   readonly roleMapping: {
     readonly types: Readonly<Record<AgentTypeId, string>>;
     readonly rules: readonly CostTypeRule[];
     readonly assumed: readonly string[];
     readonly savedAt: string | null;
   };
-  readonly scenario: {
-    readonly mode: "solo" | "company";
-    readonly currency: string;
-    readonly director: { readonly title: string; readonly hourlyRate: number; readonly hoursPerActiveDay: number };
-    readonly assumed: readonly string[];
-    readonly savedAt: string | null;
-  };
-  readonly aiSpend: {
-    /** `kind` is always present on a read (`subscription` when the stored entry leaves it out); optional on a write. */
-    readonly entries: readonly AiSpendEntryValue[];
-    readonly assumed: readonly string[];
-    readonly savedAt: string | null;
-  };
+  /** The profile in use, and the currency of every amount. Switching `mode` copies nothing. */
+  readonly scenario: { readonly mode: ProfileId; readonly currency: string; readonly assumed: readonly string[]; readonly savedAt: string | null };
+  /** Each its own setting, so editing one profile on one device can never change the other, a sync merge included. */
+  readonly solo: CostProfileValue;
+  readonly company: CostProfileValue;
 }
 
-export interface AiSpendEntryValue {
-  readonly id: string;
-  readonly label: string;
-  readonly monthlyAmount: number;
-  readonly from: string;
-  readonly to: string | null;
-  readonly kind?: BillingKind;
-}
-
-export type CostModelPartId = "roles" | "roleMapping" | "scenario" | "aiSpend";
+export type CostModelPartId = "roles" | "roleMapping" | "scenario" | "solo" | "company";
 
 /** Where the model is saved, as this machine sees it. */
 export interface CostModelHome {
@@ -422,16 +448,36 @@ export interface CostModelResponse {
   readonly agentTypes: readonly AgentTypeId[];
 }
 
+/** A profile as a write sends it. Rates may name a subset of the roles. */
+export interface CostProfileWrite {
+  readonly director: { readonly title: string; readonly hourlyRate: number; readonly hoursPerActiveDay: number };
+  readonly rates: Readonly<Record<string, number>>;
+  readonly entries: readonly AiSpendEntryWrite[];
+  readonly assumed?: readonly string[];
+}
+
 /** `POST /api/analytics/cost-model`. Parts left out are unchanged. */
 export interface CostModelWrite {
   /** The workspace to save in. Required when there is no home yet; when given and different, the whole model moves there. */
   readonly home?: string;
   readonly roles?: { readonly roles: readonly CostRole[]; readonly assumed?: readonly string[] };
   readonly roleMapping?: { readonly types: Readonly<Record<AgentTypeId, string>>; readonly rules: readonly CostTypeRule[]; readonly assumed?: readonly string[] };
-  readonly scenario?: Omit<CostModelValue["scenario"], "savedAt" | "assumed"> & { readonly assumed?: readonly string[] };
-  readonly aiSpend?: { readonly entries: readonly AiSpendEntryValue[]; readonly assumed?: readonly string[] };
+  readonly scenario?: { readonly mode: ProfileId; readonly currency: string; readonly assumed?: readonly string[] };
+  readonly solo?: CostProfileWrite;
+  readonly company?: CostProfileWrite;
   /** Return these parts to their defaults (a reset is journaled as a delete). */
   readonly reset?: readonly CostModelPartId[];
+}
+
+/** One spend line on a role's row, or on the shared row: the entry and what it cost this scope in the period. */
+export interface RoiAiEntry {
+  readonly id: string;
+  readonly label: string;
+  readonly kind: SpendKind;
+  readonly monthlyAmount: number;
+  readonly quantity: number | null;
+  /** Prorated over the period by day, and times `basis.share` for a single workspace. */
+  readonly cost: number;
 }
 
 export interface RoiRoleValue {
@@ -443,24 +489,24 @@ export interface RoiRoleValue {
   readonly types: readonly AgentTypeId[];
   /** Done tickets in the period that landed on this role. */
   readonly tickets: number;
-  /** Planned lens: of those, the ones whose estimate counts. Null on the measured lens. */
-  readonly plannedTickets: number | null;
-  /** How the role's agents are billed (its own setting, else the scenario's default). */
-  readonly billing: BillingKind;
-  /**
-   * The role's share of the AI spend of its kind: that spend split over the roles billed the
-   * same way by their measured agent-hours (on both lenses). 0 when no role of the kind ran;
-   * `aiCost` on the lens still counts every bill, so these shares can sum to less than it.
-   */
+  /** Planned lens: of those, the ones whose estimate counts ("47 h estimated on 15 of the 20 tickets"). Null on the measured lens. */
+  readonly estimatedTickets: number | null;
+  /** The sum of the spend entries assigned to this role. Nothing is split between roles. */
   readonly aiCost: number;
+  readonly aiEntries: readonly RoiAiEntry[];
 }
 
 export interface RoiLens {
   readonly lens: "measured" | "planned";
   readonly valueHours: number;
   readonly value: number;
+  /** Roles with hours or tickets under this lens, and every role a spend entry is assigned to. */
   readonly byRole: readonly RoiRoleValue[];
+  /** Every entry's cost: the roles' `aiCost` plus `sharedAiCost`. */
   readonly aiCost: number;
+  /** The entries the team shares (assigned to no role, or to a role no longer in the list). */
+  readonly sharedAiCost: number;
+  readonly sharedAiEntries: readonly RoiAiEntry[];
   readonly director: { readonly hours: number; readonly hourlyRate: number; readonly cost: number };
   readonly totalCost: number;
   readonly net: number;
@@ -480,21 +526,14 @@ export interface RoiResponse {
   readonly planned: RoiLens;
   /** How the costs were found, so the formula can be printed. */
   readonly basis: {
-    /** AI spend over the period for the whole hub, before the share. */
+    /** The profile in use's AI spend over the period, before the share. */
     readonly aiSpendHub: number;
-    /** The same, by bill. */
-    readonly aiSpendHubByKind: Readonly<Record<BillingKind, number>>;
     readonly directorHoursHub: number;
     /** Days agents ran anywhere in the hub. */
     readonly activeDaysHub: number;
     readonly hoursPerActiveDay: number;
-    /** This scope's share of the hub's agent-hours in the period: 1 for the hub. The director's time is multiplied by it. */
+    /** This scope's share of the hub's agent-hours in the period: 1 for the hub. The spend and the director's time are multiplied by it. */
     readonly share: number;
-    /**
-     * This scope's share of each bill: its agent-hours in roles billed that way over the hub's
-     * (`share` for a bill no role of its kind ran against). Each bill is multiplied by its own.
-     */
-    readonly shareByKind: Readonly<Record<BillingKind, number>>;
     readonly scopeAgentHours: number;
     readonly hubAgentHours: number;
   };
