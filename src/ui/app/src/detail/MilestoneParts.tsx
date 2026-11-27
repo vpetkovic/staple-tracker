@@ -33,6 +33,7 @@ import { MilestoneDueControl, useSetMilestoneTarget } from "@/views/milestones/M
 import { hiddenMemberCount, memberListRows, milestoneRisk } from "@/views/milestones/milestones-model";
 import { HiddenDoneNotice } from "@/views/milestones/HiddenDone";
 import { openMilestoneIn } from "@/views/milestones/AllWorkspacesMilestones";
+import { requestLanding } from "@/views/milestones/landing-requests";
 import { ProgressStrip } from "@/views/ProgressStrip";
 import { DetailCard, SectionHeading, cn, useNow } from "./parts";
 
@@ -94,7 +95,8 @@ export function MilestoneDue({ plan, workspace = "" }: { plan: MilestoneView; wo
 
 /**
  * A milestone's primary action: its plan lives on the Milestones page, where it is edited, so
- * this lands on its section there (`openMilestoneIn` sets the focus the outline scrolls to).
+ * this closes the drawer and lands on its section there (`openMilestoneIn` sets the focus the
+ * outline scrolls to; `requestLanding` lands again when the address already names it).
  */
 export function OpenPlanAction({
   workspace,
@@ -113,7 +115,11 @@ export function OpenPlanAction({
       size={size}
       data-action="primary"
       data-primary="open-plan"
-      onClick={() => openMilestoneIn(session, workspace, identifier)}
+      onClick={() => {
+        session.close();
+        openMilestoneIn(session, workspace, identifier);
+        requestLanding();
+      }}
       className={cn("gap-1.5", className)}
     >
       <MilestoneIcon aria-hidden className="size-4" />

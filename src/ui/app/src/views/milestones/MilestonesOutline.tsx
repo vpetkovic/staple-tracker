@@ -14,7 +14,8 @@
  * open milestone's section scrolls to the top, unfolds for the visit (nothing remembered
  * changes) and is marked for a moment; a finished one opens the shelf and its line; one the
  * list does not carry gets a line saying so with a way to open it. The page itself never sets
- * the focus: a name opens the drawer.
+ * the focus: a name opens the drawer. "Show in Milestones" for the milestone the address already
+ * names changes no focus, so it also asks for a landing (`landing-requests.ts`) and lands again.
  */
 import { ChevronDown, ChevronRight, Milestone, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -30,6 +31,7 @@ import { useElementWidth } from "@/views/plan/plan-parts";
 import { TAP_TEXT } from "./milestone-parts";
 import { FinishedLine, OpenSection } from "./MilestoneSection";
 import { isFinishedMilestone } from "./milestones-model";
+import { useLandingRequests } from "./landing-requests";
 import { foldAllAction, loadMilestonesMemory, MILESTONES_NARROW, saveMilestonesMemory, sectionFolded, withAllFolded, type MilestonesMemory } from "./milestones-memory";
 import { AddMilestoneRow, createMilestone, MilestonesToolbar } from "./MilestonesToolbar";
 
@@ -135,7 +137,8 @@ export function MilestonesOutline({
     else sections.current.delete(identifier);
   };
   const landing = landingOf(session.milestoneFocus, groups);
-  const landingKey = landing && measured ? `${landing.kind}:${landing.identifier}` : null;
+  const requests = useLandingRequests();
+  const landingKey = landing && measured ? `${landing.kind}:${landing.identifier}:${requests}` : null;
   useEffect(() => {
     if (!landing || !landingKey || landing.kind === "missing") return;
     const { identifier } = landing;

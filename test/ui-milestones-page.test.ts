@@ -514,6 +514,31 @@ describe.skipIf(Boolean(reason))("the Milestones page, pressed in a real browser
     await context.close();
   });
 
+  it("lands again on Show in Milestones for the milestone the address already names, and closes the drawer", async () => {
+    const { page, context } = await open(refs.carried!, WS, { width: 1440, height: 600 });
+    const where = () =>
+      page.evaluate((ref) => {
+        const outline = document.querySelector<HTMLElement>("[data-milestones-outline]")!;
+        const element = document.querySelector(`[data-milestone-section="${ref}"]`)!;
+        return { top: Math.round(element.getBoundingClientRect().top - outline.getBoundingClientRect().top), scrolled: outline.scrollTop, landed: element.hasAttribute("data-milestone-landed") };
+      }, refs.carried!);
+    await page.waitForTimeout(1800);
+    // The person scrolls away, then opens the same milestone by its name.
+    await page.locator("[data-milestones-outline]").hover();
+    await page.mouse.wheel(0, -5000);
+    await page.waitForTimeout(400);
+    expect((await where()).top).toBeGreaterThan(100);
+    await section(page, refs.carried!).locator(`[data-milestone-open="${refs.carried}"]`).click();
+    expect(await openedTask(page)).toBe(refs.carried);
+    await page.locator('[data-primary="open-plan"]').first().click();
+    await page.waitForTimeout(400);
+    expect(await page.locator("[data-detail-identifier]").count()).toBe(0);
+    const after = await where();
+    expect(Math.abs(after.top), JSON.stringify(after)).toBeLessThan(2);
+    expect(after.landed).toBe(true);
+    await context.close();
+  });
+
   it("says a link to a milestone the list does not carry is not in it, and offers to open it", async () => {
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const page = await context.newPage();
