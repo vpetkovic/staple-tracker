@@ -250,11 +250,15 @@ the done toggle, a milestone focus and every filter are written into the URL
 (`ws`, `view`, `q`, `done=1`, `focus`, one parameter per filter dimension;
 `lib/session-url.ts`), so a link opens the same page. Going to another view or
 workspace pushes a history entry, so Back returns from it; narrowing the list
-replaces the entry. An address naming a workspace the hub does not have lands on
-*All workspaces*. The page re-reads on a change fingerprint polled every 1.5s
-(`lib/useStaple.ts`), so a write from the CLI, MCP or another tab shows within
-one poll. A poll not answered within 8s is given up and the next one asked, so
-a request lost to a network change cannot stop the page refreshing.
+replaces the entry. An address naming a workspace the hub does not have, or a
+workspace unregistered while the page is on it, lands on *All workspaces* with the
+filters the page showed for it: an address that names a view shows its own (none
+when it carries none), never the filters remembered for *All workspaces*. A
+milestone focus or a run of that workspace is dropped, as on a switch. The page
+re-reads on a change fingerprint polled every 1.5s (`lib/useStaple.ts`), so a write
+from the CLI, MCP or another tab shows within one poll. A poll not answered within
+8s is given up and the next one asked, so a request lost to a network change cannot
+stop the page refreshing.
 
 ### Keyboard
 
