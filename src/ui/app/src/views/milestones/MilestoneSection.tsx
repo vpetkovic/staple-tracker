@@ -30,9 +30,12 @@ import { useSession, type StapleSession } from "@/lib/session";
 import type { EffectiveQueueRow, MilestoneListRow, MilestoneView } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { ErrorState } from "@/views/ViewChrome";
-import { dueText, progressSentence, projectedDue, shownState } from "./milestone-plain";
+import { projectedDue, shownState } from "./milestone-plain";
 import {
   AddWork,
+  FINISHED_LINE,
+  FINISHED_NAME,
+  FinishedFacts,
   FoldButton,
   GoalBody,
   MilestoneBar,
@@ -543,20 +546,19 @@ export function FinishedLine({ row, workspace, onAuthError, open, onToggle }: { 
   const { milestone, progress } = row;
   return (
     <section aria-label={milestone.title} data-milestone-section={milestone.identifier} data-milestone-finished-line={milestone.identifier} className="border-b">
-      <div className="flex min-h-10 min-w-0 items-center gap-x-2.5 px-4 hover:bg-surface-hover @max-[760px]/ms:gap-x-2 @max-[760px]/ms:px-3">
+      <div className={FINISHED_LINE}>
         <FoldButton folded={!open} label={milestone.title} onClick={onToggle} className="-ml-1" data-milestone-fold={milestone.identifier} />
         <MilestoneGlyph state={milestone.state} percent={progress.percent} />
         <button
           type="button"
           // A 32px tap under 760px, as the open section's name: padding inside the box (a `::before` would be clipped by the truncation), taken back by a negative margin.
-          className="focus-ring min-h-0 min-w-0 truncate rounded-sm text-left text-body font-medium text-text-secondary underline-offset-2 hover:underline @max-[760px]/ms:-my-1.5 @max-[760px]/ms:py-1.5"
+          className={cn("focus-ring min-h-0 rounded-sm text-left underline-offset-2 hover:underline @max-[760px]/ms:-my-1.5 @max-[760px]/ms:py-1.5", FINISHED_NAME)}
           onClick={() => session.open(workspace, milestone.identifier)}
           data-milestone-open={milestone.identifier}
         >
           {milestone.title}
         </button>
-        <span className="ms-auto shrink-0 text-label text-text-tertiary @max-[760px]/ms:hidden">{progressSentence(progress)}</span>
-        <span className="shrink-0 text-label text-text-tertiary @max-[760px]/ms:ms-auto">{dueText(milestone, null, now)}</span>
+        <FinishedFacts row={row} now={now} />
       </div>
       {open ? <FinishedBody row={row} workspace={workspace} onAuthError={onAuthError} /> : null}
     </section>

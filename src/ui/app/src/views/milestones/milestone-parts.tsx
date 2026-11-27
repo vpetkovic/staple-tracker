@@ -26,7 +26,7 @@ import type { EffectiveQueueRow, IssueDetail, MilestoneListRow, MilestoneState, 
 import { cn } from "@/lib/utils";
 import { ProgressStrip } from "@/views/ProgressStrip";
 import { Flag } from "@/views/plan/plan-parts";
-import { cancelledSentence, nextSentence, progressSegments, progressSentence, riskSentence, shownState, waitBreakdown } from "./milestone-plain";
+import { cancelledSentence, dueText, nextSentence, progressSegments, progressSentence, riskSentence, shownState, waitBreakdown } from "./milestone-plain";
 import { isFinishedMilestone, milestoneRisk } from "./milestones-model";
 
 type SummaryRow = Pick<MilestoneListRow, "milestone" | "progress" | "next">;
@@ -36,7 +36,7 @@ type SummaryRow = Pick<MilestoneListRow, "milestone" | "progress" | "next">;
  * every button 44px tall under a coarse pointer.
  */
 /** A 20px icon control: a 32px tap under 760px. */
-export const TAP_20 = "relative @max-[760px]/ms:before:absolute @max-[760px]/ms:before:-inset-1.5 @max-[760px]/ms:before:content-['']";
+const TAP_20 = "relative @max-[760px]/ms:before:absolute @max-[760px]/ms:before:-inset-1.5 @max-[760px]/ms:before:content-['']";
 /** A 28px icon control: a 36px tap at every width (a work row's `⋯`, the section's `⋯`). */
 export const TAP_28 = "relative min-h-0 before:absolute before:-inset-1 before:content-['']";
 /** A 28px text button: a 32px tap under 760px. */
@@ -86,6 +86,47 @@ export function MilestoneBar({ row, effective, size = "sm", className }: { row: 
       </div>
       {percent !== null ? <span className={cn("shrink-0 tabular-nums", size === "lg" ? "text-label font-semibold text-foreground" : "text-caption text-text-tertiary")}>{percent}%</span> : null}
     </div>
+  );
+}
+
+/** The Finished shelf's one line, which opens and closes it: "Finished 9 · show". */
+export function FinishedShelfButton({ open, count, onToggle, ...data }: { open: boolean; count: number; onToggle: () => void } & Record<`data-${string}`, string | undefined>) {
+  return (
+    <button
+      type="button"
+      className="focus-ring-inset flex min-h-9 w-full items-center gap-2 border-b bg-surface-sunken py-1.5 pr-4 pl-[15px] text-left text-label text-text-secondary hover:bg-surface-hover @max-[760px]/ms:pl-[11px]"
+      aria-expanded={open}
+      onClick={onToggle}
+      {...data}
+    >
+      {open ? <ChevronDown className="size-3.5 shrink-0 text-text-tertiary" aria-hidden /> : <ChevronRight className="size-3.5 shrink-0 text-text-tertiary" aria-hidden />}
+      <span className="ml-1.5 font-semibold">Finished</span>
+      <span className="tabular-nums text-text-tertiary">{count}</span>
+      <span className="text-text-tertiary">· {open ? "hide" : "show"}</span>
+    </button>
+  );
+}
+
+/** The quiet line where open milestones would be, when every one is finished. */
+export function NoOpenMilestones({ className }: { className?: string }) {
+  return (
+    <div className={cn("flex flex-wrap items-baseline gap-x-3 gap-y-0.5 border-b py-2.5 pr-4 pl-[42px] @max-[760px]/ms:px-3", className)} data-milestones-none-open="">
+      <span className="text-body font-semibold text-text-secondary">No open milestones</span>
+    </div>
+  );
+}
+
+/** A finished or cancelled milestone's one 40px line, and its name on it. */
+export const FINISHED_LINE = "flex min-h-10 min-w-0 items-center gap-x-2.5 px-4 hover:bg-surface-hover @max-[760px]/ms:gap-x-2 @max-[760px]/ms:px-3";
+export const FINISHED_NAME = "min-w-0 truncate text-body font-medium text-text-secondary";
+
+/** The end of a finished milestone's line: what its work came to (from 760px), then when it was due or closed. */
+export function FinishedFacts({ row, now }: { row: Pick<MilestoneListRow, "milestone" | "progress">; now: Date }) {
+  return (
+    <>
+      <span className="ms-auto shrink-0 text-label text-text-tertiary @max-[760px]/ms:hidden">{progressSentence(row.progress)}</span>
+      <span className="shrink-0 text-label text-text-tertiary @max-[760px]/ms:ms-auto">{dueText(row.milestone, null, now)}</span>
+    </>
   );
 }
 

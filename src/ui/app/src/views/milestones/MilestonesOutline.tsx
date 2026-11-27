@@ -17,7 +17,7 @@
  * the focus: a name opens the drawer. "Show in Milestones" for the milestone the address already
  * names changes no focus, so it also asks for a landing (`landing-requests.ts`) and lands again.
  */
-import { ChevronDown, ChevronRight, Milestone, Plus } from "lucide-react";
+import { Milestone, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EmptyState as PlainEmptyState } from "@/components/plain/States";
 import { Button } from "@/components/ui/button";
@@ -28,7 +28,7 @@ import { usePhoneHeaderSlot } from "@/lib/phone-header-slot";
 import { useSession } from "@/lib/session";
 import type { EffectiveQueueRow, MilestoneListRow } from "@/lib/types";
 import { useElementWidth } from "@/views/plan/plan-parts";
-import { TAP_TEXT } from "./milestone-parts";
+import { FinishedShelfButton, NoOpenMilestones, TAP_TEXT } from "./milestone-parts";
 import { FinishedLine, OpenSection } from "./MilestoneSection";
 import { isFinishedMilestone } from "./milestones-model";
 import { useLandingRequests } from "./landing-requests";
@@ -203,11 +203,7 @@ export function MilestonesOutline({
                     </Button>
                   </div>
                 ) : null}
-                {open.length === 0 ? (
-                  <section className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 border-b bg-surface-sunken py-2.5 pr-4 pl-[42px] @max-[760px]/ms:px-3" data-milestones-none-open="">
-                    <span className="text-body font-semibold text-text-secondary">No open milestones</span>
-                  </section>
-                ) : null}
+                {open.length === 0 ? <NoOpenMilestones className="bg-surface-sunken" /> : null}
                 {open.map((row) => (
                   <OpenSection
                     key={row.milestone.identifier}
@@ -225,18 +221,7 @@ export function MilestonesOutline({
                 ))}
                 {finished.length > 0 ? (
                   <section aria-label="Finished" data-milestones-finished="">
-                    <button
-                      type="button"
-                      className="focus-ring-inset flex min-h-9 w-full items-center gap-2 border-b bg-surface-sunken py-1.5 pr-4 pl-[15px] text-left text-label text-text-secondary hover:bg-surface-hover @max-[760px]/ms:pl-[11px]"
-                      aria-expanded={shelfOpen}
-                      onClick={toggleShelf}
-                      data-milestones-shelf=""
-                    >
-                      {shelfOpen ? <ChevronDown className="size-3.5 shrink-0 text-text-tertiary" aria-hidden /> : <ChevronRight className="size-3.5 shrink-0 text-text-tertiary" aria-hidden />}
-                      <span className="ml-1.5 font-semibold">Finished</span>
-                      <span className="tabular-nums text-text-tertiary">{finished.length}</span>
-                      <span className="text-text-tertiary">· {shelfOpen ? "hide" : "show"}</span>
-                    </button>
+                    <FinishedShelfButton open={shelfOpen} count={finished.length} onToggle={toggleShelf} data-milestones-shelf="" />
                     {shelfOpen
                       ? finished.map((row) => (
                           <div key={row.milestone.identifier} ref={register(row.milestone.identifier)}>

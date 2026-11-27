@@ -15,7 +15,7 @@
  * plain sentence and one button that opens this workspace's kinds in Settings, where the kind
  * is added.
  */
-import { ChevronDown, ChevronRight, Milestone, Settings2 } from "lucide-react";
+import { Milestone, Settings2 } from "lucide-react";
 import { useCallback, useId, useMemo, useState, type KeyboardEvent } from "react";
 import { PlainCard } from "@/components/plain/PlainCard";
 import { EmptyState as PlainEmptyState } from "@/components/plain/States";
@@ -29,8 +29,8 @@ import { useResource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
 import { useElementWidth } from "@/views/plan/plan-parts";
 import { ErrorState } from "@/views/ViewChrome";
-import { dueText, progressSentence, projectedDue, shownState } from "./milestone-plain";
-import { MilestoneGlyph, QueuedMark } from "./milestone-parts";
+import { projectedDue, shownState } from "./milestone-plain";
+import { FINISHED_LINE, FINISHED_NAME, FinishedFacts, FinishedShelfButton, MilestoneGlyph, NoOpenMilestones, QueuedMark } from "./milestone-parts";
 import { MilestoneDueControl } from "./MilestoneDue";
 import { HeaderFacts, NAME_LINE, NAME_TEXT, NarrowPercent } from "./MilestoneSection";
 import { groupAllMilestones, type AllMilestones, type WorkspaceMilestonesResult } from "./milestones-model";
@@ -169,28 +169,13 @@ function WorkspaceGroup({
   return (
     <section aria-label={workspace} data-milestone-group={workspace}>
       <GroupHeading workspace={workspace} counts={{ open: open.length, finished: finished.length }} />
-      {open.length === 0 ? (
-        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 border-b py-2.5 pr-4 pl-[42px] @max-[760px]/ms:px-3" data-milestones-none-open="">
-          <span className="text-body font-semibold text-text-secondary">No open milestones</span>
-        </div>
-      ) : null}
+      {open.length === 0 ? <NoOpenMilestones /> : null}
       {open.map((row) => (
         <HeaderLink key={row.milestone.identifier} row={row} workspace={workspace} effective={effective} now={now} narrow={narrow} onOpen={() => onOpen(workspace, row.milestone.identifier)} />
       ))}
       {finished.length > 0 ? (
         <>
-          <button
-            type="button"
-            className="focus-ring-inset flex min-h-9 w-full items-center gap-2 border-b bg-surface-sunken py-1.5 pr-4 pl-[15px] text-left text-label text-text-secondary hover:bg-surface-hover @max-[760px]/ms:pl-[11px]"
-            aria-expanded={shelfOpen}
-            onClick={() => setShelfOpen(!shelfOpen)}
-            data-milestone-group-shelf={workspace}
-          >
-            {shelfOpen ? <ChevronDown className="size-3.5 shrink-0 text-text-tertiary" aria-hidden /> : <ChevronRight className="size-3.5 shrink-0 text-text-tertiary" aria-hidden />}
-            <span className="ml-1.5 font-semibold">Finished</span>
-            <span className="tabular-nums text-text-tertiary">{finished.length}</span>
-            <span className="text-text-tertiary">· {shelfOpen ? "hide" : "show"}</span>
-          </button>
+          <FinishedShelfButton open={shelfOpen} count={finished.length} onToggle={() => setShelfOpen(!shelfOpen)} data-milestone-group-shelf={workspace} />
           {shelfOpen ? finished.map((row) => <FinishedLink key={row.milestone.identifier} row={row} workspace={workspace} now={now} onOpen={() => onOpen(workspace, row.milestone.identifier)} />) : null}
         </>
       ) : null}
@@ -253,13 +238,12 @@ function FinishedLink({ row, workspace, now, onOpen }: { row: MilestoneListRow; 
       type="button"
       aria-label={`Open ${milestone.title} in ${workspace}`}
       onClick={onOpen}
-      className="focus-ring-inset flex min-h-10 w-full min-w-0 items-center gap-x-2.5 border-b px-4 text-left hover:bg-surface-hover @max-[760px]/ms:gap-x-2 @max-[760px]/ms:px-3"
+      className={cn("focus-ring-inset w-full border-b text-left", FINISHED_LINE)}
       data-milestone-finished-link={milestone.identifier}
     >
       <MilestoneGlyph state={milestone.state} percent={progress.percent} />
-      <span className="min-w-0 truncate text-body font-medium text-text-secondary">{milestone.title}</span>
-      <span className="ms-auto shrink-0 text-label text-text-tertiary @max-[760px]/ms:hidden">{progressSentence(progress)}</span>
-      <span className="shrink-0 text-label text-text-tertiary @max-[760px]/ms:ms-auto">{dueText(milestone, null, now)}</span>
+      <span className={FINISHED_NAME}>{milestone.title}</span>
+      <FinishedFacts row={row} now={now} />
     </button>
   );
 }
