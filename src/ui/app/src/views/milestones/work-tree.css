@@ -1,0 +1,10 @@
+/*
+ * A milestone's work tree draws the Tasks list's own row inside a list item that carries the
+ * full-width hairline (it spans the position number and the `⋯` column too). The row's own
+ * bottom border would be a second, shorter line under it. The row's rule is unlayered
+ * (`components/task-list/task-list.css`), so a utility class on the cell cannot take it off;
+ * this rule is unlayered too and more specific, and reaches only rows inside the work tree.
+ */
+[data-milestone-work-cell] > .staple-row {
+  border-bottom: 0;
+}

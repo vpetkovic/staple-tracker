@@ -24,6 +24,7 @@ import { useBackToClose } from "@/lib/back-to-close";
 import { cn } from "@/lib/utils";
 import { useElementWidth } from "@/views/plan/plan-parts";
 import { HiddenDoneNotice } from "./HiddenDone";
+import "./work-tree.css";
 import { TAP_28 } from "./milestone-parts";
 import { isFinishedMilestone, type MemberListRow } from "./milestones-model";
 import type { MilestoneWork } from "./useMilestoneWork";
@@ -223,7 +224,7 @@ function WorkRow({
         <span role="gridcell" aria-label={role === "member" ? `Position ${memberIndex + 1}` : undefined} data-member-position={role === "member" ? memberIndex + 1 : undefined} className="w-6 shrink-0 text-right text-caption tabular-nums text-text-tertiary @max-[760px]/ms:w-5">
           {role === "member" ? memberIndex + 1 : ""}
         </span>
-        <div role="gridcell" className="min-w-0 flex-1 [&>.staple-row]:border-b-0">
+        <div role="gridcell" className="min-w-0 flex-1" data-milestone-work-cell="">
           <TaskRowLine row={row} config={config} semantics="bare" now={work.now} isExpanded={row.isExpanded} onToggleExpand={row.hasChildren ? () => work.onToggle(identifier) : undefined} />
         </div>
         <div role="gridcell" className="flex shrink-0 items-center" data-member-controls="">

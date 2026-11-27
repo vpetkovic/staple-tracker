@@ -458,6 +458,16 @@ describe.skipIf(Boolean(reason))("the Milestones page, pressed in a real browser
     await context.close();
   });
 
+  it("draws one full-width hairline under each work row: the list item's, not the task row's own", async () => {
+    const { page, context } = await open(refs.order!);
+    const lines = await section(page, refs.order!).locator(`[data-milestone-member="${refs.first}"]`).evaluate((item) => ({
+      item: getComputedStyle(item).borderBottomWidth,
+      row: getComputedStyle(item.querySelector(".staple-row")!).borderBottomWidth,
+    }));
+    expect(lines).toEqual({ item: "1px", row: "0px" });
+    await context.close();
+  });
+
   it("approves the milestone's gate from the page, signed by the person, and the status follows", async () => {
     const { page, context } = await open(refs.gated!);
     const gated = section(page, refs.gated!);
