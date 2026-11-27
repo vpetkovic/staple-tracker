@@ -30,11 +30,11 @@ surfaces that open on top of any of them.
 | [Queue](#queue) | The pickup order as one dense list: what an agent would take next, the plan with what each queued epic or milestone expands to, the open work after it, and the editor for it; one section per workspace on *All workspaces* | The rail's third row and the third phone tab; "Go to Queue"; `?view=queue` |
 | [Graph](#graph) | Issues as a node graph: epics as containers, dependencies as edges | *Graph* in the rail and in More on a phone; "Go to Graph"; `?view=graph` |
 | [Milestones](#milestones) | Open milestones as an outline in plan order, each section with its progress, goal and work in order; finished ones on a shelf | *Milestones* in the rail and in More; "Go to Milestones"; a row's milestone marker; a milestone's **Show in Milestones**; `?view=milestones&focus=<identifier>` |
-| [Estimates](#estimates) | How long work took against its estimate, per group of similar work | *Estimates* in the rail and in More; "Go to Estimates"; `?view=estimate-accuracy` |
+| [Analytics](#analytics) | What agent work delivered and cost across this computer, in three lenses: Overview, Return and Estimates | *Analytics* at the rail's foot, under *Integrations*, and under *This computer* in More; "Go to Analytics"; `?view=analytics` (with `lens`, `period`, `from`, `to`, `workspace`, `role`) |
+| [Estimates](#estimates) | A lens of Analytics: how long work took against its estimate | The *Estimates* tab of Analytics; "Go to Estimates"; `?view=analytics&lens=estimates` (`?view=estimate-accuracy` lands there) |
 | [Usage](#usage) | This computer's provider limits and the pace against each one | *Usage* at the rail's foot and under *This computer* in More; "Go to Usage"; `?view=budget` |
 | [Task detail](#task-detail) | One issue: details, connections, documents, activity, the agent payload and time | Click or Enter on any row, node or reference |
 | [Settings](#settings) | Statuses, kinds, workflow settings, cloud, usage capture | *Settings* at the rail's foot and in More; the palette; `?settings` |
-| [Choose a workspace](#choose-a-workspace) | Shown in place of Estimates on *All workspaces* | Opening it with no workspace chosen |
 
 The command palette (`⌘K`), the New task dialog (`c`), the project dialog and
 the dependencies dialog also open over any view. **New task**
@@ -75,10 +75,11 @@ highlighted. Top to bottom (`components/nav/NavRail.tsx`):
   its state; at most four, then "n more"); and *Queue*. A run line is a link to
   that run.
 - **The workspace's records**, 12px below: *Tasks* with its projects under it,
-  *Graph*, *Milestones*, *Plan* (only with planning on) and *Estimates*.
-- **The foot**, above a hairline at the bottom: *Usage*, *Integrations* and
-  *Settings*, with the dark-mode switch beside Settings (`role="switch"`). They
-  read the same whichever workspace is chosen. The page follows the system's
+  *Graph*, *Milestones* and *Plan* (only with planning on).
+- **The foot**, above a hairline at the bottom: *Usage*, *Integrations*,
+  *Analytics* (`FOOT_VIEWS`: it reads every workspace on this computer, so it
+  sits under Integrations) and *Settings*, with the dark-mode switch beside
+  Settings (`role="switch"`). They read the same whichever workspace is chosen. The page follows the system's
   light or dark setting until someone uses the switch, and only that pick is
   remembered (`staple:theme:v2`, `lib/theme.ts`). The old `staple:theme` key,
   which earlier builds wrote on every load, is never read as a pick and is
@@ -201,7 +202,7 @@ reads `/api/cloud/status` once per workspace shown (on *All workspaces*,
 
 **The toolbar** (44px) is only on views that use it (`viewControls` in
 `lib/session.ts`): Tasks has all of it, Graph has the filters only, Milestones
-has only *Done*, which moves into the top bar, and Queue, Estimates and Usage
+has only *Done*, which moves into the top bar, and Queue, Usage and Analytics
 have no toolbar. On the left: **Filter** with its count as a badge, then the
 **quick filters**, one click each: *My tasks*, *In progress*, *Blocked*, *High
 priority*, *Bugs* (only where `bug` is a configured kind) and *Unassigned*
@@ -224,14 +225,13 @@ live (green working, amber paused or waiting), *Queue*, *Tasks*, and *More*.
 
 *More* is a bottom sheet with the rest of the rail, in 48px rows:
 
-- the scope's other views: *Graph*, *Milestones*, *Plan* (planning on) and
-  *Estimates*;
+- the scope's other views: *Graph*, *Milestones* and *Plan* (planning on);
 - **Projects**: each project of the scope with its open count and a settings
   gear, captioned with its workspace when the rows span several, then *New
   project*. Tapping one narrows Tasks to it, and it is marked while Tasks shows
   exactly it;
-- **This computer**: *Usage*, *Integrations*, *Settings* and *Dark mode* (a
-  switch).
+- **This computer**: *Usage*, *Integrations*, *Analytics*, *Settings* and *Dark
+  mode* (a switch).
 
 The sheet closes before it opens a dialog, and the dialog opens with the focus
 on the *More* tab, so that is where the focus lands when the dialog closes (on a
@@ -277,8 +277,9 @@ stop the page refreshing.
 The palette's first group lists the views, all but the current one. Recently
 used commands lead the list; the "Go to" commands otherwise follow the rail's
 order: "Go to Inbox", "Go to Autopilot", "Go to Queue", "Go to Tasks", "Go to
-Graph", "Go to Milestones", "Go to Plan" (planning on), "Go to Estimates" and
-"Go to Usage". Then "Settings", "Settings: Usage", "Settings: Cloud
+Graph", "Go to Milestones", "Go to Plan" (planning on), "Go to Estimates"
+(which opens Analytics on its Estimates lens), "Go to Usage" and "Go to
+Analytics". Then "Settings", "Settings: Usage", "Settings: Cloud
 account" and "Settings: Statuses", and in hub mode "Switch to All workspaces" and "Switch to"
 followed by each workspace's name.
 
@@ -978,76 +979,126 @@ folding and remembering across a reload, the phone's folded start, reordering
 with the buttons, the menu and Alt+arrow, adding and removing, queueing, the
 calendar, the gate, every landing, and that no control on a phone is a 44px box.
 
+## Analytics
+
+At the rail's foot, under *Integrations*, **Analytics** (`views/analytics/AnalyticsView.tsx`;
+also "Go to Analytics" in the command palette), is about this computer: it reads
+every workspace the hub registers and carries its own workspace filter, so the
+switcher's choice does not narrow it. `MACHINE_VIEWS` holds it beside Usage, and
+`FOOT_VIEWS` puts it under *Integrations*. It has no toolbar.
+
+**The header row.** Three lenses (`DetailTabStrip` inside Radix `Tabs`), then the
+workspace filter (hub mode with more than one workspace) and the period (the
+last 7, 30 or 90 days, this year, all time, or a custom range; hidden on the
+Estimates lens, which reads all finished work). On a phone the lenses and both
+filters move into the shell's header slot beside the page name
+(`[data-phone-header-slot]`, found again whenever the shell changes shape) and
+stay there while the page scrolls. The page is full width. Each lens keeps its
+own scroll position, and the address holds `lens`, `period`, `from`, `to`,
+`workspace` and, on a role's page, `role`.
+
+**One query.** `period.ts` (`toQuery`) turns the period and the workspace into
+the query every route takes: `scope` (`hub` or a slug) with `from` and `to`
+(all time sends no `from`). The types and the client are
+`src/core/analytics/contract.ts` and `lib/analytics-api.ts`; the hooks are in
+`lib/use-analytics.ts`. A new period or workspace keeps the previous figures on
+screen, dimmed, until the new ones land. A first read that fails shows the
+problem state with *Try again*; a scope where nothing has happened shows the
+empty state.
+
+**Overview** (`OverviewBoard.tsx`, `overview-parts.tsx`) reads
+`GET /api/analytics` (`useAnalytics`), and `GET /api/analytics/roi` (`useRoi`)
+only while it is open, for its Return tile. Five figures lead, the first four
+with their change against the period before, then four topics behind sticky tabs
+(*Delivery*, *Capacity*, *Speed*, *Reliability*). Every widget is fed through
+`overview-data.ts`, pure functions from the report to what a widget draws. A
+workspace keeps one colour: its slot is its place in the session's workspace
+list, so a filter or a new period never repaints it; with more than four
+workspaces the three busiest keep their own series and the rest fold into *Other
+workspaces*. Each caveat the report carries is said on the widget it limits and
+again under *How this is measured*; an unreadable workspace and a clamped *all
+time* are a note under the five figures.
+
+**Return** (`ReturnLens.tsx`, `ReturnPage.tsx`) reads `useRoi` and
+`useCostModel` and prints the server's figures: `return-model.ts` shapes the
+answer for the page and computes nothing the answer carries. The return on total
+cost leads, as a range (measured agent time, then estimates) beside
+`ReturnRange`; five figures follow; **Role by role** is a table from 820px of
+its own width and one card per role below it, with the shared AI, the directing
+person and the total as their own rows. Only roles with work in scope are
+listed; the others are named in one line, each a link to its page.
+
+A role opens as a page (`RolePage.tsx`, `?role=<id>`), with Back to the table at
+the scroll position it was left: four figures, its tickets from
+`GET /api/analytics/roi/tickets` (`useRoiTickets`; the first 200 by agent time,
+with the total, a filter box and what caught each), and the recognition editor:
+the kinds of agent work the role holds, the one-field rules as chips (label,
+title word, agent name, ticket kind, workspace), and any other rule read-only.
+
+**Cost setup** (`CostSetupDialog.tsx`) opens only from the Return lens and is
+full screen on a phone. It holds the two profiles (*Just me*, *A company*), the
+directing person's rate and hours a day, each role's rate, and the AI entries: a
+subscription (price a month × how many) or an API bill, assigned to a role or
+shared. `cost-edits.ts` maps every edit to the parts of the model it writes;
+`saveCostModel` posts them to `POST /api/analytics/cost-model`, the edit shows at
+once and the figures follow when the server has re-priced it. A conflict points
+at *Settings → Cloud → Conflicts*; a validation refusal is the server's sentence
+under the field. The foot says which workspace holds the model and whether it
+syncs, with *Move* whenever the hub has another workspace to hold it. *Reset
+both profiles* asks first and puts both back to the shipped defaults. A figure
+nobody has saved wears *assumed*. The dialog is opened by a button, not a Radix
+trigger, so it hands the focus back with `useReturnFocus`.
+
+**The widgets** are `components/analytics/*`, each with its own loading, empty,
+error and partial-data states; the charts over time carry a table twin, and the
+widgets that print each value beside its mark do not need one. Their data
+contracts are in `components/analytics/README.md`.
+
+**How it is verified.** `overview-e2e.test.tsx` and `return-e2e.test.tsx` start
+the real HTTP server over workspaces written through the store and render the
+lenses from its responses (both profiles, one workspace and the hub, the page
+notes); `overview-data.test.ts`, `return-model.test.ts`, `cost-edits.test.ts`
+(every edit checked against the server's validator) and `period.test.ts` pin the
+adapters; `estimates-redirect.test.ts` pins where the old address lands.
+
 ## Estimates
 
-The last of the rail's records, **Estimates** (also "Go to Estimates" in
-the command palette, which also finds it by *estimate accuracy* and
-*calibration*), is the
-workspace's calibration report: `GET /api/calibration`, the payload of `staple
-calibrate --json` and MCP `calibration_cohorts`
+**Estimates** is the third lens of Analytics (`views/analytics/EstimatesLens.tsx`).
+It reads the workspace's calibration report, `GET /api/calibration`, the payload
+of `staple calibrate --json` and MCP `calibration_cohorts`
 ([timing-semantics.md](timing-semantics.md#calibration-cohorts), "Calibration cohorts" and
-"Confidence ranges"). The view's internal id is `calibration` (saved preferences
-and commands key off it); the address calls it `estimate-accuracy`. It is per
-workspace; on *All workspaces* it shows [Choose a workspace](#choose-a-workspace)
-(*Estimates are checked for each workspace on its own.*). The view has no
-toolbar, and the palette's filter commands are hidden here: they narrow the
-issue list, and this report is not one. The page asks for the workspace it
-names, so the label and the data cannot diverge.
+"Confidence ranges"). The old view id `calibration` is kept in `VIEWS` and
+unlisted (`UNLISTED_VIEWS`): `viewLanding` in `lib/session.ts` sends it, its
+address `?view=estimate-accuracy` and the palette's "Go to Estimates" (also found
+by *estimate accuracy* and *calibration*) to Analytics on this lens, for the
+workspace that was chosen. It has no period: it reads all finished work.
 
-**The answer first.** A card titled *How long work really takes in
-staple* (the workspace's name) opens the page with one sentence, the first three
-cards of the measured history in display order, cards that say the same thing
-said once, together: *Tasks (high priority) and all finished work (every kind)
-usually take about a fifth of the estimate.* (and how many more groups follow). It reads only the measured
-history, so it is the same with the older-history switch on or off. It holds the switch, **Include older history (rebuilt from logs, less
-precise)**; its *Show details* keeps the population line and the snapshot id with
-its member count and instant.
+**One workspace.** A sentence gives the answer (*A 10-hour estimate usually takes
+agents about 1.3 h*), from the broadest measured group. **Try an estimate** takes
+a number of hours and a kind of work and says what it usually takes and where 8
+in 10 past tickets landed. Three figures follow. **By kind of work** is one row
+per kind and priority on a shared scale where 100% is the estimate: the bar is
+where 8 in 10 past tickets landed (the ratio's p10–p90), the mark is the typical
+one, and a confidence pill says how sure the figure is (`cohortConfidence` in
+`lib/plain-language.ts`: no samples or no bounds reads *Can't tell yet*, with no
+pill; bounds under the
+90% target or `small_sample` is *Rough guess*; a quantile under the target is
+*Fairly sure*; otherwise *Quite sure*). A row opens to its detail.
 
-**Each group is a card.** A cohort that read its own key: title (*Bug fixes
-(high priority)*; dimensions nobody recorded are left out), a confidence pill,
-the figure (*About ⅕ of the estimate*, the ratio a forecast scales by; below a
-fifth, *About 50 minutes per 10 estimated hours*), and plain sentences: *Tasks
-(high priority) usually take about a fifth of the estimate. Based on 8 finished
-tasks. Rough guess: not enough data to be sure.* Its confidence reads only its
-own fields: no samples or no bounds is *Unknown*; bounds under the 90% target or
-`small_sample` is *Rough guess*; a quantile under the target is *Fairly sure*;
-otherwise *Quite sure*. **Cohorts that fell back** to a broader class never get a
-card of their own, because the figure is the class's, not theirs: the cohorts
-that share a class are ONE card named for it and for what it spans (*All finished
-work (every kind)*, *All bug fixes (every priority)*), with the class's figure and count (*Based on 9 finished tasks.*) and
-*Also used for: Bug fixes (high priority): too few of their own (1)*, the own
-count being the fallback path's first level. Its pill is always *Rough guess*
-(the kinds it stands in for have too few of their own), never *Quite sure*, and
-it says so for them: *Rough guess for spikes (critical priority): only 3 of their
-own, so all finished work (every kind) stands in.* The verb agrees with the class: *All
-finished work (every kind) usually takes*, *All bug fixes (every priority) usually take*. The
-bar shows where 8 in 10 past tasks landed (the ratio's p10–p90) inside where the
-next one is likely to land (the prediction bounds, at the confidence they reach,
-in tens; under 50% it says *Too little data to say where the next one lands* and
-draws no band), the typical ratio as the marker, and the estimate itself as a
-dashed line. Under *Show details*: the
-key (`task · high · type unknown · area unknown · model unknown`), `n`, the class
-it read and how (`read at full, its own key`, or `fell back to all: its key has 1
-sample`) with the whole fallback path, coverage (`7 of 10 eligible (70%)`), the
-median and pooled ratio, the ratio a forecast scales by and how it was formed,
-`p10–p90`, where the next one lands with the confidence reached (under the 90%
-target marked in words), the median interval, the work median and `p10–p90`,
-floors and heavy tails when present, and the warning chips.
+**Measured history first; older history apart.** The rows come from the `exact`
+set. History rebuilt from logs (`include=reconstructed`) is read when the
+remembered preference `staple:estimates-include-older-history` is on, and is
+drawn behind *Show older history*, under its own heading, never mixed with the
+measured rows.
 
-**Measured history first; older history on by default, and apart.** The page leads
-with the `exact` set, *Finished tasks with measured time*, with a plain line
-(*Based on 9 finished tasks with measured time, out of 138 finished with an
-estimate.*) and what is not used, by the state the payload counts, said for that
-set (*Not used here: 2 have only approximate timing and 127 have timing rebuilt
-from logs (they're in the older history).*, the same with the switch on or off);
-the older history, drawn under it, says *10 are in the measured history above, 2
-have only approximate timing and 19 couldn't be rebuilt reliably*. The technical set line is behind *Show details*. The
-switch re-reads with `include=reconstructed`; the reconstructed groups then
-appear in their own section, *Older history (rebuilt from logs, less precise)*,
-*kept separate: never mixed with the history above*, after the exact one. The
-exact section reads the same either way. The switch is a remembered preference
-(`staple:estimates-include-older-history` in the browser's storage): on until you
-turn it off, and then off on every visit and reload until you turn it back on. With no samples a set says *We can't tell yet* and why.
+**All workspaces.** One row per workspace on the same scale, each from that
+workspace's broadest measured group; a row chooses the workspace. Each row is
+that workspace's own figure. The sentence above the rows is their average,
+weighted by tickets, worked out in the browser. A workspace whose report could
+not be read is named as left out, never shown as empty.
+
+`views/calibration/CalibrationView.tsx` is no longer routed. Its report
+component stays because the forecast tests below render it.
 
 **How the two are verified.** `detail/forecast-e2e.test.tsx` starts the real
 HTTP server over `test/fixtures/forecast-scenario.ts`, a scenario written through
@@ -1565,14 +1616,18 @@ runs; `views/autopilot/*.test.*` cover the page.
 
 ## Choose a workspace
 
-Estimates is about one workspace at a time. On *All workspaces* with more than
-one workspace it shows a **Choose a workspace** card instead
+No routed view shows this card any more. It was what Estimates showed on *All
+workspaces* while Estimates was a view of its own; as a lens of
+[Analytics](#analytics) it lists one row per workspace instead. The component
+stays for the unrouted `CalibrationView` its tests render: a **Choose a
+workspace** card
 (`views/ChooseWorkspace.tsx`, `views/workspace-scope.ts`): a sentence saying why
 (*Estimates are checked for each workspace on its own.*), a button per workspace with its prefix, and *What does this mean?*.
 Choosing one is the same as choosing it in the switcher, and it becomes the
 default answer when New task or Settings ask which workspace. Tasks and Graph
 show every workspace at once; Milestones shows its read-only all-workspaces
-outline; Queue shows a section per workspace; Usage is not about a workspace at all.
+outline; Queue shows a section per workspace; Usage is not about a workspace at
+all, and Analytics carries its own workspace filter.
 
 ## Settings
 

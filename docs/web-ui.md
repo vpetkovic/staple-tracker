@@ -42,11 +42,11 @@ the name is in that workspace:
 - *Inbox* (what waits on you, with a count and a dot when something is new),
   *Autopilot* (agent runs, with a line per live run) and *Queue* (what agents
   take next);
-- *Tasks* with your projects under it, *Graph*, *Milestones*, *Plan* (when
-  planning is on) and *Estimates*.
+- *Tasks* with your projects under it, *Graph*, *Milestones* and *Plan* (when
+  planning is on).
 
 At the foot are the things about this computer: *Usage*, *Integrations*,
-*Settings* and the dark-mode switch. The page follows your system's light or dark
+[*Analytics*](analytics.md), *Settings* and the dark-mode switch. The page follows your system's light or dark
 setting until you use that switch. One row is highlighted: the page you are
 on, or the project or run inside it.
 
@@ -240,11 +240,14 @@ The rail shows a line per live run. While one is live, a dot marks *Autopilot*
 on the icon rail and on a phone's tab. When a run stops, open pages say why and link to what needs you and to
 the run. Agents start runs; the web UI watches, pauses and stops them.
 
-## 9. Estimates and Usage
+## 9. Analytics and Usage
 
-**Estimates** shows how long work really takes against its estimate, per kind of
-work. **Usage** shows this computer's provider limits and whether your pace keeps
-a reserve. Both are covered in [Budget and estimates](budget-and-estimates.md).
+**Analytics** is about the whole computer: what agents delivered across every
+workspace, the return on your AI spend against hiring, and, under its *Estimates*
+lens, how long work really takes against its estimate. See [Analytics](analytics.md).
+
+**Usage** shows this computer's provider limits and whether your pace keeps a
+reserve. It is covered in [Budget and estimates](budget-and-estimates.md).
 
 ## 10. Settings
 
@@ -263,7 +266,8 @@ Open **Settings** from the foot of the rail (in *More* on a phone), or `⌘K` th
 
 ## Next
 
-- [Budget and estimates](budget-and-estimates.md): the Estimates and Usage views.
+- [Analytics](analytics.md): what the work delivered, the return on AI spend, and estimate accuracy.
+- [Budget and estimates](budget-and-estimates.md): estimating tickets, and the Usage view.
 - [Several repositories](hub.md): one page over every workspace.
 - [Configuration](configuration.md): every setting the Settings sheet edits.
 

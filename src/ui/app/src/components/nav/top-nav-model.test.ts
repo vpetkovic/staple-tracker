@@ -176,8 +176,10 @@ describe("the phone's tab bar", () => {
   });
 
   it("puts every other view in the More sheet, the machine's apart, and Plan only with planning on", () => {
-    expect(moreSheetViews(true)).toEqual({ views: ["graph", "milestones", "plan", "calibration"], machine: ["budget"] });
-    expect(moreSheetViews(false)).toEqual({ views: ["graph", "milestones", "calibration"], machine: ["budget"] });
+    expect(moreSheetViews(true)).toEqual({ views: ["graph", "milestones", "plan"], machine: ["budget"], foot: ["analytics"] });
+    expect(moreSheetViews(false)).toEqual({ views: ["graph", "milestones"], machine: ["budget"], foot: ["analytics"] });
+    // Estimates is reached through Analytics, so no list offers it.
+    expect([...moreSheetViews(true).views, ...moreSheetViews(true).machine]).not.toContain("calibration");
     expect(moreSheetViews(undefined).views).not.toContain("plan");
   });
 });

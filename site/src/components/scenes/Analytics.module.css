@@ -1,0 +1,150 @@
+.wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--st-space-4);
+}
+
+/* Three figures in a row; a narrow cell keeps all three by dropping the notes. */
+.figures {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--st-space-2);
+}
+
+.figure {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: var(--st-space-3);
+  border: var(--st-hairline) solid var(--st-border);
+  border-radius: var(--st-radius-md);
+  background: var(--st-bg);
+}
+
+.figureLabel,
+.figureNote {
+  overflow: hidden;
+  font-size: var(--st-text-2xs);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--st-fg-subtle);
+}
+
+.figureValue {
+  font-size: 1.375rem;
+  font-weight: var(--st-weight-semibold);
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--st-fg-strong);
+}
+
+.figureUnit {
+  margin-left: 2px;
+  font-size: var(--st-text-xs);
+  font-weight: var(--st-weight-medium);
+  color: var(--st-fg-muted);
+}
+
+.figureNote {
+  display: none;
+}
+
+.chart {
+  padding: var(--st-space-3);
+  border: var(--st-hairline) solid var(--st-border);
+  border-radius: var(--st-radius-md);
+  background: var(--st-bg);
+}
+
+.legend {
+  display: inline-flex;
+  gap: var(--st-space-3);
+  font-family: var(--st-font-mono);
+  font-weight: var(--st-weight-regular);
+  color: var(--st-fg-subtle);
+}
+
+.key {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--st-space-1);
+}
+
+.swatchApp,
+.swatchApi {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.swatchApp,
+.segApp {
+  background: var(--st-status-active);
+}
+
+/* Blue and amber: two hues nobody confuses, in either theme. */
+.swatchApi,
+.segApi {
+  background: var(--st-status-ready);
+}
+
+/* The plot: ten days on one baseline. Every column has its final height from the start and
+   grows from the baseline, so the box never changes size. */
+.plot {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 4.5rem;
+  border-bottom: var(--st-hairline) solid var(--st-border-strong);
+}
+
+.slot {
+  display: flex;
+  flex: 1 1 0;
+  align-items: flex-end;
+  justify-content: center;
+  min-width: 0;
+  height: 100%;
+}
+
+.column {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 70%;
+  max-width: 1.25rem;
+  overflow: hidden;
+  border-radius: 3px 3px 0 0;
+  transform-origin: center bottom;
+  transition: transform calc(2 * var(--st-duration-scene)) var(--st-ease);
+  transition-delay: calc(var(--i) * 45ms);
+}
+
+.segApp,
+.segApi {
+  flex-basis: 0;
+  min-height: 2px;
+}
+
+.verdict {
+  display: flex;
+  margin-top: var(--st-space-3);
+}
+
+@container scene (min-width: 24.5rem) {
+  .figureNote {
+    display: block;
+  }
+}
+
+@container scene (min-width: 36rem) {
+  .figures {
+    gap: var(--st-space-3);
+  }
+
+  .plot {
+    height: 5.5rem;
+  }
+}

@@ -1,21 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { TAB_VIEWS, TOP_VIEWS, VIEWS, VIEW_LABELS, VIEW_SHORT_LABELS, viewControls, viewUsesIssueFilters } from "@/lib/session";
+import { TAB_VIEWS, TOP_VIEWS, UNLISTED_VIEWS, VIEWS, VIEW_LABELS, VIEW_SHORT_LABELS, viewControls, viewUsesIssueFilters } from "@/lib/session";
 import { NAV_GROUPS, isRailToggleKey, navItemForView, projectCaption, railKeyAction } from "./nav-model";
 
 describe("the rail's groups", () => {
-  it("lists every view exactly once, across all groups", () => {
+  it("lists every view exactly once, across all groups, except the ones reached through another view", () => {
     const views = NAV_GROUPS.flatMap((group) => group.items.map((entry) => entry.view));
-    expect([...views].sort()).toEqual([...VIEWS].sort());
+    // Estimates is a lens of Analytics: it keeps its address and has no row of its own.
+    expect(UNLISTED_VIEWS).toEqual(["calibration"]);
+    expect([...views].sort()).toEqual(VIEWS.filter((view) => !UNLISTED_VIEWS.includes(view)).sort());
     expect(new Set(views).size).toBe(views.length);
   });
 
   it("opens with Inbox, Autopilot and Queue, then the records in VIEWS order without them", () => {
-    expect(NAV_GROUPS.map((group) => group.id)).toEqual(["top", "views", "machine"]);
+    expect(NAV_GROUPS.map((group) => group.id)).toEqual(["top", "views", "machine", "foot"]);
     const [top, views] = NAV_GROUPS;
     expect(top!.items.map((entry) => entry.view)).toEqual(["attention", "autopilot", "queue"]);
     expect(top!.items.map((entry) => entry.label)).toEqual(["Inbox", "Autopilot", "Queue"]);
-    expect(views!.items.map((entry) => entry.label)).toEqual(["Tasks", "Graph", "Milestones", "Plan", "Estimates"]);
-    expect(views!.items.map((entry) => entry.view)).toEqual(["tree", "graph", "milestones", "plan", "calibration"]);
+    expect(views!.items.map((entry) => entry.label)).toEqual(["Tasks", "Graph", "Milestones", "Plan"]);
+    expect(views!.items.map((entry) => entry.view)).toEqual(["tree", "graph", "milestones", "plan"]);
   });
 
   it("places the same views first on the phone's tab bar, Tasks after the three", () => {
@@ -24,10 +26,16 @@ describe("the rail's groups", () => {
   });
 
   it("lists the machine's Usage in its own This computer group — Settings' name for it — after the workspace's views", () => {
-    expect(NAV_GROUPS.map((group) => group.label)).toEqual(["", "Views", "This computer"]);
+    expect(NAV_GROUPS.map((group) => group.label)).toEqual(["", "Views", "This computer", ""]);
     const machine = NAV_GROUPS[2]!;
     expect(machine.items.map((entry) => entry.label)).toEqual(["Usage"]);
     expect(machine.items.map((entry) => entry.view)).toEqual(["budget"]);
+    // Analytics reads every workspace on this computer: its row is the rail's last, under Integrations, unlabelled.
+    const foot = NAV_GROUPS[3]!;
+    expect(foot.items.map((entry) => entry.label)).toEqual(["Analytics"]);
+    expect(foot.items.map((entry) => entry.view)).toEqual(["analytics"]);
+    expect(navItemForView("analytics")).toMatchObject({ id: "view:analytics", label: "Analytics" });
+    expect(navItemForView("calibration")).toBeUndefined();
     expect(navItemForView("budget")).toMatchObject({ id: "view:budget", label: "Usage" });
     expect(navItemForView("attention")).toMatchObject({ id: "view:attention", label: "Inbox" });
     expect(navItemForView("autopilot")).toMatchObject({ id: "view:autopilot", label: "Autopilot" });
@@ -66,7 +74,7 @@ describe("the rail's groups", () => {
       subItems: "projects",
     });
     for (const view of VIEWS) {
-      if (view === "tree") continue;
+      if (view === "tree" || UNLISTED_VIEWS.includes(view)) continue;
       const entry = navItemForView(view)!;
       expect(entry.action, view).toBeUndefined();
       expect(entry.subItems, view).toBeUndefined();

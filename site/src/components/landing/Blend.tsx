@@ -6,7 +6,7 @@ import Link from '@docusaurus/Link';
 import Layout from '@theme/Layout';
 import Button, {ButtonRow} from '@site/src/components/Button';
 import CopyCommand from '@site/src/components/CopyCommand';
-import {IdeaToShipped, StatusGlyph, TrackerSync} from '@site/src/components/scenes';
+import {Analytics, IdeaToShipped, ReturnOnSpend, StatusGlyph, TrackerSync} from '@site/src/components/scenes';
 import CompareTable, {Experimental, Planned} from './parts/CompareTable';
 import Faq from './parts/Faq';
 import Install from './parts/Install';
@@ -593,6 +593,35 @@ export default function Blend(): ReactNode {
           </section>
 
           <Tour />
+
+          <section className={clsx(styles.band, styles.split)} aria-labelledby="blend-analytics">
+            <div className={styles.legend}>
+              <p className={styles.eyebrow}>Analytics · every workspace on this computer</p>
+              <h2 id="blend-analytics" className={clsx(styles.title, styles.tick)}>
+                What the work delivered, and what it <em>cost</em>.
+              </h2>
+            </div>
+            <div className={styles.prose}>
+              <p>
+                Analytics reads what the tracker already holds: how many hours agents worked and how many ran at once,
+                which features shipped, how long a ticket takes from claim to done, and how often an attempt finishes
+                the job. Pick a period and a workspace, or look at all of them together.
+              </p>
+              <p>
+                Return sets the people the work would have needed, read from its tickets, against what you paid for AI
+                and the time you spent directing it. You set the rates and assign the subscriptions; every figure says
+                how it was worked out, and what it does not know.
+              </p>
+              <Link to="/docs/analytics" className={styles.more}>
+                Analytics
+                <Arrow />
+              </Link>
+            </div>
+            <div className={clsx(styles.figure, styles.pair)}>
+              <Analytics />
+              <ReturnOnSpend />
+            </div>
+          </section>
 
           <section className={clsx(styles.band, styles.split)} aria-labelledby="blend-planning">
             <div className={styles.legend}>

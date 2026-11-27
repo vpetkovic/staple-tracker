@@ -63,6 +63,8 @@ import {
   DEFAULT_VIEW,
   SessionContext,
   pinSelection,
+  viewLanding,
+  type AnalyticsLanding,
   type Selection,
   type StapleSession,
   type ViewName,
@@ -101,8 +103,8 @@ import {
   type ViewPrefs,
 } from "@/lib/view-prefs";
 import { useDataVersion, useResource } from "@/lib/useStaple";
+import { AnalyticsView } from "@/views/analytics/AnalyticsView";
 import { BudgetView } from "@/views/budget/BudgetView";
-import { CalibrationView } from "@/views/calibration/CalibrationView";
 import { GraphView } from "@/views/GraphView";
 import { MilestonesView } from "@/views/milestones/MilestonesView";
 import { PlanView } from "@/views/plan/PlanView";
@@ -126,7 +128,9 @@ const VIEW_COMPONENTS: Record<ViewName, typeof TreeView | typeof PlanView> = {
   queue: QueueView,
   attention: AttentionView,
   autopilot: AutopilotView,
-  calibration: CalibrationView,
+  analytics: AnalyticsView,
+  // Never on screen: Estimates is a lens of Analytics, and `viewLanding` sends this id there.
+  calibration: AnalyticsView,
   budget: BudgetView,
 };
 
@@ -160,10 +164,16 @@ export function App() {
    * page (it carries `view`), the workspace, the view, the milestone focus and that scope's
    * filters all start from it; a bare address starts from what this browser remembered.
    */
-  const [initialUrl] = useState<ShellUrlState | null>(() =>
-    typeof window === "undefined" ? null : readShellUrl(window.location.search),
-  );
+  const [{ initialUrl, initialLanding }] = useState<{ initialUrl: ShellUrlState | null; initialLanding: AnalyticsLanding | null }>(() => {
+    const url = typeof window === "undefined" ? null : readShellUrl(window.location.search);
+    if (!url) return { initialUrl: null, initialLanding: null };
+    // The old Estimates address opens Analytics on its Estimates lens (lib/session.ts).
+    const landing = viewLanding(url.view, url.ws, 1);
+    return { initialUrl: { ...url, view: landing.view }, initialLanding: landing.analytics };
+  });
   const [view, setView] = useState<ViewName>(initialUrl?.view ?? DEFAULT_VIEW);
+  const [analyticsLanding, setAnalyticsLanding] = useState<AnalyticsLanding | null>(initialLanding);
+  const landingSeq = useRef(1);
   /**
    * R4c (STA-188). Which milestone the page was pointed at, and by what. Beside `view`
    * because it is the second half of one navigation act; see lib/session.ts.
@@ -508,11 +518,16 @@ export function App() {
    * milestone, and a request that outlived the trip would silently re-point the plan the
    * next time somebody clicked the tab.
    */
-  const goToView = useCallback((next: ViewName) => {
-    setMilestoneFocus(null);
-    setRun(null);
-    setView(next);
-  }, []);
+  const goToView = useCallback(
+    (next: ViewName) => {
+      setMilestoneFocus(null);
+      setRun(null);
+      const landing = viewLanding(next, ws, (landingSeq.current += 1));
+      setAnalyticsLanding(landing.analytics);
+      setView(landing.view);
+    },
+    [ws],
+  );
 
   const focusMilestone = useCallback((ref: string | null) => {
     setMilestoneFocus(ref);
@@ -661,8 +676,11 @@ export function App() {
         });
         return;
       }
-      const next = readShellUrl(window.location.search);
-      if (!next) return;
+      const read = readShellUrl(window.location.search);
+      if (!read) return;
+      const landing = viewLanding(read.view, read.ws, (landingSeq.current += 1));
+      const next = { ...read, view: landing.view };
+      setAnalyticsLanding(landing.analytics);
       lastSynced.current = next;
       setWsState(next.ws);
       setView(next.view);
@@ -723,6 +741,7 @@ export function App() {
       workspaces: bootstrap.data.workspaces,
       view: view === "plan" && !planningEnabled ? "tree" : view,
       setView: goToView,
+      analyticsLanding,
       milestoneFocus,
       focusMilestone,
       run,
@@ -761,6 +780,7 @@ export function App() {
     settingsSnapshot,
     view,
     goToView,
+    analyticsLanding,
     milestoneFocus,
     focusMilestone,
     run,

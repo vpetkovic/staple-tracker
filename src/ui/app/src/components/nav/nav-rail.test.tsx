@@ -298,10 +298,11 @@ describe("the rail", () => {
           'data-nav-item="view:graph"',
           'data-nav-item="view:milestones"',
           'data-nav-item="view:plan"',
-          'data-nav-item="view:calibration"',
           'data-nav-group="machine"',
           'data-nav-item="view:budget"',
           "data-nav-integrations",
+          // Analytics reads every workspace on this computer: under Integrations, above Settings.
+          'data-nav-item="view:analytics"',
           "data-nav-settings",
           "data-nav-theme",
         ]),
@@ -362,7 +363,7 @@ describe("the rail", () => {
   it("draws every item in the model as a button, wearing its label", () => {
     const markup = rail();
     for (const id of ["top", "views", "machine"]) expect(markup).toContain(`data-nav-group="${id}"`);
-    for (const label of ["Inbox", "Autopilot", "Queue", "Tasks", "Graph", "Milestones", "Plan", "Estimates", "Usage"]) {
+    for (const label of ["Inbox", "Autopilot", "Queue", "Tasks", "Graph", "Milestones", "Plan", "Usage", "Analytics"]) {
       expect(markup).toContain(`>${label}</span>`);
     }
     expect(markup).toMatch(/<button type="button" data-nav-item="view:budget"/);

@@ -1,0 +1,190 @@
+/**
+ * Columns over an ordered axis: time buckets (stacked by series) or the bins of a distribution.
+ *
+ * Data contract:
+ *   series   who is stacked, bottom to top, each with its colour. One series draws no legend.
+ *   points   the slots, in order: `key`, the `label` the tooltip and table say, an optional
+ *            `tick` (the axis text; leave undefined to skip that slot's tick) and the value per series.
+ *   format   how a value is said (tooltip, table); `axisFormat` for the y ticks.
+ *
+ * Marks: columns at most 24px wide with a rounded data end and a square foot, a 2px card-coloured
+ * gap between stacked segments, hairline gridlines, clean y ticks. Hover or arrow keys move a
+ * crosshair slot by slot and one tooltip lists every series there with the total. The table twin
+ * comes from `columnChartTable`, so no value lives only in the tooltip.
+ *
+ * Keyboard and screen reader: the plot is one tab stop. Left and Right move the active slot, Home
+ * and End jump to the ends, Escape clears it. The readout is said once, through one polite live
+ * region beside the plot; the visible tooltip is hidden from assistive technology so it is not
+ * read a second time.
+ */
+import { useId, useState } from "react";
+import { cn } from "@/lib/utils";
+import { ChartLegend, ChartTooltip, tooltipAnchor, type ChartSeries } from "./chart-parts";
+import { formatNumber, niceTicks } from "./format";
+import type { WidgetTable } from "./Widget";
+
+export interface ColumnPoint {
+  key: string;
+  label: string;
+  tick?: string;
+  values: Readonly<Record<string, number>>;
+}
+
+export function ColumnChart({
+  series,
+  points,
+  height = 168,
+  format = (value) => formatNumber(value),
+  axisFormat,
+  totalLabel = "Total",
+  ariaLabel,
+  legend = true,
+  className,
+}: {
+  series: readonly ChartSeries[];
+  points: readonly ColumnPoint[];
+  height?: number;
+  format?: (value: number) => string;
+  axisFormat?: (value: number) => string;
+  totalLabel?: string;
+  /** The chart in a sentence, for a screen reader: what it shows and its headline. */
+  ariaLabel: string;
+  legend?: boolean;
+  className?: string;
+}) {
+  const [active, setActive] = useState<number | null>(null);
+  const hintId = useId();
+  const totals = points.map((point) => series.reduce((sum, item) => sum + (point.values[item.id] ?? 0), 0));
+  // A chart of counts gets whole-number ticks; any other axis gets as many decimals as its step needs,
+  // so two gridlines never wear the same label.
+  const ticks = niceTicks(Math.max(...totals, 0), 4, totals.every(Number.isInteger));
+  const top = ticks[ticks.length - 1] ?? 1;
+  const step = ticks[1] ?? 1;
+  const sayTick = axisFormat ?? ((value: number) => formatNumber(value, step >= 1 ? 0 : step >= 0.1 ? 1 : 2));
+  const current = active !== null ? points[active] : undefined;
+  const tickOrder = new Map(points.flatMap((point, index) => (point.tick ? [index] : [])).map((index, order) => [index, order]));
+  const crowded = tickOrder.size > 6;
+  const readout =
+    current && active !== null
+      ? {
+          title: current.label,
+          rows: (series.length > 1 ? series.filter((item) => (current.values[item.id] ?? 0) > 0) : series).map((item) => ({
+            key: item.id,
+            label: item.label,
+            value: format(current.values[item.id] ?? 0),
+            color: series.length > 1 ? item.color : undefined,
+          })),
+          total: series.length > 1 ? { label: totalLabel, value: format(totals[active] ?? 0) } : undefined,
+        }
+      : null;
+  return (
+    <div className={cn("@container/chart flex min-w-0 flex-col gap-2", className)} data-chart="columns">
+      {legend ? <ChartLegend series={series} /> : null}
+      <div className="flex min-w-0 gap-2">
+        <div aria-hidden className="relative w-7 shrink-0 text-right text-caption text-text-tertiary tabular-nums" style={{ height }}>
+          {ticks.map((tick) => (
+            <span key={tick} data-axis-tick className="absolute right-0 translate-y-1/2 leading-none" style={{ bottom: `${(tick / top) * 100}%` }}>
+              {sayTick(tick)}
+            </span>
+          ))}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div
+            role="img"
+            aria-label={ariaLabel}
+            aria-describedby={hintId}
+            tabIndex={0}
+            className="focus-ring-inset relative rounded-sm"
+            style={{ height }}
+            onPointerLeave={() => setActive(null)}
+            onBlur={() => setActive(null)}
+            onKeyDown={(event) => {
+              const next = stepSlot(active, event.key, points.length);
+              if (next === undefined) return;
+              event.preventDefault();
+              setActive(next);
+            }}
+          >
+            {ticks.map((tick) => (
+              <span key={tick} aria-hidden data-gridline className="absolute inset-x-0 h-px" style={{ bottom: `${(tick / top) * 100}%`, background: tick === 0 ? "var(--viz-baseline)" : "var(--viz-grid)" }} />
+            ))}
+            <div className="absolute inset-0 flex items-end">
+              {points.map((point, index) => (
+                <div
+                  key={point.key}
+                  className={cn("relative flex h-full min-w-0 flex-1 items-end justify-center", active === index && "bg-[color-mix(in_oklab,var(--foreground)_5%,transparent)]")}
+                  onPointerEnter={() => setActive(index)}
+                  onPointerDown={() => setActive(index)}
+                  data-slot-index={index}
+                  data-active={active === index ? "" : undefined}
+                >
+                  <div className="flex w-[70%] max-w-6 min-w-[3px] flex-col-reverse gap-[2px]" style={{ height: `${((totals[index] ?? 0) / top) * 100}%` }}>
+                    {series
+                      .filter((item) => (point.values[item.id] ?? 0) > 0)
+                      .map((item, order, drawn) => (
+                        <span
+                          key={item.id}
+                          data-mark
+                          className={cn("min-h-[2px] w-full", order === drawn.length - 1 && "rounded-t-[4px]")}
+                          // A share of the stack, not the raw value: grow factors that add up to under 1 would leave the box part empty.
+                          style={{ flexGrow: Number((((point.values[item.id] ?? 0) / (totals[index] || 1)) * 100).toFixed(4)), flexBasis: 0, background: item.color }}
+                        />
+                      ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+            {readout && active !== null ? <ChartTooltip {...readout} className="top-1" style={tooltipAnchor(active, points.length)} /> : null}
+          </div>
+          <p id={hintId} className="sr-only">Use the left and right arrow keys to read each column.</p>
+          <p aria-live="polite" className="sr-only" data-chart-readout>
+            {readout ? slotReadout(readout) : ""}
+          </p>
+          <div aria-hidden className="relative mt-1.5 h-3.5 text-caption text-text-tertiary">
+            {points.map((point, index) =>
+              point.tick ? (
+                // A crowded axis drops every second tick when the chart is narrow, so labels never collide.
+                <span key={point.key} className={cn("absolute -translate-x-1/2 leading-none whitespace-nowrap", crowded && tickOrder.get(index)! % 2 === 1 && "@max-[440px]/chart:hidden")} style={{ left: `${((index + 0.5) / points.length) * 100}%` }}>
+                  {point.tick}
+                </span>
+              ) : null,
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Where a key moves the active slot of `count`: the slot to show, `null` to clear, `undefined`
+ * when the key is not the chart's (it then does nothing and is not swallowed). Escape with nothing
+ * active is left alone, so it still closes whatever the chart sits in.
+ */
+export function stepSlot(active: number | null, key: string, count: number): number | null | undefined {
+  if (key === "Escape") return active === null ? undefined : null;
+  if (count === 0) return undefined;
+  if (key === "ArrowRight") return active === null ? 0 : Math.min(count - 1, active + 1);
+  if (key === "ArrowLeft") return active === null ? count - 1 : Math.max(0, active - 1);
+  if (key === "Home") return 0;
+  if (key === "End") return count - 1;
+  return undefined;
+}
+
+/** The readout in one sentence for the live region: "Nov 4: 12 h Staple, 3 h Docs; 15 h Total". */
+export function slotReadout({ title, rows, total }: { title: string; rows: readonly { label: string; value: string }[]; total?: { label: string; value: string } }): string {
+  const parts = rows.length === 1 && !total ? rows[0]!.value : rows.map((row) => `${row.value} ${row.label}`).join(", ");
+  return `${title}: ${parts}${total ? `; ${total.value} ${total.label}` : ""}`;
+}
+
+/** The chart as rows, for the widget's Table switch. */
+export function columnChartTable(firstColumn: string, series: readonly ChartSeries[], points: readonly ColumnPoint[], totalLabel = "Total"): WidgetTable {
+  const many = series.length > 1;
+  return {
+    columns: [firstColumn, ...series.map((item) => item.label), ...(many ? [totalLabel] : [])],
+    rows: points.map((point) => {
+      const values = series.map((item) => point.values[item.id] ?? 0);
+      return [point.label, ...values, ...(many ? [values.reduce((sum, value) => sum + value, 0)] : [])];
+    }),
+  };
+}

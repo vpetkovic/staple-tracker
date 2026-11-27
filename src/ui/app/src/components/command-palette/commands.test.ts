@@ -179,10 +179,11 @@ describe("buildCommands", () => {
      * meaning "every view switch". The action type is what this test was always about.
      */
     const views = buildCommands(context({ view: "tree" })).filter((c) => c.action.type === "view");
-    // In the navigation's order, the view on screen left out.
-    expect(views.map((c) => c.id)).toEqual(["view:attention", "view:autopilot", "view:queue", "view:graph", "view:milestones", "view:plan", "view:calibration", "view:budget"]);
+    // In the navigation's order, the view on screen left out. Estimates keeps its command (it opens
+    // the Estimates lens of Analytics), and Analytics is last, as on the rail.
+    expect(views.map((c) => c.id)).toEqual(["view:attention", "view:autopilot", "view:queue", "view:graph", "view:milestones", "view:plan", "view:calibration", "view:budget", "view:analytics"]);
     const fromInbox = buildCommands(context({ view: "attention" })).filter((c) => c.action.type === "view");
-    expect(fromInbox.map((c) => c.id)).toEqual(["view:autopilot", "view:queue", "view:tree", "view:graph", "view:milestones", "view:plan", "view:calibration", "view:budget"]);
+    expect(fromInbox.map((c) => c.id)).toEqual(["view:autopilot", "view:queue", "view:tree", "view:graph", "view:milestones", "view:plan", "view:calibration", "view:budget", "view:analytics"]);
   });
 
   it("names the calibration view in plain words, and still finds it by its old name", () => {

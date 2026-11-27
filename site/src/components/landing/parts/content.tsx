@@ -203,7 +203,7 @@ export const COMPARE: {term: string; tracker: string; staple: string}[] = [
 export const FACTS: {value: string; label: string}[] = [
   {value: '1', label: 'SQLite file per repository: no account, no server to run'},
   {value: '65', label: 'MCP tools, each calling the same store method as the CLI'},
-  {value: '6', label: 'views in the web UI, from Tasks to Usage'},
+  {value: '6', label: 'views in the web UI, from Tasks to Analytics'},
   {value: '0', label: 'network calls until you opt in to sync or live usage checks'},
 ];
 

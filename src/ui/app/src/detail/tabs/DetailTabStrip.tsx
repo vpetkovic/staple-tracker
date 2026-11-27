@@ -31,7 +31,10 @@ export function DetailTabStrip({ sheet, compact = false, label, items, active, m
     const strip = stripRef.current;
     const trigger = strip?.querySelector<HTMLElement>('[role="tab"][data-state="active"]');
     if (!strip || !trigger || strip.scrollWidth <= strip.clientWidth) return;
-    strip.scrollTo({ left: Math.max(0, trigger.offsetLeft - (strip.clientWidth - trigger.offsetWidth) / 2), behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    // Measured against the strip itself: `offsetLeft` is relative to the nearest positioned ancestor,
+    // which beside a page name is the header row, and would scroll the active tab out of view.
+    const offset = trigger.getBoundingClientRect().left - strip.getBoundingClientRect().left + strip.scrollLeft;
+    strip.scrollTo({ left: Math.max(0, offset - (strip.clientWidth - trigger.offsetWidth) / 2), behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
   }, [active]);
   return <div className="staple-detail-tabfade min-w-0" data-fade-start={edges.start ? "" : undefined} data-fade-end={edges.end ? "" : undefined}>
     <TabsList ref={stripRef} aria-label={label} variant={sheet ? "default" : "line"} data-size={sheet && compact ? "compact" : undefined} className={cn("staple-detail-tabstrip w-full justify-start", sheet && "staple-detail-segments")}>

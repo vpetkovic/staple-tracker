@@ -231,7 +231,7 @@ function useRailReads(): RailReads {
 }
 
 /** The rail's rows of a zone, Plan only while planning is on. */
-function zoneItems(id: "views" | "machine", planningEnabled: boolean | undefined): readonly NavItem[] {
+function zoneItems(id: "views" | "machine" | "foot", planningEnabled: boolean | undefined): readonly NavItem[] {
   return navGroup(id).items.filter((entry) => entry.view !== "plan" || planningEnabled === true);
 }
 
@@ -314,6 +314,10 @@ function FullRail({ reads }: { reads: RailReads }) {
           <li>
             <IntegrationsRailRow connections={reads.connections} onClick={() => openSettings({ section: "integrations" })} />
           </li>
+          {/* Under Integrations: what reads every workspace on this computer (`FOOT_VIEWS`). */}
+          {zoneItems("foot", session.planningEnabled).map((entry) => (
+            <NavItemRow key={entry.id} entry={entry} projects={reads.projects} />
+          ))}
           {/* Under a finger the theme's hit area reaches 6px past its box: 8px apart, it never covers Settings. */}
           <li className="flex items-center gap-1 pointer-coarse:gap-2">
             <button
@@ -761,6 +765,7 @@ function NarrowRail({ reads }: { reads: RailReads }) {
             onClick={() => openSettings({ section: "integrations" })}
             data-nav-integrations
           />
+          {zoneItems("foot", session.planningEnabled).map(viewRow)}
           <IconRow
             icon={Settings}
             label="Settings"

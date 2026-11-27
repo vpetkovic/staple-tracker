@@ -13,7 +13,7 @@
  */
 import { planActionItems, type OfferedPlanAction } from "../../detail/plain-actions";
 import { HANDOFF_RISKS, handoffRiskOf, type HandoffRisk } from "../../lib/filters";
-import { selectionTarget, viewLabel, viewUsesIssueFilters, type Selection, type ViewName } from "../../lib/session";
+import { UNLISTED_VIEWS, selectionTarget, viewLabel, viewUsesIssueFilters, type Selection, type ViewName } from "../../lib/session";
 import { SEED_SETTINGS } from "../../lib/settings";
 import { NAV_GROUPS } from "../nav/nav-model";
 import {
@@ -273,8 +273,12 @@ function issueCount(count: number): string {
  * Every non-issue command, in natural order. Ordering for display is a separate
  * concern — see `orderCommands`.
  */
-/** Every view in the navigation's order: the rail's zones, top to bottom (`NAV_GROUPS`). */
-const NAV_ORDER: readonly ViewName[] = NAV_GROUPS.flatMap((group) => group.items.map((entry) => entry.view));
+/**
+ * Every view in the navigation's order: the rail's zones, top to bottom (`NAV_GROUPS`). A view with
+ * no row of its own (`UNLISTED_VIEWS`: Estimates, a lens of Analytics) keeps its command, after the
+ * workspace's records.
+ */
+const NAV_ORDER: readonly ViewName[] = NAV_GROUPS.flatMap((group) => [...group.items.map((entry) => entry.view), ...(group.id === "views" ? UNLISTED_VIEWS : [])]);
 
 /** Words the pages were once called, so muscle memory still finds them in the palette. */
 const FORMER_VIEW_NAMES: Partial<Record<ViewName, string>> = {

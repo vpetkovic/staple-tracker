@@ -27,7 +27,7 @@ import type { Resource } from "./useStaple";
  * preference. What the user sees is `VIEW_LABELS` — the tree view is called "Tasks"
  * everywhere a human reads it.
  */
-export const VIEWS = ["tree", "queue", "attention", "autopilot", "graph", "milestones", "plan", "calibration", "budget"] as const;
+export const VIEWS = ["tree", "queue", "attention", "autopilot", "graph", "milestones", "plan", "calibration", "budget", "analytics"] as const;
 export type ViewName = (typeof VIEWS)[number];
 
 /**
@@ -55,6 +55,9 @@ export const VIEW_LABELS: Record<ViewName, string> = {
   graph: "Graph",
   milestones: "Milestones",
   plan: "Plan",
+  // What the work delivered and what it cost (views/analytics): capacity, delivery, speed,
+  // reliability, and the return on AI spend as a lens of the same page.
+  analytics: "Analytics",
   // The ids stay `calibration` and `budget` (routes, saved preferences, commands key off them);
   // readers see one plain name for each, the same in the rail, the tab bar, the header and
   // the palette, and the same word Settings uses for the matching section ("Usage").
@@ -68,7 +71,37 @@ export const VIEW_LABELS: Record<ViewName, string> = {
  * lists them at its foot with Integrations and Settings (`components/nav/nav-model.ts`),
  * apart from the workspace's views.
  */
-export const MACHINE_VIEWS: readonly ViewName[] = ["budget"];
+export const MACHINE_VIEWS: readonly ViewName[] = ["budget", "analytics"];
+
+/**
+ * The machine views that sit at the very foot of the rail, under Integrations. Analytics reads
+ * every workspace on this computer (it has its own workspace filter), so it is not one
+ * workspace's view and not a provider reading either.
+ */
+export const FOOT_VIEWS: readonly ViewName[] = ["analytics"];
+
+/**
+ * Views that are reached through another view and so are not listed in the navigation. Estimates
+ * is a lens of Analytics; its own address keeps working.
+ */
+export const UNLISTED_VIEWS: readonly ViewName[] = ["calibration"];
+
+/** Analytics asked to open on one of its lenses by something other than its own tabs. `seq` tells one ask from the next. */
+export interface AnalyticsLanding {
+  lens: "estimates";
+  /** The workspace the figures are for; "" is every workspace. */
+  workspace: string;
+  seq: number;
+}
+
+/**
+ * WHERE A REQUEST FOR A VIEW LANDS. Estimates is a lens of Analytics: asking for the `calibration`
+ * view (its old address `?view=estimate-accuracy`, the palette's "Go to Estimates") opens Analytics
+ * on the Estimates lens for the same workspace. Every other view lands on itself, with no landing.
+ */
+export function viewLanding(view: ViewName, ws: string, seq: number): { view: ViewName; analytics: AnalyticsLanding | null } {
+  return view === "calibration" ? { view: "analytics", analytics: { lens: "estimates", workspace: ws, seq } } : { view, analytics: null };
+}
 
 export function isMachineView(view: ViewName): boolean {
   return MACHINE_VIEWS.includes(view);
@@ -102,6 +135,7 @@ const VIEW_CONTROLS: Record<ViewName, ViewControls> = {
   graph: { arrange: false, filter: true, done: false },
   milestones: { arrange: false, filter: false, done: true },
   plan: { arrange: false, filter: false, done: false },
+  analytics: { arrange: false, filter: false, done: false },
   queue: { arrange: false, filter: false, done: false },
   attention: { arrange: false, filter: false, done: false },
   autopilot: { arrange: false, filter: false, done: false },
@@ -204,6 +238,13 @@ export interface StapleSession {
 
   view: ViewName;
   setView: (view: ViewName) => void;
+
+  /**
+   * Where the last navigation asked Analytics to open (`viewLanding`), or null. Set when the
+   * Estimates view was asked for, cleared by any other navigation; the Analytics view reads it
+   * when it opens and whenever it changes.
+   */
+  analyticsLanding?: AnalyticsLanding | null;
 
   /**
    * THE MILESTONE THE PAGE IS ON — R4c (STA-188), `?view=milestones&focus=<identifier>`.

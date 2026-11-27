@@ -10,6 +10,8 @@ import MilestoneGoal from './MilestoneGoal';
 import IdeaToShipped from './IdeaToShipped';
 import TrackerSync from './TrackerSync';
 import Budget from './Budget';
+import Analytics from './Analytics';
+import ReturnOnSpend from './ReturnOnSpend';
 import OneStore from './OneStore';
 
 export type SceneEntry = {
@@ -35,5 +37,7 @@ export const SCENES: SceneEntry[] = [
   {name: 'IdeaToShipped', feature: 'Planning (experimental)', story: 'An idea is shaped, scheduled on a horizon, scaffolded into an epic and its tasks, and ships.', Component: IdeaToShipped},
   {name: 'TrackerSync', feature: 'Tracker links', story: 'staple beside GitHub, Linear, Azure DevOps and ClickUp, which it reads, with writing back marked planned.', Component: TrackerSync},
   {name: 'Budget', feature: 'Budget', story: 'Provider limits as gauges with the reserve, and an estimate against what the work took.', Component: Budget},
+  {name: 'Analytics', feature: 'Analytics', story: 'Agent capacity, features shipped and time to done arrive, then agent time per day stacks up by workspace.', Component: Analytics},
+  {name: 'ReturnOnSpend', feature: 'Analytics: return', story: 'The people the tickets would have needed, what hiring them costs against the AI instead, and the return on total cost.', Component: ReturnOnSpend},
   {name: 'OneStore', feature: 'One store', story: 'A command in the terminal changes the same ticket in the web UI and over MCP.', Component: OneStore},
 ];

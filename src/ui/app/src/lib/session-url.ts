@@ -39,6 +39,7 @@ export const VIEW_SLUGS: Record<ViewName, string> = {
   graph: "graph",
   milestones: "milestones",
   plan: "plan",
+  analytics: "analytics",
   calibration: "estimate-accuracy",
   budget: "budget",
 };

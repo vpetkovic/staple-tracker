@@ -83,7 +83,7 @@ export function PlainCard({
  * tooltip so it works the same on a touch screen, and the text is in the markup (hidden until
  * opened) so it is never lost.
  */
-export function HelpToggle({ children, label = "What does this mean?" }: { children: ReactNode; label?: string }) {
+export function HelpToggle({ children, label = "What does this mean?", dense = false }: { children: ReactNode; label?: string; /** Keep the desk height on a touch screen; the tap area grows invisibly instead. */ dense?: boolean }) {
   const [open, setOpen] = useState(false);
   const id = useId();
   return (
@@ -93,7 +93,7 @@ export function HelpToggle({ children, label = "What does this mean?" }: { child
         aria-expanded={open}
         aria-controls={id}
         onClick={() => setOpen((value) => !value)}
-        className={cn("inline-flex min-h-6 items-center gap-1.5 rounded-md text-[12px] text-muted-foreground hover:text-foreground [@media(pointer:coarse)]:min-h-11", FOCUS)}
+        className={cn("inline-flex min-h-6 items-center gap-1.5 rounded-md text-[12px] text-muted-foreground hover:text-foreground", dense ? "relative before:absolute before:-inset-y-1.5 before:inset-x-0 before:content-['']" : "[@media(pointer:coarse)]:min-h-11", FOCUS)}
       >
         <CircleHelp aria-hidden className="size-3.5" />
         {label}
@@ -106,12 +106,13 @@ export function HelpToggle({ children, label = "What does this mean?" }: { child
 }
 
 /** "Show details": a native disclosure, closed by default, holding the technical figures unchanged. */
-export function ShowDetails({ children, testId, label = "Show details" }: { children: ReactNode; testId?: string; label?: string }) {
+export function ShowDetails({ children, testId, label = "Show details", dense = false }: { children: ReactNode; testId?: string; label?: string; dense?: boolean }) {
   return (
     <details className="group open:basis-full" data-testid={testId} data-details>
       <summary
         className={cn(
-          "inline-flex min-h-6 cursor-pointer list-none items-center gap-1 rounded-md text-[12px] text-muted-foreground select-none hover:text-foreground [&::-webkit-details-marker]:hidden [@media(pointer:coarse)]:min-h-11",
+          "inline-flex min-h-6 cursor-pointer list-none items-center gap-1 rounded-md text-[12px] text-muted-foreground select-none hover:text-foreground [&::-webkit-details-marker]:hidden",
+          dense ? "relative before:absolute before:-inset-y-1.5 before:inset-x-0 before:content-['']" : "[@media(pointer:coarse)]:min-h-11",
           FOCUS,
         )}
       >

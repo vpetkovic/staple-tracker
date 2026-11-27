@@ -685,12 +685,16 @@ export function unreadableLine(
 // ------------------------------------------------------------------ estimate accuracy
 
 const KIND_NAMES: Record<string, string> = { bug: "Bug fixes", task: "Tasks", epic: "Epics", feature: "Features", chore: "Chores", spike: "Spikes" };
+/** A kind of ticket as a plural noun: "Bug fixes"; a kind a workspace added is capitalised and made plural. */
+export const kindName = (kind: string): string => KIND_NAMES[kind] ?? `${upperFirst(kind)}${kind.endsWith("s") ? "" : "s"}`;
+/** The same, for the kinds staple ships with; undefined for a kind a workspace added. */
+export const builtinKindName = (kind: string): string | undefined => KIND_NAMES[kind];
 const known = (value: string): boolean => value !== "*" && value !== "unknown";
 
 /** A cohort key as a noun phrase: "Bug fixes (high priority)"; dimensions nobody recorded are left out. */
 export function cohortName(key: CalibrationCohort["key"]): string {
   if (key.kind === "*") return "All finished work";
-  const kind = KIND_NAMES[key.kind] ?? `${upperFirst(key.kind)}${key.kind.endsWith("s") ? "" : "s"}`;
+  const kind = kindName(key.kind);
   const rest: string[] = [];
   if (known(key.priority)) rest.push(`${key.priority} priority`);
   if (known(key.workType)) rest.push(`type ${key.workType}`);

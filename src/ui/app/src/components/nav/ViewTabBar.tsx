@@ -14,8 +14,8 @@
  * and Tasks is the work itself.
  *
  * The fifth tab is More, a sheet in the rail's order: the scope's other views (Graph,
- * Milestones, Plan with planning on, Estimates); its projects (each narrows Tasks to itself,
- * each with its settings, then New project); and This computer (Usage, Integrations, Settings,
+ * Milestones, Plan with planning on); its projects (each narrows Tasks to itself, each with its
+ * settings, then New project); and This computer (Usage, Integrations, Analytics, Settings,
  * Dark mode). More is drawn as current while one of its views is on screen. The sheet closes
  * before any dialog it opens, so a dialog never stacks on it.
  *
@@ -299,14 +299,17 @@ function MoreSheetProjects({ onClose, onCloseThen }: { onClose: () => void; onCl
   );
 }
 
-/** This computer: Usage, Integrations, Settings and the theme, the same whichever workspace is chosen. */
+/** This computer: Usage, Integrations, Analytics, Settings and the theme, the same whichever workspace is chosen. */
 function MoreSheetMachine({
   machine,
+  foot,
   view,
   onChoose,
   onCloseThen,
 }: {
   machine: readonly ViewName[];
+  /** The views listed under Integrations, as on the rail. */
+  foot: readonly ViewName[];
   view: ViewName;
   onChoose: (view: ViewName) => void;
   onCloseThen: (open: () => void) => void;
@@ -332,6 +335,9 @@ function MoreSheetMachine({
           {attention ? <AttentionMark /> : null}
         </button>
       </li>
+      {foot.map((entry) => (
+        <ViewRow key={entry} entry={entry} view={view} onChoose={onChoose} />
+      ))}
       <li>
         <button
           type="button"
@@ -385,11 +391,12 @@ export function MoreSheetBody({
   onCloseThen: (open: () => void) => void;
 }) {
   const session = useSession();
+  const { machine, foot } = moreSheetViews(session.planningEnabled);
   return (
     <>
       <MoreSheetRows view={session.view} planningEnabled={session.planningEnabled} onChoose={onChoose} />
       <MoreSheetProjects onClose={onClose} onCloseThen={onCloseThen} />
-      <MoreSheetMachine machine={moreSheetViews(session.planningEnabled).machine} view={session.view} onChoose={onChoose} onCloseThen={onCloseThen} />
+      <MoreSheetMachine machine={machine} foot={foot} view={session.view} onChoose={onChoose} onCloseThen={onCloseThen} />
     </>
   );
 }

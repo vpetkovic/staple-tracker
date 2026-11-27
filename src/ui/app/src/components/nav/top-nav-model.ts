@@ -5,7 +5,7 @@
  * file only decides how the navigation words and marks them, so it is tested without a DOM.
  */
 import { liveStateText, type RunTone } from "@/lib/run-text";
-import { TAB_VIEWS, VIEWS, isMachineView, type ViewName } from "@/lib/session";
+import { FOOT_VIEWS, TAB_VIEWS, UNLISTED_VIEWS, VIEWS, isMachineView, type ViewName } from "@/lib/session";
 import type { InboxBadge } from "@/lib/attention";
 import type { RunEntry } from "@/lib/types";
 
@@ -121,7 +121,9 @@ export function moreIsCurrent(view: ViewName): boolean {
 }
 
 /** What the More sheet lists: every view not on the bar, the machine's under "This computer". */
-export function moreSheetViews(planningEnabled: boolean | undefined): { views: ViewName[]; machine: ViewName[] } {
-  const rest = VIEWS.filter((view) => !TAB_VIEWS.includes(view) && (view !== "plan" || planningEnabled === true));
-  return { views: rest.filter((view) => !isMachineView(view)), machine: rest.filter(isMachineView) };
+export function moreSheetViews(planningEnabled: boolean | undefined): { views: ViewName[]; machine: ViewName[]; foot: ViewName[] } {
+  const rest = VIEWS.filter((view) => !TAB_VIEWS.includes(view) && !UNLISTED_VIEWS.includes(view) && (view !== "plan" || planningEnabled === true));
+  const machine = rest.filter(isMachineView);
+  // As on the rail: the machine's views, Integrations, then what reads every workspace (`FOOT_VIEWS`).
+  return { views: rest.filter((view) => !isMachineView(view)), machine: machine.filter((view) => !FOOT_VIEWS.includes(view)), foot: machine.filter((view) => FOOT_VIEWS.includes(view)) };
 }

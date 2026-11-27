@@ -109,9 +109,9 @@ describe("the narrow rail", () => {
       "Graph",
       "Milestones",
       "Plan",
-      "Estimates",
       "Usage",
       "Integrations",
+      "Analytics",
       "Settings",
       "Dark mode",
     ]);

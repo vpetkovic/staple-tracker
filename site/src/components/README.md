@@ -53,6 +53,8 @@ while you check a change.
 | `IdeaToShipped` | Experimental planning: an idea is shaped, scheduled on a horizon, scaffolded into an epic and its tasks, and ships. |
 | `TrackerSync` | staple beside GitHub, Linear, Azure DevOps and ClickUp (Shipped); between them, Reads is Shipped and Writes back is Planned. |
 | `Budget` | Provider limits as gauges with the reserve; an estimate against what the work took. |
+| `Analytics` | Agent capacity, features shipped and time to done arrive; agent time per day stacks up by workspace. |
+| `ReturnOnSpend` | Role by role, what hiring would cost against the AI instead; then the return on total cost on a scale with break-even marked. |
 | `OneStore` | A command in the terminal changes the same ticket in the web UI and over MCP. |
 
 Use one with no props; it fills the width of its container:

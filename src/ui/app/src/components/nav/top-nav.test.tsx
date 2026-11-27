@@ -216,7 +216,8 @@ describe("the More sheet's views", () => {
 
   it("lists the workspace's other views first, with no label, the current one marked", () => {
     const markup = sheet("milestones", true);
-    expect([...markup.matchAll(/data-more-view="([^"]+)"/g)].map((match) => match[1])).toEqual(["graph", "milestones", "plan", "calibration"]);
+    // Estimates is a lens of Analytics now, so it is not listed.
+    expect([...markup.matchAll(/data-more-view="([^"]+)"/g)].map((match) => match[1])).toEqual(["graph", "milestones", "plan"]);
     expect(markup).not.toContain("<h3");
     expect(markup).toMatch(/data-more-view="milestones" aria-current="page"/);
     expect(markup.match(/ aria-current="/g)).toHaveLength(1);
