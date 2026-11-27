@@ -295,8 +295,10 @@ an idea is still being worked out is linked as exploration work: **Link research
 **Research and POCs** on the idea's Plan tab, `staple idea adopt <id> <issue> --research`, or
 `start_idea` with `research`. It shows in its own list on the idea (and under Connections), and it
 does not make the idea started, count toward its progress or dates, or join its horizon. An
-exploring, shaped or started idea can link research; `staple idea unlink` removes either kind of
-link. Linking an issue the other way moves it between the two lists.
+exploring, shaped, started or shipped idea can link and unlink research (`staple idea unlink`
+removes either kind of link); a dropped idea keeps its research until it is restored, and one that
+holds research is restored to exploring or shaped, not raw. Linking an issue the other way moves it
+between the two lists.
 
 ## 7. From started to shipped
 
@@ -494,7 +496,7 @@ come back as they were.
 | Exploring | The same, plus schedule on a horizon, plan dates, adopt existing work, link or unlink research and POCs, and mark delivered outside the tracker |
 | Shaped | Edit, schedule, plan dates, scaffold, promote, adopt, link or unlink research and POCs, mark delivered outside the tracker, back to exploring, drop |
 | Started | Re-plan, adopt more work, unlink work, link or unlink research and POCs, reset the baseline, open the epic; scaffold again only if it was scaffolded; mark shaped if it started while exploring |
-| Shipped | Open the epic, or link more work (open work reopens it). An idea that was never promoted takes no more edits, unless it was marked delivered outside the tracker: then it is still edited, and you can clear the mark. |
+| Shipped | Open the epic, link more work (open work reopens it), or link and unlink research. An idea that was never promoted takes no more edits, unless it was marked delivered outside the tracker: then it is still edited, and you can clear the mark. |
 | Dropped | Restore |
 | Horizon planned | Rename, date, reorder, run setting, remove |
 | Horizon active | Rename, date, reorder, queue, run setting |

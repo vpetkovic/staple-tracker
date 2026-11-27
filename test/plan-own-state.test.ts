@@ -208,7 +208,7 @@ describe("a promoted record is an ordinary epic", () => {
 
   it("takes title and brief edits once shipped, on the plan and on the tracker alike", () => {
     const ref = shippedEpic();
-    expect(actionsOf(ref)).toEqual(["adopt", "open_epic", "edit", "ask", "decide"]);
+    expect(actionsOf(ref)).toEqual(["adopt", "link_research", "unlink_research", "open_epic", "edit", "ask", "decide"]);
     expect(plan.update(ref, { title: "Renamed on the plan" }, "agent").title).toBe("Renamed on the plan");
     expect(store.updateIssue(ref, { title: "Renamed on the tracker" }, "agent").title).toBe("Renamed on the tracker");
     expect(plan.update(ref, { brief: "Written after it landed" }, "agent").state).toBe("shipped");
@@ -283,7 +283,7 @@ describe("an idea's documents and files are its edit", () => {
 });
 
 describe("an exploring idea adopts work", () => {
-  const STARTED = ["edit", "ask", "decide", "schedule", "plan_dates", "reorder", "adopt", "unlink", "reset_baseline"];
+  const STARTED = ["edit", "ask", "decide", "schedule", "plan_dates", "reorder", "adopt", "unlink", "link_research", "unlink_research", "reset_baseline"];
 
   it("links existing work while exploring and reads started, its maturity still exploring and still the person's to shape", () => {
     const ref = idea("Billing export", "exploring");

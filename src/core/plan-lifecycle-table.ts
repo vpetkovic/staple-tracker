@@ -40,7 +40,7 @@ export const IDEA_ACTIONS = {
   adopt: { label: "Adopt existing work", verb: "linked to work", who: "anyone" },
   unlink: { label: "Unlink work", verb: "unlinked from work", who: "anyone" },
   /** Research or a proof of concept: listed on the record on its own, and nothing it is measured by (it starts nothing). */
-  link_research: { label: "Link research or a POC", verb: "linked to research", who: "anyone" },
+  link_research: { label: "Link research", verb: "linked to research", who: "anyone" },
   unlink_research: { label: "Unlink research", verb: "unlinked from research", who: "anyone" },
   reset_baseline: { label: "Reset baseline to the plan", verb: "re-baselined", who: "person" },
   open_epic: { label: "Open the epic", verb: "opened as an epic", who: "anyone" },
@@ -56,8 +56,9 @@ export const IDEA_ACTION_IDS = Object.keys(IDEA_ACTIONS) as IdeaAction[];
  * scheduled, promoted or linked to work while it is raw. Exploring may reserve a horizon slot and
  * link work that already exists, which starts it while its scope is still open. Shaped is ready: it is scheduled, promoted or
  * linked to existing work, or scaffolded: promoted with its task breakdown as the epic's tasks.
- * Exploring, shaped and started may also link research or a proof of concept, which is listed on
- * its own and starts nothing: an exploring record with only research linked is still exploring.
+ * Exploring, shaped, started and shipped may also link research or a proof of concept, and unlink
+ * it, which is listed on its own and starts nothing: an exploring record with only research linked
+ * is still exploring, and a shipped one stays shipped.
  * Started (promoted, or linked to work) is re-planned, not re-shaped, and never promoted again;
  * one that was scaffolded scaffolds again only to add the rows written since. Exploring and shaped may be marked delivered outside the tracker by
  * the person, which ships them with no ticket. Shipped offers no edits: only linking more work (history that landed
@@ -71,7 +72,7 @@ export const IDEA_LIFECYCLE: Readonly<Record<IdeaState, readonly IdeaAction[]>> 
   exploring: ["edit", "ask", "decide", "shape", "drop", "schedule", "plan_dates", "reparent", "reorder", "adopt", "link_research", "unlink_research", "mark_delivered"],
   shaped: ["edit", "ask", "decide", "unshape", "drop", "schedule", "plan_dates", "reparent", "reorder", "promote", "scaffold", "adopt", "link_research", "unlink_research", "mark_delivered"],
   started: ["edit", "ask", "decide", "schedule", "plan_dates", "reorder", "scaffold", "adopt", "unlink", "link_research", "unlink_research", "reset_baseline", "open_epic"],
-  shipped: ["adopt", "open_epic"],
+  shipped: ["adopt", "link_research", "unlink_research", "open_epic"],
   dropped: ["restore"],
 };
 

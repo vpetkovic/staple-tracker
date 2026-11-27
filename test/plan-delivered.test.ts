@@ -45,7 +45,7 @@ const finish = (identifier: string) => {
   store.updateIssue(identifier, { status: "done" }, "agent");
 };
 
-const SHIPPED_MARKED = ["adopt", "edit", "ask", "decide", "clear_delivered"];
+const SHIPPED_MARKED = ["adopt", "link_research", "unlink_research", "edit", "ask", "decide", "clear_delivered"];
 
 describe("the derivation, one function per fact", () => {
   it("reads a marked record shipped with nothing linked, and started again while work linked since is open", () => {

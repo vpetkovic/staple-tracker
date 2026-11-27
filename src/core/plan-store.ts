@@ -1538,7 +1538,6 @@ export class PlanStore {
           maturity,
           delivered: delivered !== null,
           ownLinks: ownLinks.length,
-          explorations: (facts.explorations.get(row.id) ?? []).length,
           gate: maturity === "raw" || maturity === "exploring" ? () => this.gateOf(row.id, undefined, subIdea) : () => [],
           scaffolded,
           planIncomplete,
@@ -1796,7 +1795,7 @@ export class PlanStore {
       // Shaped only when the plan, as this write leaves it, passes the gate: marked shaped, or restored into shaped.
       if (action === "shape" || (action === "restore" && maturity === "shaped")) assertShaped(displayRef(row), this.gateOf(row.id, sections));
       // Restored into raw, it is raw: what it holds follows the table, as a capture into raw does (never scheduled, no dates).
-      if (action === "restore" && maturity === "raw") assertRestorableToRaw(row, this.listedHorizon(row.plan_horizon_id));
+      if (action === "restore" && maturity === "raw") assertRestorableToRaw(row, this.listedHorizon(row.plan_horizon_id), planLinksOf(this.db, row.id, "exploration").length > 0);
       // The rest of one write is held to the state its maturity change leads to: shaping a raw idea
       // and scheduling it is one decision. A started or shipped record keeps its state.
       if (before !== "started" && before !== "shipped") state = maturity;
@@ -2255,10 +2254,15 @@ export class PlanStore {
     const linked = [...planLinksOf(this.db, row.id), ...planLinksOf(this.db, row.id, "exploration")];
     const issueId = linked.includes(issueRef.trim()) ? issueRef.trim() : this.store.getIssue(issueRef).id;
     const purpose = planLinkPurposeOf(this.db, row.id, issueId);
-    this.allowIdea(row, purpose === "exploration" ? "unlink_research" : "unlink", {});
-    if (purpose === null) {
-      throw new StapleError("validation", `${issueRef.trim()} is not linked to ${displayRef(row)}.`);
+    const notLinked = `${issueRef.trim()} is not linked to ${displayRef(row)}.`;
+    try {
+      this.allowIdea(row, purpose === "exploration" ? "unlink_research" : "unlink", {});
+    } catch (error) {
+      // Nothing to unlink, in a state that offers no unlinking of work: say both, the missing link first.
+      if (purpose === null && error instanceof StapleError) throw new StapleError(error.code, `${notLinked} ${error.message}`, error.detail);
+      throw error;
     }
+    if (purpose === null) throw new StapleError("validation", notLinked);
     const identifier = (this.db.prepare("SELECT identifier FROM issues WHERE id = ?").get(issueId) as { identifier: string } | undefined)?.identifier ?? issueId;
     this.store.journaled(() => {
       writePlanLink(this.db, row.id, issueId, null);
@@ -2271,12 +2275,14 @@ export class PlanStore {
 
   /** One link, one row, one field of the record's `milestone` entity (`plan-links.ts`). */
   private link(row: PlanRow, issueId: string, actor: string | null, purpose: PlanLinkPurpose = "delivery"): void {
-    if (planLinkPurposeOf(this.db, row.id, issueId) === purpose) return;
+    const previous = planLinkPurposeOf(this.db, row.id, issueId);
+    if (previous === purpose) return;
     const identifier = (this.db.prepare("SELECT identifier FROM issues WHERE id = ?").get(issueId) as { identifier: string }).identifier;
     const value = planLinkValue(actor ?? "unknown", this.store.journal.mutationAt(), purpose);
     writePlanLink(this.db, row.id, issueId, value);
     this.store.journal.record({ entity: "milestone", entityId: row.id, verb: "update", payload: { [planLinkField(issueId)]: value }, actor: actor ?? null });
-    insertEvent(this.db, { kind: "idea_linked", issueId: row.id, actor, payload: { issue: identifier, ...(purpose === "exploration" ? { purpose } : {}) } });
+    // A relink from the other purpose says so: moving work to research can un-start the record.
+    insertEvent(this.db, { kind: "idea_linked", issueId: row.id, actor, payload: { issue: identifier, ...(purpose === "exploration" ? { purpose } : {}), ...(previous !== null ? { from: previous } : {}) } });
     if (purpose === "delivery") this.keepBaselines(row.id, actor);
   }
 
@@ -2492,8 +2498,6 @@ function ideaLifecycle(input: {
   /** Marked delivered outside the tracker: its edits and clearing the mark on top of its row. */
   delivered: boolean;
   ownLinks: number;
-  /** Its exploration links: unlinking research needs one. */
-  explorations: number;
   /** What the shaped gate still needs, read only when the state offers shaping. */
   gate: () => string[];
   /** Scaffolded before: a started record scaffolds again only then, to add new rows. */
@@ -2509,7 +2513,6 @@ function ideaLifecycle(input: {
     const rule = IDEA_ACTIONS[id];
     const offered: OfferedAction = { id, label: rule.label, who: rule.who };
     if (id === "unlink" && input.ownLinks === 0) offered.disabledReason = "Nothing is linked to it.";
-    if (id === "unlink_research" && input.explorations === 0) offered.disabledReason = "No research is linked to it.";
     if (id === "shape") {
       const missing = input.gate();
       if (missing.length > 0) offered.disabledReason = `It needs ${gateSentence(missing).replace(/^it needs /, "")}.`;
@@ -2618,8 +2621,10 @@ function firstLine(text: string | null): string | null {
  * and no plan dates), and a record restored into raw could not shed them: so it is restored to
  * exploring or shaped instead, which hold both.
  */
-function assertRestorableToRaw(row: Pick<PlanRow, "identifier" | "title" | "plan_start" | "plan_target">, onHorizon: boolean): void {
-  const held = [onHorizon ? "a horizon" : null, row.plan_start !== null || row.plan_target !== null ? "planned dates" : null].filter((part): part is string => part !== null);
+function assertRestorableToRaw(row: Pick<PlanRow, "identifier" | "title" | "plan_start" | "plan_target">, onHorizon: boolean, research = false): void {
+  const held = [onHorizon ? "a horizon" : null, row.plan_start !== null || row.plan_target !== null ? "planned dates" : null, research ? "linked research" : null].filter(
+    (part): part is string => part !== null,
+  );
   if (held.length === 0) return;
   const subject = displayRef(row);
   throw new StapleError(

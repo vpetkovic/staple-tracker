@@ -112,17 +112,45 @@ describe("an exploration link on one device", () => {
     expect(members(now().id)).toEqual([]);
   });
 
-  it("unlinks research from an idea that is not started, and offers it only when there is some", () => {
+  it("unlinks research from an idea that is not started", () => {
     const idea = exploringOnNow();
-    const unlinkResearch = () => plan.ideaView(idea).actions.find((a) => a.id === "unlink_research");
-    expect(unlinkResearch()?.disabledReason).toBe("No research is linked to it.");
     expect(plan.ideaView(idea).actions.some((a) => a.id === "unlink")).toBe(false);
+    expect(plan.ideaView(idea).actions.some((a) => a.id === "unlink_research")).toBe(true);
     const spike = store.createIssue({ title: "Spike" }).identifier;
+    // Nothing linked: the refusal says so first, then why work cannot be unlinked here.
+    expect(refused(() => plan.unlink(idea, spike, "agent")).message).toMatch(new RegExp(`^${spike} is not linked to .*cannot be unlinked from work`));
     plan.adopt(idea, spike, "agent", { purpose: "exploration" });
-    expect(unlinkResearch()?.disabledReason).toBeUndefined();
     const after = plan.unlink(idea, spike, "agent");
     expect(after).toMatchObject({ state: "exploring", explorations: [] });
-    expect(refused(() => plan.unlink(idea, spike, "agent")).message).toMatch(/cannot be unlinked from work/);
+    expect(refused(() => plan.unlink(idea, spike, "agent")).message).toMatch(/is not linked to/);
+  });
+
+  it("lets research be removed from a shipped idea, and keeps a dropped idea that holds research from going back to raw", () => {
+    const shipped = plan.capture({ title: "Shipped", maturity: "shaped", plan: READY_PLAN }, "vp", PERSON).id;
+    const spike = store.createIssue({ title: "Spike" }).identifier;
+    const work = store.createIssue({ title: "Work" }).identifier;
+    plan.adopt(shipped, spike, "agent", { purpose: "exploration" });
+    plan.adopt(shipped, work, "agent");
+    finish(work);
+    expect(plan.ideaView(shipped).state).toBe("shipped");
+    expect(plan.unlink(shipped, spike, "agent")).toMatchObject({ state: "shipped", explorations: [] });
+
+    const dropped = plan.capture({ title: "Dropped", maturity: "exploring" }, "vp", PERSON).id;
+    const poc = store.createIssue({ title: "POC" }).identifier;
+    plan.adopt(dropped, poc, "agent", { purpose: "exploration" });
+    plan.update(dropped, { maturity: "dropped" }, "vp", PERSON);
+    expect(refused(() => plan.update(dropped, { maturity: "raw" }, "vp", PERSON)).message).toMatch(/cannot be restored to raw while it holds linked research/);
+    expect(plan.update(dropped, { maturity: "exploring" }, "vp", PERSON)).toMatchObject({ state: "exploring" });
+    expect(plan.unlink(dropped, poc, "agent").explorations).toEqual([]);
+  });
+
+  it("records a relink with the purpose it moved from", () => {
+    const idea = exploringOnNow();
+    const ticket = store.createIssue({ title: "Ticket" }).identifier;
+    plan.adopt(idea, ticket, "agent");
+    plan.adopt(idea, ticket, "agent", { purpose: "exploration" });
+    const payloads = (store.db.prepare("SELECT payload FROM events WHERE issue_id = ? AND kind = 'idea_linked' ORDER BY rowid").all(plan.ideaView(idea).id) as Array<{ payload: string }>).map((e) => JSON.parse(e.payload));
+    expect(payloads.at(-1)).toMatchObject({ issue: ticket, purpose: "exploration", from: "delivery" });
   });
 
   it("refuses research on a raw idea, naming its state", () => {
@@ -184,6 +212,27 @@ describe("an exploration link over sync", () => {
       }
     }
   }
+
+  it("carries research made before the workspace first synced, through its seed", async () => {
+    const server = new FakeSyncServer({ repositoryId: REPO });
+    fleet = new Fleet(server, REPO);
+    const a = fleet.machine("a");
+    const plan = a.store.plan();
+    plan.enable("vp", { person: { via: "settings" } });
+    const now = plan.view().horizons[0]!.id;
+    const idea = plan.capture({ title: "Passkey auth", maturity: "exploring", horizon: now, plan: READY_PLAN }, "vp", PERSON).id;
+    const x = a.store.createIssue({ title: "Spike X" }).identifier;
+    const y = a.store.createIssue({ title: "Work Y" }).identifier;
+    plan.adopt(idea, x, "agent", { purpose: "exploration" });
+    plan.adopt(idea, y, "agent");
+    await a.sync();
+    const b = fleet.machine("b");
+    await b.sync();
+    expect(reading(a, idea)).toMatchObject({ state: "started", linked: [y], exploration: [x], members: [y] });
+    expect(reading(b, idea)).toEqual(reading(a, idea));
+    expect(conflicts(a)).toEqual([]);
+    expect(conflicts(b)).toEqual([]);
+  });
 
   for (const fold of ["service", "tail"] as const) {
     it(`reads the same on a device that received it and a fresh one, and two devices' research merges (${fold} fold)`, async () => {

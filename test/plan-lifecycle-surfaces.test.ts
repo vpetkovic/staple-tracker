@@ -166,6 +166,8 @@ interface Ctx {
   parent: string;
   linked: string | null;
   adoptable: string;
+  /** Research linked to the record before the write, where its state lets it hold some. */
+  research?: string | null;
 }
 
 const maturityWrite = (target: string): Write => ({
@@ -193,6 +195,13 @@ const WRITES: Write[] = [
     http: (ref, c) => ["adopt", { ref, issue: c.adoptable, purpose: "exploration" }],
     mcp: (ref, c) => ["start_idea", { ref, research: c.adoptable }],
     cli: (ref, c) => ["idea", "adopt", ref, c.adoptable, "--research"],
+  },
+  {
+    key: "unlink_research",
+    action: () => "unlink_research",
+    http: (ref, c) => ["unlink", { ref, issue: c.research ?? c.adoptable }],
+    mcp: (ref, c) => ["unlink_idea", { ref, issue: c.research ?? c.adoptable }],
+    cli: (ref, c) => ["idea", "unlink", ref, c.research ?? c.adoptable],
   },
   { key: "unlink", action: () => "unlink", http: (ref, c) => ["unlink", { ref, issue: c.linked ?? c.adoptable }], mcp: (ref, c) => ["unlink_idea", { ref, issue: c.linked ?? c.adoptable }], cli: (ref, c) => ["idea", "unlink", ref, c.linked ?? c.adoptable] },
   { key: "reset_baseline", action: () => "reset_baseline", http: (ref) => ["reset-baseline", { ref }], mcp: null, cli: (ref) => ["idea", "reset-baseline", ref] },
@@ -306,7 +315,13 @@ describe("the idea lifecycle on every surface", () => {
           jobs.push(async () => {
             const { id, linked } = await fixture(state);
             const adoptable = write.key === "adopt" || write.key === "link_research" || (write.key === "unlink" && linked === null) ? await task() : "";
-            const ctx: Ctx = { horizon: horizons[0]!.id, other, parent, linked, adoptable };
+            // Research to unlink, linked as the person first where the state offers linking it.
+            let research: string | null = null;
+            if (write.key === "unlink_research" && ideaOffers(state, "link_research")) {
+              research = await task();
+              expect((await http("/api/plan/adopt", { ref: id, issue: research, purpose: "exploration" })).status).toBe(200);
+            }
+            const ctx: Ctx = { horizon: horizons[0]!.id, other, parent, linked, adoptable: adoptable || (write.key === "unlink_research" ? await task() : ""), research };
             const result = await surface.run(id, ctx);
             const got = outcomeOf(result.ok, result.message, state);
             const want = expected(state, action, surface.agent);

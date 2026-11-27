@@ -350,7 +350,7 @@ function Research({ record, write }: { record: IdeaDetailData; write: PlanWrite 
       <LinkRows links={links} onUnlink={unlinks ? (issue) => void write("unlink", { ref, issue }) : null} kind="research" />
       {adds ? (
         <AddLine
-          placeholder="Link research or a POC by its identifier"
+          placeholder="Link research by its identifier"
           onAdd={(issue) => write("adopt", { ref, issue, purpose: "exploration" })}
           testId="link-research"
           icon={<Link2 className="size-3.5 shrink-0" aria-hidden />}
