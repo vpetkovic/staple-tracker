@@ -26,6 +26,8 @@ import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { insertEvent } from "./event-log.js";
 import { moveIdentifier } from "./identifier-moves.js";
 import { isIdeaNumber, nextIdeaNumber } from "./idea-numbers.js";
+import { newId } from "./ids.js";
+import { SCAFFOLD_ORIGIN_KIND, SPARKED_ORIGIN_KIND, scaffoldOriginId, scaffoldTaskId, sparkedByOf, sparkedIdeasOf, sparkedOriginId, type SparkedBy, type SparkedIdea } from "./plan-provenance.js";
 import { MILESTONE_KIND, MILESTONE_MEMBERSHIP, rankBetween, renumberedRanks } from "./milestones.js";
 import {
   DEFAULT_HORIZONS,
@@ -404,6 +406,10 @@ export interface IdeaDetail {
   breakdownRevision: string;
   /** What scaffolding it would create, while its state offers scaffolding (held back or not); else null. */
   scaffold: ScaffoldPreview | null;
+  /** The ticket whose work sparked it (`capture`'s `sparkedBy`); null when none was named or it is gone. */
+  sparkedBy: SparkedBy | null;
+  /** The ideas its own work sparked, once it is tracker work (promoted); oldest first. */
+  sparked: SparkedIdea[];
   today: string;
 }
 
@@ -457,6 +463,8 @@ export interface CaptureInput {
   horizon?: string | null;
   plannedStart?: string | null;
   plannedTarget?: string | null;
+  /** The ticket whose work sparked it: kept on the idea and listed on the ticket (`plan-provenance.ts`). */
+  sparkedBy?: string | null;
 }
 
 export interface IdeaPatch {
@@ -553,16 +561,7 @@ const QUESTIONS_KEY = "questions";
 const DECISIONS_KEY = "decisions";
 const BRIEF_KEY = "brief";
 
-/**
- * The task Scaffold makes from a breakdown row has an id that follows from the idea's and the
- * row's, the same on every device: two devices scaffolding one idea offline create the same
- * records, and sync merges them as one (design/plan.md, "Scaffold").
- */
-export function scaffoldTaskId(ideaId: string, rowId: string): string {
-  const hex = createHash("sha256").update(`staple:plan-scaffold:${ideaId}:${rowId}`).digest("hex");
-  const variant = ((parseInt(hex[16]!, 16) & 0x3) | 0x8).toString(16);
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
-}
+export { scaffoldTaskId };
 
 /** Stable within a repository, separate from user-created horizons and scaffolded work. */
 function defaultHorizonId(repositoryId: string, name: string): string {
@@ -1579,8 +1578,20 @@ export class PlanStore {
       linked: idea.links.map((id) => this.linkView(id, work)),
       exploration: idea.explorations.map((id) => this.linkView(id, work)),
       ...this.planOf(row.id, idea),
+      ...this.provenanceOf(row.id),
       today,
     };
+  }
+
+  /** The ticket that sparked a record, and the ideas its own work sparked (`plan-provenance.ts`). */
+  private provenanceOf(id: string): Pick<IdeaDetail, "sparkedBy" | "sparked"> {
+    const origin = this.db.prepare("SELECT id, parent_id, origin_kind, origin_id FROM issues WHERE id = ?").get(id) as {
+      id: string;
+      parent_id: string | null;
+      origin_kind: string;
+      origin_id: string | null;
+    };
+    return { sparkedBy: sparkedByOf(this.db, origin), sparked: sparkedIdeasOf(this.db, id) };
   }
 
   /** A record's plan sections, as stored: the document sections and the breakdown's rows. */
@@ -1743,8 +1754,24 @@ export class PlanStore {
     const sections = mergeSections(emptySections(), patch);
     // A record captured here has no sub-idea yet, so its own rows are its breakdown.
     if (maturity === "shaped") assertShaped(subject, shapedGate(sections, extra.questions));
+    if (input.sparkedBy !== undefined && input.sparkedBy !== null && input.sparkedBy.trim() === "") {
+      throw new StapleError("validation", "sparkedBy names the ticket whose work sparked the idea; it was empty. Leave it out to capture an idea no ticket sparked.");
+    }
+    const sparkedBy = input.sparkedBy ? this.sparkingTicket(input.sparkedBy) : null;
     const id = this.store.journaled(() => {
-      const issue = this.store.createIssue({ title, kind: IDEA_KIND, parent: input.parent ?? null, createdBy: actor, allowDuplicate: true }, { plan: true });
+      const ideaId = newId();
+      const issue = this.store.createIssue(
+        {
+          title,
+          kind: IDEA_KIND,
+          parent: input.parent ?? null,
+          createdBy: actor,
+          allowDuplicate: true,
+          // The ticket that sparked it rides in its own create, as a finding's origin does.
+          ...(sparkedBy ? { originKind: SPARKED_ORIGIN_KIND, originId: sparkedOriginId(sparkedBy.id, ideaId) } : {}),
+        },
+        { plan: true, id: ideaId },
+      );
       const columns: Record<string, unknown> = { plan_maturity: maturity, plan_rank: this.nextRecordRank() };
       if (input.horizon) columns.plan_horizon_id = this.horizonRow(input.horizon).id;
       const window = {
@@ -1767,6 +1794,22 @@ export class PlanStore {
       return issue.id;
     });
     return this.ideaView(id);
+  }
+
+  /**
+   * The ticket an idea names as sparking it: tracker work that exists here. An idea is not one
+   * (one part of another is its sub-idea, `parent`), nor is a milestone or a horizon, which hold
+   * work rather than do it.
+   */
+  private sparkingTicket(ref: string): { id: string; identifier: string } {
+    const target = this.store.getIssue(ref.trim());
+    if (target.kind === IDEA_KIND) {
+      throw new StapleError("validation", `${ref.trim()} is an idea, not a ticket. An idea is sparked by the ticket whose work turned it up; to make it part of another idea, give that idea as its parent.`);
+    }
+    if (target.kind === MILESTONE_KIND) {
+      throw new StapleError("validation", `${target.identifier} is a milestone, not a ticket. An idea is sparked by the ticket whose work turned it up.`);
+    }
+    return { id: target.id, identifier: target.identifier };
   }
 
   update(ref: string, patch: IdeaPatch, actor: string | null, options: PlanWriteOptions = {}): IdeaView {
@@ -2125,7 +2168,7 @@ export class PlanStore {
           waitsOutside: task.dependsOn.filter((dep) => !keys.has(dep)),
           acceptance: task.acceptance ? [task.acceptance] : [...sections.acceptance],
           acceptanceInherited: inherited,
-          context: taskContextDocument(row.title, sections, task, titles),
+          context: taskContextDocument(row.title, ideaNumberOf(row), sections, task, titles),
           existing: identifierOf(scaffoldTaskId(row.id, task.id)),
         };
       }),
@@ -2199,6 +2242,9 @@ export class PlanStore {
             estimatedSeconds: planned.estimatedSeconds,
             blockedBy: blockers,
             allowDuplicate: true,
+            // Its provenance rides in its own create: every device reads the idea and row it came from.
+            originKind: SCAFFOLD_ORIGIN_KIND,
+            originId: scaffoldOriginId(row.id, planned.rowId),
           },
           { plan: true, id },
         );
@@ -2666,8 +2712,12 @@ const CONTEXT_EXCERPT = 2000;
  * A task's context document: workable from the ticket alone. What the epic is for, this task,
  * what done means, what it waits on, and the constraints and scope it must respect.
  */
-function taskContextDocument(epicTitle: string, sections: PlanSections, row: BreakdownRow, titles: ReadonlyMap<string, string>): string {
-  const parts = [`# ${taskTitle(row)}`, `Part of **${epicTitle}**. The epic's plan document holds the whole plan.`];
+function taskContextDocument(epicTitle: string, ideaNumber: string | null, sections: PlanSections, row: BreakdownRow, titles: ReadonlyMap<string, string>): string {
+  // A snapshot, written once: the number and key as they read at scaffold. A stand-in number
+  // (`I-STA-5+12`) is not one to keep; the ticket's provenance reads both as they stand now.
+  const number = ideaNumber !== null && isIdeaNumber(ideaNumber) && !ideaNumber.includes("+") ? ideaNumber : null;
+  const from = `${number === null ? `Scaffolded from breakdown row ${row.key} of the idea` : `Scaffolded from idea ${number}, breakdown row ${row.key}`}, as numbered at scaffold; \`staple show\` names both as they stand now.`;
+  const parts = [`# ${taskTitle(row)}`, `Part of **${epicTitle}**. ${from} The epic's plan document holds the whole plan.`];
   if (sections.goal) parts.push(`## What the epic is for\n\n${sections.goal}`);
   const facts = [row.estimate ? `Estimate: ${row.estimate}` : null, row.owner ? `Owner: ${row.owner}` : null, row.notes ? `Notes: ${row.notes}` : null].filter(Boolean);
   if (facts.length > 0) parts.push(`## This task\n\n${facts.join("\n\n")}`);

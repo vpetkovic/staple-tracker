@@ -1,5 +1,6 @@
 import { ExternalLinkAdd, ExternalPropertySummary } from "@/integrations/ExternalPropertySummary";
 import { ideaPlanHref } from "./PlannedIdeaLinks";
+import { ProvenanceChips } from "./Provenance";
 /**
  * The detail panel's contents: the bar, the header (breadcrumb, title, status line, actions),
  * the properties, and the tab slot.
@@ -517,6 +518,7 @@ export function DetailContent({
             </div>
           )}
         </IdeaStatusLine>
+        <ProvenanceChips detail={detail} className="mt-3" />
         {sheet ? null : <ActionRefusal controller={controller} className="mt-4" />}
         <DetailTabs detail={detail} sheet={sheet} refresh={refresh} onAuthError={onAuthError} />
       </div>
@@ -551,6 +553,9 @@ export function DetailContent({
             </div>
           )}
         </StatusLine>
+
+        {/* Where it came from: the idea and row Scaffold made it from, the ticket that sparked it. */}
+        <ProvenanceChips detail={detail} className="mt-3" />
 
         {sheet ? <SummaryChips detail={detail} controller={controller} refresh={refresh} onRequestApproval={onRequestApproval} className="mt-4" /> : null}
 

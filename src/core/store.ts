@@ -101,6 +101,7 @@ import {
 import { MILESTONE_KIND, MILESTONE_MEMBERSHIP, assertNotReservedActor, isGoalRunGate } from "./milestones.js";
 import { IDEA_KIND, PLAN_KINDS_MISSING_MESSAGE, PLAN_KINDS, assertPlanParent, assertPlanRekind, displayRef, isPlanKind, planKindRefusal, steeringRefusal } from "./plan.js";
 import { PlanStore } from "./plan-store.js";
+import { scaffoldedFromOf, sparkedByOf, sparkedIdeasOf, type ScaffoldedFrom, type SparkedBy, type SparkedIdea } from "./plan-provenance.js";
 import { ExternalLinkStore } from "./integrations/link-store.js";
 import { LISTED_HORIZON } from "./plan-members.js";
 import { fallbackTarget, recordRemovalTarget } from "./vocabulary-targets.js";
@@ -278,7 +279,7 @@ export interface UpdateIssueInput {
  */
 export interface PlanInternal {
   plan?: boolean;
-  /** The id the plan layer derived for a task Scaffold makes (`scaffoldTaskId`); a create otherwise mints one. */
+  /** The id the plan layer chose: a task Scaffold makes (`scaffoldTaskId`), or an idea whose origin names it; a create otherwise mints one. */
   id?: string;
 }
 
@@ -8815,6 +8816,12 @@ export class WorkspaceStore {
     foundIn: FindingRef | null;
     /** The tickets filed for findings in this one, each a blocker or a follow-up. */
     findings: FindingRef[];
+    /** The idea and breakdown row Scaffold made it from; null otherwise, and while planning is off. */
+    scaffoldedFrom: ScaffoldedFrom | null;
+    /** The ticket whose work sparked this idea; null otherwise, and while planning is off. */
+    sparkedBy: SparkedBy | null;
+    /** The ideas this ticket's work sparked, oldest first; empty while planning is off. */
+    sparked: SparkedIdea[];
     comments: IssueComment[];
     documents: Array<IssueDocumentMeta & { body?: string }>;
     /** Metadata only. The bytes are never part of this payload. */
@@ -8856,6 +8863,10 @@ export class WorkspaceStore {
       blocks: this.dependentsOf(row.id).map(toRef),
       foundIn: this.foundInOf(row),
       findings: this.findingsOf(row),
+      // Plan provenance, hidden with the plan: turning planning off keeps it, unread.
+      scaffoldedFrom: planningVisible ? scaffoldedFromOf(this.db, row) : null,
+      sparkedBy: planningVisible ? sparkedByOf(this.db, row) : null,
+      sparked: planningVisible ? sparkedIdeasOf(this.db, row.id) : [],
       comments: this.listComments(row.id, 20),
       documents: opts.includeDocuments
         ? documents.map((doc) => ({ ...doc, body: this.getDocument(row.id, doc.key).body }))

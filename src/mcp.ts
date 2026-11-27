@@ -669,6 +669,24 @@ const issueShape = {
   ideaNumber: z.string().optional().describe("The permanent idea number, I-<PREFIX>-<n>, on a plan record: an idea's, kept once it is promoted"),
 };
 
+/** Plan provenance (`core/plan-provenance.ts`). */
+const scaffoldedFromShape = {
+  ideaId: z.string(),
+  ideaNumber: z.string().nullable().describe("The idea's permanent number, I-<PREFIX>-<n>"),
+  identifier: z.string().nullable().describe("The idea's ticket number since it was scaffolded into an epic; null while it is an idea"),
+  title: z.string(),
+  rowId: z.string(),
+  rowKey: z.string().nullable().describe("The breakdown row's key as the plan holds it now; null once the row was removed"),
+};
+const sparkedByShape = { identifier: z.string(), title: z.string(), status: z.string() };
+const sparkedIdeaShape = {
+  id: z.string(),
+  ideaNumber: z.string().nullable(),
+  identifier: z.string().nullable().describe("Its ticket number once promoted; null while it is an idea"),
+  title: z.string(),
+  maturity: z.string().nullable(),
+};
+
 type Equals<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 type Expect<T extends true> = T;
 /** A value as the tools send it: an unpromoted idea's identifier is null, and it says it is a draft (`publicValue`). */
@@ -1570,6 +1588,17 @@ server.registerTool(
       findings: z
         .array(z.object(findingRefShape))
         .describe("Tickets filed for findings in this one, oldest first, each a blocker or a follow-up"),
+      scaffoldedFrom: z
+        .object(scaffoldedFromShape)
+        .nullable()
+        .describe("The idea and breakdown row Scaffold made this ticket from; null for any other ticket, and while planning is off"),
+      sparkedBy: z
+        .object(sparkedByShape)
+        .nullable()
+        .describe("On an idea (or the epic it became): the ticket whose work sparked it; null when none was named, and while planning is off"),
+      sparked: z
+        .array(z.object(sparkedIdeaShape))
+        .describe("The ideas this ticket's work sparked, oldest first; [] while planning is off"),
       comments: z.array(z.object(commentShape)),
       documents: z.array(z.object(documentMetaShape)),
       attachments: z
@@ -3498,7 +3527,7 @@ server.registerTool(
   "get_idea",
   {
     description:
-      "One idea, everything an agent needs to build from it: its view (lifecycle state and the actions it offers, maturity, stage, windows, flags, units, own, umbrella and carriedBy as list_ideas gives them, nextStep: what it needs next from planning while a horizon carries it, else null, and planIncomplete: what a shaped plan edited since it was shaped now lacks, which holds Scaffold and Promote back), parent, sub-ideas, horizon, brief, questions (open, resolved, deferred), decisions, each linked issue with its progress and the milestone (and live run) holding it; its plan sections (plan: goal, context, breakdown rows {id, key, title, estimate, dependsOn, acceptance, owner, notes}, acceptance, dependencies, outOfScope, risks, sources), completeness, missingForShaped (what the shaped gate still needs; a sub-idea that is not dropped stands in for the breakdown), planWarnings (estimates that are not durations), breakdownRevision (pass it to update_idea as breakdown_base to refuse a stale breakdown edit), and while its state offers Scaffold the scaffold preview (scaffold_idea without confirm answers the same): the epic, every task with estimate, blockers, acceptance (inherited from the plan when its row has none, flagged), context and the task it already made, problems that hold the confirm back, warnings, and the fingerprint the confirm names.",
+      "One idea, everything an agent needs to build from it: its view (lifecycle state and the actions it offers, maturity, stage, windows, flags, units, own, umbrella and carriedBy as list_ideas gives them, nextStep: what it needs next from planning while a horizon carries it, else null, and planIncomplete: what a shaped plan edited since it was shaped now lacks, which holds Scaffold and Promote back), parent, sub-ideas, horizon, brief, questions (open, resolved, deferred), decisions, each linked issue with its progress and the milestone (and live run) holding it; its plan sections (plan: goal, context, breakdown rows {id, key, title, estimate, dependsOn, acceptance, owner, notes}, acceptance, dependencies, outOfScope, risks, sources), completeness, missingForShaped (what the shaped gate still needs; a sub-idea that is not dropped stands in for the breakdown), planWarnings (estimates that are not durations), breakdownRevision (pass it to update_idea as breakdown_base to refuse a stale breakdown edit), and while its state offers Scaffold the scaffold preview (scaffold_idea without confirm answers the same): the epic, every task with estimate, blockers, acceptance (inherited from the plan when its row has none, flagged), context and the task it already made, problems that hold the confirm back, warnings, and the fingerprint the confirm names. sparkedBy is the ticket whose work sparked it (null for none); sparked lists the ideas its own work sparked once it is an epic. A task scaffolded from it names this idea and its row in get_task's scaffoldedFrom.",
     inputSchema: { ref: ideaRefSchema, ws: wsSchema },
     annotations: { title: "Get idea", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
@@ -3519,20 +3548,23 @@ server.registerTool(
   "capture_idea",
   {
     description:
-      "Capture a raw idea: a title, optionally a brief and a parent idea. It takes the next idea number, I-<PREFIX>-<n>, and stays out of the task list and the queue. Maturity, horizon and dates are the person's to set in the Plan view; this tool always captures raw.",
+      "Capture a raw idea: a title, optionally a brief, a parent idea, and sparked_by, the ticket whose work turned it up. It takes the next idea number, I-<PREFIX>-<n>, and stays out of the task list and the queue. Maturity, horizon and dates are the person's to set in the Plan view; this tool always captures raw.",
     inputSchema: {
       title: z.string(),
       brief: z.string().optional().describe("What it is, who it is for, what done looks like"),
       parent: refSchema.optional().describe("The idea this one is part of"),
+      sparked_by: refSchema
+        .optional()
+        .describe("The ticket whose work turned this idea up (a new, unplanned capability found while working it). Kept on the idea and listed on the ticket as an idea it sparked"),
       actor: actorSchema,
       ws: wsSchema,
     },
     annotations: { title: "Capture idea", ...milestoneWriteAnnotations },
   },
-  ({ title, brief, parent, actor, ws }) =>
+  ({ title, brief, parent, sparked_by, actor, ws }) =>
     run(() => {
       const plan = storeFor(ws).plan();
-      return plan.detail(plan.capture({ title, brief: brief ?? null, parent: parent ?? null }, requireActor(actor)).id);
+      return plan.detail(plan.capture({ title, brief: brief ?? null, parent: parent ?? null, sparkedBy: sparked_by ?? null }, requireActor(actor)).id);
     }),
 );
 
@@ -3623,7 +3655,7 @@ server.registerTool(
   "scaffold_idea",
   {
     description:
-      "Scaffold a shaped idea, in two calls. First without confirm: the preview, writing nothing: the epic it becomes (promoted in place; its goal, context, decisions, scope and risks become the epic's plan document, its acceptance criteria the epic's), every task its breakdown rows become (estimate, blockers from depends-on, acceptance, a context document; a row with no \"done when\" inherits the plan's acceptance criteria and its task is labelled acceptance-inherited to be sharpened), each shaped sub-idea as a child epic the same way (an umbrella with no rows of its own makes its epic and its shaped sub-ideas' epics, and no task of its own), problems (what the plan lacks; while any is listed the confirm is refused), warnings (estimates that are not durations) and a fingerprint. Then confirm: true with that fingerprint creates exactly what the preview showed; a confirm without a fingerprint is refused, and one whose plan changed since the preview is refused with revision_conflict (preview again). Idempotent: each task's identity follows from the idea and its row, so a retry, a scaffold after rows were added, or another device scaffolding the same idea creates each task once; it adds the blockers depends-on names and never removes one someone set. Only a shaped idea offers it (or one scaffolded before); a raw or exploring idea or a plain task is refused, preview included.",
+      "Scaffold a shaped idea, in two calls. First without confirm: the preview, writing nothing: the epic it becomes (promoted in place; its goal, context, decisions, scope and risks become the epic's plan document, its acceptance criteria the epic's), every task its breakdown rows become (estimate, blockers from depends-on, acceptance, a context document that names the idea number and row it came from, kept on the task as get_task's scaffoldedFrom; a row with no \"done when\" inherits the plan's acceptance criteria and its task is labelled acceptance-inherited to be sharpened), each shaped sub-idea as a child epic the same way (an umbrella with no rows of its own makes its epic and its shaped sub-ideas' epics, and no task of its own), problems (what the plan lacks; while any is listed the confirm is refused), warnings (estimates that are not durations) and a fingerprint. Then confirm: true with that fingerprint creates exactly what the preview showed; a confirm without a fingerprint is refused, and one whose plan changed since the preview is refused with revision_conflict (preview again). Idempotent: each task's identity follows from the idea and its row, so a retry, a scaffold after rows were added, or another device scaffolding the same idea creates each task once; it adds the blockers depends-on names and never removes one someone set. Only a shaped idea offers it (or one scaffolded before); a raw or exploring idea or a plain task is refused, preview included.",
     inputSchema: {
       ref: ideaRefSchema,
       confirm: z.boolean().optional().describe("true creates what the preview with this fingerprint showed; absent or false only previews"),
