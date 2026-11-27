@@ -372,7 +372,7 @@ function SectionController({
     element?.scrollIntoView({ block: "nearest" });
   }, [announce, queue.busy, queue.failure, roving, view, workspace]);
 
-  const drag = useEntryDrag(listRef, { disabled: queue.busy, onMove: move });
+  const drag = useEntryDrag(listRef, { disabled: queue.busy, indexOf: queue.indexOf, onMove: move });
 
   const toggleContainer = useCallback(
     (identifier: string) =>

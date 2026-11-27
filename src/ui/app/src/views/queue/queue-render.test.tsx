@@ -194,7 +194,7 @@ describe("the list's structure", () => {
       entries: [entry({ identifier: "EXE-234", kind: "milestone", note: "the release" })],
       effective: Array.from({ length: 8 }, (_, i) => effective({ identifier: `EXE-${300 + i}`, position: i + 1, via: "EXE-234", milestonePath: ["EXE-234"], epicPath: ["EXE-299"] })),
     });
-    const drag = { from: 0, lineTop: 40, handleProps: () => ({ onPointerDown: noop, onPointerMove: noop, onPointerUp: noop, onPointerCancel: noop }) };
+    const drag = { dragging: "STA-31", lineTop: 40, handleProps: () => ({ onPointerDown: noop, onPointerMove: noop, onPointerUp: noop, onPointerCancel: noop }) };
     const caption = new Map([["EXE-299", row({ identifier: "EXE-299", title: "Payments", kind: "epic" })]]);
     for (const html of [renderSection(view, { drag }), renderSection(many, { drag }, NO_FOLDS, caption)]) {
       expect(html).toContain("q-dropline");

@@ -5,6 +5,11 @@
  * `move(from, to)`, the same write the keyboard and the menu use. Entries move only inside
  * their own section's list.
  *
+ * A drag holds on to the entry it picked up, not to its place: a poll can redraw the plan
+ * while the pointer is down, and the place the entry had at the press may by the release name
+ * another entry. So the release looks the entry up where it is now, and moves nothing if it
+ * has left the plan.
+ *
  * Settings' `ReorderList` stays as it is: its handle and arrow buttons are not this row.
  */
 import { useCallback, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
@@ -29,12 +34,24 @@ export function dropTarget(from: number, slot: number): number {
   return slot > from ? slot - 1 : slot;
 }
 
+/**
+ * The move a drop makes: the entry picked up, found at its place in the plan now, into the
+ * slot it was dropped in. Null when it has left the plan or would land where it is.
+ */
+export function dropMove(identifier: string, slot: number, indexOf: (identifier: string) => number): { from: number; to: number } | null {
+  const from = indexOf(identifier);
+  if (from < 0) return null;
+  const to = dropTarget(from, slot);
+  return to === from ? null : { from, to };
+}
+
 export interface EntryDrag {
-  /** The entry being dragged and the slot its line marks, while a drag is on. */
-  from: number | null;
+  /** The entry being dragged, while a drag is on. */
+  dragging: string | null;
   /** The drop line's offset from the top of the list, in px; null when no drag is on. */
   lineTop: number | null;
-  handleProps: (index: number) => {
+  /** The handle's pointer handlers for an entry at a plan index. */
+  handleProps: (identifier: string, index: number) => {
     onPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
     onPointerMove: (event: ReactPointerEvent<HTMLElement>) => void;
     onPointerUp: (event: ReactPointerEvent<HTMLElement>) => void;
@@ -49,10 +66,19 @@ function entryRows(list: HTMLElement): HTMLElement[] {
 
 export function useEntryDrag(
   list: RefObject<HTMLElement | null>,
-  { disabled, onMove }: { disabled: boolean; onMove: (from: number, to: number) => void },
+  {
+    disabled,
+    indexOf,
+    onMove,
+  }: {
+    disabled: boolean;
+    /** Where an entry is in the plan now, or -1: the section's own lookup. */
+    indexOf: (identifier: string) => number;
+    onMove: (from: number, to: number) => void;
+  },
 ): EntryDrag {
-  const [state, setState] = useState<{ from: number; lineTop: number | null } | null>(null);
-  const press = useRef<{ from: number; y: number; moved: boolean; slot: number; pointer: number } | null>(null);
+  const [state, setState] = useState<{ identifier: string; lineTop: number | null } | null>(null);
+  const press = useRef<{ identifier: string; y: number; moved: boolean; slot: number; pointer: number } | null>(null);
 
   const end = useCallback(
     (commit: boolean) => {
@@ -60,19 +86,19 @@ export function useEntryDrag(
       press.current = null;
       setState(null);
       if (!commit || !current || !current.moved) return;
-      const to = dropTarget(current.from, current.slot);
-      if (to !== current.from) onMove(current.from, to);
+      const move = dropMove(current.identifier, current.slot, indexOf);
+      if (move) onMove(move.from, move.to);
     },
-    [onMove],
+    [indexOf, onMove],
   );
 
   const handleProps = useCallback(
-    (index: number) => ({
+    (identifier: string, index: number) => ({
       onPointerDown: (event: ReactPointerEvent<HTMLElement>) => {
         if (disabled || (event.pointerType === "mouse" && event.button !== 0)) return;
         event.preventDefault();
         event.currentTarget.setPointerCapture?.(event.pointerId);
-        press.current = { from: index, y: event.clientY, moved: false, slot: index, pointer: event.pointerId };
+        press.current = { identifier, y: event.clientY, moved: false, slot: index, pointer: event.pointerId };
       },
       onPointerMove: (event: ReactPointerEvent<HTMLElement>) => {
         const current = press.current;
@@ -87,7 +113,7 @@ export function useEntryDrag(
         const listTop = root.getBoundingClientRect().top;
         const blocks = rows.map((row) => row.parentElement!.getBoundingClientRect());
         const edge = slot < blocks.length ? blocks[slot]!.top : (blocks.at(-1)?.bottom ?? listTop);
-        setState({ from: current.from, lineTop: edge - listTop });
+        setState({ identifier: current.identifier, lineTop: edge - listTop });
         // Near the scroller's edges, scroll so a long plan can be crossed in one drag.
         const scroller = root.closest<HTMLElement>("[data-queue-board]");
         if (scroller) {
@@ -106,5 +132,5 @@ export function useEntryDrag(
     [disabled, end, list],
   );
 
-  return { from: state?.from ?? null, lineTop: state?.lineTop ?? null, handleProps };
+  return { dragging: state?.identifier ?? null, lineTop: state?.lineTop ?? null, handleProps };
 }

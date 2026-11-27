@@ -83,8 +83,8 @@ export function SectionBody(props: SectionBodyProps) {
                 pending={props.pending === block.plan.entry.identifier}
                 busy={props.busy}
                 total={layout.entries.length}
-                dragging={props.drag?.from === block.index}
-                handle={props.drag?.handleProps(block.index)}
+                dragging={props.drag?.dragging === block.plan.entry.identifier}
+                handle={props.drag?.handleProps(block.plan.entry.identifier, block.index)}
                 onToggle={props.onToggle}
               />
               {block.plan.entry.note ? <EntryNote note={block.plan.entry.note} /> : null}
