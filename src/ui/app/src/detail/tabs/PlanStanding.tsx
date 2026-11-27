@@ -156,6 +156,9 @@ function Shaped({ record }: { record: IdeaDetailData }) {
   const hours = estimateHours(record.plan.breakdown);
   const size = tasks > 0 ? `${plural(tasks, "task")}${hours ? ` · ${hours}` : ""}` : null;
   if (!record.scaffold) return <Heading title="Shaped" words={size ? `${size} planned` : undefined} />;
+  // Held: shaped, but an idea above it is not shaped or a blocker has not shipped; the line below says which.
+  const hold = record.idea.heldBy;
+  if (hold) return <Heading title={hold.parents.length > 0 ? "Shaped · waiting on parent" : "Shaped · waiting on blockers"} words={size ? `${size} planned` : undefined} />;
   return <Heading title="Ready to scaffold" words={size ? `${size} become an epic with tickets` : undefined} />;
 }
 

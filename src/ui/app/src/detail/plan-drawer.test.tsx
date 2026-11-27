@@ -443,6 +443,8 @@ describe("the Plan tab", () => {
     };
     const html = renderTab(rec);
     expect(html).toContain('data-plan-held="parent"');
+    expect(html).toContain("Shaped · waiting on parent");
+    expect(html).not.toContain("Ready to scaffold");
     expect(html).toContain("Shaped · waiting on parent &quot;SSO&quot; (exploring). It can be scheduled; Scaffold waits until every idea above it is shaped and what it is blocked by has shipped.");
     expect(html).toContain("Held back: waiting on parent: parent &quot;SSO&quot; (exploring).");
     expect(html).not.toContain("Held back, the plan is incomplete");
