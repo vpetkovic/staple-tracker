@@ -164,8 +164,9 @@ describe("the More sheet", () => {
 
   it("lists every other view, This computer's under its caption, the current one marked", () => {
     const markup = sheet("milestones", true);
-    expect([...markup.matchAll(/data-more-view="([^"]+)"/g)].map((match) => match[1])).toEqual(["graph", "milestones", "plan", "calibration", "budget"]);
-    expect(markup.indexOf(">This computer<")).toBeGreaterThan(markup.indexOf('data-more-view="calibration"'));
+    // Estimates is a lens of Analytics now, so it is not listed; Analytics reads every workspace, so it sits with Usage.
+    expect([...markup.matchAll(/data-more-view="([^"]+)"/g)].map((match) => match[1])).toEqual(["graph", "milestones", "plan", "budget", "analytics"]);
+    expect(markup.indexOf(">This computer<")).toBeGreaterThan(markup.indexOf('data-more-view="plan"'));
     expect(markup.indexOf(">This computer<")).toBeLessThan(markup.indexOf('data-more-view="budget"'));
     expect(markup).toMatch(/data-more-view="milestones" aria-current="page"/);
     expect(markup.match(/aria-current/g)).toHaveLength(1);

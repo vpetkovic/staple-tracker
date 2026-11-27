@@ -693,7 +693,7 @@ export function NavRail({
 
       <div className="shrink-0 px-3 pb-1 max-md:px-2.5">
         <IntegrationsRailItem onNavigate={onNavigate} />
-        <ul role="list" className="m-0 list-none p-0" data-nav-foot>
+        <ul role="list" aria-label="This computer, across workspaces" className="m-0 list-none p-0" data-nav-group="foot">
           {navGroup("foot").items.map((entry) => (
             <NavItemRow key={entry.id} entry={entry} view={session.view} onSelect={select} onNavigate={onNavigate} />
           ))}

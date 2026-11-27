@@ -27,7 +27,7 @@ import type { Resource } from "./useStaple";
  * preference. What the user sees is `VIEW_LABELS` — the tree view is called "Tasks"
  * everywhere a human reads it.
  */
-export const VIEWS = ["tree", "queue", "attention", "autopilot", "graph", "milestones", "plan", "analytics", "calibration", "budget"] as const;
+export const VIEWS = ["tree", "queue", "attention", "autopilot", "graph", "milestones", "plan", "calibration", "budget", "analytics"] as const;
 export type ViewName = (typeof VIEWS)[number];
 
 /**
