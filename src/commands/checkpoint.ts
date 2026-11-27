@@ -23,7 +23,10 @@ const HELP = `staple checkpoint <ref> [--done TEXT] [--next TEXT] [--files TEXT]
   --files TEXT    the files this session changed
                   A section left out is written as its heading with nothing under
                   it, so a thin handoff shows. Say "none" when there is nothing to
-                  report: a run's handoff check wants content under all three.
+                  report: the handoff check wants content under all three. The
+                  holder's moves out of active work (but cancel) and release are
+                  refused until its worklog was written this tenure, is complete,
+                  and the holder has not kept working an hour past it.
                   One of the three may be "-" to read that section from stdin.
   --branch NAME   also record the branch the ticket is worked on, as staple branch
                   <ref> <name> does; left out, the branch is kept. Written with the

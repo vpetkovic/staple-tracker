@@ -78,6 +78,17 @@ function got(label: string): ToolCallResult {
  * golden exactly, and the text block carries the same payload (arrays wrap to
  * {items}, mirroring mcp.ts structured()).
  */
+/** The worklog reminder CON-1's holder gets on its writes until it checkpoints. */
+const missingWorklog = {
+  state: "missing",
+  tenureSince: ISO,
+  revision: null,
+  writtenAt: null,
+  author: null,
+  action:
+    'CON-1 has no worklog yet. Write a current worklog with Done, Next, and Files touched sections, each with content (say "none" when appropriate): staple checkpoint CON-1 --done "..." --next "..." --files "..." --json (or staple doc CON-1 worklog --put <file>). Update it at every milestone and before handoff; comments alone are not a checkpoint.',
+};
+
 function assertGolden(label: string, expected: Record<string, unknown>): void {
   const result = got(label);
   expect(result.isError, `${label} unexpectedly failed: ${JSON.stringify(result.content)}`).toBeFalsy();
@@ -218,6 +229,8 @@ beforeAll(async () => {
     comment: "via update",
     ws: WS,
   });
+  // The holder hands CON-1 back with a worklog: release_task refuses a holder without one.
+  await call("checkpoint_before_release", "checkpoint", { ref: "CON-1", done: "Pinned shapes.", next: "none", filesTouched: "none", ws: WS });
   await call("release_task", "release_task", { ref: "CON-1", ws: WS });
 
   await call("err_revision", "put_document", {
@@ -1269,6 +1282,8 @@ describe("tool response shapes (31/31)", () => {
         attempt: attemptGolden(),
         // The instructions it is worked under (core/instructions.ts). CON-1 inherits none.
         instructions: [],
+        // The holder has written no worklog this tenure: what to do about it (core/worklog-standing.ts).
+        worklog: missingWorklog,
         // The card the ticket view draws, carried so the view never reads it back.
         ticket: {
           workspace: WS,
@@ -1382,10 +1397,11 @@ describe("tool response shapes (31/31)", () => {
   });
 
   it("add_comment", () => {
-    assertGolden("add_comment", commentGolden({ body: "contract comment", idempotencyKey: "c-1", replayed: false }));
+    // The holder's comment carries the worklog it still owes (core/worklog-standing.ts).
+    assertGolden("add_comment", commentGolden({ body: "contract comment", idempotencyKey: "c-1", replayed: false, worklog: missingWorklog }));
     assertGolden(
       "add_comment_replay",
-      commentGolden({ body: "contract comment", idempotencyKey: "c-1", replayed: true }),
+      commentGolden({ body: "contract comment", idempotencyKey: "c-1", replayed: true, worklog: missingWorklog }),
     );
   });
 
@@ -1399,7 +1415,7 @@ describe("tool response shapes (31/31)", () => {
 
   it("put_document", () => {
     // `instructions`: whether the new revision is an instruction document (migration 019).
-    assertGolden("put_document", { key: "plan", revision: 1, instructions: false });
+    assertGolden("put_document", { key: "plan", revision: 1, instructions: false, worklog: missingWorklog });
   });
 
   it("get_document", () => {

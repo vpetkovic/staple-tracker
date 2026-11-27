@@ -12,7 +12,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CLI_ENTRY, REPO_ROOT, TSX_CLI, bareEnv, removeDir, tempDir } from "./fixtures/characterize-support.js";
-import { startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
+import { checkpointArgs, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
 import { spawnAsync } from "./fixtures/spawn-async.js";
 
 let home: string;
@@ -125,8 +125,10 @@ describe("reading what applies", () => {
     const claimedCli = await cli("checkout", b);
     expect(claimedCli.status, claimedCli.stderr).toBe(0);
     expect(keys(claimedCli.json.instructions)).toEqual([`parent:${epic}:rules:on`]);
-    // Hand both back so the runs below can take them.
+    // Hand both back so the runs below can take them, each with the worklog a release needs.
+    await tool("checkpoint", { ref: a, done: "Read the instructions.", next: "none", filesTouched: "none" });
     await tool("release_task", { ref: a });
+    expect((await cli(...checkpointArgs(b))).status).toBe(0);
     expect((await cli("release", b)).status).toBe(0);
   });
 });

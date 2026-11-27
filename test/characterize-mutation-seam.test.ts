@@ -28,7 +28,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
 import { deriveOpId } from "../src/core/journal.js";
-import { startMcpClient, type McpHarness } from "./fixtures/contract-support.js";
+import { checkpointArgs, startMcpClient, type McpHarness } from "./fixtures/contract-support.js";
 import { runCliAtAsync } from "./fixtures/characterize-support.js";
 
 const AGENT = "seam-agent";
@@ -155,6 +155,7 @@ describe("the seam is on every surface", () => {
     writeFileSync(plan, "# plan\n");
     expect((await cli("doc", cliIssue, "plan", "--put", plan)).status).toBe(0);
     expect((await cli("checkout", cliIssue)).status).toBe(0);
+    expect((await cli(...checkpointArgs(cliIssue))).status).toBe(0);
     expect((await cli("release", cliIssue)).status).toBe(0);
 
     const added = outbox().slice(before);

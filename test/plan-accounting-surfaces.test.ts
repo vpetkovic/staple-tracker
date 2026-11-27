@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
-import { CONTRACT_AGENT, runCliAsync, startMcpClient, toolPayload, type CliResult, type McpHarness } from "./fixtures/contract-support.js";
+import { CONTRACT_AGENT, checkpointArgs, runCliAsync, startMcpClient, toolPayload, type CliResult, type McpHarness } from "./fixtures/contract-support.js";
 import { READY_PLAN } from "./fixtures/plan-ready.js";
 
 const WS = "acctws";
@@ -90,6 +90,7 @@ beforeAll(async () => {
   const cart = (await cliJson("new", "Cart", "--parent", epic)) as { identifier: string };
   await cliJson("new", "Receipt", "--parent", epic);
   await cliJson("checkout", cart.identifier);
+  await cliJson(...checkpointArgs(cart.identifier));
   await cliJson("done", cart.identifier, "-m", "landed");
   expect((await http("/api/plan/capture", { title: "Invoice search", maturity: "shaped", plan: { ...READY_PLAN, breakdown: rows(3) }, horizon: now.id })).status).toBe(200);
   // And an umbrella being explored, over a sub-idea with nothing written yet: a parent and an unsized leaf.
@@ -134,6 +135,7 @@ describe("a horizon's accounting on every surface", () => {
       const ticket = (await cliJson("new", title)) as { identifier: string };
       await cliJson("milestone", "add", next.identifier, ticket.identifier);
       await cliJson("checkout", ticket.identifier);
+      await cliJson(...checkpointArgs(ticket.identifier));
       await cliJson("done", ticket.identifier, "-m", "landed");
     }
     expect((await http("/api/plan/capture", { title: "Usage export", maturity: "exploring", horizon: next.id })).status).toBe(200);

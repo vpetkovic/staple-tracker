@@ -443,6 +443,13 @@ try {
       commentRetry.body === comment.body,
     "same idempotency_key replays the original comment instead of double-posting",
   );
+  // The holder hands its ticket on only with a current worklog.
+  const unlogged = await rpc("tools/call", { name: "update_task", arguments: { ref: "SMO-1", status: "done" } });
+  assert(
+    unlogged.isError && toolError(unlogged).code === "validation" && toolText(unlogged).includes("staple checkpoint SMO-1"),
+    "the holder's handoff without a worklog is refused, naming the checkpoint",
+  );
+  await rpc("tools/call", { name: "checkpoint", arguments: { ref: "SMO-1", done: "Smoke-tested the tools.", next: "none", filesTouched: "none" } });
   const updated = JSON.parse(
     toolText(await rpc("tools/call", {
       name: "update_task",
@@ -598,7 +605,8 @@ try {
     "get_task carries crossBlockers (the field the web UI has always had)",
   );
   assert(
-    context.documents.length === 1 && context.documents[0].body === undefined,
+    // The plan and the worklog checkpointed before the handoff.
+    context.documents.length === 2 && context.documents.every((doc: { body?: string }) => doc.body === undefined),
     "get_task returns document metadata only by default",
   );
   const withDocs = JSON.parse(
@@ -608,7 +616,7 @@ try {
     })),
   );
   assert(
-    withDocs.documents[0].body.startsWith("# plan") && withDocs.documents[0].key === "plan",
+    withDocs.documents.find((doc: { key: string }) => doc.key === "plan")?.body.startsWith("# plan"),
     "include_documents inlines the current document body",
   );
 

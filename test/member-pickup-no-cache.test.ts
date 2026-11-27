@@ -11,7 +11,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { CONTRACT_AGENT, runCliAsync } from "./fixtures/contract-support.js";
+import { CONTRACT_AGENT, checkpointArgs, runCliAsync } from "./fixtures/contract-support.js";
 import { credentialStoreFor } from "../src/core/cloud/credential-store.js";
 import { writeConnection } from "../src/core/cloud/connection.js";
 import { readWorkspaceManifest } from "../src/core/repo-identity.js";
@@ -82,6 +82,7 @@ describe("no member list: output identical to master", () => {
     const shown = await cli("show", "MEM-1", "--json");
     const issue = JSON.parse(shown.stdout).issue as { assignee: string | null; checkoutAgent: string | null };
     outputs["checkout MEM-1 -> assignee, checkoutAgent"] = JSON.stringify([issue.assignee, issue.checkoutAgent]);
+    expect((await cli(...checkpointArgs("MEM-1"), "--agent", "claude-ab12")).status).toBe(0);
     expect((await cli("release", "MEM-1", "--agent", "claude-ab12")).status).toBe(0);
     const after = JSON.parse((await cli("show", "MEM-1", "--json")).stdout).issue as { assignee: string | null };
     outputs["release MEM-1 -> assignee"] = JSON.stringify(after.assignee);

@@ -70,6 +70,7 @@ import type { CrossBlockerState } from "./core/hub.js";
 import { requireMineLens } from "./core/cloud/member-lens.js";
 import { CONTINUE_STOP_REASONS, RUN_STATES, RUN_STOP_REASONS, RUN_TICKET_OUTCOMES, RUN_WAIT_REASONS } from "./core/run-store.js";
 import { INSTRUCTION_SOURCE_KINDS, type InstructionChange, type ResolvedInstruction } from "./core/instructions.js";
+import { assertHandoffStatus, assertHandoffWorklog, worklogNudge } from "./core/worklog-standing.js";
 import {
   COMMENT_AUTHOR_TYPES,
   COMMENT_PAGE_LIMITS,
@@ -1124,6 +1125,23 @@ const resolvedInstructionShape = {
 };
 type _ResolvedInstructionShapeMatchesInterface = Expect<Equals<z.infer<z.ZodObject<typeof resolvedInstructionShape>>, ResolvedInstruction>>;
 
+/** A holder's worklog reminder on its progress writes: present only while the worklog is not current. */
+const worklogField = {
+  worklog: z
+    .object({
+      state: z.enum(["missing", "incomplete", "behind"]),
+      tenureSince: z.string().describe("When your claim was taken; a worklog older than this is a predecessor's"),
+      revision: z.number().int().nullable(),
+      writtenAt: z.string().nullable(),
+      author: z.string().nullable(),
+      action: z.string().describe("What to do: checkpoint Done, Next and Files touched"),
+    })
+    .optional()
+    .describe(
+      "Present when you hold this ticket and its worklog is not current: missing for your tenure, incomplete, or behind (you kept working an hour past it). Call checkpoint now. Handing the ticket on (any move out of active work but a cancel, or release_task) is refused until it is current.",
+    ),
+};
+
 const instructionsField = {
   instructions: z
     .array(z.object(resolvedInstructionShape))
@@ -1812,7 +1830,7 @@ server.registerTool(
   "update_task",
   {
     description:
-      "Patch an issue. Guards: in_progress needs an assignee and zero unresolved blockers; unblock_owner/unblock_action only with status blocked; pass expected_status_version for optimistic concurrency. Optional comment lands in the same transaction. When scope changes, edit the ticket rather than recreating it: acceptance_criteria replaces the criteria whole, or remove_criteria (1-based positions) then add_criteria edit them in place (criteriaChange {from, to, changed, marks} says what changed; a milestone criterion's met/unmet mark follows its words, and marks.cleared names any the change removed); parent moves the ticket and its subtree under another parent, or to the top level with null (parentChange {from, to, changed}); a loop, the depth cap, an idea and the tree of a pending gate are refused. After you hand a ticket on for review (in_review), show_ticket shows the person what waits on them.",
+      "Patch an issue. Guards: in_progress needs an assignee and zero unresolved blockers; unblock_owner/unblock_action only with status blocked; pass expected_status_version for optimistic concurrency. Optional comment lands in the same transaction. When scope changes, edit the ticket rather than recreating it: acceptance_criteria replaces the criteria whole, or remove_criteria (1-based positions) then add_criteria edit them in place (criteriaChange {from, to, changed, marks} says what changed; a milestone criterion's met/unmet mark follows its words, and marks.cleared names any the change removed); parent moves the ticket and its subtree under another parent, or to the top level with null (parentChange {from, to, changed}); a loop, the depth cap, an idea and the tree of a pending gate are refused. The claim holder moving its ticket out of active work (except to a cancelled status) is refused with validation until its worklog is current (checkpoint). After you hand a ticket on for review (in_review), show_ticket shows the person what waits on them.",
     inputSchema: {
       ref: refSchema,
       title: z.string().optional(),
@@ -1864,6 +1882,7 @@ server.registerTool(
     run(() => {
       const actor = requireActor(input.actor);
       const store = storeFor(input.ws);
+      assertHandoffStatus(store, input.ref, input.status, actor);
       const { issue: updated, criteriaChange, parentChange } = store.updateIssueResult(
         input.ref,
         {
@@ -1999,7 +2018,7 @@ server.registerTool(
   "checkpoint",
   {
     description:
-      "Write a session's handoff in one call: replaces the ticket's worklog document with one new revision whose whole body is '## Done', '## Next' and '## Files touched', in that order, and with branch also records the ticket's branch as set_branch does. Use it after each step and before you stop, instead of composing the worklog for put_document. A second call replaces the first (the earlier one stays in the revision history). A section left out is written as its heading with nothing under it and the call still succeeds, but a run's handoff check wants content under all three: say 'none' when a section has nothing to report. Branch left out keeps the ticket's branch; a blank branch is refused. Branch and worklog are written together or not at all. Never changes status or the claim.",
+      "Write a session's handoff in one call: replaces the ticket's worklog document with one new revision whose whole body is '## Done', '## Next' and '## Files touched', in that order, and with branch also records the ticket's branch as set_branch does. Use it after each step and before you stop, instead of composing the worklog for put_document. A second call replaces the first (the earlier one stays in the revision history). A section left out is written as its heading with nothing under it and the call still succeeds, but the handoff check wants content under all three: say 'none' when a section has nothing to report. While you hold the ticket, update_task out of active work (any status but a cancel) and release_task are refused until your worklog was written since you took it, is complete, and you have not kept working an hour past it. Branch left out keeps the ticket's branch; a blank branch is refused. Branch and worklog are written together or not at all. Never changes status or the claim.",
     inputSchema: {
       ref: refSchema,
       done: z.string().optional().describe("What this session finished"),
@@ -2063,6 +2082,7 @@ server.registerTool(
       ...issueShape,
       ...attemptOutputField,
       ...instructionsField,
+      ...worklogField,
       ticket: z.object(ticketCardShape).describe("The claimed ticket as show_ticket would answer it: what the ticket card draws"),
     },
     /**
@@ -2100,6 +2120,7 @@ server.registerTool(
       return {
         ...withAttemptResult(store, issue),
         instructions: store.instructions(issue.id),
+        ...worklogNudge(store, issue.identifier, issue.checkoutAgent),
         ticket: ticketCard(store, issue.identifier),
       };
     }),
@@ -2109,7 +2130,7 @@ server.registerTool(
   "release_task",
   {
     description:
-      "Release a held issue back to todo (keeps the assignee, clears the claim). Pass if_idle_seconds to free a claim held by ANOTHER agent that has gone silent for at least that long — the explicit counterpart to checkout_task's steal.",
+      "Release a held issue back to todo (keeps the assignee, clears the claim). Pass if_idle_seconds to free a claim held by ANOTHER agent that has gone silent for at least that long — the explicit counterpart to checkout_task's steal. Releasing your own claim is a handoff: refused with validation until your worklog is current (checkpoint).",
     inputSchema: {
       ref: refSchema,
       actor: actorSchema,
@@ -2140,6 +2161,7 @@ server.registerTool(
       const gone = storeFor(ws).removedByRestore(ref);
       if (gone !== null) return { released: false, removedByRestore: gone };
       const store = storeFor(ws);
+      assertHandoffWorklog(store, ref, requireActor(actor, agent), "release");
       const released = store.releaseIssue(ref, requireActor(actor, agent), {
         ifIdleSeconds: if_idle_seconds,
         attempt: attemptOptionsFromInput({ outcome, reason, role }),
@@ -2167,7 +2189,14 @@ server.registerTool(
       openWorldHint: false,
     },
   },
-  ({ ref, actor, ws, ...input }) => run(() => recordAttemptEvent(storeFor(ws), ref, requireActor(actor), input)),
+  ({ ref, actor, ws, ...input }) =>
+    run(() => {
+      const store = storeFor(ws);
+      const who = requireActor(actor);
+      const attempt = recordAttemptEvent(store, ref, who, input);
+      // A milestone is the protocol's moment to checkpoint: remind a holder whose worklog is not current.
+      return input.event === "milestone" ? { ...(attempt as object), ...worklogNudge(store, ref, who) } : attempt;
+    }),
 );
 
 /**
@@ -2417,7 +2446,7 @@ server.registerTool(
         .describe("Retry token, unique per issue: a repeat returns the original comment"),
       ws: wsSchema,
     },
-    outputSchema: { ...commentShape, ...replayedShape },
+    outputSchema: { ...commentShape, ...replayedShape, ...worklogField },
     annotations: {
       title: "Add comment",
       readOnlyHint: false,
@@ -2436,7 +2465,7 @@ server.registerTool(
         author_type ?? "agent",
         { idempotencyKey: idempotency_key },
       );
-      return { ...comment, replayed };
+      return { ...comment, replayed, ...worklogNudge(storeFor(ws), ref, comment.author) };
     }),
 );
 
@@ -2511,15 +2540,18 @@ server.registerTool(
     },
   },
   ({ ref, key, body, base_revision, change_summary, title, instructions, actor, ws }) =>
-    run(() =>
-      storeFor(ws).putDocument(ref, key, body, {
+    run(() => {
+      const store = storeFor(ws);
+      const author = requireActor(actor);
+      const result = store.putDocument(ref, key, body, {
         baseRevision: base_revision,
         changeSummary: change_summary,
         title,
         instructions,
-        author: requireActor(actor),
-      }),
-    ),
+        author,
+      });
+      return { ...result, ...worklogNudge(store, ref, author) };
+    }),
 );
 
 server.registerTool(

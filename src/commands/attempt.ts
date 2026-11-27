@@ -12,6 +12,7 @@ import type { WorkspaceStore } from "../core/store.js";
 import type { AttemptOptions, AttemptView } from "../core/telemetry/attempts.js";
 import { StapleError } from "../core/types.js";
 import { resolveWorkspace } from "../core/workspace.js";
+import { worklogNudge } from "../core/worklog-standing.js";
 import { showAttempt } from "./attempts.js";
 
 /** The self-reported flags an attempt-opening write accepts (`checkout`, `status`, `done`). */
@@ -164,7 +165,10 @@ export function runAttemptCommand(rest: string[]): void {
     ...(values["comment-id"] !== undefined ? { commentId: values["comment-id"] } : {}),
     ...(values.doc !== undefined ? { document: parseDoc(values.doc) } : {}),
   });
-  if (values.json) return console.log(JSON.stringify(attempt));
+  // A milestone is the protocol's moment to checkpoint: remind a holder whose worklog is not current.
+  const nudge = sub === "milestone" ? worklogNudge(store, ref, actor) : {};
+  if (values.json) return console.log(JSON.stringify({ ...attempt, ...nudge }));
   const identifier = attempt.identifier ?? ref;
   console.log(`${identifier} attempt ${attempt.ordinal}: ${attempt.state}${attempt.outcome ? ` (${attempt.outcome}, ${attempt.endReason})` : ""}${sub === "heartbeat" ? " · heartbeat recorded" : ""}`);
+  if (nudge.worklog) console.error(`worklog ${nudge.worklog.state}: ${nudge.worklog.action}`);
 }

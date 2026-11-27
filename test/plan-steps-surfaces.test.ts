@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { PlanStep } from "../src/core/plan-steps.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
-import { CONTRACT_AGENT, runCliAsync, startMcpClient, toolPayload, type CliResult, type McpHarness } from "./fixtures/contract-support.js";
+import { CONTRACT_AGENT, checkpointArgs, runCliAsync, startMcpClient, toolPayload, type CliResult, type McpHarness } from "./fixtures/contract-support.js";
 import { READY_PLAN } from "./fixtures/plan-ready.js";
 
 const WS = "stepws";
@@ -141,6 +141,7 @@ describe("plan steps on every surface, planning on", () => {
 
   it("with no ticket left, next is null and the steps remain", async () => {
     await cliJson("checkout", ticket);
+    await cliJson(...checkpointArgs(ticket));
     await cliJson("done", ticket, "-m", "landed");
     const answer = (await cliJson("queue", "next", "--scope", horizon.identifier)) as { next: null; planSteps: PlanStep[] };
     expect(answer.next).toBeNull();

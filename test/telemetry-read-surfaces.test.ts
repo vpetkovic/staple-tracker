@@ -18,7 +18,7 @@ import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
 import { CLI_ENTRY, REPO_ROOT, TSX_CLI, bareEnv, removeDir, tempDir } from "./fixtures/characterize-support.js";
-import { mcpEnvelope, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
+import { checkpointArgs, mcpEnvelope, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
 import { spawnAsync } from "./fixtures/spawn-async.js";
 
 let home: string;
@@ -232,6 +232,7 @@ describe("a lower-bound burn", () => {
       const reading = await run(["budget", "ingest", "--source", "manual", "--account", "team-max", "--provider", "anthropic", "--limit-key", "five_hour", "--used", used, "--resets-at", "4h", "--json"]);
       expect(reading.status, reading.stderr).toBe(0);
     }
+    await cli(checkpointArgs(issue));
     await cli(["release", issue]);
     expect(await cli(["attempt", attempt])).toMatchObject({ burn: { limits: [{ burnPercent: 3, lowerBound: true }] } });
     expect((await run(["attempt", attempt, "--ws", WS])).stdout).toMatch(/burn five_hour\s+≥3%/);

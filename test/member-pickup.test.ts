@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { MEMBERS_CACHE_VERSION, writeMembersCache, type MembersCache } from "../src/core/cloud/members-cache.js";
 import { resolveWorkspace } from "../src/core/workspace.js";
-import { CONTRACT_AGENT, runCliAsync, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
+import { CONTRACT_AGENT, checkpointArgs, runCliAsync, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
 
 const WS = "mem";
 const VP_MEMBER = "mem-vp";
@@ -208,12 +208,14 @@ describe("with a member list on this machine", () => {
     expect(stolen.status, stolen.stderr).toBe(0);
     expect(await show("MEM-3")).toMatchObject({ assignee: "vp", checkoutAgent: "codex-77" });
     // Released, it is still VP's, so marko's pickup still skips it.
+    expect((await cli(...checkpointArgs("MEM-3"), "--agent", "codex-77")).status).toBe(0);
     expect((await cli("release", "MEM-3", "--agent", "codex-77")).status).toBe(0);
     expect(await show("MEM-3")).toMatchObject({ assignee: "vp", checkoutAgent: null });
 
     // MEM-4's assignee is an agent's handle, no member: the claim writes the claimer, as always.
     expect((await cli("checkout", "MEM-4", "--agent", "agent-one")).status).toBe(0);
     expect(await show("MEM-4")).toMatchObject({ assignee: "agent-one", checkoutAgent: "agent-one" });
+    expect((await cli(...checkpointArgs("MEM-4"), "--agent", "agent-one")).status).toBe(0);
     expect((await cli("release", "MEM-4", "--agent", "agent-one")).status).toBe(0);
   });
 

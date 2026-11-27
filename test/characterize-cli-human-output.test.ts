@@ -21,6 +21,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runCliAt, tempDir, removeDir } from "./fixtures/characterize-support.js";
+import { checkpointArgs } from "./fixtures/contract-support.js";
 
 const AGENT = "char-agent";
 
@@ -267,6 +268,8 @@ describe("write command feedback", () => {
     expect(cli("checkout", ref).stdout).toBe(
       `claimed ◐  ${ref.padEnd(9)} in_progress Checkoutee @${AGENT}\n`,
     );
+    // The holder hands its claim back with a worklog: release refuses it without one.
+    expect(cli(...checkpointArgs(ref)).status).toBe(0);
     expect(cli("release", ref).stdout).toBe(`○  ${ref.padEnd(9)} todo        Checkoutee @${AGENT}\n`);
   }, 60_000);
 

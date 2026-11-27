@@ -93,6 +93,7 @@ import { sharedLine, sharedStatus } from "./core/cloud/shared-status.js";
 import { readConnection } from "./core/cloud/connection.js";
 import { format } from "node:util";
 import { hideDraftIdentifiers, publicOutput } from "./core/plan.js";
+import { assertHandoffStatus, assertHandoffWorklog, worklogNudge } from "./core/worklog-standing.js";
 
 /**
  * Everything the CLI prints goes through one place on its way out, so no command can show an
@@ -637,6 +638,11 @@ function completeWithHub(
   return updated;
 }
 
+/** A holder's worklog reminder, for a progress write that printed prose: on stderr, beside the answer. */
+function printWorklogNudge(nudge: ReturnType<typeof worklogNudge>): void {
+  if (nudge.worklog) console.error(`worklog ${nudge.worklog.state}: ${nudge.worklog.action}`);
+}
+
 /** listEvents' own row cap — drain in pages so an event burst is never truncated. */
 const EVENT_PAGE = 200;
 
@@ -1166,7 +1172,9 @@ Flow
   checkpoint <ref> [--done T] [--next T] [--files T] [--branch NAME]
               the handoff in one call: replace the worklog with Done, Next and
               Files touched (an omitted section is written empty) and, with
-              --branch, record the branch too. See staple checkpoint --help
+              --branch, record the branch too. The holder's moves out of
+              active work (but cancel) and release are refused until it is
+              current. See staple checkpoint --help
   release <ref> [--agent A] [--if-stale <dur>]
               give a claim back -> todo; --if-stale frees a claim whose holder
               has been silent at least <dur> (any caller)
@@ -1951,10 +1959,12 @@ function main() {
         attempt: attemptOptionsFrom(values),
       });
       const instructions = store.instructions(issue.id);
+      const nudge = worklogNudge(store, issue.identifier, issue.checkoutAgent);
       if (values.json) {
-        outJson({ ...withAttempt(store, issue), instructions });
+        outJson({ ...withAttempt(store, issue), instructions, ...nudge });
         break;
       }
+      printWorklogNudge(nudge);
       // Name whose work was taken: a silent "claimed" would hide the takeover.
       const stolen = before && before.heldBy !== issue.checkoutAgent;
       console.log(
@@ -1978,6 +1988,7 @@ function main() {
       });
       const ref = requireRef(positionals[0], command);
       const { store } = getStore(values);
+      if (command === "done") assertHandoffWorklog(store, ref, agentName(values.agent), "done");
       const issue = completeWithHub(
         store,
         ref,
@@ -2024,6 +2035,7 @@ function main() {
        */
       const estimatedSeconds = estimateOption(values.estimate, values["no-estimate"]);
       const attempt = attemptOptionsFrom(values);
+      assertHandoffStatus(store, positionals[0]!, target, agentName(values.agent));
       const issue =
         // By category, as MCP does: a workspace's own finished status wakes its dependents too.
         store.isResolvedStatus(target)
@@ -2083,6 +2095,7 @@ function main() {
         else console.log(gone.message);
         break;
       }
+      assertHandoffWorklog(store, ref, agentName(values.agent), "release");
       const released = store.releaseIssue(ref, agentName(values.agent), {
         ifIdleSeconds: stale === undefined ? undefined : parseDuration(stale, "if-stale"),
         attempt: attemptOptionsFrom(values),
@@ -2197,6 +2210,7 @@ function main() {
       });
       const ref = requireRef(positionals[0], "block");
       const { store } = getStore(values);
+      assertHandoffStatus(store, ref, "blocked", agentName());
       const issue = store.updateIssue(
         ref,
         { status: "blocked", unblockOwner: values.owner, unblockAction: values.action },
@@ -2458,11 +2472,13 @@ function main() {
       const ref = requireRef(rawRef, "comment");
       const { store } = getStore(values);
       const comment = store.addComment(ref, body.join(" "), agentName(values.author), "user");
+      const nudge = worklogNudge(store, ref, comment.author);
       if (values.json) {
-        outJson(comment);
+        outJson({ ...comment, ...nudge });
         break;
       }
       console.log("commented.");
+      printWorklogNudge(nudge);
       break;
     }
 
@@ -2798,11 +2814,13 @@ function main() {
           author: agentName(),
           instructions: values.instructions === true ? true : values["no-instructions"] === true ? false : undefined,
         });
+        const nudge = worklogNudge(store, ref, agentName());
         if (values.json) {
-          outJson(result);
+          outJson({ ...result, ...nudge });
           break;
         }
         console.log(`${key} @ revision ${result.revision}${result.instructions ? " (instructions)" : ""}`);
+        printWorklogNudge(nudge);
         break;
       }
       const doc = store.getDocument(ref, key);

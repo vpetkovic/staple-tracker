@@ -30,6 +30,7 @@ import {
   CONTRACT_AGENT,
   REPO_ROOT,
   TSX_CLI,
+  checkpointArgs,
   cleanEnv,
   cliEnvelope,
   mcpEnvelope,
@@ -265,6 +266,7 @@ describe("the derived numbers reach every read surface", () => {
     expect((await cli("new", "Child unplanned", "--ws", WS, "--parent", parent)).status).toBe(0);
 
     expect((await cli("start", "CON-5", "--agent", CONTRACT_AGENT, "--ws", WS)).status).toBe(0);
+    expect((await cli(...checkpointArgs("CON-5"), "--agent", CONTRACT_AGENT, "--ws", WS)).status).toBe(0);
     expect((await cli("done", "CON-5", "--ws", WS)).status).toBe(0);
     expect((await cli("start", "CON-6", "--agent", CONTRACT_AGENT, "--ws", WS)).status).toBe(0);
     // The running child needs evidence of work after its claim: STA-90 counts an

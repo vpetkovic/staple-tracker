@@ -31,7 +31,7 @@ import { renumbersAcknowledged, withRenumberAcknowledged } from "../src/core/ide
 import { Hub } from "../src/core/hub.js";
 import { StapleError } from "../src/core/types.js";
 import { initWorkspace } from "../src/core/workspace.js";
-import { CLI_ENTRY, REPO_ROOT, TSX_CLI, runCli, startMcpClient } from "./fixtures/contract-support.js";
+import { CLI_ENTRY, REPO_ROOT, TSX_CLI, checkpointArgs, runCli, startMcpClient } from "./fixtures/contract-support.js";
 import { FakeSyncServer } from "./fixtures/fake-sync-server.js";
 import { Fleet, type Machine } from "./fixtures/sync-machines.js";
 
@@ -398,6 +398,7 @@ describe("a number that moved under the process holding it", () => {
     const actorOf = (kind: string): unknown =>
       (c.b.db.prepare("SELECT actor FROM events WHERE issue_id = ? AND kind = ? ORDER BY seq DESC LIMIT 1").get(c.mine.id, kind) as { actor: string } | undefined)?.actor;
     expect(runCli(["checkout", moved, "--agent", "agent-one", "--db", c.b.dbPath], env(c.b, "vp")).status).toBe(0);
+    expect(runCli([...checkpointArgs(moved), "--agent", "agent-one", "--db", c.b.dbPath], env(c.b, "vp")).status).toBe(0);
     expect(runCli(["release", moved, "--agent", "agent-one", "--db", c.b.dbPath], env(c.b, "vp")).status).toBe(0);
     expect(actorOf("release")).toBe("agent-one");
     expect(runCli(["status", moved, "backlog", "--agent", "agent-two", "--db", c.b.dbPath], env(c.b, "vp")).status).toBe(0);

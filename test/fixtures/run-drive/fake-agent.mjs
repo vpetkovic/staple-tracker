@@ -5,6 +5,7 @@
  *   review      write <ref>.txt, record its review, move the ticket to in_review
  *   done        the same, then close the ticket
  *   unreviewed  write <ref>.txt and move the ticket to in_review with NO review comment
+ *   uncheckpointed  review it, then hand it on with NO worklog, under another name
  *   fail    exit 3
  *   idle    exit 0 and touch nothing (the ticket stays held)
  *   sleep   start a grandchild that sleeps, record both pids in <ref>.pids, never finish
@@ -50,6 +51,7 @@ if (mode === "mainline" || mode === "mainline-sleep" || mode === "mainline-hande
 if (mode === "mainline-handed-on") {
   // Moves the main line AND hands its ticket on, then lingers: nothing holds it any more.
   staple("comment", ref, "review: done");
+  staple("checkpoint", ref, "--done", "Moved master.", "--next", "none", "--files", "none");
   staple("status", ref, "in_review");
 }
 
@@ -64,7 +66,9 @@ if (["review", "done", "unreviewed", "uncheckpointed", "background", "mainline"]
     const checkpointed = staple("doc", ref, "worklog", "--put", `${ref}-worklog.md`);
     if (checkpointed.status !== 0) process.exit(checkpointed.status ?? 1);
   }
-  const verb = mode === "done" ? ["done", ref] : ["status", ref, "in_review"];
+  // The CLI refuses the holder a handoff without a worklog. An uncheckpointed session that slips
+  // past it (here by handing on under another name) is still failed by the driver as no_worklog.
+  const verb = mode === "done" ? ["done", ref] : ["status", ref, "in_review", ...(mode === "uncheckpointed" ? ["--agent", "someone-else"] : [])];
   const moved = staple(...verb);
   process.stderr.write(moved.stderr);
   process.exit(moved.status ?? 1);

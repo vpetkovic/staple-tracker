@@ -80,11 +80,14 @@ does not authorize claiming work. Do not fetch a whole workspace tree for one ti
    are met; tracking work never grants permission to commit, merge or deploy it.
 6. Before interruption or handoff, `checkpoint` the worklog and branch and
    leave ownership explicit. Resume from that context rather than starting over.
-   Automated runs require the latest worklog to be written during the current
-   session (interactive hooks use the current ticket tenure), with content under
-   Done, Next and Files touched. Write "none" for an empty section. A headless
-   session fails as `no_worklog` without it; interactive hooks ask for the checkpoint
-   before advancing, subject to the usual human-stop and loop-limit controls.
+   The holder's handoff (any move out of active work except a cancel, and
+   `release_task`) is refused with `validation` until its worklog was written since
+   it took the ticket, has content under Done, Next and Files touched, and the
+   holder has not kept working for an hour past it. Its comments, documents and
+   milestones carry a `worklog` field while it is not: checkpoint then. Write "none" for an empty section. Automated runs also require
+   the worklog to be written during the current session; a headless session fails as
+   `no_worklog` without it, and interactive hooks ask for the checkpoint before
+   advancing, subject to the usual human-stop and loop-limit controls.
 
 ## Classify review findings
 

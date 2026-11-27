@@ -47,6 +47,7 @@ import type { EffectiveQueueRow } from "../src/core/queue-store.js";
 import type { MilestoneListRow, MilestoneView } from "../src/core/milestone-store.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
 import {
+  checkpointArgs,
   cliEnvelope,
   mcpEnvelope,
   runCliAsync,
@@ -448,6 +449,7 @@ describe("progress counts each leaf once", () => {
 
   it("moves only the numerator when a leaf lands, and moves it back when the leaf reopens", { timeout: 30_000 }, async () => {
     await ok("checkout", SCENARIO.q1);
+    await ok(...checkpointArgs(SCENARIO.q1));
     await ok("status", SCENARIO.q1, "done");
     const landed = await milestoneHttp(SCENARIO.october);
     expect(landed.progress).toMatchObject({ total: 5, countable: 4, percent: 50 });
@@ -769,6 +771,7 @@ describe("a gate over a member epic", () => {
     // The holder can resume through checkout, but ongoing work is not fresh pickup.
     expect(rowFor(await queueHttp("other-agent"), SCENARIO.m1).eligibility).toBe("claimed");
 
+    expect((await runCliAsync([...checkpointArgs(SCENARIO.m1), "--ws", WS], { STAPLE_HOME: home, STAPLE_AGENT: "other-agent" })).status).toBe(0);
     expect((await runCliAsync(["release", SCENARIO.m1, "--ws", WS], { STAPLE_HOME: home, STAPLE_AGENT: "other-agent" })).status).toBe(0);
     expect((await queueHttp()).effective).toEqual(before.effective);
   });
@@ -782,6 +785,7 @@ describe("work landing under a milestone", () => {
     // cross-epic member. (MSC-6 derives `done` from its own children, as any parent does.)
     for (const ref of [SCENARIO.m1, SCENARIO.m2, SCENARIO.q3]) {
       await ok("checkout", ref);
+      await ok(...checkpointArgs(ref));
       await ok("status", ref, "done");
     }
 

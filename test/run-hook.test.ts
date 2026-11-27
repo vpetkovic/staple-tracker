@@ -159,7 +159,9 @@ describe("claude-stop: a bound session works the run", () => {
     const { dir, epic, refs } = workspace(["one", "two"]);
     startAndBind(dir, epic);
     claudeStop(dir, {});
-    ok(dir, ["status", refs[0]!, "in_review"]);
+    // The CLI refuses the holder this handoff without a worklog; a person moving the ticket
+    // is not held to it, which leaves the hook's own review and worklog checks to answer.
+    ok(dir, ["status", refs[0]!, "in_review", "--agent", "vp"]);
     const unreviewed = claudeStop(dir, { stop_hook_active: true });
     expect(unreviewed.answer?.decision).toBe("block");
     expect(unreviewed.answer?.reason).toContain(`${refs[0]} is in_review but has no review since the run took it`);
@@ -181,7 +183,8 @@ describe("claude-stop: a bound session works the run", () => {
     const runId = startAndBind(dir, epic);
     claudeStop(dir, {});
     ok(dir, ["comment", refs[0]!, "review: reproduced it"]);
-    ok(dir, ["status", refs[0]!, "in_review"]);
+    // A person hands it on (the CLI refuses the holder without a worklog of its own tenure).
+    ok(dir, ["status", refs[0]!, "in_review", "--agent", "vp"]);
     expect(claudeStop(dir, { stop_hook_active: true }).answer?.reason).toContain("current worklog");
     expect(claudeStop(dir, { stop_hook_active: true }).answer?.decision).toBe("block");
     expect(claudeStop(dir, { stop_hook_active: true }).answer?.systemMessage).toContain("2 reminders in a row");
@@ -244,8 +247,10 @@ describe("claude-stop: --max-blocks caps every kind of block", () => {
     let released: Record<string, any> | null = null;
     for (let turn = 0; turn < 8; turn++) {
       // Alternate the reason: unfinished (held, in_progress), then no_review (in_review).
-      if (turn % 2 === 0) ok(dir, ["status", refs[0]!, "in_review"]);
-      else {
+      if (turn % 2 === 0) {
+        checkpoint(dir, refs[0]!);
+        ok(dir, ["status", refs[0]!, "in_review"]);
+      } else {
         ok(dir, ["status", refs[0]!, "todo"]);
         ok(dir, ["checkout", refs[0]!]);
       }

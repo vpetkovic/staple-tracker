@@ -34,6 +34,7 @@ import {
   tempDir,
   TSX_CLI,
 } from "./fixtures/characterize-support.js";
+import { checkpointArgs } from "./fixtures/contract-support.js";
 
 let home: string;
 let root: string;
@@ -259,6 +260,7 @@ describe("agent identity resolution", () => {
     });
     expect(result.status).toBe(0);
     expect((JSON.parse(result.stdout) as { checkoutAgent: string }).checkoutAgent).toBe("flag-claimer");
+    expect(runCliAt(repo, checkpointArgs("OUT-1"), { STAPLE_HOME: home, STAPLE_AGENT: "flag-claimer" }).status).toBe(0);
     expect(runCliAt(repo, ["release", "OUT-1"], { STAPLE_HOME: home, STAPLE_AGENT: "flag-claimer" }).status).toBe(0);
   }, 60_000);
 });
