@@ -82,6 +82,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readStoredRepositoryId } from "./repo-identity.js";
 import { readLocalLease } from "./cloud/lease-store.js";
 import { allPlanLinks, planLinkField, planLinkPurposeOf, planLinkValue, planLinksOf, writePlanLink, type PlanLinkPurpose } from "./plan-links.js";
+import { allPlanBlockers, planBlockerField, writePlanBlocker } from "./plan-blockers.js";
 import { planRowsByRecord, planRowField, planRowsOf, planRowValue, writePlanRow, type PlanRowValue } from "./plan-rows.js";
 import {
   BREAKDOWN_KEY,
@@ -283,8 +284,25 @@ export interface IdeaView {
   planIncomplete: string[];
   /** How much of its plan is written: the starred sections and all ten. */
   completeness: { starred: number; starredTotal: number; filled: number; total: number };
-  /** The records it waits on, by id: those its dependencies and outside depends-on cells name. */
+  /**
+   * The records it waits on, by id: the ones it is blocked by (`blockedBy`), then those its
+   * dependencies and outside depends-on cells name.
+   */
   dependsOn: string[];
+  /**
+   * The plan records it is blocked by, by id: its structured edges (`staple idea block`,
+   * update_idea's add_blockers), in the order of their ids. One its ancestors or descendants hold
+   * is kept but holds nothing.
+   */
+  blockedBy: string[];
+  /**
+   * What holds its Scaffold and Promote back, or null when nothing does: the ideas above it that
+   * are not shaped (still raw or exploring, or dropped), nearest first, and the records it or an
+   * idea above it is blocked by that have neither shipped nor been dropped. A shaped record held
+   * reads `shaped · waiting on parent` (or on its blockers). On a record already promoted it is
+   * the flag that an idea above it went back to exploring or was dropped since: its tickets stay.
+   */
+  heldBy: IdeaHold | null;
   /** Its lifecycle state, and the actions that state offers (`plan-lifecycle.ts`). */
   state: IdeaState;
   actions: OfferedAction[];
@@ -298,6 +316,28 @@ export interface IdeaView {
   nextStep: PlanStep | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** What holds a record back from being built (`IdeaView.heldBy`). */
+export interface IdeaHold {
+  parents: Array<{ id: string; title: string; maturity: Maturity }>;
+  blockers: Array<{ id: string; title: string; state: IdeaState }>;
+}
+
+/** A hold in a few words: `waiting on parent`, `waiting on parents`, `waiting on blockers`. */
+export function holdLabel(hold: IdeaHold): string {
+  if (hold.parents.length > 0) return hold.parents.length === 1 ? "waiting on parent" : "waiting on parents";
+  return hold.blockers.length === 1 ? "waiting on blocker" : "waiting on blockers";
+}
+
+/** A hold as a sentence's object: `parent "SSO" (exploring)`, `"Audit log" (shaped)`. */
+export function holdWords(hold: IdeaHold): string {
+  const parents = hold.parents.map((parent) => `"${parent.title}" (${parent.maturity})`);
+  const blockers = hold.blockers.map((blocker) => `"${blocker.title}" (${blocker.state})`);
+  return [
+    ...(parents.length > 0 ? [`${parents.length === 1 ? "parent" : "parents"} ${parents.join(", ")}`] : []),
+    ...(blockers.length > 0 ? [`${blockers.length === 1 ? "blocker" : "blockers"} ${blockers.join(", ")}`] : []),
+  ].join(" and ");
 }
 
 /** A record's size and its own units: what a horizon's accounting and its hold read. */
@@ -339,6 +379,10 @@ interface PlanFacts {
   links: Map<string, string[]>;
   /** Each record's exploration links, read in the same pass: shown, never measured. */
   explorations: Map<string, string[]>;
+  /** Each record's structured blockers, by blocked record, read in one statement (`plan-blockers.ts`). */
+  blockers: Map<string, string[]>;
+  /** What holds each record back (`IdeaView.heldBy`); absent when nothing does. */
+  held: Map<string, IdeaHold>;
   /**
    * Each record's standing proposal to be marked shaped (`shape-proposal`), read in one statement
    * on the first view that asks: a pull that re-derives only the horizons never reads it.
@@ -424,7 +468,24 @@ export interface IdeaDetail {
   sparkedBy: SparkedBy | null;
   /** The ideas its own work sparked, once it is tracker work (promoted); oldest first. */
   sparked: SparkedIdea[];
+  /** The records it is blocked by (`IdeaView.blockedBy`), named; one this device no longer holds is `missing`. */
+  blockedBy: BlockerRef[];
+  /** The records blocked by it. */
+  blocks: BlockerRef[];
   today: string;
+}
+
+/** A plan record one is blocked by, or that it blocks, as a detail names it. */
+export interface BlockerRef {
+  id: string;
+  /** Its idea number; null on a record this device does not hold. */
+  number: string | null;
+  /** Its ticket number once promoted; null while it is an idea. */
+  identifier: string | null;
+  title: string;
+  /** Its lifecycle state; null on a record this device does not hold. */
+  state: IdeaState | null;
+  missing: boolean;
 }
 
 /** One task Scaffold creates from a breakdown row. */
@@ -1393,9 +1454,11 @@ export class PlanStore {
       list.push({ state: facts.state, own, liveSubRecords: size.liveSubRecords, holds: holdsHorizon(facts.stage, size), delivered: size.delivered === true && size.work === null });
       carried.set(horizonId, list);
     }
-    const stepInputs = this.stepInputsOf(rows, byId, records, sizes, carrier, breakdowns);
+    const blockers = allPlanBlockers(this.db);
+    const held = holdsOf(rows, byId, records, blockers);
+    const stepInputs = this.stepInputsOf(rows, byId, records, sizes, carrier, breakdowns, held);
     let proposals: Map<string, ShapeProposal> | null = null;
-    return { rows, byId, childIds, horizons, horizonDates, work, links, explorations, proposals: () => (proposals ??= this.proposals()), categoryOf, records, sizes, carried, carrier, stepInputs, steps: null, accounting: new Map() };
+    return { rows, byId, childIds, horizons, horizonDates, work, links, explorations, blockers, held, proposals: () => (proposals ??= this.proposals()), categoryOf, records, sizes, carried, carrier, stepInputs, steps: null, accounting: new Map() };
   }
 
   /** Every record's standing proposal to be marked shaped, in one statement: an emptied one is none. */
@@ -1425,6 +1488,7 @@ export class PlanStore {
     sizes: ReadonlyMap<string, RecordSizeView>,
     carrier: ReadonlyMap<string, string>,
     breakdowns: ReadonlyMap<string, BreakdownRow[]>,
+    held: ReadonlyMap<string, IdeaHold>,
   ): Map<string, Omit<PlanStepInput, "today">> {
     const out = new Map<string, Omit<PlanStepInput, "today">>();
     if (carrier.size === 0) return out;
@@ -1482,10 +1546,16 @@ export class PlanStore {
         // Only a shaped record with no own work reads it, and that one is held to the gate as its view is.
         planIncomplete: maturity === "shaped" && state === "shaped" ? shapedGate(sections, questions, { subIdea }) : [],
         start: startOf(id),
-        dependsOn: dependsOn(id, sections).flatMap((dep) => {
-          const facts = records.get(dep);
-          return facts === undefined ? [] : [{ id: dep, title: byId.get(dep)!.title, state: facts.state }];
-        }),
+        // The records it is blocked by (its own and its ancestors'), then the ones its text names.
+        dependsOn: [
+          ...(held.get(id)?.blockers ?? []),
+          ...dependsOn(id, sections).flatMap((dep) => {
+            const facts = records.get(dep);
+            return facts === undefined ? [] : [{ id: dep, title: byId.get(dep)!.title, state: facts.state }];
+          }),
+        ].filter((dep, index, all) => all.findIndex((other) => other.id === dep.id) === index),
+        parents: held.get(id)?.parents ?? [],
+        blockerIds: (held.get(id)?.blockers ?? []).map((blocker) => blocker.id),
       });
     }
     return out;
@@ -1499,7 +1569,11 @@ export class PlanStore {
       const step = planStepOf({ ...input, today });
       if (step !== null) byRecord.set(id, step);
     }
-    /** The waiting records beneath one, which its Scaffold would build too. */
+    /**
+     * The waiting records beneath one, which its Scaffold would build too. A sub-idea that is held
+     * (`heldBy`) is left out of its parent's Scaffold, which would then make the parent without it:
+     * the parent waits for it all the same.
+     */
     const waitingBeneath = (id: string, seen = new Set<string>()): PlanStep[] =>
       (facts.childIds.get(id) ?? []).flatMap((child) => {
         if (seen.has(child)) return [];
@@ -1587,6 +1661,8 @@ export class PlanStore {
         (sections.breakdown.length === 0 ? subIdea : planRowsOf(this.db, row.id).some((planRow) => this.issueExists(scaffoldTaskId(row.id, planRow.id))));
       // A shaped plan is held to the gate again before anything is built from it.
       const planIncomplete = maturity === "shaped" && (state === "shaped" || scaffolded) ? this.gateOf(row.id, undefined, subIdea) : [];
+      const heldBy = facts.held.get(row.id) ?? null;
+      const blockedBy = facts.blockers.get(row.id) ?? [];
       const lifecycle = ideaLifecycle({
         state,
         promoted,
@@ -1596,6 +1672,7 @@ export class PlanStore {
         gate: maturity === "raw" || maturity === "exploring" ? () => this.gateOf(row.id, undefined, subIdea) : () => [],
         scaffolded,
         planIncomplete,
+        heldBy,
         proposed: facts.proposals().has(row.id),
       });
       return {
@@ -1642,7 +1719,9 @@ export class PlanStore {
         childIds: childIds.get(row.id) ?? [],
         openQuestions: questions.filter((q) => !q.resolved).length,
         completeness: completeness(sections, questions, parseDecisions(this.documentBody(row.id, DECISIONS_KEY))),
-        dependsOn: dependsOn(row.id, sections),
+        dependsOn: [...new Set([...blockedBy.filter((id) => byId.has(id) && !relatedRecords(byId, id, row.id)), ...dependsOn(row.id, sections)])],
+        blockedBy,
+        heldBy,
         planIncomplete,
         ...lifecycle,
         // A proposal stands while the record can still be marked shaped; once shaped or dropped it is history.
@@ -1685,6 +1764,8 @@ export class PlanStore {
       exploration: idea.explorations.map((id) => this.linkView(id, work)),
       ...this.planOf(row.id, idea),
       ...this.provenanceOf(row.id),
+      blockedBy: idea.blockedBy.map((id) => blockerRef(id, ideas.find((view) => view.id === id))),
+      blocks: ideas.filter((view) => view.blockedBy.includes(idea.id)).map((view) => blockerRef(view.id, view)),
       today,
     };
   }
@@ -2169,6 +2250,7 @@ export class PlanStore {
     }
     this.allowIdea(row, "promote", options);
     this.assertPlanComplete(row, "promoted");
+    this.assertNotHeld(row, "promoted");
     this.store.journaled(() => {
       this.promoteRecord(row.id, this.promotedKind(), actor);
       this.settleMembership(actor);
@@ -2188,6 +2270,21 @@ export class PlanStore {
       "validation",
       `${displayRef(row)} is shaped, but its plan is incomplete, so it cannot be ${verb}: ${gateSentence(missing).replace(/ before it is shaped$/, "")}.`,
       { missing },
+    );
+  }
+
+  /**
+   * A shaped sub-idea is built from only once every idea above it is shaped and what it (or an
+   * idea above it) is blocked by has shipped: until then Scaffold and Promote are refused, naming
+   * what it waits on. Scheduling it, on any horizon, stays open.
+   */
+  private assertNotHeld(row: PlanRow, verb: "promoted" | "scaffolded"): void {
+    const hold = this.ideaView(row.id).heldBy;
+    if (hold === null) return;
+    throw new StapleError(
+      "validation",
+      `${displayRef(row)} cannot be ${verb} yet: it is ${this.stateOf(row.id)} · ${holdLabel(hold)}, ${holdWords(hold)}. It waits until every idea above it is shaped and what it is blocked by has shipped.`,
+      { heldBy: hold },
     );
   }
 
@@ -2373,13 +2470,21 @@ export class PlanStore {
     const identifierOf = (id: string) => (this.db.prepare("SELECT identifier FROM issues WHERE id = ?").get(id) as { identifier: string } | undefined)?.identifier ?? null;
     const children = (this.db.prepare(`SELECT id FROM issues WHERE parent_id = ? AND plan_maturity IS NOT NULL ORDER BY plan_rank`).all(row.id) as Array<{ id: string }>)
       .map((child) => this.ideaView(child.id))
-      .filter((child) => child.actions.some((action) => action.id === "scaffold"))
+      // A held sub-idea waits for its own turn: its parent's Scaffold leaves it, and what is beneath it.
+      .filter((child) => child.heldBy === null && child.actions.some((action) => action.id === "scaffold"))
       .map((child) => this.previewOf(this.row(child.id, false)));
+    const hold = this.ideaView(row.id).heldBy;
     const problems = [
+      ...(hold === null ? [] : [`${holdLabel(hold)}: ${holdWords(hold)}`]),
       ...this.gateOf(row.id),
       ...children.flatMap((child) => child.problems.map((problem) => `sub-idea "${child.idea.title}": ${problem}`)),
     ];
-    const warnings = [...planWarnings(sections), ...children.flatMap((child) => child.warnings.map((warning) => `sub-idea "${child.idea.title}": ${warning}`))];
+    // A held sub-idea is left out, and the preview says so: its parent's epic is made without it.
+    const left = (this.db.prepare(`SELECT id FROM issues WHERE parent_id = ? AND plan_maturity IS NOT NULL ORDER BY plan_rank`).all(row.id) as Array<{ id: string }>)
+      .map((child) => this.ideaView(child.id))
+      .filter((child) => child.heldBy !== null && child.state === "shaped")
+      .map((child) => `sub-idea "${child.title}" is left out until its turn: ${holdLabel(child.heldBy!)}, ${holdWords(child.heldBy!)}`);
+    const warnings = [...planWarnings(sections), ...left, ...children.flatMap((child) => child.warnings.map((warning) => `sub-idea "${child.idea.title}": ${warning}`))];
     const preview: Omit<ScaffoldPreview, "fingerprint"> = {
       idea: { id: row.id, title: row.title },
       epic: {
@@ -2434,6 +2539,7 @@ export class PlanStore {
     if (!fingerprint) {
       throw new StapleError("validation", `Preview ${displayRef(row)}'s scaffold first, then confirm it with the preview's fingerprint: what is created is what was shown.`);
     }
+    this.assertNotHeld(row, "scaffolded");
     const preview = this.previewOf(row);
     if (preview.problems.length > 0) {
       throw new StapleError("validation", `${displayRef(row)} is shaped, but its plan is incomplete, so it cannot be scaffolded: ${gateSentence(preview.problems).replace(/^it needs /, "").replace(/ before it is shaped$/, "")}.`, {
@@ -2555,6 +2661,90 @@ export class PlanStore {
   }
 
   /** One link, one row, one field of the record's `milestone` entity (`plan-links.ts`). */
+  /**
+   * Block a plan record on another (`staple idea block`, update_idea's add_blockers, the Plan tab):
+   * it waits on that one, and while it has not shipped (or been dropped) the record's Scaffold and
+   * Promote are refused and its plan step waits. One field of the record's `milestone` entity
+   * (`plan-blockers.ts`). Either may be an idea or a promoted record; an edit, as its state offers
+   * one. Refused for itself, a record above or beneath it (a parent's work holds its sub-ideas',
+   * so either wait is a cycle), one that is not part of the plan, and an edge that closes a loop.
+   * Blocking it on one it is blocked by already changes nothing.
+   */
+  block(ref: string, blockerRef: string, actor: string | null): IdeaView {
+    this.assertEnabled();
+    const row = this.recordRow(ref);
+    this.allowIdea(row, "edit", {});
+    const blocker = this.recordRow(blockerRef, false);
+    if (blocker.id === row.id) throw new StapleError("cycle", `${displayRef(row)} cannot be blocked by itself.`);
+    const facts = this.facts();
+    if (relatedRecords(facts.byId, blocker.id, row.id)) {
+      throw new StapleError(
+        "validation",
+        `${displayRef(row)} cannot be blocked by ${displayRef(blocker)}: one is above the other in the plan, and a parent's work already holds its sub-ideas'.`,
+      );
+    }
+    if ((facts.blockers.get(row.id) ?? []).includes(blocker.id)) return this.ideaView(row.id);
+    /**
+     * A loop: the blocker already waits on this record, or on one above or beneath it. A record
+     * waits on what it is blocked by, on what the ideas above it are blocked by (it is held with
+     * them), and on what the records beneath it are blocked by (its work holds theirs).
+     */
+    const above = (id: string): string[] => {
+      const out: string[] = [];
+      const seenUp = new Set<string>([id]);
+      for (let at = facts.byId.get(id)?.parent_id ?? null; at !== null && facts.byId.has(at) && !seenUp.has(at); at = facts.byId.get(at)!.parent_id) {
+        seenUp.add(at);
+        out.push(at);
+      }
+      return out;
+    };
+    const beneath = (id: string): string[] => {
+      const out: string[] = [];
+      const queue = [...(facts.childIds.get(id) ?? [])];
+      while (queue.length > 0) {
+        const at = queue.shift()!;
+        if (out.includes(at)) continue;
+        out.push(at);
+        queue.push(...(facts.childIds.get(at) ?? []));
+      }
+      return out;
+    };
+    const seen = new Set<string>();
+    const stack = [blocker.id];
+    while (stack.length > 0) {
+      const at = stack.pop()!;
+      if (relatedRecords(facts.byId, at, row.id)) {
+        throw new StapleError("cycle", `${displayRef(row)} cannot be blocked by ${displayRef(blocker)}: ${displayRef(blocker)} already waits on it, or on an idea above or beneath it.`);
+      }
+      if (seen.has(at)) continue;
+      seen.add(at);
+      for (const holder of [at, ...above(at), ...beneath(at)]) stack.push(...(facts.blockers.get(holder) ?? []));
+    }
+    this.store.journaled(() => {
+      writePlanBlocker(this.db, row.id, blocker.id, true);
+      this.store.journal.record({ entity: "milestone", entityId: row.id, verb: "update", payload: { [planBlockerField(blocker.id)]: true }, actor: actor ?? null });
+      insertEvent(this.db, { kind: "idea_blocked", issueId: row.id, actor, payload: { blocker: blocker.id, title: blocker.title } });
+    });
+    return this.ideaView(row.id);
+  }
+
+  /** Remove one edge `block` made. The other record is untouched. */
+  unblock(ref: string, blockerRef: string, actor: string | null): IdeaView {
+    this.assertEnabled();
+    const row = this.recordRow(ref);
+    this.allowIdea(row, "edit", {});
+    // A blocker this device no longer holds is still removable by its id.
+    const held = this.facts().blockers.get(row.id) ?? [];
+    const blockerId = held.includes(blockerRef) ? blockerRef : this.row(blockerRef, false).id;
+    if (!held.includes(blockerId)) throw new StapleError("validation", `${displayRef(row)} is not blocked by ${blockerRef}.`);
+    this.store.journaled(() => {
+      writePlanBlocker(this.db, row.id, blockerId, null);
+      this.store.journal.record({ entity: "milestone", entityId: row.id, verb: "update", payload: { [planBlockerField(blockerId)]: null }, actor: actor ?? null });
+      insertEvent(this.db, { kind: "idea_unblocked", issueId: row.id, actor, payload: { blocker: blockerId } });
+    });
+    return this.ideaView(row.id);
+  }
+
   private link(row: PlanRow, issueId: string, actor: string | null, purpose: PlanLinkPurpose = "delivery"): void {
     const previous = planLinkPurposeOf(this.db, row.id, issueId);
     if (previous === purpose) return;
@@ -2785,6 +2975,8 @@ function ideaLifecycle(input: {
   scaffolded: boolean;
   /** A shaped plan that no longer passes the gate: Scaffold and Promote are held back, saying why. */
   planIncomplete: readonly string[];
+  /** Ideas above it not shaped, or blockers not shipped: Scaffold and Promote are held back, saying why. */
+  heldBy: IdeaHold | null;
   /** A proposal to be marked shaped stands: only then is it offered for dismissal. */
   proposed: boolean;
 }): { state: IdeaState; actions: OfferedAction[] } {
@@ -2807,6 +2999,8 @@ function ideaLifecycle(input: {
     }
     if ((id === "scaffold" || id === "promote") && input.planIncomplete.length > 0) {
       offered.disabledReason = `Plan incomplete: it needs ${gateSentence(input.planIncomplete).replace(/^it needs /, "").replace(/ before it is shaped$/, "")}.`;
+    } else if ((id === "scaffold" || id === "promote") && input.heldBy !== null) {
+      offered.disabledReason = `${capitalized(holdLabel(input.heldBy))}: ${holdWords(input.heldBy)}.`;
     }
     actions.push(offered);
   }
@@ -2983,6 +3177,68 @@ function taskContextDocument(epicTitle: string, ideaNumber: string | null, secti
   }
   if (sections.outOfScope) parts.push(`## Out of scope\n\n${sections.outOfScope}`);
   return parts.join("\n\n") + "\n";
+}
+
+function blockerRef(id: string, view: IdeaView | undefined): BlockerRef {
+  if (view === undefined) return { id, number: null, identifier: null, title: "Missing: this record is no longer on this device", state: null, missing: true };
+  return { id, number: view.number, identifier: view.identifier, title: view.title, state: view.state, missing: false };
+}
+
+/** Whether one record is the other, or above or beneath it, in the plan's tree. */
+function relatedRecords(byId: ReadonlyMap<string, Pick<PlanRow, "parent_id">>, a: string, b: string): boolean {
+  if (a === b) return true;
+  const above = (of: string, ancestor: string): boolean => {
+    const seen = new Set<string>();
+    for (let at = byId.get(of)?.parent_id ?? null; at !== null && !seen.has(at); at = byId.get(at)?.parent_id ?? null) {
+      if (at === ancestor) return true;
+      seen.add(at);
+    }
+    return false;
+  };
+  return above(a, b) || above(b, a);
+}
+
+/**
+ * What holds each record back (design/plan.md, "Sub-ideas and blockers"), from facts already read:
+ * the ideas above it that are not shaped and have not shipped (a dropped one included), nearest
+ * first, and the records it or an idea above it is blocked by that have neither shipped nor been
+ * dropped. A blocker this device does not hold, or one above or beneath the record, holds nothing.
+ */
+function holdsOf(
+  rows: readonly PlanRow[],
+  byId: ReadonlyMap<string, PlanRow>,
+  records: ReadonlyMap<string, RecordFacts>,
+  blockers: ReadonlyMap<string, readonly string[]>,
+): Map<string, IdeaHold> {
+  const out = new Map<string, IdeaHold>();
+  for (const row of rows) {
+    // A shipped or dropped record is built from no more: nothing holds it.
+    const own = records.get(row.id)!.state;
+    if (own === "shipped" || own === "dropped") continue;
+    const chain: string[] = [];
+    const seen = new Set<string>([row.id]);
+    for (let at = row.parent_id; at !== null && byId.has(at) && !seen.has(at); at = byId.get(at)!.parent_id) {
+      seen.add(at);
+      chain.push(at);
+    }
+    const parents = chain
+      .filter((id) => {
+        const facts = records.get(id)!;
+        return facts.maturity !== "shaped" && facts.state !== "shipped";
+      })
+      .map((id) => ({ id, title: byId.get(id)!.title, maturity: records.get(id)!.maturity }));
+    const waiting: IdeaHold["blockers"] = [];
+    for (const holder of [row.id, ...chain]) {
+      for (const blocker of blockers.get(holder) ?? []) {
+        const facts = records.get(blocker);
+        if (facts === undefined || facts.state === "shipped" || facts.state === "dropped") continue;
+        if (relatedRecords(byId, blocker, holder) || relatedRecords(byId, blocker, row.id) || waiting.some((entry) => entry.id === blocker)) continue;
+        waiting.push({ id: blocker, title: byId.get(blocker)!.title, state: facts.state });
+      }
+    }
+    if (parents.length > 0 || waiting.length > 0) out.set(row.id, { parents, blockers: waiting });
+  }
+  return out;
 }
 
 function isResolvedCategory(category: StatusCategory | null): boolean {

@@ -529,7 +529,7 @@ export function PlanSectionsView({ record, write }: { record: IdeaDetailData; wr
  * with estimate, blockers and acceptance. What is shown is what the store makes; a row created
  * by an earlier scaffold shows its number and is not made again.
  */
-export function ScaffoldSection({ preview, open, onToggle, onConfirm, busy }: { preview: ScaffoldPreviewData; open: boolean; onToggle: () => void; onConfirm: (fingerprint: string) => void; busy: boolean }) {
+export function ScaffoldSection({ preview, open, onToggle, onConfirm, busy, waiting = false }: { preview: ScaffoldPreviewData; open: boolean; onToggle: () => void; onConfirm: (fingerprint: string) => void; busy: boolean; waiting?: boolean }) {
   const count = countTasks(preview);
   const fresh = countTasks(preview, true);
   const held = preview.problems.length > 0;
@@ -541,7 +541,7 @@ export function ScaffoldSection({ preview, open, onToggle, onConfirm, busy }: { 
       </p>
       {held ? (
         <p className="m-0 mt-1.5 text-label text-flag-todo" data-plan-scaffold-problems>
-          Held back, the plan is incomplete: {preview.problems.join("; ")}.
+          {waiting ? "Held back" : "Held back, the plan is incomplete"}: {preview.problems.join("; ")}.
         </p>
       ) : null}
       <div className="mt-2 flex flex-wrap gap-2">

@@ -15,10 +15,14 @@ export type PlanStepNeed = (typeof PLAN_STEP_NEEDS)[number];
 /** Who must act next: the person, an agent, or nobody yet (a waiting idea). */
 export type PlanStepWho = "person" | "agent" | "nobody";
 
-/** What a waiting idea waits for: its planned start, and the records it depends on that have not shipped. */
+/**
+ * What a waiting idea waits for: its planned start, the records it depends on that have not
+ * shipped, and the ideas above it that are not shaped yet.
+ */
 export interface PlanStepWaitingOn {
   start?: string;
   records?: Array<{ id: string; title: string; state: IdeaState }>;
+  parents?: Array<{ id: string; title: string; maturity: Maturity }>;
 }
 
 export interface PlanStep {
@@ -65,8 +69,12 @@ export interface PlanStepInput {
   planIncomplete: readonly string[];
   /** The day it may start: its own planned start, else its nearest ancestor's; null for none. */
   start: string | null;
-  /** The records it depends on, with their state. */
+  /** The records it depends on, with their state: those it or an idea above it is blocked by, then those its text names. */
   dependsOn: ReadonlyArray<{ id: string; title: string; state: IdeaState }>;
+  /** The ideas above it that are not shaped and have not shipped (`IdeaView.heldBy`), nearest first. */
+  parents: ReadonlyArray<{ id: string; title: string; maturity: Maturity }>;
+  /** Which of `dependsOn` it (or an idea above it) is blocked by with an edge: those hold Scaffold back, a date does not release them. */
+  blockerIds: ReadonlyArray<string>;
   today: string;
 }
 
@@ -141,12 +149,20 @@ export function planStepOf(input: PlanStepInput): PlanStep | null {
   if (input.start !== null && input.start > input.today) waitingOn.start = input.start;
   const unshipped = input.dependsOn.filter((dep) => dep.state !== "shipped" && dep.state !== "dropped");
   if (unshipped.length > 0) waitingOn.records = unshipped.map(({ id, title, state }) => ({ id, title, state }));
-  if (waitingOn.start !== undefined || waitingOn.records !== undefined) {
+  if (input.parents.length > 0) waitingOn.parents = input.parents.map(({ id, title, maturity }) => ({ id, title, maturity }));
+  if (waitingOn.start !== undefined || waitingOn.records !== undefined || waitingOn.parents !== undefined) {
     const why = [
+      ...(waitingOn.parents ?? []).map((parent) =>
+        parent.maturity === "dropped" ? `its parent "${parent.title}", which was dropped (restore it, or move this idea out from under it)` : `its parent "${parent.title}" to be shaped (it is ${parent.maturity})`,
+      ),
       ...(waitingOn.start !== undefined ? [`its planned start, ${waitingOn.start}`] : []),
       ...(waitingOn.records ?? []).map((dep) => `"${dep.title}" (${dep.state})`),
     ].join(" and ");
-    return step("wait", "nobody", `Nothing to do yet: "${input.title}" waits for ${why}. Never scaffold it before then; the person releases it early by moving its planned start.`, { waitingOn });
+    const release =
+      waitingOn.parents !== undefined || unshipped.some((dep) => input.blockerIds.includes(dep.id))
+        ? "Scaffold is refused until every idea above it is shaped and what it is blocked by has shipped."
+        : "the person releases it early by moving its planned start.";
+    return step("wait", "nobody", `Nothing to do yet: "${input.title}" waits for ${why}. Never scaffold it before then; ${release}`, { waitingOn });
   }
   return step(
     "scaffold",
@@ -166,7 +182,7 @@ export function heldBySubIdeas(step: PlanStep, waiting: readonly PlanStep[]): Pl
     ...step,
     need: "wait",
     who: "nobody",
-    instruction: `Nothing to do yet: Scaffold on "${step.title}" would also build ${names}, which still wait${waiting.length === 1 ? "s" : ""}. Never scaffold it before then; scaffold each of its sub-ideas on its own when its turn comes.`,
+    instruction: `Nothing to do yet: "${step.title}" has sub-ideas that still wait, ${names}; Scaffold on it would build them early, or leave out the ones held back. Never scaffold it before then; scaffold each of its sub-ideas on its own when its turn comes.`,
     waitingOn: { records: waiting.map((sub) => ({ id: sub.ideaId, title: sub.title, state: sub.state })) },
   };
 }

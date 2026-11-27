@@ -55,6 +55,21 @@ export interface ScaffoldedFrom {
   rowId: string;
   /** The row's key as the breakdown holds it now; null once the row was removed from the breakdown. */
   rowKey: string | null;
+  /**
+   * The flag that the nearest idea above the one it came from is not shaped any more: it went back
+   * to exploring (or raw) or was dropped after this ticket was scaffolded. The ticket is flagged,
+   * never cancelled; null while every idea above is shaped (or shipped), or once the ticket is resolved.
+   */
+  parentUnsettled: UnsettledParent | null;
+}
+
+/** An idea above a scaffolded ticket's own that is not shaped any more. */
+export interface UnsettledParent {
+  ideaId: string;
+  ideaNumber: string | null;
+  identifier: string | null;
+  title: string;
+  maturity: "raw" | "exploring" | "dropped";
 }
 
 /** The ticket whose work sparked an idea. */
@@ -147,7 +162,34 @@ export function scaffoldedFromOf(db: DatabaseSync, issue: OriginRow): Scaffolded
     title: idea.title,
     rowId,
     rowKey: rowKeyOf(db, idea.id, rowId),
+    parentUnsettled: null,
   };
+}
+
+/**
+ * Whether an idea above this one is not shaped: one read per level, bounded by the tree's depth.
+ * Only a hint: the plan's derivation decides (one that shipped while exploring holds nothing).
+ */
+export function unsettledAbove(db: DatabaseSync, ideaId: string): boolean {
+  const step = db.prepare("SELECT parent_id, plan_maturity FROM issues WHERE id = ?");
+  const seen = new Set<string>([ideaId]);
+  let at = (step.get(ideaId) as { parent_id: string | null } | undefined)?.parent_id ?? null;
+  while (at !== null && !seen.has(at)) {
+    seen.add(at);
+    const row = step.get(at) as { parent_id: string | null; plan_maturity: string | null } | undefined;
+    if (!row || row.plan_maturity === null) return false;
+    if (row.plan_maturity !== "shaped") return true;
+    at = row.parent_id;
+  }
+  return false;
+}
+
+/** The unsettled parent as a ticket reads it, from the record's row. */
+export function unsettledParentOf(db: DatabaseSync, parent: { id: string; maturity: string }): UnsettledParent | null {
+  if (parent.maturity !== "raw" && parent.maturity !== "exploring" && parent.maturity !== "dropped") return null;
+  const row = db.prepare(`SELECT ${RECORD_COLUMNS} FROM issues WHERE id = ?`).get(parent.id) as RecordRow | undefined;
+  if (!row) return null;
+  return { ideaId: row.id, ideaNumber: ideaNumberOf(row), identifier: ticketNumberOf(row), title: row.title, maturity: parent.maturity };
 }
 
 /** The ticket whose work sparked this idea, or null (none was named, or it is gone from this device). */

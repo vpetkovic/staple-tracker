@@ -80,11 +80,13 @@ describe("workspace migration 017", () => {
     db.exec("ALTER TABLE issues DROP COLUMN plan_ticket_number");
     // 029's column. Dropped so the walk from 16 can add it again.
     db.exec("ALTER TABLE issues DROP COLUMN plan_explored");
+    // 030's table. Dropped so the walk from 16 can create it again.
+    db.exec("DROP TABLE IF EXISTS plan_blockers");
     db.prepare("UPDATE meta SET value = '16' WHERE key = 'schema_version'").run();
-    expect(describeSchema(db, WORKSPACE_TARGET).pending).toEqual([17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]);
+    expect(describeSchema(db, WORKSPACE_TARGET).pending).toEqual([17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]);
 
     migrateWorkspace(db);
-    expect(describeSchema(db, WORKSPACE_TARGET)).toMatchObject({ current: 29, pending: [] });
+    expect(describeSchema(db, WORKSPACE_TARGET)).toMatchObject({ current: 30, pending: [] });
     expect(owned()).toEqual(recorded);
     expect(db.prepare("SELECT value FROM meta WHERE key = 'derived_status_publish_owed'").get()).toEqual({ value: "1" });
     expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name").all()).toEqual([
@@ -126,6 +128,8 @@ describe("workspace migration 017", () => {
     db.exec("ALTER TABLE issues DROP COLUMN plan_ticket_number");
     // 029's column. Dropped so the walk from 16 can add it again.
     db.exec("ALTER TABLE issues DROP COLUMN plan_explored");
+    // 030's table. Dropped so the walk from 16 can create it again.
+    db.exec("DROP TABLE IF EXISTS plan_blockers");
     db.prepare("UPDATE meta SET value = '16' WHERE key = 'schema_version'").run();
     migrateWorkspace(db);
     expect(db.prepare("SELECT value FROM meta WHERE key = 'derived_status_publish_owed'").get()).toBeUndefined();

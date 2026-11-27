@@ -163,7 +163,8 @@ describe("what the plan's accounting and hold cost", () => {
       return statements(() => rederivePlanMilestonesAfterPull(w.db, []));
     };
     const base = cost(4, 0);
-    expect(base).toBeLessThanOrEqual(16);
+    // 16 -> 17: every record's blocker edges, read in one statement with the rest of the facts.
+    expect(base).toBeLessThanOrEqual(17);
     expect(cost(16, 0)).toBe(base);
     expect(cost(4, 2)).toBe(base);
     // And it opens no mutation: nothing to journal, nothing to send.

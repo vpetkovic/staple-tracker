@@ -66,7 +66,7 @@ describe("a scaffolded ticket's provenance", () => {
     const first = tasks.get("R1")!;
     expect(origin(first.id)).toEqual({ origin_kind: SCAFFOLD_ORIGIN_KIND, origin_id: `${id}/${rows.get("R1")}` });
     const from = store.context(first.identifier).scaffoldedFrom;
-    expect(from).toEqual({ ideaId: id, ideaNumber: number, identifier: epic.identifier, title: "Checkout", rowId: rows.get("R1"), rowKey: "R1" });
+    expect(from).toEqual({ ideaId: id, ideaNumber: number, identifier: epic.identifier, title: "Checkout", rowId: rows.get("R1"), rowKey: "R1", parentUnsettled: null });
     expect(scaffoldedFromWords(from!)).toBe(`from ${number} · row R1`);
     expect(store.context(tasks.get("R2")!.identifier).scaffoldedFrom?.rowKey).toBe("R2");
     // The epic the idea became is not a row's ticket.

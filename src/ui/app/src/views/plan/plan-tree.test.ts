@@ -47,7 +47,7 @@ function idea(id: string, title: string, extra: Partial<IdeaData> = {}): IdeaDat
     openQuestions: 0,
     planIncomplete: [],
     completeness: { starred: 3, starredTotal: 3, filled: 5, total: 10 },
-    dependsOn: [],
+    dependsOn: [], blockedBy: [], heldBy: null,
     state: "shaped",
     actions: [],
     nextStep: null,
@@ -163,6 +163,7 @@ describe("a step's short label", () => {
   it("says what the record needs, and whether it waits on the person", () => {
     expect(stepLabel(step("a", "wait", "nobody", { waitingOn: { start: "2026-12-01" } }))).toEqual({ label: "starts Dec 1", person: false });
     expect(stepLabel(step("a", "wait", "nobody", { waitingOn: { records: [{ id: "b", title: "Audit trail", state: "shaped" }] } }))).toEqual({ label: "waits on Audit trail", person: false });
+    expect(stepLabel(step("a", "wait", "nobody", { waitingOn: { parents: [{ id: "p", title: "SSO", maturity: "exploring" }], records: [{ id: "b", title: "Audit trail", state: "shaped" }] } }))).toEqual({ label: "waiting on parent · waits on Audit trail", person: false });
     expect(stepLabel(step("a", "wait", "nobody", { waitingOn: { start: "2026-12-01", records: [{ id: "b", title: "Audit trail", state: "shaped" }, { id: "c", title: "Ledger", state: "started" }] } }))).toEqual({
       label: "starts Dec 1 · waits on Audit trail, Ledger",
       person: false,

@@ -826,6 +826,7 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/plan",
       "/api/plan-idea",
       "/api/plan/adopt",
+      "/api/plan/blocker",
       "/api/plan/capture",
       "/api/plan/decision",
       "/api/plan/horizon-create",

@@ -54,7 +54,7 @@ function idea(id: string, extra: Partial<IdeaData> = {}): IdeaData {
     openQuestions: 0,
     planIncomplete: [],
     completeness: { starred: 0, starredTotal: 3, filled: 0, total: 10 },
-    dependsOn: [],
+    dependsOn: [], blockedBy: [], heldBy: null,
     state: "raw",
     actions: [],
     createdAt: "2026-11-01T00:00:00.000Z",
@@ -186,6 +186,17 @@ describe("the Horizons lens is delivery", () => {
     const board = renderToStaticMarkup(<HorizonsBoard plan={plan([shipped, started])} write={async () => true} onOpen={() => {}} selected={null} />);
     expect(board).toMatch(/data-plan-card="shipped"[^>]*data-plan-card-shipped=""/);
     expect(board).not.toMatch(/data-plan-card="started"[^>]*data-plan-card-shipped/);
+  });
+
+  it("chips a held card: a shaped one waiting on its parent or blockers, a promoted one whose parent went back", () => {
+    const parent = { id: "p", title: "SSO", maturity: "exploring" as const };
+    const waiting = renderToStaticMarkup(<DeliveryChips idea={{ ...started, state: "shaped", stage: "shaped", linkCount: 0, heldBy: { parents: [parent], blockers: [] } }} />);
+    expect(waiting).toContain('data-plan-card-held="waiting on parent"');
+    expect(waiting).toContain('title="SSO (exploring)"');
+    const blocked = renderToStaticMarkup(<DeliveryChips idea={{ ...started, state: "shaped", stage: "shaped", linkCount: 0, heldBy: { parents: [], blockers: [{ id: "b", title: "Audit", state: "exploring" }, { id: "c", title: "Search", state: "raw" }] } }} />);
+    expect(blocked).toContain('data-plan-card-held="waiting on blockers"');
+    expect(renderToStaticMarkup(<DeliveryChips idea={{ ...started, heldBy: { parents: [parent], blockers: [] } }} />)).toContain('data-plan-card-held="parent not shaped"');
+    expect(renderToStaticMarkup(<DeliveryChips idea={started} />)).not.toContain("data-plan-card-held");
   });
 
   it("captions a card delivered outside the tracker, and only that card", () => {
