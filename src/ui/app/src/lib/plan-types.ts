@@ -341,6 +341,10 @@ export interface PlanFileData {
   problem: string | null;
   state: PlanFileState;
   idea: PlanFileIdea | null;
+  /** An idea came from this path and the file has changed since (an ignored file can be both). */
+  changedSinceImport: boolean;
+  /** Other ideas imported from the same file as it stands. */
+  alsoImportedAs: PlanFileIdea[];
 }
 
 /** The Plan files tray (`PlanFilesView`): where it looks, what it found, how many of each. */

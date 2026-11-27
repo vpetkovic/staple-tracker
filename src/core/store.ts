@@ -2414,17 +2414,17 @@ export class WorkspaceStore {
   }
 
   /**
-   * Ignore one plan file, or end its ignore (`entry` null): the entity keyed by its path is set,
-   * or deleted with a tombstone. A create when its last word here was a delete, as `setSetting`
-   * does, so an ignore ended and set again lands on every device. Writes nothing when it would
-   * change nothing.
+   * Ignore one plan file as it stands (`ignored`), or end that ignore: the entity keyed by its path
+   * and hash is set, or deleted with a tombstone. A create when its last word here was a delete, as
+   * `setSetting` does, so an ignore ended and set again lands on every device. Writes nothing when
+   * it would change nothing.
    */
-  setIgnoredPlanFile(path: string, entry: IgnoredPlanFile | null, actor: string | null): void {
-    const key = ignoredFileKey(path);
+  setIgnoredPlanFile(entry: IgnoredPlanFile, ignored: boolean, actor: string | null): void {
+    const key = ignoredFileKey(entry);
     const metaKey = settingMetaKey(key);
     this.atomically(() => {
       const row = this.db.prepare("SELECT value FROM meta WHERE key = ?").get(metaKey) as { value: string } | undefined;
-      if (entry === null) {
+      if (!ignored) {
         if (row === undefined) return;
         this.db.prepare("DELETE FROM meta WHERE key = ?").run(metaKey);
         this.journal.record({ entity: "setting", entityId: key, verb: "delete", payload: {}, actor });

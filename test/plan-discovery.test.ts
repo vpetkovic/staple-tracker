@@ -6,12 +6,12 @@
  * by path and content hash; the person imports one or many, or ignores one; nothing imports on
  * its own. The same on a device that received the marks by sync and on a freshly hydrated one.
  */
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openDb } from "../src/core/db.js";
-import { discoverPlanFiles, doneStatus, planStatus, workspaceRootOf } from "../src/core/plan-discovery.js";
+import { discoverPlanFiles, doneStatus, planHashOf, planStatus, workspaceRootOf } from "../src/core/plan-discovery.js";
 import { discoveryPathsProblem, ignoredFileKey, isIgnoredPlanFile } from "../src/core/plan-discovery-paths.js";
 import type { PlanStore } from "../src/core/plan-store.js";
 import { migrateWorkspace } from "../src/core/schema.js";
@@ -131,6 +131,33 @@ describe("finding plan files", () => {
     expect(billing).toMatchObject({ path: "plans/billing", main: "plans/billing/README.md", title: "billing" });
   });
 
+  it("lists plans that share an assets folder one by one, since no file there is the folder's own", () => {
+    put("plans/active/one.md", "# One\n");
+    put("plans/active/two.md", "# Two\n");
+    put("plans/active/assets/shared.jsx", "export {};\n");
+    put("plans/solo/only.md", "# Only\n");
+    put("plans/solo/assets/a.html", "<p/>");
+    expect(discoverPlanFiles(root, ["plans/**"]).plans.map((plan) => [plan.path, plan.kind])).toEqual([
+      ["plans/active/one.md", "file"],
+      ["plans/active/two.md", "file"],
+      ["plans/solo", "folder"],
+    ]);
+  });
+
+  it("reads a status written as a heading", () => {
+    expect(planStatus("# X\n\n## Status\n\nDone, shipped in 2.1\n\n## Goal\n")).toBe("Done, shipped in 2.1");
+    expect(planStatus("# X\n\n## Status\n\n## Goal\n")).toBeNull();
+  });
+
+  it("hashes what it reads the way an import checks it", () => {
+    layout();
+    const sso = discoverPlanFiles(root, ["plans/**"]).plans.find((plan) => plan.path === "Plans/research/sso")!;
+    const contents = new Map(sso.files.map((file) => [file, new Uint8Array(readFileSync(join(root, file)))]));
+    expect(planHashOf(sso, contents)).toBe(sso.hash);
+    const one = discoverPlanFiles(root, ["*.md"]).plans[0]!;
+    expect(planHashOf(one, new Map([[one.main, new Uint8Array(readFileSync(join(root, one.main)))]]))).toBe(one.hash);
+  });
+
   it("hashes a file by its bytes and a folder by every file in it", () => {
     layout();
     const hashOf = (path: string) => discoverPlanFiles(root, ["*.md", "plans/**"]).plans.find((plan) => plan.path === path)!.hash;
@@ -194,9 +221,12 @@ describe("finding plan files", () => {
     expect(isIgnoredPlanFile({ path: "plans/a.md", hash: `sha256:${"a".repeat(64)}` })).toBe(true);
     expect(isIgnoredPlanFile({ path: "plans/a.md", hash: "abc" })).toBe(false);
     expect(isIgnoredPlanFile({ path: "../a.md", hash: `sha256:${"a".repeat(64)}` })).toBe(false);
-    expect(ignoredFileKey("./plans/a.md/")).toBe(ignoredFileKey("plans/a.md"));
-    expect(ignoredFileKey("plans/a.md")).toMatch(/^plan\.ignoredFile:[0-9a-f]{32}$/);
-    expect(ignoredFileKey("plans/b.md")).not.toBe(ignoredFileKey("plans/a.md"));
+    const hash = `sha256:${"a".repeat(64)}`;
+    expect(ignoredFileKey({ path: "./plans/a.md/", hash })).toBe(ignoredFileKey({ path: "plans/a.md", hash }));
+    expect(ignoredFileKey({ path: "plans/a.md", hash })).toMatch(/^plan\.ignoredFile:[0-9a-f]{32}$/);
+    expect(ignoredFileKey({ path: "plans/b.md", hash })).not.toBe(ignoredFileKey({ path: "plans/a.md", hash }));
+    // The same path with other content is another ignore: two checkouts never write one entity two ways.
+    expect(ignoredFileKey({ path: "plans/a.md", hash: `sha256:${"b".repeat(64)}` })).not.toBe(ignoredFileKey({ path: "plans/a.md", hash }));
   });
 });
 
@@ -294,9 +324,32 @@ describe("the Plan files tray", () => {
     expect(refused(() => plan.ignoreDiscovered(root, "README.md", true, "VP", PERSON)).code).toBe("not_found");
   });
 
+  it("imports by a path in any case when only one listed file matches it", () => {
+    const { imported } = plan.importDiscovered(root, ["plans/ACTIVE/Passkeys.MD"], {}, "VP", PERSON);
+    expect(imported.map((entry) => entry.path)).toEqual(["Plans/active/passkeys.md"]);
+    plan.ignoreDiscovered(root, "ROADMAP.md", true, "VP", PERSON);
+    expect(states()["roadmap.md"]).toBe("ignored");
+  });
+
+  it("says an ignored file changed since its import, and an ignore of content imported elsewhere is spent", () => {
+    plan.importDiscovered(root, ["roadmap.md"], {}, "VP", PERSON);
+    put("roadmap.md", "# Roadmap v2\n");
+    plan.ignoreDiscovered(root, "roadmap.md", true, "VP", PERSON);
+    const roadmap = plan.discoverFiles(root).files.find((file) => file.path === "roadmap.md")!;
+    expect(roadmap).toMatchObject({ state: "ignored", changedSinceImport: true, idea: { number: "I-TST-1" } });
+    // An ignore whose content an idea came from (another device imported it) no longer holds.
+    const mock = plan.discoverFiles(root).files.find((file) => file.path === "Plans/research/mock.jsx")!;
+    store.setIgnoredPlanFile({ path: mock.path, hash: mock.hash }, true, "VP");
+    expect(states()[mock.path]).toBe("ignored");
+    store.setIgnoredPlanFile({ path: "elsewhere/mock.jsx", hash: mock.hash }, true, "VP");
+    plan.importDiscovered(root, [mock.path], {}, "VP", PERSON);
+    put("Plans/research/mock.jsx", "export const Mock = () => <p/>;\n");
+    expect(states()[mock.path]).toBe("changed");
+  });
+
   it("an unchanged import outranks an ignore, and an ignore outranks a change", () => {
     plan.importDiscovered(root, ["roadmap.md"], {}, "VP", PERSON);
-    store.setIgnoredPlanFile("roadmap.md", { path: "roadmap.md", hash: `sha256:${"0".repeat(64)}` }, "VP");
+    store.setIgnoredPlanFile({ path: "roadmap.md", hash: `sha256:${"0".repeat(64)}` }, true, "VP");
     expect(states()["roadmap.md"]).toBe("imported");
     put("roadmap.md", "# Roadmap v2\n");
     expect(states()["roadmap.md"]).toBe("ignored");
@@ -384,6 +437,55 @@ describe("plan file marks over sync", () => {
       const fresh = fleet!.machine("fresh");
       await fresh.sync();
       expect(tray(fresh)).toEqual(seen);
+      expect(conflicts(a)).toEqual([]);
+      expect(conflicts(b)).toEqual([]);
+    });
+
+    it(`two devices ignoring one path while their checkouts differ both land, with no conflict (${fold} fold)`, async () => {
+      const { a, b } = await pair(fold);
+      a.use();
+      a.store.plan().ignoreDiscovered(root, "roadmap.md", true, "VP", PERSON);
+      put("roadmap.md", "# Roadmap on another branch\n");
+      b.use();
+      b.store.plan().ignoreDiscovered(root, "roadmap.md", true, "VP", PERSON);
+      await both(a, b);
+      expect(a.store.ignoredPlanFiles()).toHaveLength(2);
+      expect(b.store.ignoredPlanFiles()).toEqual(a.store.ignoredPlanFiles());
+      expect(tray(a).find((file) => file.path === "roadmap.md")!.state).toBe("ignored");
+      expect(conflicts(a)).toEqual([]);
+      expect(conflicts(b)).toEqual([]);
+    });
+
+    it(`an ignore on one device and an import of the same file on another read the same everywhere, and a later change reads changed (${fold} fold)`, async () => {
+      const { a, b } = await pair(fold);
+      a.use();
+      a.store.plan().ignoreDiscovered(root, "Plans/active/passkeys.md", true, "VP", PERSON);
+      b.use();
+      b.store.plan().importDiscovered(root, ["Plans/active/passkeys.md"], {}, "VP", PERSON);
+      await both(a, b);
+      expect(tray(a).find((file) => file.path === "Plans/active/passkeys.md")!.state).toBe("imported");
+      put("Plans/active/passkeys.md", "# Passkeys, revised\n");
+      const fresh = fleet!.machine("fresh");
+      await fresh.sync();
+      for (const machine of [a, b, fresh]) expect(tray(machine).find((file) => file.path === "Plans/active/passkeys.md")!.state).toBe("changed");
+      expect(conflicts(a)).toEqual([]);
+      expect(conflicts(b)).toEqual([]);
+    });
+
+    it(`one file imported on two devices offline names the other idea, with no conflict (${fold} fold)`, async () => {
+      const { a, b } = await pair(fold);
+      a.use();
+      a.store.plan().importDiscovered(root, ["roadmap.md"], {}, "VP", PERSON);
+      b.use();
+      b.store.plan().importDiscovered(root, ["roadmap.md"], {}, "VP", PERSON);
+      await both(a, b);
+      for (const machine of [a, b]) {
+        machine.use();
+        const roadmap = machine.store.plan().discoverFiles(root).files.find((file) => file.path === "roadmap.md")!;
+        expect(roadmap.state).toBe("imported");
+        expect(roadmap.alsoImportedAs).toHaveLength(1);
+        expect(roadmap.alsoImportedAs[0]!.id).not.toBe(roadmap.idea!.id);
+      }
       expect(conflicts(a)).toEqual([]);
       expect(conflicts(b)).toEqual([]);
     });

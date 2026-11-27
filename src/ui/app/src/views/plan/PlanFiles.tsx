@@ -6,13 +6,13 @@
  * until the person presses Import: opening the tray reads the files and writes nothing.
  */
 import { FolderOpen } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import { GuardRefusal } from "@/components/GuardRefusal";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { getPlanFiles, planFilesWrite, putSettings } from "@/lib/api";
-import type { PlanData, PlanFileData, PlanFilesData, PlanFileState } from "@/lib/plan-types";
+import type { PlanData, PlanFileData, PlanFileIdea, PlanFilesData, PlanFileState } from "@/lib/plan-types";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
 import { cn } from "@/lib/utils";
 
@@ -33,6 +33,9 @@ export const selectAllOf = (files: readonly PlanFileData[]) => files.filter((fil
 /** The paths as the editor shows them, one per line, and back. */
 export const pathsText = (paths: readonly string[]) => paths.join("\n");
 export const textPaths = (text: string) => text.split("\n").map((line) => line.trim()).filter((line) => line !== "");
+
+/** How a row names an idea: its ticket number once promoted, else its idea number. */
+const ideaName = (idea: PlanFileIdea) => idea.identifier ?? idea.number ?? idea.title;
 
 /** The tray's button on the Import form: opens the dialog. */
 export function PlanFilesButton({ onOpen }: { onOpen: () => void }) {
@@ -253,7 +256,8 @@ export function PlanFileRow({
   onOpenIdea: (id: string) => void;
 }) {
   const canPick = importable(file);
-  const id = `plan-file-${file.hash.slice(7, 19)}-${file.path.length}`;
+  // One id per row, whatever its path or content: two rows with the same content must not share a label.
+  const id = useId();
   const notes = [
     file.kind === "folder" ? `folder · ${file.files.length} files` : null,
     file.done ? `done${file.status ? ` (${file.status})` : ""}` : file.status,
@@ -291,32 +295,49 @@ export function PlanFileRow({
             {file.idea ? (
               <span className="whitespace-nowrap">
                 {notes.length > 0 ? <span aria-hidden className="mr-1.5">·</span> : null}
-                {file.state === "changed" ? "changed since imported as " : "imported as "}
+                {file.changedSinceImport ? "changed since imported as " : "imported as "}
                 <button type="button" className="focus-ring rounded-sm font-medium text-foreground underline underline-offset-2" onClick={() => onOpenIdea(file.idea!.id)} data-plan-file-idea>
-                  {file.idea.identifier ?? file.idea.number ?? file.idea.title}
+                  {ideaName(file.idea)}
                 </button>
+              </span>
+            ) : null}
+            {file.alsoImportedAs.length > 0 ? (
+              // The same file imported twice, as two devices can offline: both ideas are named.
+              <span className="whitespace-nowrap" data-plan-file-also>
+                <span aria-hidden className="mr-1.5">·</span>
+                also as{" "}
+                {file.alsoImportedAs.map((idea, index) => (
+                  <span key={idea.id}>
+                    {index > 0 ? ", " : null}
+                    <button type="button" className="focus-ring rounded-sm font-medium text-foreground underline underline-offset-2" onClick={() => onOpenIdea(idea.id)}>
+                      {ideaName(idea)}
+                    </button>
+                  </span>
+                ))}
               </span>
             ) : null}
           </span>
         ) : null}
       </label>
-      {/* On a phone the actions take their own line under the name, so the name is not squeezed. */}
-      <span className="flex shrink-0 items-center gap-1 max-sm:w-full max-sm:pl-7">
-        {file.state === "new" || file.state === "changed" ? (
-          <>
-            <Button type="button" size="sm" variant="outline" className="h-8" disabled={!canPick || busy} onClick={onImport} data-plan-file-import>
-              {file.state === "changed" ? "Import again" : "Import"}
+      {/* On a phone the actions take their own line under the name, so the name is not squeezed. An imported row has none. */}
+      {file.state === "imported" ? null : (
+        <span className="flex shrink-0 items-center gap-1 max-sm:w-full max-sm:pl-7">
+          {file.state === "ignored" ? (
+            <Button type="button" size="sm" variant="ghost" className="h-8" disabled={busy} onClick={() => onIgnore(false)} data-plan-file-unignore>
+              Unignore
             </Button>
-            <Button type="button" size="sm" variant="ghost" className="h-8" disabled={busy} onClick={() => onIgnore(true)} data-plan-file-ignore>
-              Ignore
-            </Button>
-          </>
-        ) : file.state === "ignored" ? (
-          <Button type="button" size="sm" variant="ghost" className="h-8" disabled={busy} onClick={() => onIgnore(false)} data-plan-file-unignore>
-            Unignore
-          </Button>
-        ) : null}
-      </span>
+          ) : (
+            <>
+              <Button type="button" size="sm" variant="outline" className="h-8" disabled={!canPick || busy} onClick={onImport} data-plan-file-import>
+                {file.state === "changed" ? "Import again" : "Import"}
+              </Button>
+              <Button type="button" size="sm" variant="ghost" className="h-8" disabled={busy} onClick={() => onIgnore(true)} data-plan-file-ignore>
+                Ignore
+              </Button>
+            </>
+          )}
+        </span>
+      )}
     </li>
   );
 }

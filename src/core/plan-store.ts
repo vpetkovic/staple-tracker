@@ -23,7 +23,7 @@
  *    lateness and a horizon's members are read or rebuilt from the work every time.
  */
 import type { DatabaseSync, StatementSync } from "node:sqlite";
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { insertEvent } from "./event-log.js";
 import { moveIdentifier } from "./identifier-moves.js";
@@ -114,7 +114,7 @@ import {
 } from "./plan-sections.js";
 import { LISTED_HORIZON, rebuildPlanMembers } from "./plan-members.js";
 import { readImportFile } from "./plan-import.js";
-import { DISCOVERY_LIMITS, discoverPlanFiles, type DiscoveredPlan, type DiscoveryLimits } from "./plan-discovery.js";
+import { DISCOVERY_LIMITS, discoverPlanFiles, planHashOf, type DiscoveredPlan, type DiscoveryLimits } from "./plan-discovery.js";
 import { discoveryPaths, normalizeDiscoveryPath } from "./plan-discovery-paths.js";
 import { cleanFilename } from "./attachments.js";
 import { classifyStep, heldBySubIdeas, orderPlanSteps, planStepOf, type PlanStep, type PlanStepInput } from "./plan-steps.js";
@@ -141,6 +141,10 @@ export interface PlanFileView extends DiscoveredPlan {
   state: PlanFileState;
   /** The idea it was imported as: the unchanged import, else the latest from its path, else one with its content; null when none. */
   idea: ImportSource["idea"] | null;
+  /** Whether an idea came from this path and the file has changed since (an ignored file can be both). */
+  changedSinceImport: boolean;
+  /** Other ideas imported from the same file as it stands, such as two devices importing it offline. */
+  alsoImportedAs: Array<ImportSource["idea"]>;
 }
 
 /** The Plan files tray: where discovery looks, what it found, and how many of each state. */
@@ -2619,17 +2623,22 @@ export class PlanStore {
     if (root === null) return { paths, files: [], truncated: false, counts: empty, unavailable: "This workspace is not inside a repository, so there are no plan files to find." };
     const found = discoverPlanFiles(root, paths, this.discoveryLimits);
     const sources = this.importSources();
-    const ignored = this.store.ignoredPlanFiles();
+    // An ignore of content some idea was imported from is spent: an import on another device,
+    // offline, outranks it on every device alike, so a later change reads as changed.
+    const importedHashes = new Set(sources.map((source) => source.hash));
+    const ignored = this.store.ignoredPlanFiles().filter((entry) => !importedHashes.has(entry.hash));
     const counts = { ...empty };
     const files = found.plans.map((plan): PlanFileView => {
       const samePath = sources.filter((source) => source.path === plan.path);
-      const exact = samePath.find((source) => source.hash === plan.hash);
-      const moved = sources.find((source) => source.hash === plan.hash);
+      const exacts = samePath.filter((source) => source.hash === plan.hash);
+      const moved = sources.filter((source) => source.hash === plan.hash);
       const ignore = ignored.some((entry) => entry.path === plan.path || entry.hash === plan.hash);
-      const state: PlanFileState = exact ? "imported" : ignore ? "ignored" : samePath.length > 0 ? "changed" : moved ? "imported" : "new";
+      const changedSinceImport = samePath.length > 0 && exacts.length === 0;
+      const state: PlanFileState = exacts.length > 0 ? "imported" : ignore ? "ignored" : changedSinceImport ? "changed" : moved.length > 0 ? "imported" : "new";
       counts[state] += 1;
-      const idea = (exact ?? samePath.at(-1) ?? moved)?.idea ?? null;
-      return { ...plan, state, idea };
+      const chosen = exacts.at(-1) ?? samePath.at(-1) ?? moved.at(-1);
+      const same = exacts.length > 0 ? exacts : moved;
+      return { ...plan, state, idea: chosen?.idea ?? null, changedSinceImport, alsoImportedAs: same.filter((source) => source !== chosen).map((source) => source.idea) };
     });
     return { paths, files, truncated: found.truncated, counts, unavailable: null };
   }
@@ -2640,10 +2649,17 @@ export class PlanStore {
     }
   }
 
-  private discovered(root: string | null, path: string): { view: PlanFilesView; file: PlanFileView | undefined } {
+  /** A listed plan file by its path as spelled, else by the one path that matches it in any case. */
+  private listed(view: PlanFilesView, path: string): PlanFileView | undefined {
+    const exact = view.files.find((file) => file.path === path);
+    if (exact) return exact;
+    const loose = view.files.filter((file) => file.path.toLowerCase() === path.toLowerCase());
+    return loose.length === 1 ? loose[0] : undefined;
+  }
+
+  private discovered(root: string | null, path: string): PlanFileView | undefined {
     if (root === null) throw new StapleError("validation", "This workspace is not inside a repository, so there are no plan files to import or ignore.");
-    const view = this.discoverFiles(root);
-    return { view, file: view.files.find((file) => file.path === path) };
+    return this.listed(this.discoverFiles(root), path);
   }
 
   /**
@@ -2665,9 +2681,8 @@ export class PlanStore {
     if (wanted.length === 0) throw new StapleError("validation", "Name at least one plan file to import.");
     if (root === null) throw new StapleError("validation", "This workspace is not inside a repository, so there are no plan files to import.");
     const view = this.discoverFiles(root);
-    const byPath = new Map(view.files.map((file) => [file.path, file]));
     const picked = wanted.map((path) => {
-      const file = byPath.get(path);
+      const file = this.listed(view, path);
       if (file === undefined) {
         throw new StapleError("not_found", `"${path}" is not a plan file this workspace finds. staple idea files lists them; the paths it looks in are the plan.discoveryPaths setting.`, { path });
       }
@@ -2677,13 +2692,21 @@ export class PlanStore {
       }
       return file;
     });
-    const reads = picked.map((file) => {
-      const bytesOf = (path: string) => new Uint8Array(readFileSync(join(root, path)));
+    const realRoot = realpathSync(root);
+    const reads = [...new Map(picked.map((file) => [file.path, file])).values()].map((file) => {
+      // Read only inside the root, through no link, and only what discovery hashed a moment ago.
+      const bytesOf = (path: string) => {
+        const real = realpathSync(join(root, path));
+        if (real !== join(realRoot, path)) throw new StapleError("validation", `"${path}" is reached through a link, so it is not imported.`, { path });
+        return new Uint8Array(readFileSync(real));
+      };
+      const contents = new Map(file.files.map((path) => [path, bytesOf(path)]));
+      if (planHashOf(file, contents) !== file.hash) throw new StapleError("conflict", `"${file.path}" changed while it was being imported. Look again, then import it.`, { path: file.path });
       const ext = file.main.slice(file.main.lastIndexOf("."));
       const name = cleanFilename(file.main.split("/").pop()!);
       // A folder's idea is titled for the folder when its main file has no title of its own.
-      const read = readImportFile(file.kind === "folder" ? `${file.path.split("/").pop()}${ext}` : name, bytesOf(file.main));
-      return { file, name, read, others: file.files.filter((path) => path !== file.main).map((path) => ({ path, bytes: bytesOf(path) })) };
+      const read = readImportFile(file.kind === "folder" ? `${file.path.split("/").pop()}${ext}` : name, contents.get(file.main)!);
+      return { file, name, read, others: file.files.filter((path) => path !== file.main).map((path) => ({ path, bytes: contents.get(path)! })) };
     });
     const ids = this.store.journaled(() => {
       const out = reads.map(({ file, name, read, others }) => ({
@@ -2691,7 +2714,7 @@ export class PlanStore {
         id: this.importRead(name, read, input, actor, options, { path: file.path, main: file.main, hash: file.hash, others }),
       }));
       for (const entry of this.store.ignoredPlanFiles()) {
-        if (picked.some((file) => entry.path === file.path || entry.hash === file.hash)) this.store.setIgnoredPlanFile(entry.path, null, actor);
+        if (picked.some((file) => entry.path === file.path || entry.hash === file.hash)) this.store.setIgnoredPlanFile(entry, false, actor);
       }
       return out;
     });
@@ -2710,15 +2733,16 @@ export class PlanStore {
     this.assertEnabled();
     this.assertPlanFilesPerson(options, ignore ? "Ignoring plan files" : "Ending an ignore");
     const clean = normalizeDiscoveryPath(path);
-    const { file } = this.discovered(root, clean);
+    const file = this.discovered(root, clean);
     this.store.journaled(() => {
       if (ignore) {
         if (file === undefined) throw new StapleError("not_found", `"${clean}" is not a plan file this workspace finds, so there is nothing to ignore.`, { path: clean });
-        this.store.setIgnoredPlanFile(clean, { path: clean, hash: file.hash }, actor);
+        this.store.setIgnoredPlanFile({ path: file.path, hash: file.hash }, true, actor);
         return;
       }
+      const at = file?.path ?? clean;
       for (const entry of this.store.ignoredPlanFiles()) {
-        if (entry.path === clean || (file !== undefined && entry.hash === file.hash)) this.store.setIgnoredPlanFile(entry.path, null, actor);
+        if (entry.path === at || (file !== undefined && entry.hash === file.hash)) this.store.setIgnoredPlanFile(entry, false, actor);
       }
     });
     return this.discoverFiles(root);

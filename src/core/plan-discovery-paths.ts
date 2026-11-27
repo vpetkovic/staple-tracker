@@ -6,10 +6,11 @@
  * Where to look is one registered workspace setting, `plan.discoveryPaths`: the person edits it
  * as a whole, and two devices that change it offline raise a conflict like any setting.
  *
- * Each ignored file is its own `setting` entity, keyed by its path (`ignoredFileKey`), not an
- * entry in one list: two devices that ignore different files offline write different entities and
- * both ignores land, with no conflict. Ending an ignore deletes it (a tombstone, as a reset
- * setting has). Like the repository's prefix, these keys ride the setting entity every build
+ * Each ignore is its own `setting` entity, keyed by the path and the content it had then
+ * (`ignoredFileKey`), not an entry in one list: two devices that ignore different files offline,
+ * or the same path while their checkouts hold different content, write different entities, so every
+ * ignore lands with no conflict. Two that ignore the same content at the same path write the same
+ * entity with the same value. Ending an ignore deletes it (a tombstone, as a reset setting has). Like the repository's prefix, these keys ride the setting entity every build
  * applies and are not registered settings: `staple settings` does not list them.
  */
 import { createHash } from "node:crypto";
@@ -23,9 +24,9 @@ export const MAX_DISCOVERY_PATHS = 50;
 /** The setting key prefix one ignored plan file travels under. */
 export const IGNORED_FILE_SETTING_PREFIX = "plan.ignoredFile:";
 
-/** The setting key the ignore of one path travels under: the same on every device. */
-export function ignoredFileKey(path: string): string {
-  return `${IGNORED_FILE_SETTING_PREFIX}${createHash("sha256").update(normalizeDiscoveryPath(path)).digest("hex").slice(0, 32)}`;
+/** The setting key one ignore travels under, from its path and hash: the same on every device. */
+export function ignoredFileKey(entry: IgnoredPlanFile): string {
+  return `${IGNORED_FILE_SETTING_PREFIX}${createHash("sha256").update(`${normalizeDiscoveryPath(entry.path)}\0${entry.hash}`).digest("hex").slice(0, 32)}`;
 }
 
 /** One file or folder the person ignored: where it was, and what it held then. */

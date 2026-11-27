@@ -156,7 +156,13 @@ export function planStatus(text: string): string | null {
     if (line) return clean(line[1]!);
   }
   const lines = (front ? body.slice(front[0].length) : body).split("\n").slice(0, 40);
-  for (const line of lines) {
+  for (const [index, line] of lines.entries()) {
+    // A `## Status` heading: its value is the next line with words on it.
+    if (/^#{1,6}\s*status\s*:?\s*$/i.test(line)) {
+      const next = lines.slice(index + 1).find((candidate) => candidate.trim() !== "");
+      if (next !== undefined && !/^#/.test(next)) return clean(next.replace(/^\s*[-*>]\s*/, ""));
+      continue;
+    }
     const match = /^\s*(?:>\s*)?(?:[-*]\s+)?(?:\*\*|__)?status(?:\*\*|__)?\s*:\s*(?:\*\*|__)?\s*(.+)$/i.exec(line)
       ?? /^\s*\|\s*\**status\**\s*\|\s*([^|]+)\|/i.exec(line);
     if (match) return clean(match[1]!);
@@ -176,12 +182,33 @@ function entriesOf(dir: string, budget: { entries: number; truncated: boolean })
   } catch {
     return [];
   }
+  // Sorted before any cut, so every device that reads the same tree keeps the same entries.
+  entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   if (entries.length > budget.entries) {
     budget.truncated = true;
     entries = entries.slice(0, Math.max(0, budget.entries));
   }
   budget.entries -= entries.length;
-  return entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  return entries;
+}
+
+/**
+ * Hashes this process already took, by absolute path, size and modification time: opening the tray
+ * again reads only what changed. Bounded; the oldest go first.
+ */
+const hashCache = new Map<string, string>();
+const HASH_CACHE_LIMIT = 5000;
+
+/** How many bytes one walk reads to hash and title plans; past it the rest are listed unread. */
+export const DISCOVERY_READ_BYTES = 256 * 1024 * 1024;
+
+function cachedHash(path: string, size: number, mtimeMs: number): string | undefined {
+  return hashCache.get(`${path}\0${size}\0${mtimeMs}`);
+}
+
+function rememberHash(path: string, size: number, mtimeMs: number, hex: string): void {
+  if (hashCache.size >= HASH_CACHE_LIMIT) hashCache.delete(hashCache.keys().next().value!);
+  hashCache.set(`${path}\0${size}\0${mtimeMs}`, hex);
 }
 
 /** A file's bytes when it is at most the attachment cap; null past it. */
@@ -203,15 +230,19 @@ function readCapped(path: string): Uint8Array | null {
   }
 }
 
-/** The main file of a folder plan: named for the folder, else plan, index or readme, else the first Markdown, else the first file. */
-function mainOf(folder: string, names: readonly string[]): string {
+/**
+ * The main file of a folder plan: the one named for the folder, else plan, index or readme, else
+ * its only Markdown file. Null when there is none of these: several plans sharing an `assets/`
+ * folder are a folder of plans, each listed on its own, not one plan.
+ */
+function mainOf(folder: string, names: readonly string[]): string | null {
   const own = stemOf(folder);
   const markdown = names.filter((name) => importFormatOf(name) === "markdown");
   return (
     names.find((name) => stemOf(name) === own) ??
     markdown.find((name) => ["plan", "index", "readme"].includes(stemOf(name))) ??
-    markdown[0] ??
-    names[0]!
+    (markdown.length === 1 ? markdown[0]! : null) ??
+    (markdown.length === 0 && names.length === 1 ? names[0]! : null)
   );
 }
 
@@ -235,7 +266,7 @@ function folderFiles(root: string, rel: string, limit: number, budget: { entries
 }
 
 /** Read a plan's parts as discovery sees them: title, status, hash and any problem. */
-function describe(root: string, path: string, kind: "file" | "folder", main: string, files: string[] | null, folderLimit: number): DiscoveredPlan {
+function describe(root: string, path: string, kind: "file" | "folder", main: string, files: string[] | null, folderLimit: number, reads: { bytes: number; truncated: boolean }): DiscoveredPlan {
   const format = importFormatOf(main)!;
   const plan: DiscoveredPlan = { path, kind, main, files: files ?? [main], format, title: basename(path), status: null, done: false, hash: "", bytes: 0, problem: null };
   plan.done = path.split("/").some((segment) => DONE_FOLDERS.has(segment.toLowerCase()));
@@ -246,16 +277,34 @@ function describe(root: string, path: string, kind: "file" | "folder", main: str
   }
   const hashes = new Map<string, string>();
   for (const file of plan.files) {
-    const bytes = readCapped(join(root, file));
-    if (bytes === null) {
-      const size = statSync(join(root, file)).size;
-      plan.bytes += size;
-      plan.problem ??= `${file} is over ${ATTACH_MAX_BYTES / (1024 * 1024)} MiB`;
-      hashes.set(file, sha256Hex(new TextEncoder().encode(`size:${size}`)));
+    const absolute = join(root, file);
+    const stat = statSync(absolute);
+    const known = cachedHash(absolute, stat.size, stat.mtimeMs);
+    // Only the main file is read for its title and status once its hash is known.
+    if (known !== undefined && file !== main) {
+      plan.bytes += stat.size;
+      hashes.set(file, known);
       continue;
     }
+    if (reads.bytes + stat.size > DISCOVERY_READ_BYTES) {
+      reads.truncated = true;
+      plan.bytes += stat.size;
+      plan.problem ??= "not read: the plan files are too large together to read at once; narrow the paths";
+      hashes.set(file, sha256Hex(new TextEncoder().encode(`unread:${stat.size}:${stat.mtimeMs}`)));
+      continue;
+    }
+    const bytes = readCapped(absolute);
+    if (bytes === null) {
+      plan.bytes += stat.size;
+      plan.problem ??= `${file} is over ${ATTACH_MAX_BYTES / (1024 * 1024)} MiB`;
+      hashes.set(file, sha256Hex(new TextEncoder().encode(`size:${stat.size}`)));
+      continue;
+    }
+    reads.bytes += bytes.byteLength;
     plan.bytes += bytes.byteLength;
-    hashes.set(file, sha256Hex(bytes));
+    const hex = known ?? sha256Hex(bytes);
+    if (known === undefined) rememberHash(absolute, stat.size, stat.mtimeMs, hex);
+    hashes.set(file, hex);
     if (file !== main) continue;
     try {
       // A folder plan's title falls back to the folder's name, not its main file's.
@@ -274,6 +323,13 @@ function describe(root: string, path: string, kind: "file" | "folder", main: str
   return plan;
 }
 
+/** A plan's hash from the bytes of its files (repo-relative path to bytes), as discovery takes it. */
+export function planHashOf(plan: Pick<DiscoveredPlan, "kind" | "path" | "main">, files: ReadonlyMap<string, Uint8Array>): string {
+  if (plan.kind === "file") return `sha256:${sha256Hex(files.get(plan.main)!)}`;
+  const lines = [...files].map(([file, bytes]) => `${file.slice(plan.path.length + 1)}\0${sha256Hex(bytes)}\n`).sort();
+  return `sha256:${sha256Hex(new TextEncoder().encode(lines.join("")))}`;
+}
+
 /**
  * The plans under `root` that `paths` reach, sorted by path. Reads the files to hash and title
  * them; writes nothing.
@@ -281,6 +337,7 @@ function describe(root: string, path: string, kind: "file" | "folder", main: str
 export function discoverPlanFiles(root: string, paths: readonly string[], limits: DiscoveryLimits = DISCOVERY_LIMITS): Discovery {
   const list = patterns(paths);
   const budget = { entries: limits.entries, truncated: false };
+  const reads = { bytes: 0, truncated: false };
   const plans: DiscoveredPlan[] = [];
   const full = () => {
     if (plans.length < limits.plans) return false;
@@ -294,11 +351,12 @@ export function discoverPlanFiles(root: string, paths: readonly string[], limits
     if (folder.length > 0 && entries.some((entry) => entry.isDirectory() && entry.name.toLowerCase() === "assets")) {
       const own = entries.filter((entry) => entry.isFile() && importFormatOf(entry.name) !== null).map((entry) => entry.name);
       const reached = own.some((name) => list.some((pattern) => folder.length > pattern.base && matches(pattern.segments, [...folder, name])));
-      if (reached) {
+      const mainName = reached ? mainOf(folder.at(-1)!, own) : null;
+      if (mainName !== null) {
         if (full()) return;
-        const main = `${rel}/${mainOf(folder.at(-1)!, own)}`;
+        const main = `${rel}/${mainName}`;
         const files = folderFiles(root, rel, limits.folderFiles, budget);
-        plans.push(describe(root, rel, "folder", main, files && [main, ...files.filter((file) => file !== main)], limits.folderFiles));
+        plans.push(describe(root, rel, "folder", main, files && [main, ...files.filter((file) => file !== main)], limits.folderFiles, reads));
         return;
       }
     }
@@ -316,10 +374,10 @@ export function discoverPlanFiles(root: string, paths: readonly string[], limits
         if (skippedFile(entry.name) || importFormatOf(entry.name) === null) continue;
         if (!list.some((pattern) => matches(pattern.segments, path))) continue;
         const file = path.join("/");
-        plans.push(describe(root, file, "file", file, [file], limits.folderFiles));
+        plans.push(describe(root, file, "file", file, [file], limits.folderFiles, reads));
       }
     }
   };
   visit([], 0);
-  return { plans: plans.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)), truncated: budget.truncated };
+  return { plans: plans.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)), truncated: budget.truncated || reads.truncated };
 }

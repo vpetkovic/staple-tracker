@@ -24,6 +24,8 @@ const file = (path: string, patch: Partial<PlanFileData> = {}): PlanFileData => 
   problem: null,
   state: "new",
   idea: null,
+  changedSinceImport: false,
+  alsoImportedAs: [],
   ...patch,
 });
 
@@ -46,7 +48,7 @@ describe("the Plan files tray", () => {
     expect(fresh).toContain(">Import</button>");
     expect(fresh).toContain("data-plan-file-ignore");
     const idea = { id: "i1", number: "I-STA-3", identifier: null, title: "A" };
-    const changed = row(file("plans/a.md", { state: "changed", idea }));
+    const changed = row(file("plans/a.md", { state: "changed", idea, changedSinceImport: true }));
     expect(changed).toContain(">Import again</button>");
     expect(changed).toContain("changed since imported as ");
     expect(changed).toContain(">I-STA-3</button>");
@@ -57,6 +59,23 @@ describe("the Plan files tray", () => {
     const ignored = row(file("plans/a.md", { state: "ignored" }));
     expect(ignored).toContain("data-plan-file-unignore");
     expect(ignored).not.toContain("data-plan-file-import");
+  });
+
+  it("says an ignored file changed since its import, names a second import of the same file, and gives every row its own id", () => {
+    const idea = { id: "i1", number: "I-STA-3", identifier: null, title: "A" };
+    expect(row(file("plans/a.md", { state: "ignored", idea, changedSinceImport: true }))).toContain("changed since imported as ");
+    const twice = row(file("plans/a.md", { state: "imported", idea, alsoImportedAs: [{ id: "i2", number: "I-STA-4", identifier: null, title: "A" }] }));
+    expect(twice).toContain("also as");
+    expect(twice).toContain(">I-STA-4</button>");
+    const both = renderToStaticMarkup(
+      <ul>
+        <PlanFileRow file={file("plans/dup1.md")} picked={false} busy={false} onPick={() => {}} onImport={() => {}} onIgnore={() => {}} onOpenIdea={() => {}} />
+        <PlanFileRow file={file("plans/dup2.md")} picked={false} busy={false} onPick={() => {}} onImport={() => {}} onIgnore={() => {}} onOpenIdea={() => {}} />
+      </ul>,
+    );
+    const ids = [...both.matchAll(/ id="([^"]+)"/g)].map((match) => match[1]);
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
   });
 
   it("shows a folder's files, a done status and why a file cannot be imported", () => {

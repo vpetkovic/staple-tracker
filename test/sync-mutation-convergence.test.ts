@@ -526,7 +526,7 @@ const SCENARIOS: readonly Scenario[] = [
   {
     method: "WorkspaceStore.setIgnoredPlanFile",
     name: "ignore a plan file by path and hash",
-    run: (w) => void w.a.store.setIgnoredPlanFile("plans/raw.md", { path: "plans/raw.md", hash: `sha256:${"b".repeat(64)}` }, "alice"),
+    run: (w) => void w.a.store.setIgnoredPlanFile({ path: "plans/raw.md", hash: `sha256:${"b".repeat(64)}` }, true, "alice"),
   },
   {
     method: "PlanStore.scaffold",

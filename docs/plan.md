@@ -255,10 +255,12 @@ under `plans/`, in any case, so `Plans/` counts too. It leaves out README, AGENT
 CHANGELOG, CONTRIBUTING, LICENSE and the like, anything whose name starts with `_` (templates),
 `assets/` folders, handoffs (`Handoffs/`, `handoff-*.md`), hidden folders and `node_modules`.
 
-A folder below `plans/` that holds an `assets/` folder is one plan. Its main file is the one named
-for the folder, else `plan`, `index` or `readme`, else the first Markdown file. The main file
-becomes the idea, and every file in the folder is attached with it. A plan whose status reads done,
-completed or implemented (front matter `status:`, or a `Status:` line near the top), or that sits
+A folder below `plans/` that holds an `assets/` folder is one plan when it has a main file: the one
+named for the folder, else `plan`, `index` or `readme`, else its only Markdown file. The main file
+becomes the idea, and every file in the folder is attached with it. A folder of several plans that
+share an `assets/` folder lists each plan on its own. A plan whose status reads done,
+completed or implemented (front matter `status:`, a `Status:` line or a `## Status` heading near
+the top), or that sits
 in a `done/`, `completed/` or `implemented/` folder, is marked **done**. **Select all** leaves done
 plans out.
 
@@ -268,8 +270,8 @@ Each file is in one of four groups, matched by its path and its content hash:
 |---|---|
 | **New** | No idea came from it |
 | **Changed since import** | An idea came from this path, and the file has changed since. **Import again** makes a new idea |
-| **Imported** | An idea came from it as it stands, at this path or with the same content at another one |
-| **Ignored** | You ignored it (this path, or this content). **Unignore** lists it again |
+| **Imported** | An idea came from it as it stands, at this path or with the same content at another one. If two ideas came from it, as two devices importing it offline make, the row names both |
+| **Ignored** | You ignored it (this path, or this content). **Unignore** lists it again. Importing a file's content ends an ignore of it, on every device |
 
 **Import** takes one file, **Import selected** takes the ones you ticked (all or none), and
 **Ignore** hides one without importing it. An import works like an uploaded file: no stage chosen,
@@ -280,7 +282,7 @@ reads the files. Agents cannot import or ignore plan files.
 the workspace setting `plan.discoveryPaths` (default `*.md` and `plans/**`). `*` matches within a
 folder name and `**` matches any depth. A plain path is that file, or everything under that folder.
 The paths, the imports and the ignores sync to every device, and each device reads its own
-checkout. Ignores from two devices both land.
+checkout. Ignores from two devices both land, even when their checkouts differ.
 
 ```bash
 staple idea files                                # list them, with their group
