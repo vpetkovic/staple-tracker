@@ -1099,8 +1099,7 @@ try {
 
   const coldInboxTargeted = await cold.rpc("tools/call", { name: "inbox", arguments: { ws: "cold" } });
   assert(
-    // A new workspace starts with planning on, so its Now and Next horizons (milestones) are listed too.
-    JSON.parse(toolText(coldInboxTargeted)).ready.filter((row: any) => (row.identifier ?? row.issue?.identifier) === targetedIssue.identifier).length === 1,
+    JSON.parse(toolText(coldInboxTargeted)).ready.length === 1,
     "ws-targeted inbox sees the task written through the cached store",
   );
 
@@ -1184,7 +1183,7 @@ try {
 
   const afterReInit = await cold.rpc("tools/call", { name: "inbox", arguments: { ws: "cold" } });
   assert(
-    JSON.parse(toolText(afterReInit)).ready.filter((row: any) => (row.identifier ?? row.issue?.identifier) === targetedIssue.identifier).length === 1,
+    JSON.parse(toolText(afterReInit)).ready.length === 1,
     "workspace data survives the cache reset init performs",
   );
 

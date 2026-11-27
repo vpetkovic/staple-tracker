@@ -367,6 +367,11 @@ export interface IssueFilters {
   excludeAssignees?: readonly string[];
   /** List ideas and horizons too. Without it (and without a `kind` filter) they are left out. */
   includePlan?: boolean;
+  /**
+   * Leave out the horizons while planning is on (the inbox): a horizon is the plan's slot,
+   * tracked by the work on it, never work to pick up. With planning off it is a plain milestone.
+   */
+  excludeHorizons?: boolean;
 }
 
 /**
@@ -8654,6 +8659,10 @@ export class WorkspaceStore {
       where.push(`kind NOT IN (${[...PLAN_KINDS].map(() => "?").join(",")})`);
       params.push(...PLAN_KINDS);
     }
+    if (filters.excludeHorizons && this.planningOn()) {
+      where.push("NOT (kind = ? AND plan_rank IS NOT NULL)");
+      params.push(MILESTONE_KIND);
+    }
     if (filters.assignee) {
       where.push("assignee = ?");
       params.push(filters.assignee);
@@ -8754,7 +8763,9 @@ export class WorkspaceStore {
     blocked: Array<InboxEntry>;
     hasMore: boolean;
   } {
-    const filters: IssueFilters = assignee ? { assignee } : {};
+    // Horizons are the plan's slots, not pickup work: `next` never takes one, so the inbox
+    // never lists one first for an agent to start.
+    const filters: IssueFilters = assignee ? { assignee, excludeHorizons: true } : { excludeHorizons: true };
     if (excludeAssignees && excludeAssignees.length > 0) filters.excludeAssignees = excludeAssignees;
     // The three buckets partition ONE window over the open issues, so the page
     // is over the scan, not over any one list.

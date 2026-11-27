@@ -175,10 +175,10 @@ export function initWorkspace(options: {
    */
   gitignore?: boolean;
   /**
-   * Turn planning on when this call makes a new workspace (see below). The doors a person
-   * creates a workspace through pass true: `staple init`, bare `staple`, `staple add` and the
-   * MCP `init` tool. A join (`cloud/share.ts`) does not: it makes the local copy of a workspace
-   * that already exists, whose own setting arrives by sync.
+   * Turn planning on when this call makes a new workspace (see below). The doors that create
+   * a workspace on purpose pass true unless told otherwise: `staple init`, bare `staple`,
+   * `staple add` and the MCP `init` tool. A join (`cloud/share.ts`) does not: it makes the
+   * local copy of a workspace that already exists, whose own setting arrives by sync.
    */
   planning?: boolean;
 }): OpenedWorkspace & {
@@ -458,8 +458,12 @@ export function initWorkspace(options: {
     const store = new WorkspaceStore(db, storedSlug, prefix);
     /**
      * A NEW workspace starts with planning on: its database and its identity were both made by
-     * this call, through a door a person creates workspaces with (`options.planning`). After the
-     * identity, so the default horizons take the repository's stable ids.
+     * this call, through a door that creates workspaces on purpose (`options.planning`). After
+     * the identity, so the default horizons take the repository's stable ids.
+     *
+     * The workspace's first value, not a change to one: written under no actor, through the
+     * person path because no one has decided anything yet. From here on only a person changes
+     * it, as everywhere else.
      *
      * Not a clone, whose manifest came out of git, and not a join target, whose manifest the
      * share link wrote first: both are an existing workspace arriving on this machine, and its

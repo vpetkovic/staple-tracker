@@ -189,7 +189,7 @@ export function FieldsForm({ definitions, settings, write, onDirtyChange }: Fiel
               error={errors[definition.key] ?? null}
               dirty={definition.key in value}
               trailing={
-                editable ? (
+                editable && definition.ui.resettable !== false ? (
                   <Button
                     type="button"
                     variant="ghost"

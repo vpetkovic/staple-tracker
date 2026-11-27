@@ -69,7 +69,7 @@ export interface AddReport extends InitReport {
  * Everything here is read-only: `planSetup` opens the source database only
  * through `planMigration`, which is a preview, and the hub is opened read-only.
  */
-export function previewAdd(path: string): AddPreview {
+export function previewAdd(path: string, options: { planning?: boolean } = {}): AddPreview {
   const dir = resolve(path);
   if (!existsSync(dir)) {
     throw new StapleError("not_found", `No such directory: ${dir}`);
@@ -92,6 +92,10 @@ export function previewAdd(path: string): AddPreview {
       changes.push(`create ${plan.layout.currentPath}`);
       changes.push(`write ${dir}/.staple/AGENTS.md (the agent protocol guide)`);
       changes.push(`write ${dir}/.staple/.gitignore (ignores the database, not AGENTS.md)`);
+      // A new workspace starts with planning on; a clone's carries its own setting (`initWorkspace`).
+      if (options.planning !== false && readWorkspaceManifest(plan.layout.currentPath) === null) {
+        changes.push("turn planning on: the idea and milestone kinds and the horizons Now and Next (--no-planning declines)");
+      }
       changes.push(createRegistrationNote(plan.layout.currentPath));
       break;
     case "adopt":
@@ -254,6 +258,7 @@ export function runAddCommand(argv: string[]): void {
       yes: { type: "boolean" },
       json: { type: "boolean" },
       "no-gitignore": { type: "boolean" },
+      "no-planning": { type: "boolean" },
       migrate: { type: "boolean" },
     },
   });
@@ -262,12 +267,12 @@ export function runAddCommand(argv: string[]): void {
   if (target === undefined) {
     throw new StapleError(
       "validation",
-      "usage: staple add <path> [--slug s] [--migrate] [--no-gitignore] --yes\n" +
+      "usage: staple add <path> [--slug s] [--migrate] [--no-gitignore] [--no-planning] --yes\n" +
         "  `add` names ONE project explicitly. It never scans; use `staple discover <root>` for that.",
     );
   }
 
-  const preview = previewAdd(target);
+  const preview = previewAdd(target, { planning: values["no-planning"] !== true });
 
   /**
    * Plan §4: "A path already registered returns success after refreshing
@@ -279,6 +284,7 @@ export function runAddCommand(argv: string[]): void {
     const report = applyAdd(preview.path, {
       slug: values.slug,
       gitignore: values["no-gitignore"] !== true,
+      planning: values["no-planning"] !== true,
       migrate: false,
     });
     if (values.json) {
@@ -305,6 +311,7 @@ export function runAddCommand(argv: string[]): void {
   const report = applyAdd(preview.path, {
     slug: values.slug,
     gitignore: values["no-gitignore"] !== true,
+    planning: values["no-planning"] !== true,
     migrate: values.migrate === true,
   });
 
@@ -317,6 +324,7 @@ export function runAddCommand(argv: string[]): void {
   );
   if (report.migrated) console.log(`Migrated this project's state to ${report.dbPath}.`);
   if (report.gitignoreWritten) console.log(`Wrote ${report.gitignorePath}.`);
+  if (report.created && report.planning) console.log("Planning is on: ideas, and the horizons Now and Next.");
   if (report.migrationCommand) {
     console.log(`Still on the legacy layout. Move it with: ${report.migrationCommand}`);
   }
@@ -325,7 +333,7 @@ export function runAddCommand(argv: string[]): void {
 
 function applyAdd(
   dir: string,
-  options: { slug?: string; gitignore: boolean; migrate: boolean },
+  options: { slug?: string; gitignore: boolean; planning: boolean; migrate: boolean },
 ): AddReport {
   // One application service, shared with `init` and bare `staple`. `add` is a
   // different consent shape around the same operation, never a second one.
@@ -334,6 +342,7 @@ function applyAdd(
     slug: options.slug,
     yes: options.migrate,
     gitignore: options.gitignore,
+    planning: options.planning,
     // Never interactive: `add` names a directory the user is not standing in,
     // so its consent is a flag by construction.
     interactive: false,

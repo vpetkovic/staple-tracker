@@ -209,6 +209,7 @@ describe("a server started with no workspace in reach", () => {
       created: true,
       guidePath: join(target, ".staple", "AGENTS.md"),
       guideWritten: true,
+      planning: false,
     });
 
     // Parity check against the CLI: the workspace the tool made is a first-class

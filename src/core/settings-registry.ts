@@ -89,6 +89,12 @@ export interface SettingUiMetadata {
   control: SettingControl;
   /** Position inside its category; ties break on key. */
   order: number;
+  /**
+   * false: Settings offers no Reset for it, and a section's Reset to defaults leaves it alone.
+   * For a toggle whose stored default differs by workspace, where clearing the stored value
+   * would flip it (`features.planning`: on in a new workspace, off where never stored).
+   */
+  resettable?: false;
 }
 
 /**
@@ -308,7 +314,7 @@ const definitions: SettingDefinition[] = [
   {
     key: "features.planning", category: "features", scope: "workspace",
     schema: { type: "boolean" }, default: false, version: 1, sensitivity: "normal",
-    ui: { label: "Planning", description: "Ideas, horizons and the Plan view. On for a new workspace. Only a person can change this; turning it off keeps all planning data.", control: "toggle", order: 10 },
+    ui: { label: "Planning", description: "Ideas, horizons and the Plan view. On for a new workspace. Only a person can change this; turning it off keeps all planning data.", control: "toggle", order: 10, resettable: false },
   },
   ...(Object.entries(COST_MODEL_KEYS) as Array<[CostModelPart, string]>).map(
     ([part, key], index): SettingDefinition => ({

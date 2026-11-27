@@ -32,21 +32,22 @@ runtime can open the database, doctor names the required schema and prints
 verified compatible payload. Do not run `doctor --fix --only schema`: schema
 repair is an install choice, not a doctor fix.
 
-## Planning (experimental)
+## Planning
 
-Read `staple settings get features.planning` or MCP `get_setting` first. It defaults
-false and synchronizes with the workspace. Only a person can change it in Settings →
-Experimental, or `staple settings set features.planning true --person` under their
+Read `staple settings get features.planning` or MCP `get_setting` first. A new
+workspace starts with it on; one an older build made keeps it off until a person turns
+it on. It synchronizes with the workspace. Only a person can change it in Settings →
+Features, or `staple settings set features.planning true|false --person` under their
 configured humanName. Agents may read it; `set_setting` refuses to change it.
 
 When off, use ordinary tasks, milestones and the pickup queue. Planning commands and
 tools refuse; no horizon-run or horizon-plan instructions and no plan steps are
 supplied. Ideas keep their I-<PREFIX>-<n> numbers and are never tasks or pickup work. When on, the
-experimental plan/idea/horizon tools are available; read their lifecycle actions and
+plan/idea/horizon tools are available; read their lifecycle actions and
 respect person-only steering. Work that shipped outside the tracker is the person's
 mark (delivered outside the tracker), never a placeholder ticket an agent files to make
 an idea read shipped. Turning it off keeps all data, and turning it on restores the
-plan. The feature may change.
+plan.
 
 ### Idea or ticket
 

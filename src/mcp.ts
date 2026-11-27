@@ -3121,6 +3121,7 @@ server.registerTool(
       guideWritten: z
         .boolean()
         .describe("false when a guide was already there and was kept unchanged"),
+      planning: z.boolean().describe("Whether planning is on in the workspace, as init leaves it"),
     },
     // initWorkspace is documented idempotent: re-running an existing workspace
     // refreshes its hub registration and keeps the already-minted prefix.
@@ -3142,6 +3143,7 @@ server.registerTool(
         created: opened.created,
         guidePath: opened.guidePath,
         guideWritten: opened.guideWritten,
+        planning: opened.store.planningOn(),
       };
       // Hand back a serializable summary, drop the handle init just opened, and
       // reset the caches so the next call re-resolves and can see this workspace.

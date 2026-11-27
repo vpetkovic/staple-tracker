@@ -996,9 +996,10 @@ Workspace
   install [status] [--from p] [--yes] [--update-path] [--rollback]
               install/switch a user-owned staple runtime under <home>/runtime;
               previews and exits 2 without --yes; PATH edits need --update-path
-  add <path> [--slug s] [--migrate] --yes
+  add <path> [--slug s] [--migrate] [--no-planning] --yes
               register ONE named project (never scans); previews every change
-              and exits 2 without --yes; an already-registered path just refreshes
+              and exits 2 without --yes; an already-registered path just refreshes;
+              a new workspace starts with planning on unless --no-planning
   discover <root> [--depth 6] [--all-found|--select a,b] [--yes]
               find workspaces beneath ONE explicit root — both layouts, bounded
               depth, no symlinks, no other filesystems; previews by default and

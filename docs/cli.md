@@ -288,7 +288,7 @@ Guide: [Several repositories](hub.md).
 |---|---|
 | `staple hub` | Every workspace registered on this machine. `hub links` and `hub events` cover the ones between them. |
 | `staple discover <root>` | Find workspaces under a folder; `--all-found --yes` or `--select a,b --yes` registers them. |
-| `staple add <path> --yes` | Register one repository. |
+| `staple add <path> --yes` | Register one repository. A new workspace starts with planning on; `--no-planning` starts it without. |
 | `staple hub unregister <slug>` | Drop one entry. The workspace itself is untouched. |
 | `staple hub prune [--yes]` | Drop entries whose folder is gone. Without `--yes` it only shows them. |
 | `staple hub unlink <blocker> <blocked>` | Remove a cross-repository link. |

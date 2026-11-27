@@ -63,6 +63,19 @@ describe("set", () => {
 });
 
 describe("reset", () => {
+  it("offers no reset for a setting marked not resettable, even with a stored value", () => {
+    const PLANNING = definition("features.planning", {
+      schema: { type: "boolean" },
+      default: false,
+      ui: { label: "Planning", description: "x", control: "toggle", order: 0, resettable: false },
+    });
+    const served = stored("features.planning", true);
+    expect(isResettable(emptyFieldsDraft(), PLANNING, served)).toBe(false);
+    // A section's Reset to defaults runs resetField over every field: this one is left alone.
+    expect(resetField(emptyFieldsDraft(), PLANNING, served)).toEqual({});
+    expect(shownValue(resetField(emptyFieldsDraft(), PLANNING, served), PLANNING, served)).toBe(true);
+  });
+
   it("queues a reset for a stored value and shows the default", () => {
     const served = stored("queue.policy", "strict");
     const draft = resetField(emptyFieldsDraft(), POLICY, served);

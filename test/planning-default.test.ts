@@ -86,6 +86,18 @@ describe("a new workspace starts with planning on", () => {
     });
   });
 
+  it("the inbox leaves the horizons out while planning is on, as next does", () => {
+    withInit({ dir: dir("inbox") }, (store) => {
+      const task = store.createIssue({ title: "First task" });
+      const ready = () => store.inbox().ready.map((row) => row.title);
+      expect(ready()).toEqual(["First task"]);
+      expect(store.inbox(undefined, { limit: 10, offset: 0 }).ready.map((row) => row.id)).toEqual([task.id]);
+      // With planning off a horizon is a plain milestone again, listed as one.
+      store.setSetting("features.planning", false, "vp", { via: "cli" });
+      expect(ready().sort()).toEqual(["First task", "Next", "Now"]);
+    });
+  });
+
   it("a new global workspace has planning on too", () => {
     withInit({ global: true, slug: "notes" }, (store) => {
       expect(planning(store)).toEqual({ setting: true, on: true, kinds: ["idea", "milestone"] });
@@ -189,15 +201,29 @@ describe("the doors a person creates a workspace through", () => {
     expect(JSON.parse(runCliAt(plain, ["init", "--json"], env, 30_000).stdout)).toMatchObject({ created: false, planning: false });
   }, 60_000);
 
+  it("staple add previews planning and turns it on, or not with --no-planning", () => {
+    const env = { STAPLE_HOME: process.env.STAPLE_HOME! };
+    const target = dir("add-target");
+    const refused = runCliAt(dir("add-cwd"), ["add", target], env, 30_000);
+    expect(refused.status).toBe(2);
+    expect(refused.stderr).toContain("turn planning on: the idea and milestone kinds and the horizons Now and Next");
+    const added = runCliAt(dir("add-cwd2"), ["add", target, "--yes", "--json"], env, 30_000);
+    expect(JSON.parse(added.stdout)).toMatchObject({ created: true, planning: true });
+    const plain = dir("add-plain");
+    expect(runCliAt(dir("add-cwd3"), ["add", plain, "--no-planning"], env, 30_000).stderr).not.toContain("turn planning on");
+    const declined = runCliAt(dir("add-cwd4"), ["add", plain, "--no-planning", "--yes", "--json"], env, 30_000);
+    expect(JSON.parse(declined.stdout)).toMatchObject({ created: true, planning: false });
+  }, 60_000);
+
   it("the MCP init tool starts a new workspace with planning on", async () => {
     const home = process.env.STAPLE_HOME!;
     const mcp = await startMcpClient({ home, cwd: dir("mcp-cwd"), agent: "worker" });
     try {
       const made = await mcp.call("init", { global: true, slug: "wren" });
-      expect(made.isError).toBeFalsy();
+      expect(made.structuredContent).toMatchObject({ created: true, planning: true });
       expect(toolPayload(await mcp.call("get_setting", { ws: "wren", key: "features.planning" }))).toMatchObject({ value: true, source: "workspace" });
       expect((await mcp.call("list_horizons", { ws: "wren" })).isError).toBeFalsy();
-      expect((await mcp.call("init", { global: true, slug: "finch", planning: false })).isError).toBeFalsy();
+      expect((await mcp.call("init", { global: true, slug: "finch", planning: false })).structuredContent).toMatchObject({ created: true, planning: false });
       expect(toolPayload(await mcp.call("get_setting", { ws: "finch", key: "features.planning" }))).toMatchObject({ value: false, source: "default" });
     } finally {
       await mcp.close();

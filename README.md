@@ -71,15 +71,15 @@ works with Claude Code and Codex. Keep `.staple/AGENTS.md` as the repository's p
 
 ```bash
 staple inbox                                # what is ready, in pickup order
-staple new "Add a health check endpoint"    # file it
-staple start APP-1 --agent claude           # claim it, atomically
-staple doc APP-1 plan --put plan.md         # the plan lives on the ticket
-staple comment APP-1 "route added, tests next"
-staple done APP-1                           # finish it; the inbox shows what it unblocked
+staple new "Add a health check endpoint"    # file it: APP-3, after the horizons Now and Next
+staple start APP-3 --agent claude           # claim it, atomically
+staple doc APP-3 plan --put plan.md         # the plan lives on the ticket
+staple comment APP-3 "route added, tests next"
+staple done APP-3                           # finish it; the inbox shows what it unblocked
 
 staple open                                 # the web UI; Ctrl-C stops it
-staple queue add APP-2 --at 1               # say what gets picked up next
-staple start APP-2 --steal-if-stale 1h      # take over a dead agent's claim
+staple queue add APP-4 --at 1               # say what gets picked up next
+staple start APP-4 --steal-if-stale 1h      # take over a dead agent's claim
 ```
 
 `staple help` lists every command; the [CLI reference](https://github.com/vpetkovic/staple-tracker/blob/master/docs/cli.md) documents them.

@@ -1227,6 +1227,7 @@ describe("tool response shapes (31/31)", () => {
       created: true,
       guidePath: null,
       guideWritten: false,
+      planning: false,
     });
     // A second workspace proves the prefix collision suffix is part of the contract.
     assertGolden("init_two", {
@@ -1236,6 +1237,7 @@ describe("tool response shapes (31/31)", () => {
       created: true,
       guidePath: null,
       guideWritten: false,
+      planning: false,
     });
   });
 
