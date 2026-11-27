@@ -116,7 +116,7 @@ it waits on, and use the **Epics** picker to narrow the canvas.
 
 ## 6. Milestones: dated plans
 
-![The Milestones view: a milestone card with its due date and progress, and beside it the milestone's summary and its members in order](../site/static/img/screens/milestones-light.webp)
+![The Milestones view: one milestone as a section with its due date, progress bar and what is next, a Goal line, and its work in order with the first epic unfolded into its tickets](../site/static/img/screens/milestones-light.webp)
 
 Each open [milestone](milestones.md) is a section, in plan order. Its header gives
 the due date, a progress bar, what needs you (*Waiting for your approval*, *2
