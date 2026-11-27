@@ -313,6 +313,8 @@ describe("a section's work", () => {
     expect(conflict).toContain("Member order changed elsewhere.");
     expect(conflict).toContain("at revision 4, not 3");
     expect(conflict).toContain("Reload");
+    // The touch floor is lifted: Reload is the small text button, never a 44px box.
+    expect(conflict).toMatch(/<button[^>]*\bmin-h-0\b[^>]*data-milestone-reload/);
     expect(conflict).not.toContain("data-guard-refusal");
     const refused = renderToStaticMarkup(<WorkTree work={loaded({ failure: { kind: "refusal", refusal: refusal("STA-66 is an epic, not a milestone", "validation") } })} />);
     expect(refused).toContain("data-guard-refusal");

@@ -25,7 +25,7 @@ import { cn } from "@/lib/utils";
 import { useElementWidth } from "@/views/plan/plan-parts";
 import { HiddenDoneNotice } from "./HiddenDone";
 import "./work-tree.css";
-import { TAP_28 } from "./milestone-parts";
+import { TAP_28, TAP_TEXT } from "./milestone-parts";
 import { isFinishedMilestone, type MemberListRow } from "./milestones-model";
 import type { MilestoneWork } from "./useMilestoneWork";
 
@@ -105,7 +105,7 @@ export function WorkTree({ work }: { work: WorkTreeProps }) {
             <span className="min-w-0 flex-1">
               <span className="font-medium">Member order changed elsewhere.</span> {work.failure.refusal.message}
             </span>
-            <Button variant="outline" size="xs" onClick={work.onReload}>
+            <Button variant="outline" size="sm" className={TAP_TEXT} onClick={work.onReload} data-milestone-reload="">
               <RefreshCw aria-hidden />
               Reload
             </Button>
