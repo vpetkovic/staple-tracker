@@ -15,10 +15,14 @@ export type PlanStepNeed = (typeof PLAN_STEP_NEEDS)[number];
 /** Who must act next: the person, an agent, or nobody yet (a waiting idea). */
 export type PlanStepWho = "person" | "agent" | "nobody";
 
-/** What a waiting idea waits for: its planned start, and the records it depends on that have not shipped. */
+/**
+ * What a waiting idea waits for: its planned start, the records it depends on that have not
+ * shipped, and the ideas above it that are not shaped yet.
+ */
 export interface PlanStepWaitingOn {
   start?: string;
   records?: Array<{ id: string; title: string; state: IdeaState }>;
+  parents?: Array<{ id: string; title: string; maturity: Maturity }>;
 }
 
 export interface PlanStep {
@@ -63,8 +67,10 @@ export interface PlanStepInput {
   planIncomplete: readonly string[];
   /** The day it may start: its own planned start, else its nearest ancestor's; null for none. */
   start: string | null;
-  /** The records it depends on, with their state. */
+  /** The records it depends on, with their state: those it or an idea above it is blocked by, then those its text names. */
   dependsOn: ReadonlyArray<{ id: string; title: string; state: IdeaState }>;
+  /** The ideas above it that are not shaped and have not shipped (`IdeaView.heldBy`), nearest first. */
+  parents: ReadonlyArray<{ id: string; title: string; maturity: Maturity }>;
   today: string;
 }
 
@@ -124,12 +130,18 @@ export function planStepOf(input: PlanStepInput): PlanStep | null {
   if (input.start !== null && input.start > input.today) waitingOn.start = input.start;
   const unshipped = input.dependsOn.filter((dep) => dep.state !== "shipped" && dep.state !== "dropped");
   if (unshipped.length > 0) waitingOn.records = unshipped.map(({ id, title, state }) => ({ id, title, state }));
-  if (waitingOn.start !== undefined || waitingOn.records !== undefined) {
+  if (input.parents.length > 0) waitingOn.parents = input.parents.map(({ id, title, maturity }) => ({ id, title, maturity }));
+  if (waitingOn.start !== undefined || waitingOn.records !== undefined || waitingOn.parents !== undefined) {
     const why = [
+      ...(waitingOn.parents ?? []).map((parent) => `its parent "${parent.title}" to be shaped (it is ${parent.maturity})`),
       ...(waitingOn.start !== undefined ? [`its planned start, ${waitingOn.start}`] : []),
       ...(waitingOn.records ?? []).map((dep) => `"${dep.title}" (${dep.state})`),
     ].join(" and ");
-    return step("wait", "nobody", `Nothing to do yet: "${input.title}" waits for ${why}. Never scaffold it before then; the person releases it early by moving its planned start.`, { waitingOn });
+    const release =
+      waitingOn.parents !== undefined
+        ? "Scaffold is refused until every idea above it is shaped and what it is blocked by has shipped."
+        : "the person releases it early by moving its planned start.";
+    return step("wait", "nobody", `Nothing to do yet: "${input.title}" waits for ${why}. Never scaffold it before then; ${release}`, { waitingOn });
   }
   return step(
     "scaffold",

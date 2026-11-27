@@ -71,15 +71,23 @@ describe("a parent's own state is its own; its sub-ideas' work is a rollup", () 
     expect(actionsOf(parent)).toEqual(EXPLORING);
   });
 
-  it("lets the parent be shaped and promoted, and its shaped sibling promoted, with no 'promote the parent first'", () => {
+  it("lets the parent be shaped and promoted, and its shaped sibling promoted once the parent is shaped, with no 'promote the parent first'", () => {
     const parent = idea("Parent", "exploring");
     childWithWork(parent, false);
     const sibling = idea("Shaped sibling", "shaped", parent);
+    // A shaped sub-idea waits for every idea above it to be shaped (design/plan.md, "Sub-ideas and blockers").
+    expect(plan.ideaView(sibling).actions.find((a) => a.id === "promote")).toEqual({
+      id: "promote",
+      label: "Promote to epic",
+      who: "anyone",
+      disabledReason: 'Waiting on parent: parent "Parent" (exploring).',
+    });
+    expect(plan.ideaView(parent).state).toBe("exploring");
+    expect(plan.update(parent, { maturity: "shaped" }, "vp", PERSON).state).toBe("shaped");
     expect(plan.ideaView(sibling).actions.find((a) => a.id === "promote")).toEqual({ id: "promote", label: "Promote to epic", who: "anyone" });
     const promotedSibling = plan.promote(sibling, "agent");
     expect(promotedSibling).toMatchObject({ promoted: true, kind: "epic", state: "started" });
-    expect(plan.ideaView(parent).state).toBe("exploring");
-    expect(plan.update(parent, { maturity: "shaped" }, "vp", PERSON).state).toBe("shaped");
+    expect(plan.ideaView(parent).state).toBe("shaped");
     expect(actionsOf(parent)).toEqual(SHAPED);
     expect(plan.promote(parent, "vp", PERSON)).toMatchObject({ promoted: true, state: "started" });
   });

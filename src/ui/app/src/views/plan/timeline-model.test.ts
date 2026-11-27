@@ -18,7 +18,7 @@ function idea(id: string, extra: Partial<IdeaData> = {}): IdeaData {
     links: [], explorations: [], missingLinks: [], linkCount: 0, resolvedLinks: 0, units: ZERO, unsized: false, own: ZERO, umbrella: false, carriedBy: null,
     nextStep: null, progress: null, percent: null, actual: { start: null, end: null, forecastEnd: null }, late: false, notStarted: false,
     delivered: null, childIds: [], openQuestions: 0, planIncomplete: [], completeness: { starred: 3, starredTotal: 3, filled: 5, total: 10 },
-    dependsOn: [], state: "shaped", actions: [], createdAt: "2026-11-01T00:00:00.000Z", updatedAt: "2026-11-01T00:00:00.000Z",
+    dependsOn: [], blockedBy: [], heldBy: null, state: "shaped", actions: [], createdAt: "2026-11-01T00:00:00.000Z", updatedAt: "2026-11-01T00:00:00.000Z",
     ...extra,
   };
 }

@@ -49,6 +49,7 @@ import { renumberedRanks } from "../milestones.js";
 import { criterionMarkFromValue, criterionMarkPosition, criterionMarkValue } from "../milestone-goal.js";
 import { planLinkFromValue, planLinkIssue, writePlanLink } from "../plan-links.js";
 import { planRowFromValue, planRowId, writePlanRow } from "../plan-rows.js";
+import { planBlockerFromValue, planBlockerId, writePlanBlocker } from "../plan-blockers.js";
 import { IDEA_KIND, isDraftIdentifier } from "../plan.js";
 import { advanceIdeaNumber, isIdeaNumber } from "../idea-numbers.js";
 import { writeCriterionMark } from "../milestone-marks.js";
@@ -2590,7 +2591,11 @@ function applyMilestone(db: DatabaseSync, input: ApplyInput): boolean {
   const rows = Object.keys(input.payload)
     .map((key) => ({ key, rowId: planRowId(key) }))
     .filter((entry): entry is { key: string; rowId: string } => entry.rowId !== null);
-  const fieldsOnly = marks.length + links.length + rows.length;
+  /** And the records it waits on (`planBlocker.<record id>`, `plan-blockers.ts`): one field per edge, a null removes it. */
+  const blockers = Object.keys(input.payload)
+    .map((key) => ({ key, blockerId: planBlockerId(key) }))
+    .filter((entry): entry is { key: string; blockerId: string } => entry.blockerId !== null);
+  const fieldsOnly = marks.length + links.length + rows.length + blockers.length;
   if (!hasMembers && !hasTarget && !hasStart && !hasUpdated && fieldsOnly === 0) return false;
 
   if (!issueExists(db, input.entityId)) throw new ReferentMissing(`milestone ${input.entityId}`);
@@ -2611,6 +2616,11 @@ function applyMilestone(db: DatabaseSync, input: ApplyInput): boolean {
     const row = value === null ? null : planRowFromValue(value);
     if (value !== null && row === null) continue;
     writePlanRow(db, input.entityId, rowId, row);
+  }
+  for (const { key, blockerId } of blockers) {
+    const edge = planBlockerFromValue(input.payload[key]);
+    if (edge === undefined) continue;
+    writePlanBlocker(db, input.entityId, blockerId, edge);
   }
   if (fieldsOnly > 0 && !hasMembers && !hasTarget && !hasStart && !hasUpdated) return true;
   /**

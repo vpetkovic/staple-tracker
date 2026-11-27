@@ -90,7 +90,7 @@ function idea(state: keyof typeof OFFERED, patch: Partial<IdeaData> = {}): IdeaD
     openQuestions: 0,
     planIncomplete: [],
     completeness: { starred: 0, starredTotal: 3, filled: 0, total: 10 },
-    dependsOn: [],
+    dependsOn: [], blockedBy: [], heldBy: null,
     state: state as IdeaData["state"],
     actions: OFFERED[state]!,
     createdAt: "2026-11-01T00:00:00.000Z",

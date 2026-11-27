@@ -13,7 +13,7 @@ import { basename } from "node:path";
 import { parseArgs } from "node:util";
 import { readInputFile } from "../core/input-file.js";
 import { configuredHumanName } from "../mcp-view-actions.js";
-import { horizonWords, ideasOnHorizon, type HorizonView, type IdeaDetail, type IdeaView, type PlanView, type PlanWriteOptions, type ScaffoldPreview } from "../core/plan-store.js";
+import { holdLabel, holdWords, horizonWords, ideasOnHorizon, type HorizonView, type IdeaDetail, type IdeaView, type PlanView, type PlanWriteOptions, type ScaffoldPreview } from "../core/plan-store.js";
 import { splitDepends, type BreakdownRowInput, type PlanPatch } from "../core/plan-sections.js";
 import { resolveWorkspace } from "../core/workspace.js";
 import { StapleError } from "../core/types.js";
@@ -59,7 +59,9 @@ function planFor(values: { db?: string; ws?: string }, enabling = false) {
 
 function ideaLine(idea: IdeaView, plan: PlanView): string {
   const horizon = horizonWords(idea, plan);
-  const flags = [idea.late ? "late" : null, idea.notStarted ? "not started" : null].filter(Boolean).join(", ");
+  // A shaped record held reads `shaped · waiting on parent`; a promoted one under a parent that went back is flagged.
+  const held = idea.heldBy === null ? null : idea.state === "started" ? (idea.heldBy.parents.length > 0 ? "parent not shaped" : null) : holdLabel(idea.heldBy);
+  const flags = [held, idea.late ? "late" : null, idea.notStarted ? "not started" : null].filter(Boolean).join(", ");
   const depth = (() => {
     let level = 0;
     let cursor = idea.parentId;
@@ -123,6 +125,19 @@ function printDetail(detail: IdeaDetail): void {
   const { completeness: c } = detail;
   console.log(`plan     ${c.starred}/${c.starredTotal} required sections · ${c.filled}/${c.total} written${detail.missingForShaped.length > 0 && idea.actions.some((action) => action.id === "shape") ? ` · to shape: ${detail.missingForShaped.join("; ")}` : ""}`);
   if (idea.planIncomplete.length > 0) console.log(`shaped · plan incomplete: ${idea.planIncomplete.join("; ")}`);
+  if (idea.heldBy !== null) {
+    console.log(
+      idea.state === "started"
+        ? idea.heldBy.parents.length > 0
+          ? `flagged  an idea above it is not shaped any more: ${holdWords({ parents: idea.heldBy.parents, blockers: [] })}; its tickets stay`
+          : `waiting  ${holdWords(idea.heldBy)}`
+        : `${idea.state} · ${holdLabel(idea.heldBy)}: ${holdWords(idea.heldBy)}`,
+    );
+  }
+  for (const id of idea.blockedBy) {
+    const blocker = detail.blockedBy.find((entry) => entry.id === id);
+    console.log(blocker ? `  blocked by ${blocker.number ?? blocker.identifier ?? blocker.id} ${blocker.title} (${blocker.state})` : `  blocked by ${id} · missing on this device`);
+  }
   if (detail.plan.goal) console.log(`goal     ${detail.plan.goal.split("\n")[0]}`);
   const inherits = detail.plan.acceptance.length > 0;
   for (const row of detail.plan.breakdown) {
@@ -285,6 +300,12 @@ export function runIdeaCommand(rest: string[]): void {
     case "unlink":
       plan.unlink(need(first, "an idea reference"), need(others[0], "the issue to unlink"), actor);
       return show(first!);
+    case "block":
+      plan.block(need(first, "an idea reference"), need(others[0], "the idea it waits on"), actor);
+      return show(first!);
+    case "unblock":
+      plan.unblock(need(first, "an idea reference"), need(others[0], "the idea it no longer waits on"), actor);
+      return show(first!);
     case "ask":
       plan.addQuestion(need(first, "an idea reference"), need(others.join(" "), "the question"), actor);
       return show(first!);
@@ -379,7 +400,7 @@ export function runIdeaCommand(rest: string[]): void {
       return;
     }
     default:
-      throw new StapleError("validation", `Unknown idea verb "${sub}". Use: ls, new, show, set, plan, task, promote, scaffold, import, convert, adopt, unlink, ask, resolve, defer, decide, reset-baseline`);
+      throw new StapleError("validation", `Unknown idea verb "${sub}". Use: ls, new, show, set, plan, task, promote, scaffold, import, convert, adopt, unlink, block, unblock, ask, resolve, defer, decide, reset-baseline`);
   }
 }
 

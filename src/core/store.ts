@@ -101,7 +101,7 @@ import {
 import { MILESTONE_KIND, MILESTONE_MEMBERSHIP, assertNotReservedActor, isGoalRunGate } from "./milestones.js";
 import { IDEA_KIND, PLAN_KINDS_MISSING_MESSAGE, PLAN_KINDS, assertPlanParent, assertPlanRekind, displayRef, isPlanKind, planKindRefusal, steeringRefusal } from "./plan.js";
 import { PlanStore } from "./plan-store.js";
-import { scaffoldedFromOf, sparkedByOf, sparkedIdeasOf, type ScaffoldedFrom, type SparkedBy, type SparkedIdea } from "./plan-provenance.js";
+import { scaffoldedFromOf, sparkedByOf, sparkedIdeasOf, unsettledAbove, unsettledParentOf, type ScaffoldedFrom, type SparkedBy, type SparkedIdea } from "./plan-provenance.js";
 import { ExternalLinkStore } from "./integrations/link-store.js";
 import { LISTED_HORIZON } from "./plan-members.js";
 import { fallbackTarget, recordRemovalTarget } from "./vocabulary-targets.js";
@@ -8885,7 +8885,7 @@ export class WorkspaceStore {
       foundIn: this.foundInOf(row),
       findings: this.findingsOf(row),
       // Plan provenance, hidden with the plan: turning planning off keeps it, unread.
-      scaffoldedFrom: planningVisible ? scaffoldedFromOf(this.db, row) : null,
+      scaffoldedFrom: planningVisible ? this.flagScaffolded(scaffoldedFromOf(this.db, row), row) : null,
       sparkedBy: planningVisible ? sparkedByOf(this.db, row) : null,
       sparked: planningVisible ? sparkedIdeasOf(this.db, row.id) : [],
       comments: this.listComments(row.id, 20),
@@ -9106,6 +9106,19 @@ export class WorkspaceStore {
     }
     return issue;
   };
+
+  /**
+   * A scaffolded ticket whose idea has an idea above it that went back to exploring or was dropped
+   * is flagged, never cancelled (design/plan.md, "Sub-ideas and blockers"). Derived on the read, so
+   * every device that holds the plan reads the same flag and nothing is written that could
+   * conflict. The plan's derivation is consulted only when a cheap walk up the tree finds a
+   * candidate; a resolved ticket carries no flag.
+   */
+  private flagScaffolded(from: ScaffoldedFrom | null, row: IssueRow): ScaffoldedFrom | null {
+    if (from === null || this.isResolvedStatus(row.status) || !unsettledAbove(this.db, from.ideaId)) return from;
+    const parent = this.plan().ideaView(from.ideaId).heldBy?.parents[0];
+    return parent === undefined ? from : { ...from, parentUnsettled: unsettledParentOf(this.db, parent) };
+  }
 
   private planStore: PlanStore | null = null;
 

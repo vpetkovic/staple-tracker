@@ -57,7 +57,7 @@ function idea(id: string, title: string, extra: Partial<IdeaData> = {}): IdeaDat
     openQuestions: 0,
     planIncomplete: [],
     completeness: { starred: 3, starredTotal: 3, filled: 5, total: 10 },
-    dependsOn: [],
+    dependsOn: [], blockedBy: [], heldBy: null,
     state: "shaped",
     actions: [],
     nextStep: null,

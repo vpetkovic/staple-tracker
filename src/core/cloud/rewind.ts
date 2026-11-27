@@ -46,6 +46,7 @@ import type { SnapshotEntity } from "./wire.js";
 import { criterionMarkField, criterionMarkPosition } from "../milestone-goal.js";
 import { planLinkField, planLinkIssue } from "../plan-links.js";
 import { planRowField, planRowId } from "../plan-rows.js";
+import { planBlockerField, planBlockerId } from "../plan-blockers.js";
 import { endOf, readAttempt, writeEnd, type AttemptEnd } from "../telemetry/attempt-records.js";
 import { ATTEMPT_END_FIELDS } from "./attempt-ends.js";
 
@@ -254,6 +255,21 @@ export function reconcileBeforeRead(db: DatabaseSync, entities: readonly Snapsho
       const field = planRowField(row_id);
       if (field in entity.state || unsentRows.has(`${entity.entityId} ${field}`)) continue;
       db.prepare("DELETE FROM plan_rows WHERE idea_id = ? AND row_id = ?").run(entity.entityId, row_id);
+    }
+  }
+
+  /** And the records an idea waits on, one field each (`plan-blockers.ts`). */
+  const unsentBlockers = new Set(
+    unsent
+      .filter((op) => op.entity === "milestone")
+      .flatMap((op) => Object.keys(parsedPayload(op.payload)).filter((key) => planBlockerId(key) !== null).map((key) => `${op.id} ${key}`)),
+  );
+  for (const entity of entities) {
+    if (entity.entity !== "milestone") continue;
+    for (const { blocker_id } of db.prepare("SELECT blocker_id FROM plan_blockers WHERE idea_id = ?").all(entity.entityId) as Array<{ blocker_id: string }>) {
+      const field = planBlockerField(blocker_id);
+      if (field in entity.state || unsentBlockers.has(`${entity.entityId} ${field}`)) continue;
+      db.prepare("DELETE FROM plan_blockers WHERE idea_id = ? AND blocker_id = ?").run(entity.entityId, blocker_id);
     }
   }
 

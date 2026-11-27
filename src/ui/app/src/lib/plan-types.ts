@@ -46,7 +46,7 @@ export interface PlanStepData {
   instruction: string;
   questions?: string[];
   missing?: string[];
-  waitingOn?: { start?: string; records?: Array<{ id: string; title: string; state: IdeaState }> };
+  waitingOn?: { start?: string; records?: Array<{ id: string; title: string; state: IdeaState }>; parents?: Array<{ id: string; title: string; maturity: Maturity }> };
 }
 
 /** Work items as the server counts them (`plan-accounting.ts`). */
@@ -151,13 +151,27 @@ export interface IdeaData {
   planIncomplete: string[];
   /** Written sections and dependencies, derived by the server from the plan. */
   completeness: { starred: number; starredTotal: number; filled: number; total: number };
+  /** The records it waits on: those it is blocked by, then those its plan's text names. */
   dependsOn: string[];
+  /** The plan records it is blocked by (its structured edges), by id. */
+  blockedBy: string[];
+  /**
+   * What holds Scaffold and Promote back: the ideas above it not shaped, and the blockers (its own
+   * and its ancestors') not shipped; null when nothing does. On a promoted record, the flag that an
+   * idea above it went back to exploring or was dropped.
+   */
+  heldBy: IdeaHold | null;
   state: IdeaState;
   actions: OfferedAction[];
   /** What it needs next from planning while a horizon carries it; else null. */
   nextStep: PlanStepData | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface IdeaHold {
+  parents: Array<{ id: string; title: string; maturity: Maturity }>;
+  blockers: Array<{ id: string; title: string; state: IdeaState }>;
 }
 
 export interface PlanData {

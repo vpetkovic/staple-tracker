@@ -137,7 +137,12 @@ describe("a waiting idea's turn", () => {
     // The dropped parent is skipped, not stopped at: the grandparent's start still reaches the child.
     expect(stepOf(child)).toMatchObject({ need: "wait", waitingOn: { start: "2027-02-01" } });
     plan.update(grand, { maturity: "dropped" }, "vp", PERSON);
-    expect(stepOf(child)).toMatchObject({ need: "scaffold", who: "agent" });
+    // No date holds it any more; a dropped idea above it does, until it is restored or the sub-idea moves out.
+    expect(stepOf(child)).toMatchObject({
+      need: "wait",
+      waitingOn: { parents: [{ id: parent, title: "Reporting", maturity: "dropped" }, { id: grand, title: "Platform", maturity: "dropped" }] },
+    });
+    expect(stepOf(child)!.waitingOn).not.toHaveProperty("start");
     // A shipped ancestor's future start holds nothing either.
     const shippedParent = capture("Billing", { maturity: "shaped", horizon: now, plan: READY_PLAN, plannedStart: "2027-03-01" });
     const under = capture("Invoices", { maturity: "shaped", parent: shippedParent, plan: READY_PLAN });

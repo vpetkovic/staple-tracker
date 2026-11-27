@@ -678,6 +678,16 @@ const scaffoldedFromShape = {
   title: z.string(),
   rowId: z.string(),
   rowKey: z.string().nullable().describe("The breakdown row's key as the plan holds it now; null once the row was removed"),
+  parentUnsettled: z
+    .object({
+      ideaId: z.string(),
+      ideaNumber: z.string().nullable(),
+      identifier: z.string().nullable(),
+      title: z.string(),
+      maturity: z.enum(["raw", "exploring", "dropped"]),
+    })
+    .nullable()
+    .describe("The flag that an idea above the one this came from went back to exploring (or raw) or was dropped since it was scaffolded: the ticket stays, flagged; null otherwise and once the ticket is resolved"),
 };
 const sparkedByShape = { identifier: z.string(), title: z.string(), status: z.string() };
 const sparkedIdeaShape = {
@@ -1187,9 +1197,10 @@ const planStepShape = {
     .object({
       start: z.string().optional(),
       records: z.array(z.object({ id: z.string(), title: z.string(), state: z.enum(IDEA_STATES) })).optional(),
+      parents: z.array(z.object({ id: z.string(), title: z.string(), maturity: z.enum(["raw", "exploring", "shaped", "dropped"]) })).optional(),
     })
     .optional()
-    .describe("wait: the planned start it waits for and the records it depends on that have not shipped"),
+    .describe("wait: the planned start it waits for, the records it depends on that have not shipped (those it or an idea above it is blocked by, and those its text names), and the ideas above it that are not shaped yet"),
 };
 type _PlanStepShapeMatchesInterface = Expect<Equals<z.infer<z.ZodObject<typeof planStepShape>>, PlanStep>>;
 const planStepsField = z
@@ -3508,7 +3519,7 @@ server.registerTool(
   "list_ideas",
   {
     description:
-      "The plan: every horizon in order (a horizon is a milestone shown as a column: name, date, status, shipped, units, progress, percent, complete, unsizedCount and records as list_horizons gives them, member count, idea count, late and not-started counts) and every plan record with its maturity, briefLine (its brief's first written line, null for none; get_idea has the whole brief), derived stage (raw, exploring, shaped, scheduled, started, shipped, dropped), horizon, parent, planned window, baseline, linked issues, units (its rollup's work items: done and open ticket leaves of its and its sub-ideas' work, and planned breakdown rows of itself and every non-dropped sub-idea with no work yet), unsized (its own size is unknown: no work, no rows, no sub-ideas), own (its own work items without its sub-ideas': its tickets' leaves done and open, else its breakdown rows planned; none for an umbrella), umbrella (no own work, over sub-ideas that are not dropped, which carry its size), carriedBy (the horizon that carries it: the one it is scheduled on, else its nearest scheduled parent's; null for none), progress (done over those units; null before any of its work is started), percent (progress as a whole percent, rounded down), actual dates, the late / notStarted flags, and its lifecycle state with the actions that state offers (state, actions: id, label, who: anyone or person, disabledReason), and nextStep: what it needs next from planning while a horizon carries it (the step list_horizons lists), else null. A write the state does not offer is refused with validation naming the state and what it offers. Every record has number, its permanent idea number I-<PREFIX>-<n> (I-STA-12), kept once it is promoted. An unpromoted idea has identifier null (it holds no ticket number; refer to it by its number, I-12 in its own workspace, or its id) and never appears in list_tasks, the queue or next_task; a promoted one is an ordinary epic with its ticket number, and its idea number still resolves. Filter with maturity or horizon (an identifier or name; the records it carries, as its column shows them: scheduled on it or following a parent that is, and the dropped ones scheduled on it; a name that matches no horizon, or several, is refused). A workspace with planning off refuses with validation.",
+      "The plan: every horizon in order (a horizon is a milestone shown as a column: name, date, status, shipped, units, progress, percent, complete, unsizedCount and records as list_horizons gives them, member count, idea count, late and not-started counts) and every plan record with its maturity, briefLine (its brief's first written line, null for none; get_idea has the whole brief), derived stage (raw, exploring, shaped, scheduled, started, shipped, dropped), horizon, parent, planned window, baseline, linked issues, units (its rollup's work items: done and open ticket leaves of its and its sub-ideas' work, and planned breakdown rows of itself and every non-dropped sub-idea with no work yet), unsized (its own size is unknown: no work, no rows, no sub-ideas), own (its own work items without its sub-ideas': its tickets' leaves done and open, else its breakdown rows planned; none for an umbrella), umbrella (no own work, over sub-ideas that are not dropped, which carry its size), carriedBy (the horizon that carries it: the one it is scheduled on, else its nearest scheduled parent's; null for none), progress (done over those units; null before any of its work is started), percent (progress as a whole percent, rounded down), actual dates, the late / notStarted flags, and its lifecycle state with the actions that state offers (state, actions: id, label, who: anyone or person, disabledReason), and nextStep: what it needs next from planning while a horizon carries it (the step list_horizons lists), else null; blockedBy (the plan records it is blocked by, its structured edges, by id), dependsOn (those, then the records its plan's text names) and heldBy (null, or what holds its Scaffold and Promote back: parents, the ideas above it not shaped, and blockers, its own and its ancestors' not shipped; a shaped one held reads shaped · waiting on parent; on a promoted record it flags that an idea above went back to exploring or was dropped, and its tickets stay). A write the state does not offer is refused with validation naming the state and what it offers. Every record has number, its permanent idea number I-<PREFIX>-<n> (I-STA-12), kept once it is promoted. An unpromoted idea has identifier null (it holds no ticket number; refer to it by its number, I-12 in its own workspace, or its id) and never appears in list_tasks, the queue or next_task; a promoted one is an ordinary epic with its ticket number, and its idea number still resolves. Filter with maturity or horizon (an identifier or name; the records it carries, as its column shows them: scheduled on it or following a parent that is, and the dropped ones scheduled on it; a name that matches no horizon, or several, is refused). A workspace with planning off refuses with validation.",
     inputSchema: {
       maturity: z.enum(["raw", "exploring", "shaped", "dropped"]).optional(),
       horizon: z.string().optional().describe("A horizon's identifier or name"),
@@ -3528,7 +3539,7 @@ server.registerTool(
   "get_idea",
   {
     description:
-      "One idea, everything an agent needs to build from it: its view (lifecycle state and the actions it offers, maturity, stage, windows, flags, units, own, umbrella and carriedBy as list_ideas gives them, nextStep: what it needs next from planning while a horizon carries it, else null, and planIncomplete: what a shaped plan edited since it was shaped now lacks, which holds Scaffold and Promote back), parent, sub-ideas, horizon, brief, questions (open, resolved, deferred), decisions, each linked issue with its progress and the milestone (and live run) holding it; its plan sections (plan: goal, context, breakdown rows {id, key, title, estimate, dependsOn, acceptance, owner, notes}, acceptance, dependencies, outOfScope, risks, sources), completeness, missingForShaped (what the shaped gate still needs; a sub-idea that is not dropped stands in for the breakdown), planWarnings (estimates that are not durations), breakdownRevision (pass it to update_idea as breakdown_base to refuse a stale breakdown edit), and while its state offers Scaffold the scaffold preview (scaffold_idea without confirm answers the same): the epic, every task with estimate, blockers, acceptance (inherited from the plan when its row has none, flagged), context and the task it already made, problems that hold the confirm back, warnings, and the fingerprint the confirm names. sparkedBy is the ticket whose work sparked it (null for none); sparked lists the ideas its own work sparked once it is an epic. A task scaffolded from it names this idea and its row in get_task's scaffoldedFrom.",
+      "One idea, everything an agent needs to build from it: its view (lifecycle state and the actions it offers, maturity, stage, windows, flags, units, own, umbrella and carriedBy as list_ideas gives them, nextStep: what it needs next from planning while a horizon carries it, else null, and planIncomplete: what a shaped plan edited since it was shaped now lacks, which holds Scaffold and Promote back), parent, sub-ideas, horizon, brief, questions (open, resolved, deferred), decisions, each linked issue with its progress and the milestone (and live run) holding it; its plan sections (plan: goal, context, breakdown rows {id, key, title, estimate, dependsOn, acceptance, owner, notes}, acceptance, dependencies, outOfScope, risks, sources), completeness, missingForShaped (what the shaped gate still needs; a sub-idea that is not dropped stands in for the breakdown), planWarnings (estimates that are not durations), breakdownRevision (pass it to update_idea as breakdown_base to refuse a stale breakdown edit), and while its state offers Scaffold the scaffold preview (scaffold_idea without confirm answers the same): the epic, every task with estimate, blockers, acceptance (inherited from the plan when its row has none, flagged), context and the task it already made, problems that hold the confirm back, warnings, and the fingerprint the confirm names. sparkedBy is the ticket whose work sparked it (null for none); sparked lists the ideas its own work sparked once it is an epic. blockedBy names the records it is blocked by and blocks the records it blocks ({id, number, identifier, title, state, missing}). A task scaffolded from it names this idea and its row in get_task's scaffoldedFrom, whose parentUnsettled flags that an idea above went back to exploring or was dropped since.",
     inputSchema: { ref: ideaRefSchema, ws: wsSchema },
     annotations: { title: "Get idea", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
@@ -3573,7 +3584,7 @@ server.registerTool(
   "update_idea",
   {
     description:
-      "Edit an idea as an agent may: title, brief, its plan sections (plan: goal, context, breakdown rows {key, title, estimate, dependsOn, acceptance, owner, notes}, acceptance, dependencies, outOfScope, risks, sources; each section given replaces that section whole), add_question, resolve_question (1-based; reopen with resolved: false), defer_question (left open on purpose, it no longer holds shaping back), add_decision, as its lifecycle state offers them (a shipped or dropped idea offers no edits; see the record's actions). maturity, horizon, parent, planned_start and planned_target are accepted only to be refused with validation: they are the person's, set in the Plan view. So are delivered_on, delivered_note and undelivered: marking an idea delivered outside the tracker (it then reads shipped with no ticket) is the person's; to record work that landed in the tracker, adopt its ticket with start_idea. Answers the idea's detail.",
+      "Edit an idea as an agent may: title, brief, its plan sections (plan: goal, context, breakdown rows {key, title, estimate, dependsOn, acceptance, owner, notes}, acceptance, dependencies, outOfScope, risks, sources; each section given replaces that section whole), add_question, resolve_question (1-based; reopen with resolved: false), defer_question (left open on purpose, it no longer holds shaping back), add_decision, add_blockers and remove_blockers (the plan records it waits on: until each has shipped or been dropped, its Scaffold and Promote are refused and its plan step waits; refused for itself, an idea above or beneath it, or a loop; text in plan.dependencies keeps naming records it waits on, and only these edges hold Scaffold back), as its lifecycle state offers them (a shipped or dropped idea offers no edits; see the record's actions). maturity, horizon, parent, planned_start and planned_target are accepted only to be refused with validation: they are the person's, set in the Plan view. So are delivered_on, delivered_note and undelivered: marking an idea delivered outside the tracker (it then reads shipped with no ticket) is the person's; to record work that landed in the tracker, adopt its ticket with start_idea. Answers the idea's detail.",
     inputSchema: {
       ref: ideaRefSchema,
       title: z.string().optional(),
@@ -3583,6 +3594,8 @@ server.registerTool(
       resolved: z.boolean().optional().describe("With resolve_question: false reopens it"),
       add_decision: z.string().optional(),
       defer_question: z.number().int().min(1).optional().describe("The 1-based question to defer; with resolved: false it is reopened instead"),
+      add_blockers: z.array(ideaRefSchema).optional().describe("Plan records this idea waits on, each added as a structured edge (get_idea's blockedBy)"),
+      remove_blockers: z.array(ideaRefSchema).optional().describe("Plan records it no longer waits on, each edge removed"),
       plan: z
         .object({
           goal: z.string().nullable().optional(),
@@ -3648,6 +3661,8 @@ server.registerTool(
       if (input.resolve_question !== undefined) plan.resolveQuestion(input.ref, input.resolve_question, actor, input.resolved !== false);
       if (input.defer_question !== undefined) plan.deferQuestion(input.ref, input.defer_question, actor, input.resolved !== false);
       if (input.add_decision !== undefined) plan.addDecision(input.ref, input.add_decision, actor);
+      for (const blocker of input.remove_blockers ?? []) plan.unblock(input.ref, blocker, actor);
+      for (const blocker of input.add_blockers ?? []) plan.block(input.ref, blocker, actor);
       return plan.detail(input.ref);
     }),
 );

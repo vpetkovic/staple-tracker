@@ -56,6 +56,7 @@ import { criterionMarkPosition } from "../milestone-goal.js";
 import { criterionMarkFields } from "../milestone-marks.js";
 import { planLinkFields, planLinkIssue } from "../plan-links.js";
 import { planRowFields, planRowId } from "../plan-rows.js";
+import { planBlockerFields, planBlockerId } from "../plan-blockers.js";
 
 /** The plan's singleton entity id. Mirrors `queue-store.ts`. */
 const QUEUE_PLAN_ID = "@plan";
@@ -757,6 +758,7 @@ function inventory(db: DatabaseSync, now: string, skipped: SeedSkipped[]): Local
           UNION SELECT milestone_id AS id FROM milestone_criterion_marks
           UNION SELECT idea_id AS id FROM plan_links
           UNION SELECT idea_id AS id FROM plan_rows
+          UNION SELECT idea_id AS id FROM plan_blockers
           ORDER BY id`,
       )
       .all() as Array<{ id: string }>
@@ -778,7 +780,7 @@ function inventory(db: DatabaseSync, now: string, skipped: SeedSkipped[]): Local
         entity: "milestone",
         entityId: milestoneId,
         label: identifierOf(db, milestoneId),
-        payload: { ...links, ...planRowFields(db, milestoneId) },
+        payload: { ...links, ...planRowFields(db, milestoneId), ...planBlockerFields(db, milestoneId) },
         actor: Object.values(links).at(-1)?.linkedBy ?? null,
         at: latest(Object.values(links).map((link) => link.linkedAt), now),
       });
@@ -804,6 +806,7 @@ function inventory(db: DatabaseSync, now: string, skipped: SeedSkipped[]): Local
     Object.assign(payload, criterionMarkFields(db, milestoneId));
     Object.assign(payload, planLinkFields(db, milestoneId));
     Object.assign(payload, planRowFields(db, milestoneId));
+    Object.assign(payload, planBlockerFields(db, milestoneId));
     out.push({
       entity: "milestone",
       entityId: milestoneId,
@@ -1376,6 +1379,12 @@ function replacedValues(db: DatabaseSync, index: SurveyIndex): SeedReplaced[] {
         const rows = planRowFields(db, entity.entityId);
         for (const field of Object.keys(entity.state).filter((key) => planRowId(key) !== null)) {
           const local = rows[field] ?? null;
+          if (canonical(local) === canonical(entity.state[field])) continue;
+          out.push({ entity: "milestone", entityId: entity.entityId, label: identifierOf(db, entity.entityId), field, local, repository: entity.state[field] });
+        }
+        const blockers = planBlockerFields(db, entity.entityId);
+        for (const field of Object.keys(entity.state).filter((key) => planBlockerId(key) !== null)) {
+          const local = blockers[field] ?? null;
           if (canonical(local) === canonical(entity.state[field])) continue;
           out.push({ entity: "milestone", entityId: entity.entityId, label: identifierOf(db, entity.entityId), field, local, repository: entity.state[field] });
         }

@@ -5478,6 +5478,11 @@ export function startUiServer(options: UiOptions): UiHandle {
           case "/api/plan/unlink":
             plan.unlink(ref, (body.issue as string) ?? "", actor);
             break;
+          case "/api/plan/blocker":
+            // One edge: the idea waits on `blocker`, or, with remove, no longer does.
+            if (body.remove === true) plan.unblock(ref, (body.blocker as string) ?? "", actor);
+            else plan.block(ref, (body.blocker as string) ?? "", actor);
+            break;
           case "/api/plan/reset-baseline":
             plan.resetBaseline(ref, actor, person);
             break;

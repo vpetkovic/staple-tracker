@@ -24,6 +24,11 @@ export function scaffoldedFromWords(from: ScaffoldedFromWordsInput): string {
   return from.rowKey === null ? `from ${idea} · a removed row` : `from ${idea} · row ${from.rowKey}`;
 }
 
+/** The flag on a scaffolded ticket whose idea's parent is not shaped any more: `"SSO" went back to exploring`. */
+export function parentUnsettledWords(parent: { title: string; maturity: string }): string {
+  return parent.maturity === "dropped" ? `its parent idea "${parent.title}" was dropped` : `its parent idea "${parent.title}" went back to ${parent.maturity}`;
+}
+
 /** A sparked idea's reference: its idea number, with its ticket number once promoted. */
 export function sparkedIdeaWords(idea: SparkedIdeaWordsInput): string {
   const number = idea.ideaNumber ?? "idea";

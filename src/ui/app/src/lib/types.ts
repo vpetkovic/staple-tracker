@@ -823,6 +823,8 @@ export interface ScaffoldedFromRef {
   rowId: string;
   /** The row's key as the breakdown holds it now; null once the row was removed. */
   rowKey: string | null;
+  /** Set when an idea above its idea went back to exploring (or raw) or was dropped since; absent from an older server. */
+  parentUnsettled?: { ideaId: string; ideaNumber: string | null; identifier: string | null; title: string; maturity: "raw" | "exploring" | "dropped" } | null;
 }
 
 /** An idea a ticket's work sparked. */
