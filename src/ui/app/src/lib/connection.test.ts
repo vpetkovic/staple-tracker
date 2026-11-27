@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { RECONNECTING_AFTER_MS, createConnectionTracker } from "./useStaple";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AuthError } from "./api";
+import { RECONNECTING_AFTER_MS, createConnectionTracker, currentConnection, startPolling } from "./useStaple";
 
 describe("whether the server is answering", () => {
   it("is live while polls are answered, however far apart they are", () => {
@@ -35,5 +36,49 @@ describe("whether the server is answering", () => {
     expect(tracker.state(10_001)).toBe("live");
     tracker.attempted(20_000);
     expect(tracker.state(20_000 + RECONNECTING_AFTER_MS - 1)).toBe("live");
+  });
+});
+
+describe("the page's poll loop", () => {
+  const hang = () => new Promise<{ fingerprint: string }>(() => {});
+
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  const start = (poll: (signal: AbortSignal) => Promise<{ fingerprint: string }>) => {
+    const onAuthError = vi.fn();
+    const stop = startPolling({ poll, fingerprint: { current: null }, onChange: () => {}, onAuthError });
+    return { stop, onAuthError };
+  };
+
+  it("says reconnecting when a poll hangs, and live again at the next answer", async () => {
+    let answer: (value: { fingerprint: string }) => void = () => {};
+    const { stop } = start(() => new Promise((resolve) => (answer = resolve)));
+    await vi.advanceTimersByTimeAsync(1500 + RECONNECTING_AFTER_MS);
+    expect(currentConnection()).toBe("reconnecting");
+    answer({ fingerprint: "f1" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(currentConnection()).toBe("live");
+    stop();
+  });
+
+  it("is not reconnecting when the page is signed out", async () => {
+    const { stop, onAuthError } = start(() => Promise.reject(new AuthError(401, "unauthorized", "token expired")));
+    await vi.advanceTimersByTimeAsync(1500 + RECONNECTING_AFTER_MS * 2);
+    expect(onAuthError).toHaveBeenCalledTimes(1);
+    expect(currentConnection()).toBe("live");
+    stop();
+  });
+
+  it("leaves live behind when it stops, so a page that polls again does not start reconnecting", async () => {
+    const { stop } = start(hang);
+    await vi.advanceTimersByTimeAsync(1500 + RECONNECTING_AFTER_MS);
+    expect(currentConnection()).toBe("reconnecting");
+    stop();
+    expect(currentConnection()).toBe("live");
+    const again = start(hang);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(currentConnection()).toBe("live");
+    again.stop();
   });
 });

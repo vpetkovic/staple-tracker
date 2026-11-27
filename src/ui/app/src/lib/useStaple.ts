@@ -61,6 +61,11 @@ function publishConnection(next: Connection): void {
   for (const listener of connectionListeners) listener();
 }
 
+/** What `useConnection` reads, outside React. */
+export function currentConnection(): Connection {
+  return connection;
+}
+
 function subscribeConnection(listener: () => void): () => void {
   connectionListeners.add(listener);
   return () => connectionListeners.delete(listener);
@@ -72,7 +77,68 @@ function subscribeConnection(listener: () => void): () => void {
  * runs on screen are the last ones heard while it says "reconnecting".
  */
 export function useConnection(): Connection {
-  return useSyncExternalStore(subscribeConnection, () => connection, () => "live");
+  return useSyncExternalStore(subscribeConnection, currentConnection, () => "live");
+}
+
+export interface PollingOptions {
+  poll: (signal: AbortSignal) => Promise<{ fingerprint: string }>;
+  /** The fingerprint the page already shows; `bump` moves it too. */
+  fingerprint: { current: string | null };
+  /** Something changed under the page: refetch. */
+  onChange: () => void;
+  onAuthError: (error: AuthError) => void;
+}
+
+/**
+ * The page's poll loop, started; the return value stops it. One poll every
+ * `POLL_INTERVAL_MS`, each given up after `POLL_TIMEOUT_MS`, and the connection state
+ * (`useConnection`) kept from the answers.
+ */
+export function startPolling(options: PollingOptions): () => void {
+  let alive = true;
+  const tracker = createConnectionTracker();
+  // One timer per unanswered stretch, armed when it starts and cleared by the next answer: a
+  // poll that hangs has no answer to report itself with. Nothing runs while the server answers.
+  let watch: ReturnType<typeof setTimeout> | undefined;
+  const stopWatch = () => {
+    clearTimeout(watch);
+    watch = undefined;
+  };
+  const tick = async () => {
+    tracker.attempted(Date.now());
+    watch ??= setTimeout(() => publishConnection("reconnecting"), RECONNECTING_AFTER_MS);
+    try {
+      const { fingerprint: next } = await options.poll(AbortSignal.timeout(POLL_TIMEOUT_MS));
+      if (!alive) return;
+      tracker.answered();
+      stopWatch();
+      publishConnection("live");
+      // The first fingerprint only establishes the baseline — the views already
+      // loaded current data, so refetching on it would be a wasted round trip.
+      if (options.fingerprint.current !== null && options.fingerprint.current !== next) options.onChange();
+      options.fingerprint.current = next;
+    } catch (error) {
+      if (error instanceof AuthError) {
+        // Signed out, not out of reach: the token screen takes over and polling stops,
+        // because every subsequent tick would fail the same way.
+        stopWatch();
+        options.onAuthError(error);
+        return;
+      }
+      // Anything else is the server being briefly busy, or out of reach. Try again next
+      // tick; the tracker decides when it has been long enough to say so.
+      if (alive) publishConnection(tracker.state(Date.now()));
+    }
+    if (alive) timer = setTimeout(tick, POLL_INTERVAL_MS);
+  };
+  let timer = setTimeout(tick, POLL_INTERVAL_MS);
+  return () => {
+    alive = false;
+    clearTimeout(timer);
+    stopWatch();
+    // The state is the page's, not this loop's: a page that polls again starts from "live".
+    publishConnection("live");
+  };
 }
 
 /**
@@ -108,44 +174,10 @@ export function useDataVersion(onAuthError: (error: AuthError) => void): {
     );
   }, [advance]);
 
-  useEffect(() => {
-    let alive = true;
-    const tracker = createConnectionTracker();
-    // One timer per unanswered stretch, armed when it starts and cleared by the next answer: a
-    // poll that hangs has no answer to report itself with. Nothing runs while the server answers.
-    let watch: number | undefined;
-    const tick = async () => {
-      tracker.attempted(Date.now());
-      watch ??= window.setTimeout(() => publishConnection("reconnecting"), RECONNECTING_AFTER_MS);
-      try {
-        const { fingerprint: next } = await getPoll(AbortSignal.timeout(POLL_TIMEOUT_MS));
-        if (!alive) return;
-        tracker.answered();
-        window.clearTimeout(watch);
-        watch = undefined;
-        publishConnection("live");
-        // The first fingerprint only establishes the baseline — the views already
-        // loaded current data, so refetching on it would be a wasted round trip.
-        if (fingerprint.current !== null && fingerprint.current !== next) advance();
-        fingerprint.current = next;
-      } catch (error) {
-        if (error instanceof AuthError) {
-          authRef.current(error);
-          return; // stop polling: every subsequent tick would fail the same way
-        }
-        // Anything else is the server being briefly busy, or out of reach. Try again next
-        // tick; the tracker decides when it has been long enough to say so.
-        if (alive) publishConnection(tracker.state(Date.now()));
-      }
-      if (alive) timer = window.setTimeout(tick, POLL_INTERVAL_MS);
-    };
-    let timer = window.setTimeout(tick, POLL_INTERVAL_MS);
-    return () => {
-      alive = false;
-      window.clearTimeout(timer);
-      window.clearTimeout(watch);
-    };
-  }, [advance]);
+  useEffect(
+    () => startPolling({ poll: getPoll, fingerprint, onChange: advance, onAuthError: (error) => authRef.current(error) }),
+    [advance],
+  );
 
   return { version, bump };
 }
