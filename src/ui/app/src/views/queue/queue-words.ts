@@ -12,7 +12,7 @@ import { BUCKET_OF, type QueueBucket } from "./queue-summary";
 
 export type Counts = Record<QueueBucket, number>;
 
-export const EMPTY_COUNTS: Readonly<Counts> = { done: 0, active: 0, ready: 0, waiting: 0 };
+const EMPTY_COUNTS: Readonly<Counts> = { done: 0, active: 0, ready: 0, waiting: 0 };
 
 export function countsOf(rows: readonly EffectiveQueueRow[]): Counts {
   const counts: Counts = { ...EMPTY_COUNTS };
@@ -21,7 +21,7 @@ export function countsOf(rows: readonly EffectiveQueueRow[]): Counts {
 }
 
 /** The four buckets in the order the words read them. */
-export const WORD_ORDER: readonly QueueBucket[] = ["ready", "active", "waiting", "done"];
+const WORD_ORDER: readonly QueueBucket[] = ["ready", "active", "waiting", "done"];
 
 const WIDE_WORD: Readonly<Record<QueueBucket, string>> = {
   ready: "ready",
@@ -41,12 +41,6 @@ const NARROW_WORD: Readonly<Record<QueueBucket, string>> = {
 export function countParts(counts: Counts, narrow = false): Array<{ bucket: QueueBucket; count: number; word: string }> {
   const words = narrow ? NARROW_WORD : WIDE_WORD;
   return WORD_ORDER.filter((bucket) => counts[bucket] > 0).map((bucket) => ({ bucket, count: counts[bucket], word: words[bucket] }));
-}
-
-export function countSentence(counts: Counts, narrow = false): string {
-  return countParts(counts, narrow)
-    .map((part) => `${part.count} ${part.word}`)
-    .join(" · ");
 }
 
 export function plural(count: number, one: string, many = `${one}s`): string {
@@ -268,12 +262,6 @@ export const BAND_PAGE = 10;
 /** The rows a paged list shows: the first `page`, or every row once shown whole. */
 export function paged<T>(rows: readonly T[], page: number, whole: boolean): T[] {
   return whole ? [...rows] : rows.slice(0, page);
-}
-
-/** "103 more in EXE-234" for a container, "51 more" for the band. */
-export function moreWords(total: number, page: number, inside?: string): string {
-  const more = Math.max(0, total - page);
-  return inside ? `${more} more in ${inside}` : `${more} more`;
 }
 
 // ---------- the band ----------

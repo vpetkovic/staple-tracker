@@ -311,7 +311,6 @@ describe("the queue in plain words", () => {
       inPlan.filter((r) => ["blocked", "gated", "unavailable"].includes(r.eligibility)).length,
     );
     expect(summary.counts.waiting).toBeGreaterThanOrEqual(3);
-    expect(summary.notPlanned).toBe(queue.effective.filter((r) => r.unqueued).length);
   });
 
   it("says it on the queue page's header as counts and a meter, waiting drawn neutral", () => {

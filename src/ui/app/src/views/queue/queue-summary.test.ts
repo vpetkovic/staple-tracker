@@ -11,7 +11,7 @@ describe("queue summary counts", () => {
     expect(BUCKET_OF.resolved).toBe("done");
   });
 
-  it("counts the plan by bucket and the open work after it apart", () => {
+  it("counts the plan by bucket and leaves the open work after it out", () => {
     const summary = queueSummary([
       effective({ identifier: "A" }),
       effective({ identifier: "B", eligibility: "claimed" }),
@@ -19,6 +19,6 @@ describe("queue summary counts", () => {
       effective({ identifier: "D", eligibility: "resolved" }),
       effective({ identifier: "E", unqueued: true }),
     ]);
-    expect(summary).toEqual({ planned: 4, counts: { ready: 1, active: 1, waiting: 1, done: 1 }, notPlanned: 1 });
+    expect(summary).toEqual({ planned: 4, counts: { ready: 1, active: 1, waiting: 1, done: 1 } });
   });
 });
