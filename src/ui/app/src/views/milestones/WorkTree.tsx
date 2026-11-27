@@ -508,8 +508,8 @@ function WorkRow({
           {issue.title || "(untitled)"}
         </span>
         <span className="contents @max-[760px]/tree:hidden">{tags}</span>
-        {/* The note takes only what the title leaves: the title never truncates while it shows. */}
-        {noteText ? <span className="flex min-w-0 flex-[1_1_0%] @max-[760px]/tree:hidden">{noteText}</span> : null}
+        {/* The note takes what the title leaves, and never less than 9rem: a long title gives way before the note is gone. */}
+        {noteText ? <span className="flex min-w-[9rem] flex-[1_1_0%] @max-[760px]/tree:hidden">{noteText}</span> : null}
       </div>
       {/* On a compact tree, the second line; from 760px its cells are the row's own columns. */}
       <div className="col-span-full row-start-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 pt-0.5 pb-[9px] pl-[calc(var(--d)*16px+48px)] text-label text-text-secondary @min-[760px]/tree:contents">

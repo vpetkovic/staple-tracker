@@ -549,6 +549,13 @@ describe.skipIf(Boolean(reason))("the Milestones page, pressed in a real browser
         return { cut: element.scrollWidth > element.clientWidth, full: element.getAttribute("title"), shown: element.clientWidth > 0, titleCut: title.scrollWidth > title.clientWidth };
       });
     expect(note).toEqual({ cut: true, full: expect.stringContaining("well past the width of any row"), shown: true, titleCut: false });
+    // However long the title, a note keeps at least 9rem of the line: it is never squeezed away.
+    // 1100px of window leaves the tree just over 760px: its narrowest one-line form.
+    await page.setViewportSize({ width: 1100, height: 900 });
+    await page.waitForTimeout(300);
+    const widths = await section(page, refs.rows!).locator("[data-work-cell] > span > [data-member-note]").evaluateAll((notes) => notes.map((element) => Math.round(element.parentElement!.getBoundingClientRect().width)));
+    expect(widths.length).toBeGreaterThan(0);
+    for (const width of widths) expect(width).toBeGreaterThanOrEqual(144);
     await context.close();
   });
 

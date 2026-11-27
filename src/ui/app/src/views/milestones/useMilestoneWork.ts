@@ -232,7 +232,11 @@ export function useMilestoneWork(
     (rowWorkspace: string, identifier: string) => session.open(rowWorkspace || workspace, identifier),
     [session, workspace],
   );
-  const onShowDone = useCallback(() => setFinishedShown((shown) => !shown), []);
+  // Showing them unfolds the members too: finished work is mostly inside an epic that starts as one line.
+  const onShowDone = useCallback(() => {
+    if (!finishedShown) setCollapsed(new Set());
+    setFinishedShown(!finishedShown);
+  }, [finishedShown]);
 
   return {
     view,
