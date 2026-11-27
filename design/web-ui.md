@@ -94,8 +94,19 @@ Rows are 32px (44px on a touch screen) with 8px corners. The page's row carries
 is the place (Tasks narrowed to one project, or a live run open on the Autopilot
 page) the child carries `aria-current="true"` and takes the fill. The parent
 keeps `aria-current="page"` and is marked `data-child-current`, which draws it in
-the foreground tone with no fill. The run lines and the project rows share one
-shape: 28px, on a hairline spine that drops from the parent's icon.
+the foreground tone with no fill. The place moves to a child only when that
+child is a row on screen: a filter naming a project the rail does not list (still
+loading, a failed read, another workspace's) leaves the fill on Tasks, and so
+does a run not among the run lines. The run lines and the project rows share one
+shape: 28px, on a hairline spine that drops from the parent's icon. A project's
+name keeps priority over its workspace caption, which takes at most 40% of the
+row and truncates; the row's title has both.
+
+**Under forced colours** (Windows High Contrast and the like) backgrounds are
+replaced, so the place is an inset 2px outline in the system's `Highlight`
+instead of the fill: on the full and narrow rails, the More sheet's rows and the
+current tab's pill. State dots, badges and the reconnecting dot keep their own
+colours (`forced-color-adjust: none`).
 
 **Marks share one register:** right-aligned, `text-label`, tabular, tertiary. A
 count is a plain number. Something new or waiting is a 6px accent dot before the
@@ -107,15 +118,18 @@ amber dot when a connection needs attention.
 have gone unanswered for 5 seconds (`useConnection` in `lib/useStaple.ts`) the
 counts and dots on screen are the last ones heard and may be stale. The rail
 says so without shouting. It is marked `data-stale`, and one rule dims every
-mark in it (`data-nav-mark`) to half: the Inbox count and its dot, "n live" and
+mark in it (`data-nav-mark`) to 80%: the Inbox count and its dot, "n live" and
 its dot, the run lines' dots and asides, the project counts, and the Settings
-and Integrations marks. Rows keep their full strength and still work. One line
-appears at the bottom of the rail's body, just above the foot's hairline: a
-28px status (`role="status"`, `aria-live="polite"`), not a control, with the
-waiting tone's dot breathing in the icon column and the word *Reconnecting*. The
-narrow rail shows the dot alone in a 36px slot, named *Reconnecting* and with a
-tooltip. On a phone the Inbox badge and the Autopilot dot dim, and nothing else
-changes. All of it goes at the first answer.
+and Integrations marks. At 80% a dimmed count or dot still measures at least
+3:1 against the rail in both themes. Rows keep their full strength and still
+work. One line appears in its own slot between the rail's scrolling body and the
+foot's hairline, so however long the list it is always in sight: a 28px status
+(`role="status"`, `aria-live="polite"`, the region always present and empty
+while the page is live), not a control, with the waiting tone's dot breathing in
+the icon column and the word *Reconnecting*. The narrow rail shows the dot alone
+in a 36px slot, named *Reconnecting* and with a tooltip. On a phone the Inbox
+badge and the Autopilot dot dim, and nothing else changes. All of it goes at
+the first answer.
 
 **Projects hang off Tasks.** The Tasks row carries a `+` (*New project*),
 visible on hover and focus and always in the tab order, that opens the project
@@ -219,8 +233,11 @@ live (green working, amber paused or waiting), *Queue*, *Tasks*, and *More*.
 - **This computer**: *Usage*, *Integrations*, *Settings* and *Dark mode* (a
   switch).
 
-The sheet closes before it opens a dialog. Escape, the scrim and Back close it,
-and the focus returns to the *More* tab. More is drawn as current when the page
+The sheet closes before it opens a dialog, and the dialog opens with the focus
+on the *More* tab, so that is where the focus lands when the dialog closes (on a
+desk, a dialog opened from the rail returns it to the row that opened it,
+`lib/return-focus.ts`). Escape, the scrim and Back close the sheet, and the focus
+returns to the *More* tab. More is drawn as current when the page
 is one of its views. The shell's controls keep their drawn size at every width:
 under a finger the pill, the narrow rail's buttons and the top bar's search and
 New task get 44px through an invisible hit area rather than a bigger box.
@@ -245,7 +262,7 @@ a request lost to a network change cannot stop the page refreshing.
 | --- | --- | --- |
 | `⌘K` / Ctrl-K | anywhere, even in a field | opens or closes the command palette |
 | `c` | anywhere but a field or open dialog | New task |
-| `[`, `⌘\` / Ctrl-\ | a desk, outside a field or an open menu | switches the rail between full and narrow |
+| `[`, `⌘\` / Ctrl-\ | a desk, outside an open menu or dialog; a bare `[` not in a field (`⌘\` / Ctrl-\ works there too) | switches the rail between full and narrow, the focus staying on the same row |
 | ↑ ↓ ← → Home End Enter Space | the Tasks grid | move, fold and unfold, open |
 | `s` | a focused task row (desk) | opens the row's status menu |
 | `j` / `k`, Alt-↓ / Alt-↑ | task detail | next or previous task in the list on screen |
@@ -253,10 +270,11 @@ a request lost to a network change cannot stop the page refreshing.
 | Alt-↑ / Alt-↓ | Queue and Milestones rows, settings lists | move the row up or down |
 | Alt-Home / Alt-End | Queue rows | move the row to the top or bottom |
 
-The palette's first group lists the views in the rail's order, all but the
-current one: "Go to Inbox", "Go to Autopilot", "Go to Queue", "Go to Tasks",
-"Go to Graph", "Go to Milestones", "Go to Plan" (planning on), "Go to Estimates"
-and "Go to Usage". Then "Settings", "Settings: Usage", "Settings: Cloud
+The palette's first group lists the views, all but the current one. Recently
+used commands lead the list; the "Go to" commands otherwise follow the rail's
+order: "Go to Inbox", "Go to Autopilot", "Go to Queue", "Go to Tasks", "Go to
+Graph", "Go to Milestones", "Go to Plan" (planning on), "Go to Estimates" and
+"Go to Usage". Then "Settings", "Settings: Usage", "Settings: Cloud
 account" and "Settings: Statuses", and in hub mode "Switch to All workspaces" and "Switch to"
 followed by each workspace's name.
 

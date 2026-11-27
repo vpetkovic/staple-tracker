@@ -68,8 +68,9 @@ holds the search field and **New task**.
 | Escape | close what is open |
 
 If the page loses touch with staple (the server stopped, or the network dropped),
-the counts and dots in the navigation fade to half and the rail says
-*Reconnecting* until it is back.
+the counts and dots in the rail and on the phone's tab bar fade a little (the
+workspace list and the More sheet stay as they are), and the rail says
+*Reconnecting* above its foot until it is back.
 
 Below 768 px the UI becomes a phone app. The workspace is the pill at the top;
 tap it to switch. The tab bar holds *Inbox*, *Autopilot*, *Queue*, *Tasks* and
