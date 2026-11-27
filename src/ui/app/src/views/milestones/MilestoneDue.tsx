@@ -10,7 +10,7 @@
  * projection again. The projection itself is never stored.
  */
 import { CalendarDays } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type RefObject } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -78,6 +78,7 @@ export function MilestoneDueControl({
   open: openProp,
   onOpenChange,
   button = true,
+  anchor,
 }: {
   milestone: DueMilestone;
   projection: ProjectedDue | null;
@@ -97,6 +98,8 @@ export function MilestoneDueControl({
   onOpenChange?: (open: boolean) => void;
   /** False: no calendar button; the field opens from `open` and sits under the words. */
   button?: boolean;
+  /** With no button: the element the field opens from instead of the words (a phone's stuck `⋯`, which stays in view). */
+  anchor?: RefObject<HTMLElement | null>;
 }) {
   const [ownOpen, setOwnOpen] = useState(defaultOpen);
   const open = openProp ?? ownOpen;
@@ -144,7 +147,14 @@ export function MilestoneDueControl({
           setOpen(next);
         }}
       >
-        {button ? words : <PopoverAnchor asChild>{words}</PopoverAnchor>}
+        {button ? words : anchor ? (
+          <>
+            <PopoverAnchor virtualRef={anchor} />
+            {words}
+          </>
+        ) : (
+          <PopoverAnchor asChild>{words}</PopoverAnchor>
+        )}
         {button ? (
           <PopoverTrigger asChild>
             <Button
@@ -161,7 +171,7 @@ export function MilestoneDueControl({
             </Button>
           </PopoverTrigger>
         ) : null}
-        <PopoverContent align="start" className="w-72" data-milestone-due-picker="">
+        <PopoverContent align={anchor && !button ? "end" : "start"} className="w-72" data-milestone-due-picker="">
           <form
             className="flex flex-col gap-3"
             onSubmit={(event) => {

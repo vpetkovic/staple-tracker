@@ -227,6 +227,8 @@ export function SectionView({
   const [dueOpen, setDueOpen] = useState(false);
   const sentinel = useRef<HTMLSpanElement>(null);
   const stuck = useStuck(sentinel);
+  // Under 760px the due field opens from the stuck first line's `⋯`, which stays in view.
+  const menuButton = useRef<HTMLButtonElement>(null);
   // The view once read is fresher than the list row; until then the row is the header.
   const summary = work.view ?? row;
   const { milestone, progress } = summary;
@@ -246,6 +248,7 @@ export function SectionView({
       open={dueOpen}
       onOpenChange={setDueOpen}
       button={!narrow}
+      anchor={narrow ? menuButton : undefined}
     />
   );
   const queued = milestone.planPosition !== null;
@@ -310,6 +313,7 @@ export function SectionView({
               queued={queued}
               queue={queue}
               onOpenChange={setMenuOpen}
+              triggerRef={menuButton}
               onOpenDetails={() => work.onOpen("", milestone.identifier)}
               onChangeDue={() => setDueOpen(true)}
               onRequestApproval={() => setRequestOpen(true)}
@@ -343,6 +347,7 @@ function SectionMenu({
   queued,
   queue,
   onOpenChange,
+  triggerRef,
   onOpenDetails,
   onChangeDue,
   onRequestApproval,
@@ -356,6 +361,7 @@ function SectionMenu({
   queued: boolean;
   queue: SectionQueue;
   onOpenChange: (open: boolean) => void;
+  triggerRef: RefObject<HTMLButtonElement | null>;
   onOpenDetails: () => void;
   onChangeDue: () => void;
   onRequestApproval: () => void;
@@ -376,7 +382,7 @@ function SectionMenu({
       onOpenChange={setOpen}
     >
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" className={cn("size-7 text-text-tertiary @max-[760px]/ms:-my-2", TAP_28)} aria-label={`${title} options`} data-milestone-menu={identifier}>
+        <Button ref={triggerRef} variant="ghost" size="icon" className={cn("size-7 text-text-tertiary @max-[760px]/ms:-my-2", TAP_28)} aria-label={`${title} options`} data-milestone-menu={identifier}>
           <MoreHorizontal aria-hidden />
         </Button>
       </DropdownMenuTrigger>

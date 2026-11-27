@@ -432,6 +432,32 @@ describe.skipIf(Boolean(reason))("the Milestones page, pressed in a real browser
     await context.close();
   });
 
+  it("opens Change due date in view on a phone, wherever the section is scrolled", async () => {
+    const { page, context } = await open("", WS, { width: 375, height: 700 }, true);
+    await section(page, refs.plan!).locator("[data-milestone-fold]").click();
+    await page.waitForTimeout(600);
+    // Scroll the section's facts (where the due date is in words) out of view, under its stuck first line.
+    const facts = await page.evaluate((ref) => {
+      const outline = document.querySelector<HTMLElement>("[data-milestones-outline]")!;
+      const words = document.querySelector(`[data-milestone-section="${ref}"] [data-milestone-facts-due]`)!;
+      outline.scrollTop += words.getBoundingClientRect().bottom - outline.getBoundingClientRect().top + 240;
+      return { bottom: words.getBoundingClientRect().bottom, top: outline.getBoundingClientRect().top };
+    }, refs.plan!);
+    await page.waitForTimeout(300);
+    expect(facts.bottom, JSON.stringify(facts)).toBeLessThan(facts.top);
+    // Pressed where it is drawn: a locator's click would first scroll the stuck line's natural place into view.
+    await section(page, refs.plan!).locator("[data-milestone-menu]").dispatchEvent("pointerdown", { button: 0, pointerType: "mouse" });
+    await page.locator('[role=menu] [data-menu-item="due"]').click();
+    await page.waitForTimeout(500);
+    const field = await page.locator('[data-milestone-due-picker] input[type="date"]').evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      return { top: box.top, bottom: box.bottom, height: window.innerHeight };
+    });
+    expect(field.top, JSON.stringify({ field, facts })).toBeGreaterThanOrEqual(0);
+    expect(field.bottom, JSON.stringify(field)).toBeLessThanOrEqual(field.height);
+    await context.close();
+  });
+
   it("approves the milestone's gate from the page, signed by the person, and the status follows", async () => {
     const { page, context } = await open(refs.gated!);
     const gated = section(page, refs.gated!);
