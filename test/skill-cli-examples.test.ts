@@ -22,6 +22,7 @@ const PACKAGE_ENTRY = join(REPO_ROOT, "src", "package", "staple.ts");
 const NOT_RUN: Record<string, string> = {
   "branch <ref> --discover": "asks the local gh for the branch's pull requests at GitHub",
   "attempt heartbeat <ref>": "needs the session's open attempt, which only its checkout opens; test/claim-heartbeat.test.ts runs it",
+  "idea scaffold <idea>": "needs an idea the person marked shaped, and the scratch idea is only exploring; test/plan-scaffold-surfaces.test.ts scaffolds one",
 };
 
 /** The CLI examples in the skill, in document order, without the leading `staple `. */
@@ -65,6 +66,7 @@ function argv(example: string, index: number): string[] {
     .replace(/\[([^\]]+)\]/g, "$1")
     .replaceAll("...", "none")
     .replaceAll("<ref>", "SKI-1")
+    .replaceAll("<idea>", "I-SKI-1")
     .replaceAll("<slug>", "skill")
     .replaceAll("<name>", "eng-skill")
     .replaceAll("<sha>", "0123abc")
@@ -89,6 +91,10 @@ beforeAll(() => {
   elsewhere = tempDir("skill-examples-elsewhere");
   expect(runCliAt(repo, ["init", "--slug", "skill", "--yes"], { STAPLE_HOME: home, HOME: home }).status).toBe(0);
   expect(staple(["new", "First task", "--json"]).status).toBe(0);
+  // The idea-or-ticket table's idea commands need planning on, which only a person turns on.
+  expect(staple(["config", "set", "humanName", "Skill Person"]).status).toBe(0);
+  expect(staple(["plan", "enable", "--person"]).status).toBe(0);
+  expect(staple(["idea", "new", "First idea", "--json"]).status).toBe(0);
 }, 60_000);
 
 afterAll(() => {
@@ -105,6 +111,7 @@ describe("the skill's CLI examples", () => {
     expect(examples).toContain("--json --ws <slug> show <ref>");
     expect(examples).toContain("doctor --ws <slug> --json");
     expect(examples.some((e) => e.includes("--agent <name>"))).toBe(true);
+    for (const routed of ["new <title> --kind bug", "idea adopt <idea> <ref> --research", "idea new <title> --sparked-by <ref>"]) expect(examples).toContain(routed);
   });
 
   it("every example left out is still in the skill", () => {
@@ -127,5 +134,10 @@ describe("the skill's CLI examples", () => {
       }
     }
     expect(failed).toEqual([]);
+    // The routing table's research row did what it says: linked as research, the raw idea explores.
+    const idea = JSON.parse(staple(["idea", "show", "I-SKI-1", "--json"]).stdout);
+    expect(idea.idea.maturity).toBe("exploring");
+    expect(idea.exploration.map((link: { identifier: string }) => link.identifier)).toContain("SKI-1");
+    expect(idea.linked).toEqual([]);
   }, 180_000);
 });

@@ -221,7 +221,7 @@ const featureInstructions = (() => {
   catch { return "Resolve the workspace and read get_setting features.planning first."; }
 })();
 const server = new McpServer({ name: "staple", version: STAPLE_VERSION }, {
-  instructions: `${featureInstructions} Planning is experimental, defaults off, and only a person changes it in Settings → Experimental or with staple settings set features.planning true --person. Read get_setting or show_about for the current workspace state; explicit ws may differ from this handshake. When off, use ordinary tasks and milestones; plan tools refuse. Ideas have their own numbers, I-<PREFIX>-<n>, and are never pickup work.`,
+  instructions: `${featureInstructions} Planning is experimental, defaults off, and only a person changes it in Settings → Experimental or with staple settings set features.planning true --person. Read get_setting or show_about for the current workspace state; explicit ws may differ from this handshake. When off, use ordinary tasks and milestones; plan tools refuse. Ideas have their own numbers, I-<PREFIX>-<n>, and are never pickup work. With planning on, a brainstorm or a new, unplanned capability found while working a ticket is an idea (capture_idea), a defect is a ticket (create_task), and what the ticket you hold needs is fixed in that ticket.`,
 });
 const PLANNING_TOOLS = new Set(["list_ideas", "get_idea", "list_horizons", "capture_idea", "update_idea", "scaffold_idea", "start_idea", "unlink_idea", "convert_to_idea", "reset_idea_baseline"]);
 
@@ -1806,7 +1806,7 @@ server.registerTool(
   "create_task",
   {
     description:
-      "Create an issue. Defaults: status todo when assigned, backlog otherwise; medium priority. Duplicate open titles are rejected unless allow_duplicate; pass idempotency_key for safe retries (same key replays the original). Use parent for subtasks and blocked_by for dependencies. For a review finding pass found_in (and blocks for a blocker).",
+      "Create an issue. Defaults: status todo when assigned, backlog otherwise; medium priority. Duplicate open titles are rejected unless allow_duplicate; pass idempotency_key for safe retries (same key replays the original). Use parent for subtasks and blocked_by for dependencies. For a review finding pass found_in (and blocks for a blocker). With features.planning on, file a ticket for a defect (kind bug), for more work on what a ticket or its epic builds that the ticket is correct without (a review finding takes found_in), for research or a POC on an idea (a spike, then start_idea with research) or for settled work (a shaped idea scaffolds its tickets with scaffold_idea). What the ticket you hold needs to meet its criteria or outcome is no new ticket: fix it in that ticket. A brainstorm, or a new capability nobody planned found while working a ticket, is an idea instead: capture_idea, with sparked_by naming the ticket. Never a ticket to hold a brainstorm; an unstarted ticket that should have been an idea converts with convert_to_idea. An idea starts raw, moves to exploring as its plan, questions, decisions or research are written, and only the person marks it shaped (propose it with update_idea propose_shaped).",
     inputSchema: {
       title: z.string(),
       description: z.string().optional(),
@@ -3562,7 +3562,7 @@ server.registerTool(
   "capture_idea",
   {
     description:
-      "Capture a raw idea: a title, optionally a brief, a parent idea, and sparked_by, the ticket whose work turned it up. It takes the next idea number, I-<PREFIX>-<n>, and stays out of the task list and the queue. Maturity, horizon and dates are the person's to set in the Plan view; this tool always captures raw.",
+      "Capture a raw idea: a title, optionally a brief, a parent idea, and sparked_by, the ticket whose work turned it up. It takes the next idea number, I-<PREFIX>-<n>, and stays out of the task list and the queue. Capture a brainstorm (something to discuss, a what-if, an outcome nobody has settled) or a new capability nobody planned that turned up while working a ticket (pass sparked_by); never file a ticket to hold either. What the ticket you hold needs to meet its criteria or outcome is fixed in that ticket, not captured. A defect, more work on what a ticket or its epic builds (a review finding takes found_in), research or a POC for an idea (a spike linked with start_idea research) and settled work are tickets instead (create_task). Maturity: capture makes it raw (an import and title or brief edits keep it raw); writing a plan section or breakdown row, asking, answering or deferring a question, recording a decision or linking research moves it to exploring by itself; shaped (details settled, enough context and plan for an agent to start) is only the person's, so propose it with update_idea propose_shaped once its plan passes the gate. A shaped sub-idea may sit on any horizon but is not scaffolded until every idea above it is shaped and every idea it or one above it waits on has shipped or been dropped. Maturity, horizon and dates are the person's to set in the Plan view; this tool always captures raw.",
     inputSchema: {
       title: z.string(),
       brief: z.string().optional().describe("What it is, who it is for, what done looks like"),

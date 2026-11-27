@@ -16,13 +16,14 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { renderAgentsGuide, writeAgentsGuide } from "../src/core/agents-template.js";
+import { IDEA_ROUTING, renderAgentsGuide, writeAgentsGuide } from "../src/core/agents-template.js";
 import { initWorkspace, stapleHome } from "../src/core/workspace.js";
 import { CLI_ENTRY, TSX_CLI, cleanEnv, startMcpClient, toolPayload } from "./fixtures/contract-support.js";
 
 let home: string;
 const PLANS_HEADING = "### Plans and specs are staple records";
 const FINDINGS_HEADING = "## Findings and rulings on open work";
+const ROUTING_HEADING = "### Idea or ticket";
 const tempRoots: string[] = [];
 
 function scratch(label: string): string {
@@ -426,6 +427,77 @@ describe("the guide teaches the whole protocol", () => {
   });
 });
 
+// Agents filed brainstorms and unplanned capabilities as tickets (a structural key found while
+// working one rung of a catalogue became work of its own). One routing table and one set of
+// maturity rules, in every place an agent reads instructions, are what stop that.
+describe("the guide routes new work to an idea or a ticket", () => {
+  const guide = renderAgentsGuide({ slug: "demo", prefix: "DEM" });
+  const rows = IDEA_ROUTING.split("\n").filter((line) => line.startsWith("| ") && !line.startsWith("| You have"));
+
+  it("renders the routing under Planning, before the horizon steps", () => {
+    const section = sectionOf(guide, ROUTING_HEADING);
+    expect(section.replace(`${ROUTING_HEADING}\n\n`, "")).toBe(IDEA_ROUTING);
+    expect(guide.indexOf("## Planning")).toBeLessThan(guide.indexOf(ROUTING_HEADING));
+    expect(guide.indexOf(ROUTING_HEADING)).toBeLessThan(guide.indexOf("### Working a horizon"));
+  });
+
+  it("routes in order, first match wins: in-scope fix, defect or more of the same work, research, sparked idea, brainstorm, settled work", () => {
+    expect(IDEA_ROUTING).toMatch(/With planning on[^.]*\.\s+First\s+match wins\. The CLI column leaves out the leading `staple`/);
+    const expected: Array<[RegExp, RegExp]> = [
+      [/^\| What the findings rules fix here: something the ticket you hold needs to meet its criteria or outcome, a defect included/, /No new record: the fix goes in that ticket's branch and pull request \| none \| none \|$/],
+      [/^\| A defect, a review finding the findings rules file \(a blocker, follow-up or independent one\), upkeep, or more work on what the ticket or its epic builds/, /a finding is filed as the findings rules say \(`found_in`, and `blocks` for a blocker\) \|[^|]*`found_in`[^|]*\| `new <title> --kind bug`, `new <title> --found-in <ref>`/],
+      [/^\| Research or a proof of concept for an idea still being worked out/, /`spike` ticket, linked to the idea as research \| `create_task` with `kind: "spike"`, then `start_idea` with `research` \| `new <title> --kind spike`, `idea adopt <idea> <ref> --research`/],
+      [/^\| A new capability nobody planned, found while working a ticket/, /An idea sparked by that ticket \|[^|]*`capture_idea` with `sparked_by`[^|]*\| `idea new <title> --sparked-by <ref>`/],
+      [/^\| A brainstorm: something to discuss/, /A raw idea \| `capture_idea` \| `idea new <title>`/],
+      [/^\| Settled work: the breakdown of an idea the person marked shaped/, /for a shaped idea, Scaffold makes them \| `scaffold_idea`, `create_task` \| `idea scaffold <idea>`, `new <title>`/],
+    ];
+    expect(rows).toHaveLength(expected.length);
+    for (const [index, [have, goes]] of expected.entries()) {
+      const row = rows[index]!;
+      expect(row, `row ${index + 1}`).toMatch(have);
+      expect(row, `row ${index + 1}`).toMatch(goes);
+    }
+  });
+
+  it("names the test for a discovery, the counter-example, the conversion and planning off", () => {
+    const text = IDEA_ROUTING.replace(/\s+/g, " ");
+    expect(text).toMatch(/does this ticket need it to meet its criteria or outcome\? If not, is it a defect, a review finding, upkeep, or more work on what the ticket or its epic builds\? Then it is a ticket\. If none of these, it is a new capability: an idea sparked by the ticket, never a ticket filed beside it/);
+    expect(text).toMatch(/structural key naming its family\. Nobody planned that, so it is an idea sparked by the rung's ticket/);
+    expect(text).toMatch(/Never file a ticket to hold a brainstorm/);
+    expect(text).toMatch(/nobody has started becomes one with `convert_to_idea`/);
+    expect(text).toMatch(/With planning off, ideas are hidden and none can be captured: use tickets/);
+  });
+
+  it("teaches the maturity rules: capture is raw, enrichment explores, shaped is the person's", () => {
+    const text = IDEA_ROUTING.replace(/\s+/g, " ");
+    expect(text).toMatch(/\*\*Raw\*\*: captured for discussion[^*]*Capturing or importing it, and editing its title or brief, leave it raw/);
+    expect(text).toMatch(/\*\*Exploring\*\*: being worked until every section is shaped\. Writing a plan section or a breakdown row, asking, answering or deferring a question, recording a decision, or linking research or a POC moves a raw idea to exploring by itself\. Do that work; never set the stage by hand/);
+    expect(text).toMatch(/\*\*Shaped\*\*: brainstormed with the person, the details settled, with enough context and a plan for an agent to start\. Only the person marks an idea shaped/);
+    expect(text).toMatch(/propose it \(`update_idea` with `propose_shaped`\)/);
+    expect(text).toMatch(/Dropping an idea, restoring a dropped one and moving a shaped one back to exploring are the person's too/);
+    expect(text).toMatch(/A shaped sub-idea can sit on any horizon while an idea above it is still exploring, but it is not scaffolded until every idea above it is shaped and every idea it or one above it waits on has shipped or been dropped/);
+    expect(text).toMatch(/Research and POCs never start an idea or count as its delivery/);
+  });
+});
+
+describe("the skill and the plan guide carry the same routing", () => {
+  const words = (text: string) => text.replace(/\s+/g, " ");
+  it.each([
+    ["the shipped skill", join("skills", "staple", "SKILL.md")],
+    ["docs/plan.md", join("docs", "plan.md")],
+  ])("%s holds the routing table and maturity rules word for word", (_label, path) => {
+    const text = readFileSync(join(import.meta.dirname, "..", path), "utf8");
+    expect(words(text)).toContain(words(IDEA_ROUTING));
+  });
+
+  it("the skill sends ticket creation through it first", () => {
+    const skill = readFileSync(join(import.meta.dirname, "..", "skills", "staple", "SKILL.md"), "utf8");
+    const record = sectionOf(skill, "## Record, claim and work");
+    expect(words(record)).toMatch(/With planning on, decide idea or ticket first \(above\)\. Before durable changes, create one/);
+    expect(skill.indexOf("## Decide idea or ticket")).toBeLessThan(skill.indexOf("## Record, claim and work"));
+  });
+});
+
 describe("the shipped skill teaches the same findings framework", () => {
   const skill = readFileSync(join(import.meta.dirname, "..", "skills", "staple", "SKILL.md"), "utf8");
   const section = sectionOf(skill, "## Classify review findings");
@@ -451,7 +523,7 @@ function sectionOf(text: string, heading: string): string {
 // This repository keeps its own guide, edited by hand alongside the template. A rule the template
 // gains has to reach it too, or the repo that ships the rule is the one place agents never read it.
 describe("this repository's own guide", () => {
-  it.each([PLANS_HEADING, FINDINGS_HEADING])("carries the template's %s section word for word", (heading) => {
+  it.each([ROUTING_HEADING, PLANS_HEADING, FINDINGS_HEADING])("carries the template's %s section word for word", (heading) => {
     const own = readFileSync(join(import.meta.dirname, "..", ".staple", "AGENTS.md"), "utf8");
     expect(sectionOf(own, heading)).toBe(sectionOf(renderAgentsGuide({ slug: "staple", prefix: "STA" }), heading));
   });
@@ -490,6 +562,32 @@ describe("the views the guide names are the server's", () => {
       expect(description("record_attempt_event")).toMatch(/After a milestone, show_progress[^.]*once/);
       expect(description("update_task")).toMatch(/in_review\), show_ticket/);
       expect(description("gate_task")).toMatch(/show_ticket on the parent/);
+    } finally {
+      await harness.close();
+    }
+  }, 60_000);
+});
+
+// An agent that never opens the guide or the skill files work through these two tools.
+describe("the filing tools carry the routing and the maturity rules", () => {
+  it("create_task sends brainstorms and unplanned capabilities to capture_idea, capture_idea sends defects and in-scope gaps to create_task", async () => {
+    const harness = await startMcpClient({ home, cwd: scratch("routing-cwd") });
+    try {
+      const tools = (await harness.client.listTools()).tools;
+      const description = (name: string) => tools.find((candidate) => candidate.name === name)?.description ?? "";
+      const create = description("create_task");
+      expect(create).toMatch(/With features\.planning on, file a ticket for a defect \(kind bug\), for more work on what a ticket or its epic builds that the ticket is correct without \(a review finding takes found_in\), for research or a POC on an idea \(a spike, then start_idea with research\) or for settled work/);
+      expect(create).toMatch(/What the ticket you hold needs to meet its criteria or outcome is no new ticket: fix it in that ticket/);
+      expect(create).toMatch(/A brainstorm, or a new capability nobody planned found while working a ticket, is an idea instead: capture_idea, with sparked_by naming the ticket/);
+      expect(create).toMatch(/Never a ticket to hold a brainstorm; an unstarted ticket that should have been an idea converts with convert_to_idea/);
+      expect(create).toMatch(/An idea starts raw, moves to exploring as its plan, questions, decisions or research are written, and only the person marks it shaped \(propose it with update_idea propose_shaped\)/);
+
+      const capture = description("capture_idea");
+      expect(capture).toMatch(/Capture a brainstorm \(something to discuss, a what-if, an outcome nobody has settled\) or a new capability nobody planned that turned up while working a ticket \(pass sparked_by\); never file a ticket to hold either/);
+      expect(capture).toMatch(/What the ticket you hold needs to meet its criteria or outcome is fixed in that ticket, not captured\. A defect, more work on what a ticket or its epic builds \(a review finding takes found_in\), research or a POC for an idea \(a spike linked with start_idea research\) and settled work are tickets instead \(create_task\)/);
+      expect(capture).toMatch(/capture makes it raw \(an import and title or brief edits keep it raw\); writing a plan section or breakdown row, asking, answering or deferring a question, recording a decision or linking research moves it to exploring by itself/);
+      expect(capture).toMatch(/shaped \(details settled, enough context and plan for an agent to start\) is only the person's, so propose it with update_idea propose_shaped once its plan passes the gate/);
+      expect(capture).toMatch(/A shaped sub-idea may sit on any horizon but is not scaffolded until every idea above it is shaped and every idea it or one above it waits on has shipped or been dropped/);
     } finally {
       await harness.close();
     }
