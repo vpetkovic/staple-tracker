@@ -3,7 +3,7 @@
  * Regenerate with: npx tsx scripts/regen-migration-snapshots.ts
  *
  * The `sqlite_master` dump of a workspace database that walked migrations
- * 001, 002, 003, 004, 005, 006, 007, 008, 009, 010, 011, 012, 013, 014, 015, 016, 017, 018, 019, 020, 021, 022, 023, 024, 025, 026. Executed verbatim by the runner when — and only when —
+ * 001, 002, 003, 004, 005, 006, 007, 008, 009, 010, 011, 012, 013, 014, 015, 016, 017, 018, 019, 020, 021, 022, 023, 024, 025, 026, 027. Executed verbatim by the runner when — and only when —
  * version detection proved the file has no tables at all.
  *
  * No `IF NOT EXISTS` anywhere, deliberately: reaching this text with tables
@@ -444,7 +444,7 @@ CREATE TABLE plan_links (
         idea_id   TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
         issue_id  TEXT NOT NULL,
         linked_by TEXT NOT NULL,
-        linked_at TEXT NOT NULL,
+        linked_at TEXT NOT NULL, purpose TEXT NOT NULL DEFAULT 'delivery' CHECK (purpose IN ('delivery', 'exploration')),
         PRIMARY KEY (idea_id, issue_id)
       );
 

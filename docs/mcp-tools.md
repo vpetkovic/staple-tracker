@@ -95,9 +95,9 @@ epic.
 | `list_horizons` | Horizons in order | `staple horizon ls` | no |
 | `capture_idea` | Capture a raw idea; `sparked_by` names the ticket whose work turned it up | `staple idea new` | yes |
 | `update_idea` | Edit title, brief, plan sections, questions (answer or defer) and decisions; steering fields, the delivered-outside-the-tracker mark included, are refused as the person's | `staple idea set`, `ask`, `resolve`, `decide` | yes |
-| `start_idea` | Promote an idea to an epic in place, or adopt an issue | `staple idea promote`, `adopt` | yes |
+| `start_idea` | Promote an idea to an epic in place, adopt an issue, or link one as research or a POC (`research`: listed apart, does not start the idea or count as its delivery) | `staple idea promote`, `adopt`, `adopt --research` | yes |
 | `scaffold_idea` | Preview an idea's epic and its tasks from the breakdown, then create exactly that preview, named by its `fingerprint` | `staple idea scaffold` | yes |
-| `unlink_idea` | Remove a link from an idea | `staple idea unlink` | yes |
+| `unlink_idea` | Remove a link from an idea, work or research | `staple idea unlink` | yes |
 
 ## Autopilot runs
 

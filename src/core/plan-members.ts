@@ -2,7 +2,8 @@
  * The members a horizon holds through the plan (design/plan.md, "Membership").
  *
  * A horizon is a milestone. Its members come from its plan records without anyone typing them:
- * a promoted record on the horizon is a member, and so is every issue a record on it links.
+ * a promoted record on the horizon is a member, and so is every issue a record on it links for
+ * delivery (an exploration link is not the horizon's work).
  * Moving a record moves its work; unscheduling removes it; a member a person put in a
  * milestone by hand (`milestone_members`) stays where it was put and wins over the plan.
  *
@@ -48,7 +49,8 @@ export function derivePlanMembers(db: DatabaseSync): Array<{ issueId: string; mi
     // The plan's order, then the UUID: the same order on every device for the same facts.
     .sort((a, b) => (a.plan_rank ?? Number.MAX_SAFE_INTEGER) - (b.plan_rank ?? Number.MAX_SAFE_INTEGER) || a.id.localeCompare(b.id));
   const kindOf = db.prepare("SELECT kind FROM issues WHERE id = ?");
-  const links = db.prepare("SELECT issue_id FROM plan_links WHERE idea_id = ? ORDER BY linked_at, issue_id");
+  // Delivery links only: research and proofs of concept linked to an idea are not its horizon's work.
+  const links = db.prepare("SELECT issue_id FROM plan_links WHERE idea_id = ? AND purpose = 'delivery' ORDER BY linked_at, issue_id");
   const out: Array<{ issueId: string; milestoneId: string }> = [];
   const placed = new Set<string>();
   const place = (issueId: string, milestoneId: string) => {

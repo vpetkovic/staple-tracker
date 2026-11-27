@@ -78,7 +78,7 @@ import {
 } from "./plan-lifecycle.js";
 import { createHash, randomUUID } from "node:crypto";
 import { readStoredRepositoryId } from "./repo-identity.js";
-import { allPlanLinks, planLinkField, planLinksOf, writePlanLink } from "./plan-links.js";
+import { allPlanLinks, planLinkField, planLinkPurposeOf, planLinkValue, planLinksOf, writePlanLink, type PlanLinkPurpose } from "./plan-links.js";
 import { planRowsByRecord, planRowField, planRowsOf, planRowValue, writePlanRow, type PlanRowValue } from "./plan-rows.js";
 import {
   BREAKDOWN_KEY,
@@ -225,8 +225,14 @@ export interface IdeaView {
   /** The window kept when it was started; null before it is started or when it had no window. */
   baseline: PlanWindow | null;
   rank: number;
-  /** The issues this record itself links, by id; some may be missing (see `missingLinks`). */
+  /** The issues this record itself links for delivery, by id; some may be missing (see `missingLinks`). */
   links: string[];
+  /**
+   * The issues it links as exploration (research, a proof of concept), by id: listed on their
+   * own, and nothing it is measured by. They do not start it, count toward its progress or dates,
+   * or join its horizon. Some may be missing, as links may.
+   */
+  explorations: string[];
   /** Own links whose issue this device no longer holds (a rewind, say): shown as missing, still unlinkable. */
   missingLinks: string[];
   /** Work it stands for, rolled up from sub-ideas: itself once promoted, and every link. */
@@ -322,6 +328,8 @@ interface PlanFacts {
   horizonDates: Map<string, string | null>;
   work: ReturnType<PlanStore["work"]>;
   links: Map<string, string[]>;
+  /** Each record's exploration links, read in the same pass: shown, never measured. */
+  explorations: Map<string, string[]>;
   /** The workspace's status categories, read once for the build. */
   categoryOf: (status: string) => StatusCategory | null;
   records: Map<string, RecordFacts>;
@@ -379,7 +387,10 @@ export interface IdeaDetail {
   brief: string | null;
   questions: Question[];
   decisions: string[];
+  /** Its delivery links: the work it stands for. */
   linked: LinkView[];
+  /** Its exploration links (research, proofs of concept): its own list, nothing it is measured by. */
+  exploration: LinkView[];
   /** The plan sections (design/plan.md, "Plan sections"). */
   plan: PlanSections;
   /** How much of the plan is written: starred sections and all ten. */
@@ -1233,7 +1244,7 @@ export class PlanStore {
     const horizons = this.horizonRows();
     const horizonDates = new Map(horizons.map((row) => [row.id, row.target_date]));
     const work = this.work();
-    const links = allPlanLinks(this.db);
+    const { delivery: links, exploration: explorations } = allPlanLinks(this.db);
     const breakdowns = planRowsByRecord(this.db);
     // Its own facts first: a record's size reads whether its sub-records are dropped.
     const records = new Map<string, RecordFacts>();
@@ -1299,7 +1310,7 @@ export class PlanStore {
       carried.set(horizonId, list);
     }
     const stepInputs = this.stepInputsOf(rows, byId, records, sizes, carrier, breakdowns);
-    return { rows, byId, childIds, horizons, horizonDates, work, links, categoryOf, records, sizes, carried, carrier, stepInputs, steps: null, accounting: new Map() };
+    return { rows, byId, childIds, horizons, horizonDates, work, links, explorations, categoryOf, records, sizes, carried, carrier, stepInputs, steps: null, accounting: new Map() };
   }
 
   /**
@@ -1491,6 +1502,7 @@ export class PlanStore {
         baseline: hasBaseline ? { start: row.plan_baseline_start, target: row.plan_baseline_target } : null,
         rank: row.plan_rank ?? 0,
         links: ownLinks,
+        explorations: facts.explorations.get(row.id) ?? [],
         missingLinks: ownLinks.filter((id) => !work.rows.has(id)),
         linkCount: workIds.length,
         resolvedLinks: measured.resolved,
@@ -1564,6 +1576,7 @@ export class PlanStore {
       questions: parseQuestions(this.documentBody(row.id, QUESTIONS_KEY)),
       decisions: parseDecisions(this.documentBody(row.id, DECISIONS_KEY)),
       linked: idea.links.map((id) => this.linkView(id, work)),
+      exploration: idea.explorations.map((id) => this.linkView(id, work)),
       ...this.planOf(row.id, idea),
       ...this.provenanceOf(row.id),
       today,
@@ -1825,7 +1838,7 @@ export class PlanStore {
       // Shaped only when the plan, as this write leaves it, passes the gate: marked shaped, or restored into shaped.
       if (action === "shape" || (action === "restore" && maturity === "shaped")) assertShaped(displayRef(row), this.gateOf(row.id, sections));
       // Restored into raw, it is raw: what it holds follows the table, as a capture into raw does (never scheduled, no dates).
-      if (action === "restore" && maturity === "raw") assertRestorableToRaw(row, this.listedHorizon(row.plan_horizon_id));
+      if (action === "restore" && maturity === "raw") assertRestorableToRaw(row, this.listedHorizon(row.plan_horizon_id), planLinksOf(this.db, row.id, "exploration").length > 0);
       // The rest of one write is held to the state its maturity change leads to: shaping a raw idea
       // and scheduling it is one decision. A started or shipped record keeps its state.
       if (before !== "started" && before !== "shipped") state = maturity;
@@ -2252,55 +2265,71 @@ export class PlanStore {
     }
   }
 
-  /** Adopt: link an existing issue (an epic or a ticket) to a plan record. */
-  adopt(ref: string, issueRef: string, actor: string | null): IdeaView {
+  /**
+   * Adopt: link an existing issue (an epic or a ticket) to a plan record. For delivery (the
+   * default) it is the work the record stands for, and starts it; as exploration it is research
+   * or a proof of concept, listed on its own and nothing the record is measured by. An issue the
+   * record already links the other way is relinked for this purpose, one field either way.
+   */
+  adopt(ref: string, issueRef: string, actor: string | null, options: { purpose?: PlanLinkPurpose } = {}): IdeaView {
     this.assertEnabled();
+    const purpose = options.purpose ?? "delivery";
     const row = this.recordRow(ref);
-    this.allowIdea(row, "adopt", {});
+    this.allowIdea(row, purpose === "exploration" ? "link_research" : "adopt", {});
     const target = this.store.writeTarget(issueRef);
     if (isPlanKind(target.kind) || target.id === row.id) {
-      throw new StapleError("validation", `${displayRef(target)} is an idea; only tracker work can be adopted.`);
+      throw new StapleError("validation", `${displayRef(target)} is an idea; only tracker work can be ${purpose === "exploration" ? "linked as research" : "adopted"}.`);
     }
-    if (planLinksOf(this.db, row.id).includes(target.id)) return this.ideaView(row.id);
+    if (planLinkPurposeOf(this.db, row.id, target.id) === purpose) return this.ideaView(row.id);
     this.store.journaled(() => {
-      this.link(row, target.id, actor);
+      this.link(row, target.id, actor, purpose);
       this.settleMembership(actor);
     });
     return this.ideaView(row.id);
   }
 
   /**
-   * Unlink one issue. The issue may be gone (a rewind removed it): a link names it by id, and
-   * that id is accepted here even when nothing resolves it any more.
+   * Unlink one issue, whichever way it is linked. The issue may be gone (a rewind removed it): a
+   * link names it by id, and that id is accepted here even when nothing resolves it any more.
+   * Unlinking delivery work is what a started record offers; unlinking research, what any record
+   * that links research offers.
    */
   unlink(ref: string, issueRef: string, actor: string | null): IdeaView {
     this.assertEnabled();
     const row = this.recordRow(ref);
-    this.allowIdea(row, "unlink", {});
-    const links = planLinksOf(this.db, row.id);
-    const issueId = links.includes(issueRef.trim()) ? issueRef.trim() : this.store.getIssue(issueRef).id;
-    if (!links.includes(issueId)) {
-      throw new StapleError("validation", `${issueRef.trim()} is not linked to ${displayRef(row)}.`);
+    const linked = [...planLinksOf(this.db, row.id), ...planLinksOf(this.db, row.id, "exploration")];
+    const issueId = linked.includes(issueRef.trim()) ? issueRef.trim() : this.store.getIssue(issueRef).id;
+    const purpose = planLinkPurposeOf(this.db, row.id, issueId);
+    const notLinked = `${issueRef.trim()} is not linked to ${displayRef(row)}.`;
+    try {
+      this.allowIdea(row, purpose === "exploration" ? "unlink_research" : "unlink", {});
+    } catch (error) {
+      // Nothing to unlink, in a state that offers no unlinking of work: say both, the missing link first.
+      if (purpose === null && error instanceof StapleError) throw new StapleError(error.code, `${notLinked} ${error.message}`, error.detail);
+      throw error;
     }
+    if (purpose === null) throw new StapleError("validation", notLinked);
     const identifier = (this.db.prepare("SELECT identifier FROM issues WHERE id = ?").get(issueId) as { identifier: string } | undefined)?.identifier ?? issueId;
     this.store.journaled(() => {
       writePlanLink(this.db, row.id, issueId, null);
       this.store.journal.record({ entity: "milestone", entityId: row.id, verb: "update", payload: { [planLinkField(issueId)]: null }, actor: actor ?? null });
-      insertEvent(this.db, { kind: "idea_unlinked", issueId: row.id, actor, payload: { issue: identifier } });
+      insertEvent(this.db, { kind: "idea_unlinked", issueId: row.id, actor, payload: { issue: identifier, ...(purpose === "exploration" ? { purpose } : {}) } });
       this.settleMembership(actor);
     });
     return this.ideaView(row.id);
   }
 
   /** One link, one row, one field of the record's `milestone` entity (`plan-links.ts`). */
-  private link(row: PlanRow, issueId: string, actor: string | null): void {
-    if (planLinksOf(this.db, row.id).includes(issueId)) return;
+  private link(row: PlanRow, issueId: string, actor: string | null, purpose: PlanLinkPurpose = "delivery"): void {
+    const previous = planLinkPurposeOf(this.db, row.id, issueId);
+    if (previous === purpose) return;
     const identifier = (this.db.prepare("SELECT identifier FROM issues WHERE id = ?").get(issueId) as { identifier: string }).identifier;
-    const value = { linkedBy: actor ?? "unknown", linkedAt: this.store.journal.mutationAt() };
+    const value = planLinkValue(actor ?? "unknown", this.store.journal.mutationAt(), purpose);
     writePlanLink(this.db, row.id, issueId, value);
     this.store.journal.record({ entity: "milestone", entityId: row.id, verb: "update", payload: { [planLinkField(issueId)]: value }, actor: actor ?? null });
-    insertEvent(this.db, { kind: "idea_linked", issueId: row.id, actor, payload: { issue: identifier } });
-    this.keepBaselines(row.id, actor);
+    // A relink from the other purpose says so: moving work to research can un-start the record.
+    insertEvent(this.db, { kind: "idea_linked", issueId: row.id, actor, payload: { issue: identifier, ...(purpose === "exploration" ? { purpose } : {}), ...(previous !== null ? { from: previous } : {}) } });
+    if (purpose === "delivery") this.keepBaselines(row.id, actor);
   }
 
   // ---------- the baseline ----------
@@ -2638,8 +2667,10 @@ function firstLine(text: string | null): string | null {
  * and no plan dates), and a record restored into raw could not shed them: so it is restored to
  * exploring or shaped instead, which hold both.
  */
-function assertRestorableToRaw(row: Pick<PlanRow, "identifier" | "title" | "plan_start" | "plan_target">, onHorizon: boolean): void {
-  const held = [onHorizon ? "a horizon" : null, row.plan_start !== null || row.plan_target !== null ? "planned dates" : null].filter((part): part is string => part !== null);
+function assertRestorableToRaw(row: Pick<PlanRow, "identifier" | "title" | "plan_start" | "plan_target">, onHorizon: boolean, research = false): void {
+  const held = [onHorizon ? "a horizon" : null, row.plan_start !== null || row.plan_target !== null ? "planned dates" : null, research ? "linked research" : null].filter(
+    (part): part is string => part !== null,
+  );
   if (held.length === 0) return;
   const subject = displayRef(row);
   throw new StapleError(
