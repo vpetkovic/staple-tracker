@@ -548,7 +548,8 @@ export function FinishedLine({ row, workspace, onAuthError, open, onToggle }: { 
         <MilestoneGlyph state={milestone.state} percent={progress.percent} />
         <button
           type="button"
-          className="focus-ring min-h-0 min-w-0 truncate rounded-sm text-left text-body font-medium text-text-secondary underline-offset-2 hover:underline"
+          // A 32px tap under 760px, as the open section's name: padding inside the box (a `::before` would be clipped by the truncation), taken back by a negative margin.
+          className="focus-ring min-h-0 min-w-0 truncate rounded-sm text-left text-body font-medium text-text-secondary underline-offset-2 hover:underline @max-[760px]/ms:-my-1.5 @max-[760px]/ms:py-1.5"
           onClick={() => session.open(workspace, milestone.identifier)}
           data-milestone-open={milestone.identifier}
         >

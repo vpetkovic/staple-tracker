@@ -212,6 +212,18 @@ function lastEventActor(type: string): string | null {
   }
 }
 
+/**
+ * A control's drawn height and its tap's: the larger of its box and its invisible `::before`. The
+ * `::before` is positioned on the padding box, so a bordered button's tap counts from inside the border.
+ */
+const measureTap = (page: Page, selector: string) =>
+  page.locator(selector).first().evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const before = getComputedStyle(element, "::before");
+    const tap = before.content !== "none" && before.position === "absolute" ? Math.max(box.height, parseFloat(before.height)) : box.height;
+    return { drawn: Math.round(box.height), tap: Math.round(Math.max(tap, box.height)) };
+  });
+
 /** A milestone's section. */
 const section = (page: Page, ref: string) => page.locator(`[data-milestone-section="${ref}"]`);
 
@@ -646,20 +658,16 @@ describe.skipIf(Boolean(reason))("the Milestones page, pressed in a real browser
   });
 
   it("keeps every control's look on a phone, with a tap of at least 32px and no 44px box", async () => {
-    // A finger: the base layer's touch floor applies unless a control lifts it.
-    const { page, context } = await open(refs.carried!, WS, { width: 390, height: 844 }, true);
-    /** The drawn box's height and the tap's: the larger of the box and its invisible `::before`. */
-    const measure = (selector: string) =>
-      page.locator(selector).first().evaluate((element) => {
-        const box = element.getBoundingClientRect();
-        const before = getComputedStyle(element, "::before");
-        const tap = before.content !== "none" && before.position === "absolute" ? Math.max(box.height, parseFloat(before.height)) : box.height;
-        return { drawn: box.height, tap: Math.max(tap, box.height) };
-      });
+    // A finger at 375px: the base layer's touch floor applies unless a control lifts it.
+    const phone = { width: 375, height: 812 };
+    const { page, context } = await open(refs.carried!, WS, phone, true);
     const carried = `[data-milestone-section="${refs.carried}"]`;
     for (const [selector, drawn] of [
       [`${carried} [data-milestone-fold]`, 20],
       [`${carried} [data-milestone-menu]`, 28],
+      // The name, drawn as text, takes its tap through padding a negative margin gives back.
+      [`${carried} [data-milestone-open="${refs.carried}"]`, 32],
+      [`${carried} [data-milestone-goal-line]`, 36],
       // The lifted row's own control: the hidden member's `⋯` it carries.
       [`[data-milestone-member="${refs.late}"] [data-member-actions]`, 28],
       [`${carried} [data-milestone-add-open]`, 28],
@@ -667,21 +675,40 @@ describe.skipIf(Boolean(reason))("the Milestones page, pressed in a real browser
       ["[data-add-milestone-row]", 32],
       ["[data-phone-header-slot] [data-milestones-fold-all]", 32],
     ] as const) {
-      const { drawn: height, tap } = await measure(selector);
+      const { drawn: height, tap } = await measureTap(page, selector);
       expect(height, selector).toBeCloseTo(drawn, 0);
       expect(tap, selector).toBeGreaterThanOrEqual(32);
     }
     await page.locator(`${carried} [data-milestone-add-open]`).click();
-    for (const selector of [`${carried} [data-milestone-add] button[type=submit]`, `${carried} [aria-label="Identifier to add"]`]) {
-      const { drawn, tap } = await measure(selector);
-      expect(drawn, selector).toBeLessThanOrEqual(32);
-      expect(tap, selector).toBeGreaterThanOrEqual(28);
+    for (const selector of [`${carried} [data-milestone-add] button[type=submit]`, `${carried} [data-milestone-add] button[type=button]`]) {
+      const { drawn, tap } = await measureTap(page, selector);
+      expect(drawn, selector).toBeCloseTo(28, 0);
+      expect(tap, selector).toBeGreaterThanOrEqual(32);
     }
+    expect((await measureTap(page, `${carried} [aria-label="Identifier to add"]`)).drawn).toBeLessThanOrEqual(32);
+    // A finished milestone's name on the opened shelf.
+    await page.locator("[data-milestones-shelf]").click();
+    const finishedName = `[data-milestone-finished-line="${refs.finished}"] [data-milestone-open]`;
+    expect(await measureTap(page, finishedName)).toEqual({ drawn: 32, tap: 32 });
     // The lifted child's parent chip is the Tasks list's own: it keeps its drawn size and grows a 44px target.
     const chip = page.locator(`[data-member-row="${refs.late}"] .staple-row-breadcrumb`);
     const target = await chip.evaluate((element) => parseFloat(getComputedStyle(element, "::before").height));
     expect(target).toBeGreaterThanOrEqual(44);
     await context.close();
+
+    // Bordered text buttons: 28px drawn, a 32px tap counted from inside the border.
+    const missing = await open("", WS, phone, true);
+    await missing.page.goto(`${origin}/?ws=${WS}&view=milestones&focus=${refs.open}&token=${token}`, { waitUntil: "networkidle" });
+    expect(await measureTap(missing.page, `[data-milestone-missing="${refs.open}"] button`)).toEqual({ drawn: 28, tap: 32 });
+    await missing.context.close();
+    const failing = await open("", WS, phone, true);
+    await failing.page.route((url) => url.pathname === "/api/milestone" && url.searchParams.get("ref") === refs.order, (route) =>
+      route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "Down for the test.", message: "Down for the test.", code: "unknown", retryable: true }) }),
+    );
+    await failing.page.goto(`${origin}/?ws=${WS}&view=milestones&focus=${refs.order}&token=${token}`, { waitUntil: "networkidle" });
+    await failing.page.locator("[data-milestone-retry]").waitFor();
+    expect(await measureTap(failing.page, "[data-milestone-retry]")).toEqual({ drawn: 28, tap: 32 });
+    await failing.context.close();
   });
 
   it("says approving a gated milestone with open work continues it, and it does not close", async () => {

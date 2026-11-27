@@ -253,3 +253,34 @@ it("opens a horizon's plan from its Milestones section inside the app, landing o
     await context.close();
   }
 }, 30_000);
+
+it("gives a horizon's Plan line and Open in Plan a 32px tap on a phone, at their desk look", async () => {
+  const context = await browser.newContext({ viewport: { width: 375, height: 812 }, hasTouch: true, isMobile: true });
+  const page = await context.newPage();
+  page.setDefaultTimeout(5000);
+  try {
+    // A horizon is listed on Milestones once it has a date.
+    const dated = await fetch(`http://127.0.0.1:${(ui.server.address() as AddressInfo).port}/api/milestone/update`, {
+      method: "POST",
+      headers: { "x-staple-token": ui.token, "content-type": "application/json" },
+      body: JSON.stringify({ ws: "larkspur", ref: next.identifier, targetDate: "2031-06-30", actor: "Mira" }),
+    });
+    expect(dated.status).toBe(200);
+    await page.goto(route(`&ws=larkspur&view=milestones&focus=${next.identifier}`).replace("&view=plan", ""));
+    const line = `[data-milestone-section="${next.identifier}"] [data-milestone-plan-line]`;
+    await page.locator(line).waitFor();
+    const measure = (selector: string) =>
+      page.locator(selector).first().evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        const before = getComputedStyle(element, "::before");
+        const tap = before.content !== "none" && before.position === "absolute" ? Math.max(box.height, parseFloat(before.height)) : box.height;
+        return { drawn: Math.round(box.height), tap: Math.round(tap) };
+      });
+    expect(await measure(line)).toEqual({ drawn: 36, tap: 36 });
+    const link = await measure(`[data-milestone-section="${next.identifier}"] [data-milestone-open-plan]`);
+    expect(link.drawn).toBeLessThan(28);
+    expect(link.tap).toBeGreaterThanOrEqual(32);
+  } finally {
+    await context.close();
+  }
+}, 30_000);
