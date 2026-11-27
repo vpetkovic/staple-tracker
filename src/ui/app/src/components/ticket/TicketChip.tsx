@@ -108,8 +108,11 @@ export function TicketChip({
   );
 }
 
-/** A whole ticket identifier: "STA-12", "AB2-3"; never part of a longer word. */
-const REF = /\b[A-Z][A-Z0-9]*-\d+\b/g;
+/**
+ * A whole ticket identifier: "STA-12", "AB2-3"; never part of a longer word, nor the tail of an
+ * idea number ("I-STA-12" names an idea, not the ticket STA-12).
+ */
+const REF = /(?<![\w-])[A-Z][A-Z0-9]*-\d+\b/g;
 
 /** A sentence with every identifier of one of `issues` drawn as an inline chip; anything else stays text. */
 export function RefText({ text, issues, onOpen }: { text: string; issues: readonly RunIssue[]; onOpen?: (ref: string) => void }) {

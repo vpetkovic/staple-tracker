@@ -10,6 +10,7 @@ function idea(id: string, extra: Partial<IdeaData> = {}): IdeaData {
   return {
     id,
     identifier: null,
+    number: null,
     promoted: false,
     kind: "idea",
     title: `Idea ${id}`,
@@ -89,6 +90,16 @@ describe("narrowing the plan", () => {
     const whole = plan();
     expect(focusPlan(whole, "all", "")).toBe(whole);
     expect(focusPlan(whole, "all", "   ")).toBe(whole);
+  });
+
+  it("finds a record by its idea number or ticket number spelled whole, in any case", () => {
+    const numbered: PlanData = {
+      ...plan(),
+      ideas: [idea("one", { number: "I-STA-1" }), idea("twelve", { number: "I-STA-12" }), idea("epic", { number: "I-STA-3", identifier: "STA-40", promoted: true })],
+    };
+    expect(ids(focusPlan(numbered, "all", "i-sta-1"))).toEqual(["one"]);
+    expect(ids(focusPlan(numbered, "all", "I-STA-3"))).toEqual(["epic"]);
+    expect(ids(focusPlan(numbered, "all", "sta-40"))).toEqual(["epic"]);
   });
 
   it("keeps the ideas that match and every ancestor of each, in plan order", () => {

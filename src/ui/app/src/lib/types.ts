@@ -296,10 +296,15 @@ export type CommentAuthorType = "user" | "agent" | "system";
 
 export interface Issue {
   id: string;
-  /** Its ticket number. An unpromoted idea has none: the server sends null with `draft: true`, and the page addresses it by `id` (`getIssue`). */
+  /**
+   * Its ticket number, or an unpromoted idea's idea number (`I-STA-12`). An idea an earlier build
+   * left under a draft has none: the server sends null with `draft: true`, and the page addresses it by `id` (`getIssue`).
+   */
   identifier: string;
-  /** An unpromoted idea: no ticket number yet. */
+  /** An unpromoted idea with no number yet (an earlier build's draft). */
   draft?: boolean;
+  /** A plan record's permanent idea number: an idea's identifier, kept once it is promoted. Absent on other issues. */
+  ideaNumber?: string;
   title: string;
   description: string | null;
   status: IssueStatus;

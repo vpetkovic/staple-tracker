@@ -158,13 +158,14 @@ function WorkspacePlan({ workspace, onAuthError }: { workspace: string; onAuthEr
   if (!plan) return resource.error ? <ErrorState error={resource.error} /> : <PlanSkeleton lens={lens} />;
   if (!plan.enabled) return <PlanOff workspace={workspace} onTurnOn={() => void write("enable", {})} refusal={refusal} />;
 
-  // An idea opens by its id (it has no number), a promoted one by its number, both in the shared drawer.
+  // An idea opens by its idea number, a promoted one by its ticket number, both in the shared drawer; by its id only while unnumbered.
   const open = (id: string) => {
     const idea = plan.ideas.find((candidate) => candidate.id === id);
     const horizon = plan.horizons.find((candidate) => candidate.id === id);
-    session.open(workspace, idea?.identifier ?? horizon?.identifier ?? id);
+    session.open(workspace, idea?.identifier ?? idea?.number ?? horizon?.identifier ?? id);
   };
-  const selected = session.selection && session.selection.workspace === workspace ? (plan.ideas.find((idea) => idea.id === session.selection!.ref || idea.identifier === session.selection!.ref)?.id ?? null) : null;
+  const wanted = session.selection?.ref.toUpperCase() ?? null;
+  const selected = session.selection && session.selection.workspace === workspace ? (plan.ideas.find((idea) => idea.id === session.selection!.ref || idea.identifier === session.selection!.ref || (idea.number !== null && idea.number === wanted))?.id ?? null) : null;
   const text = session.filters.text;
   const setText = (next: string) => session.setFilters({ ...session.filters, text: next });
   // A fold is remembered with the rest; a horizon that is gone takes its fold with it. It ends the

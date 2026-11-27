@@ -55,6 +55,7 @@ function idea(state: keyof typeof OFFERED, patch: Partial<IdeaData> = {}): IdeaD
   return {
     id: ID,
     identifier: null,
+    number: null,
     promoted: false,
     kind: "idea",
     title: "Coach shares a program",

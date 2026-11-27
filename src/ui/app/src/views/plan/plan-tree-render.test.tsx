@@ -24,6 +24,7 @@ function idea(id: string, title: string, extra: Partial<IdeaData> = {}): IdeaDat
   return {
     id,
     identifier: null,
+    number: null,
     promoted: false,
     kind: "idea",
     title,
@@ -243,6 +244,29 @@ describe("one tree on three surfaces", () => {
       expect(text(html)).toContain("100% incomplete");
       expect(rows(html)).toEqual(TREE);
     }
+  });
+});
+
+describe("idea numbers", () => {
+  const numbered = (): PlanData => ({
+    ...plan(),
+    ideas: plan().ideas.map((entry, index) => ({
+      ...entry,
+      number: `I-LAR-${index + 1}`,
+      ...(entry.id === "checkout" ? { identifier: "LAR-40", promoted: true, kind: "epic" } : {}),
+    })),
+  });
+
+  it("shows each row's number beside its title, and a promoted record's ticket number with it", () => {
+    const html = renderToStaticMarkup(<HorizonsBoard plan={numbered()} write={async () => true} onOpen={noop} selected={null} />);
+    expect(html).toMatch(/data-plan-idea-number="I-LAR-1"[^>]*>LAR-40 · I-LAR-1</);
+    expect(html).toMatch(/data-plan-idea-number="I-LAR-2"[^>]*>I-LAR-2</);
+  });
+
+  it("shows the number on an Ideas lens card, and nothing for a record an earlier build left unnumbered", () => {
+    const html = renderToStaticMarkup(<IdeasBoard plan={numbered()} write={async () => true} onOpen={noop} selected={null} />);
+    expect(html).toMatch(/data-plan-card="billing"[\s\S]*?data-plan-idea-number="I-LAR-4"/);
+    expect(renderToStaticMarkup(<IdeasBoard plan={plan()} write={async () => true} onOpen={noop} selected={null} />)).not.toContain("data-plan-idea-number");
   });
 });
 

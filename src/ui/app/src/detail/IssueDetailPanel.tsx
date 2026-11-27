@@ -402,10 +402,16 @@ function Breadcrumb({ selection, detail, className }: { selection: Selection; de
 
 /**
  * The quiet reference at the end of the breadcrumb. An unpromoted idea has no ticket number, so
- * it reads "Idea"; while a detail loads, a ref that is an id or a stored key is not shown either.
+ * it reads its idea number ("Idea" while an earlier build's draft has none); a promoted record
+ * reads its ticket number with the idea number it kept. While a detail loads, a ref that is an id
+ * or a stored key is not shown.
  */
 function referenceOf(selection: Selection, detail: IssueDetail | undefined): string {
-  if (detail) return isIdeaDetail(detail) ? "Idea" : detail.issue.identifier;
+  if (detail) {
+    const kept = planRecordOf(detail)?.idea.number ?? detail.issue.ideaNumber ?? null;
+    if (isIdeaDetail(detail)) return kept ?? "Idea";
+    return kept !== null && kept !== detail.issue.identifier ? `${detail.issue.identifier} · ${kept}` : detail.issue.identifier;
+  }
   return selection.ref.startsWith("~") || /^[0-9a-f]{8}-[0-9a-f]{4}-/.test(selection.ref) ? "" : selection.ref;
 }
 

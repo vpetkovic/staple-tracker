@@ -104,6 +104,8 @@ export interface IdeaData {
   id: string;
   /** The ticket number once promoted; null while it is an idea, which has none. */
   identifier: string | null;
+  /** Its permanent idea number, `I-<PREFIX>-<n>`, before and after promotion; null only on a record an earlier build left unnumbered. */
+  number: string | null;
   /** Promoted in place: the record is an epic in the tracker now. */
   promoted: boolean;
   kind: string;

@@ -109,7 +109,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const plan = useResource(loadPlan, [selectedWs, session.version], () => undefined);
   const planRecord = useMemo(() => {
     if (!selected || !plan.data?.enabled) return null;
-    return plan.data.ideas.find((idea) => idea.id === selected.ref || idea.identifier === selected.ref) ?? null;
+    return plan.data.ideas.find((idea) => idea.id === selected.ref || idea.identifier === selected.ref || idea.number === selected.ref.toUpperCase()) ?? null;
   }, [plan.data, selected]);
   const selectedStatus = useMemo<IssueStatus | null>(() => {
     if (!selected) return null;

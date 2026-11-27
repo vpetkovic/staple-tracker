@@ -339,7 +339,7 @@ export interface SetEstimateResult {
  * the issue_id primary keys.
  */
 const TEXT_MATCH_SQL = `(
-    issues.title LIKE ? ESCAPE '\\' OR issues.identifier LIKE ? ESCAPE '\\'
+    issues.title LIKE ? ESCAPE '\\' OR issues.identifier LIKE ? ESCAPE '\\' OR issues.plan_idea_number LIKE ? ESCAPE '\\'
     OR issues.description LIKE ? ESCAPE '\\' OR issues.assignee LIKE ? ESCAPE '\\'
     OR (json_valid(issues.labels) AND EXISTS (SELECT 1 FROM json_each(issues.labels) l WHERE l.value LIKE ? ESCAPE '\\'))
     OR (json_valid(issues.acceptance_criteria)

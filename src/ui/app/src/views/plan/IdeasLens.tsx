@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
 import { moveOffered, planActionItems, type PlanItem } from "@/detail/plain-actions";
 import { ShippedMark } from "@/detail/ShippedMark";
 import { MoveMenu, openOnKey, type BoardProps, type Write } from "./plan-board";
-import { Amber, Flag, HorizonChip, StateGlyph } from "./plan-parts";
+import { Amber, Flag, HorizonChip, IdeaNumber, StateGlyph } from "./plan-parts";
 import { capturedAge, exploreItem, sectionMarks, sectionsTitle, shaping, type SectionMark } from "./ideas-words";
 import { columnEntries, dayLabel, dropBody, dropChanges, droppedIdeas, horizonOf, ideasColumns, isShipped, isStarted, riskOf, riskWords, type BoardColumn, type BoardEntry } from "./plan-model";
 
@@ -247,6 +247,12 @@ function RawRow({ plan, idea, column, columns, write, onOpen, selected, onDrag }
       <div className="min-w-0 flex-1">
         <div className="line-clamp-2 text-body font-medium text-foreground @max-[760px]/plan:text-[14px] @max-[760px]/plan:leading-5">{idea.title}</div>
         <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-caption text-text-tertiary">
+          {idea.number !== null ? (
+            <>
+              <IdeaNumber idea={idea} />
+              <span aria-hidden>·</span>
+            </>
+          ) : null}
           <span data-plan-captured-age>captured {capturedAge(idea.createdAt, plan.today)}</span>
           {idea.openQuestions > 0 ? (
             <>
@@ -320,7 +326,12 @@ function ExploringCard({ plan, entry, column, columns, write, onOpen, selected, 
         selected === idea.id && "border-ring hover:border-ring",
       )}
     >
-      {parentTitle ? <div className="truncate text-caption text-text-tertiary">{parentTitle} ›</div> : null}
+      {parentTitle || idea.number !== null ? (
+        <div className="flex min-w-0 items-center gap-1.5 text-caption text-text-tertiary">
+          <IdeaNumber idea={idea} />
+          {parentTitle ? <span className="truncate">{idea.number !== null ? "· " : ""}{parentTitle} ›</span> : null}
+        </div>
+      ) : null}
       <div className="flex items-start gap-2 text-[14px] font-medium leading-5 text-foreground">
         <StateGlyph state={idea.state} className="mt-[3px]" />
         <span className="min-w-0">{idea.title}</span>

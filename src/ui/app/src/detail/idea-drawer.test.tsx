@@ -23,6 +23,7 @@ function idea(patch: Partial<IdeaData> = {}): IdeaData {
   return {
     id: ID,
     identifier: null,
+    number: null,
     promoted: false,
     kind: "idea",
     title: "Coach shares a program",
