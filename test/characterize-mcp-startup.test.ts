@@ -130,7 +130,7 @@ describe("a server started with no workspace in reach", () => {
     await client?.close();
   });
 
-  it("still connects and still lists all 91 tools", async () => {
+  it("still connects and still lists all 92 tools", async () => {
     const { tools } = await client.listTools();
     // The inventory does not shrink when there is nowhere to write: a harness
     // configured before the user ever ran `init` sees the full tool set.
@@ -155,8 +155,8 @@ describe("a server started with no workspace in reach", () => {
     // The plan layer then added list_ideas, get_idea, list_horizons, capture_idea, update_idea,
     // start_idea, unlink_idea and the app-only reset_idea_baseline (83), and scaffold_idea (84).
     // The ticket branch added set_branch (89), and the one-call handoff checkpoint (90).
-    // Converting a misfiled ticket added convert_to_idea (91).
-    expect(tools).toHaveLength(91);
+    // Converting a misfiled ticket added convert_to_idea (91). Importing an idea from a file added import_idea (92).
+    expect(tools).toHaveLength(92);
   });
 
   it("pins the not_found guidance a read tool returns instead of an empty result", async () => {
