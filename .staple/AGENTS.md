@@ -41,7 +41,7 @@ configured humanName. Agents may read it; `set_setting` refuses to change it.
 
 When off, use ordinary tasks, milestones and the pickup queue. Planning commands and
 tools refuse; no horizon-run or horizon-plan instructions and no plan steps are
-supplied. Ideas remain unnumbered drafts, never tasks or pickup work. When on, the
+supplied. Ideas keep their I-<PREFIX>-<n> numbers and are never tasks or pickup work. When on, the
 experimental plan/idea/horizon tools are available; read their lifecycle actions and
 respect person-only steering. Work that shipped outside the tracker is the person's
 mark (delivered outside the tracker), never a placeholder ticket an agent files to make

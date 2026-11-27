@@ -69,8 +69,9 @@ function ideaLine(idea: IdeaView, plan: PlanView): string {
     return level;
   })();
   const progress = idea.progress === null ? "" : ` ${Math.round(idea.progress * 100)}%`;
-  // An idea has no ticket number to show; its id is what a command takes until it is promoted.
-  return `${(idea.identifier ?? idea.id).padEnd(9)} ${idea.stage.padEnd(9)} ${horizon.padEnd(14)} ${"  ".repeat(depth)}${idea.title}${progress}${flags ? `  [${flags}]` : ""}`;
+  // An idea is named by its idea number until it is promoted, then by its ticket number with the idea number beside it.
+  const kept = idea.identifier !== null && idea.number !== null ? ` (${idea.number})` : "";
+  return `${(idea.identifier ?? idea.number ?? idea.id).padEnd(9)} ${idea.stage.padEnd(9)} ${horizon.padEnd(14)} ${"  ".repeat(depth)}${idea.title}${kept}${progress}${flags ? `  [${flags}]` : ""}`;
 }
 
 function printScaffold(preview: ScaffoldPreview, dry: boolean, depth = 0): void {
@@ -100,7 +101,7 @@ function horizonLine(horizon: HorizonView): string {
 
 function printDetail(detail: IdeaDetail): void {
   const { idea } = detail;
-  console.log(`${idea.identifier ?? `idea ${idea.id}`} · ${idea.title}`);
+  console.log(`${[idea.identifier, idea.number].filter((ref) => ref !== null).join(" · ") || `idea ${idea.id}`} · ${idea.title}`);
   console.log(`state ${idea.state} · stage ${idea.stage} · maturity ${idea.maturity} · horizon ${detail.horizon?.name ?? "unscheduled"}${detail.parent ? ` · part of ${detail.parent.identifier ?? detail.parent.title}` : ""}`);
   console.log(`planned ${idea.planned.start ?? "—"} → ${idea.planned.target ?? "—"}${idea.baseline ? ` · baseline ${idea.baseline.start ?? "—"} → ${idea.baseline.target ?? "—"}` : ""}`);
   if (idea.delivered) {
@@ -113,7 +114,7 @@ function printDetail(detail: IdeaDetail): void {
   if (detail.brief) console.log(`brief    ${detail.brief.split("\n")[0]}`);
   detail.questions.forEach((q, i) => console.log(`  ${q.resolved ? "[x]" : q.deferred ? "[~]" : "[ ]"} ${i + 1}. ${q.text}${q.deferred ? " (deferred)" : ""}`));
   for (const decision of detail.decisions) console.log(`  decided ${decision}`);
-  for (const child of detail.children) console.log(`  sub-idea ${child.identifier ?? child.id} ${child.title} (${child.stage})`);
+  for (const child of detail.children) console.log(`  sub-idea ${child.identifier ?? child.number ?? child.id} ${child.title} (${child.stage})`);
   for (const link of detail.linked) console.log(`  linked  ${link.identifier} ${link.title} · ${link.status} · ${link.doneLeaves}/${link.leaves}`);
   const { completeness: c } = detail;
   console.log(`plan     ${c.starred}/${c.starredTotal} required sections · ${c.filled}/${c.total} written${detail.missingForShaped.length > 0 && idea.actions.some((action) => action.id === "shape") ? ` · to shape: ${detail.missingForShaped.join("; ")}` : ""}`);
@@ -354,7 +355,7 @@ export function runIdeaCommand(rest: string[]): void {
         options,
       );
       if (values.json) return console.log(JSON.stringify(result));
-      console.log(`imported ${result.idea.idea.title} (idea ${result.idea.idea.id}): ${result.rows} task${result.rows === 1 ? "" : "s"}, ${result.idea.completeness.filled}/${result.idea.completeness.total} sections`);
+      console.log(`imported ${result.idea.idea.title} (idea ${result.idea.idea.number ?? result.idea.idea.id}): ${result.rows} task${result.rows === 1 ? "" : "s"}, ${result.idea.completeness.filled}/${result.idea.completeness.total} sections`);
       for (const warning of result.warnings) console.log(`  warning: ${warning}`);
       return;
     }

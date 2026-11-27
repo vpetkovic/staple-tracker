@@ -7,6 +7,7 @@ import { stapleHome } from "../config/home.js";
 import { openDb, tx } from "./db.js";
 import { migrateHub } from "./schema.js";
 import { derivePrefixBase, parseIdentifier, prefixSuffixForAttempt } from "./ids.js";
+import { formatIdeaNumber, parseIdeaNumber } from "./idea-numbers.js";
 import { openWorkspace } from "./open.js";
 import { readWorkspaceManifest } from "./repo-identity.js";
 import { assertInTestSandbox } from "./test-sandbox.js";
@@ -905,15 +906,20 @@ export class Hub {
     const upper = identifier.trim().toUpperCase();
     const plus = upper.indexOf("+");
     const suffix = plus < 0 ? "" : upper.slice(plus);
-    const parsed = parseIdentifier(plus < 0 ? upper : upper.slice(0, plus));
+    /**
+     * An idea number, `I-STA-12` (`idea-numbers.ts`), names its workspace by the same prefix, and
+     * the workspace resolves it like any reference: the idea, or the epic it became.
+     */
+    const idea = parseIdeaNumber(plus < 0 ? upper : upper.slice(0, plus));
+    const parsed = idea ?? parseIdentifier(plus < 0 ? upper : upper.slice(0, plus));
     if (!parsed || (suffix !== "" && !/^\+\d+$/.test(suffix))) {
-      throw new StapleError("validation", `"${identifier}" is not an identifier (expected PREFIX-N)`);
+      throw new StapleError("validation", `"${identifier}" is not an identifier (expected PREFIX-N or I-PREFIX-N)`);
     }
     const entry = this.list().find((w) => w.prefix === parsed.prefix);
     if (!entry) {
       throw new StapleError("not_found", `No workspace with prefix ${parsed.prefix} in the hub`);
     }
-    return { entry, identifier: `${parsed.prefix}-${parsed.number}${suffix}` };
+    return { entry, identifier: `${idea ? formatIdeaNumber(parsed.prefix, parsed.number) : `${parsed.prefix}-${parsed.number}`}${suffix}` };
   }
 
   // ---------- cross-workspace links ----------

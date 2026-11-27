@@ -924,7 +924,7 @@ export function startUiServer(options: UiOptions): UiHandle {
   }
 
   function json(res: ServerResponse, status: number, payload: unknown, headers: Record<string, string> = {}): void {
-    // Every API answer: no draft identifier leaves the server (design/plan.md, "Ticket numbers").
+    // Every API answer: no draft identifier leaves the server (design/plan.md, "Idea numbers").
     const body = JSON.stringify(payload, hideDraftIdentifiers);
     res.writeHead(status, { "content-type": "application/json; charset=utf-8", ...headers });
     res.end(body);

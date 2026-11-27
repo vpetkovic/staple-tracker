@@ -540,7 +540,7 @@ async function syncRepositoryOnce(
    * point the seam's author left for exactly this.
    */
   const journal = bindJournal(db, session.deviceId);
-  new WorkspaceStore(db, "", "").plan().migrateLegacyLater();
+  new WorkspaceStore(db, "", "").plan().upgradeRecords();
 
   const capabilities = await negotiate(session, options);
 

@@ -20,7 +20,7 @@ The four things and their jobs:
 
 | Thing | Job |
 |---|---|
-| Idea | A plan you are still thinking about. It has no ticket number and never shows up as work. |
+| Idea | A plan you are still thinking about. It has its own number, `I-STA-12`, no ticket number, and never shows up as work. |
 | Horizon | A column of planned work. Every horizon is a [milestone](milestones.md), so it has progress, a state and a place in the queue. |
 | Epic and tasks | The executable work, made from the idea's plan. Agents pick them up like any other tickets. |
 | Milestone | Delivery tracking. A horizon's milestone counts its work, the planned work in its ideas too, and reads shipped when all of it is done. |
@@ -96,12 +96,31 @@ Open **Plan**. In the **Ideas** lens, type in **Capture an idea…** at the top 
 press Enter. On Horizons and the Timeline, **+ Idea** opens the same field: the idea lands in
 Raw, you stay on the lens you are on, and **View** takes you to it. The idea starts **raw**. It
 is not a task: it never appears in Tasks, the queue or an agent's `next`, and it takes no ticket
-number. On the command line you name an idea by the id `staple idea ls` prints:
+number. It takes an **idea number** instead, `I-<PREFIX>-<n>` (`I-STA-12` in a workspace whose
+tickets are `STA-n`), from a counter of its own. The number shows beside the idea's title on every
+lens and in its panel, and every surface finds the idea by it: the CLI, the agent tools, the page
+(type it in the plan's filter, or open `?ref=I-STA-12`) and the hub, which reads the workspace
+from the prefix. In its own workspace `I-12` is enough, as `12` is enough for `STA-12`.
 
 ```bash
 staple idea new "Gift cards at checkout" --brief "Buyers pay with a card balance, alone or split with a card"
-staple idea ask <id> "Do gift cards expire?"
+staple idea ask I-STA-12 "Do gift cards expire?"
 ```
+
+### Idea numbers
+
+- **Permanent.** A number is never handed out twice, not after the idea is promoted, scaffolded
+  or dropped.
+- **Kept after it becomes an epic.** Scaffold and Promote give the record a ticket number, and
+  the idea number stays with it: the panel reads `STA-40 · I-STA-12`, and `I-STA-12` still opens
+  it, on this device and on every other one.
+- **Like ticket numbers across devices.** Two devices that capture ideas offline can both mint
+  `I-STA-12`. The one captured first in the shared log keeps it; the other device renumbers its own
+  idea to the next free number, with a comment saying so, and the old number keeps naming it
+  there. Nobody is asked to resolve anything.
+- **Ideas from before.** Ideas captured before idea numbers existed are numbered in the order they
+  were captured, the next time the workspace is opened or synced with planning on. Records already
+  promoted get the number they keep beside their ticket number.
 
 An idea opens in the same panel as a task. Its **Plan** tab holds the brief, the plan sections,
 open questions and decisions. Connections, Documents, Files, Activity, **For agents** (the
@@ -243,7 +262,7 @@ open and is never folded away.
 ## 6. Scaffold, or adopt what exists
 
 Open a shaped idea and press **Scaffold epic and tasks**. The preview opens in **Where it
-stands**: the epic (this same record, now with a ticket number) and one task per breakdown row
+stands**: the epic (this same record, now with a ticket number beside its idea number) and one task per breakdown row
 with its estimate, blockers from depends-on and its done-when. Confirm, and it creates exactly
 that preview. Each task also gets a context page, so an agent can work it from the ticket alone.
 If the plan changed after the preview, the confirm is refused and you preview again.
@@ -439,7 +458,8 @@ Turn **Planning (experimental)** off in **Settings → Experimental**, or run
 - Pickup answers and run briefs carry no horizon run settings, no plan steps and no
   `horizon-plan` instruction, and a run never stops with `planning_needed`.
 - Horizons read as plain milestones and scaffolded epics as ordinary epics.
-- Ideas stay unnumbered drafts, never tasks or pickup work.
+- Ideas keep their idea numbers and stay out of tasks and pickup work. No new numbers are handed
+  out while planning is off.
 
 Nothing is deleted. Turn it on again and ideas, horizons, plan sections, links and run settings
 come back as they were.
@@ -481,7 +501,7 @@ what it offers.
 | CLI | MCP | What |
 |---|---|---|
 | `staple idea ls`, `staple plan show` | `list_ideas` | Horizons and ideas with state and flags |
-| `staple idea show <id>` | `get_idea` | One idea: plan, questions, decisions, links and what it offers |
+| `staple idea show <ref>` | `get_idea` | One idea, by its idea number (`I-STA-12`), ticket number once promoted, or id: plan, questions, decisions, links and what it offers |
 | `staple horizon ls` | `list_horizons` | Horizons in order, with their run setting and plan steps |
 | `staple idea new` | `capture_idea` | Capture a raw idea |
 | `staple idea set`, `ask`, `resolve`, `defer`, `decide` | `update_idea` | Edit an idea and its questions |

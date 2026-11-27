@@ -586,7 +586,9 @@ describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
         const dialog = page.getByRole("dialog", { name: "Issue detail", exact: true });
         expect(await dialog.count()).toBe(1);
         expect(await dialog.innerText()).not.toContain(id);
-        expect(await heading(page).innerText()).not.toMatch(/ALP-\d+/);
+        // Its idea number names it; no ticket number does.
+        expect(await heading(page).innerText()).toContain("I-ALP-1");
+        expect(await heading(page).innerText()).not.toMatch(/(?<!I-)ALP-\d+/);
         expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
         expect(errors).toEqual([]);
       } finally {

@@ -119,35 +119,84 @@ remove it once empty. A dated Later is intentional and stays. The changed `planH
 workspace without a device identity defers the upgrade until its journal can send it. Clearing
 the rank makes the upgrade idempotent.
 
-## Ticket numbers: none until promotion
+## Idea numbers: their own counter, and no ticket number until promotion
 
-An idea is stored under a **draft identifier**, `~` and its id's 32 hex digits
-(`draftIdentifier`). The `issues.identifier` column stays `NOT NULL UNIQUE`, so nothing about the
-issue row changes shape, and the draft:
+An idea holds an **idea number**, `I-<PREFIX>-<n>` (`I-STA-12`), as its identifier
+(`idea-numbers.ts`). It is a value of the identifier field, so everything the tracker does for a
+ticket number it does for this one, with no new mechanism:
 
-- is unique, because the id is;
-- never parses as a ticket ref (`IDENTIFIER_RE` is `^[A-Z]+-\d+$`), so no ref a person types
-  reaches it, and `advanceIssueNumber` ignores it;
-- consumes nothing: `createIssue` skips `nextIssueNumber` for an idea while planning is on;
-- synchronizes as the identifier field, like any other value of it;
-- is never shown. Every surface sends what it prints through one rule in `plan.ts`: the CLI's
-  output (every line it prints, `cli.ts`), every MCP tool's answer (`published` in `mcp.ts`) and
-  every HTTP answer (`json` in `server.ts`). In JSON an issue whose identifier is a draft goes out
-  as `identifier: null, draft: true` (`hideDraftIdentifiers`); a draft anywhere else, a text line,
-  a message or an event, goes out as the idea's id (`draftsAsIds`), which is how the CLI, MCP
-  tools and page refer to an idea. `IdeaView.identifier` is `null` until promotion, and refusals
-  name an idea by its title (`displayRef`).
+- the `issues.identifier` `UNIQUE` index;
+- two devices that capture offline settle as two that create tickets offline (`claims.ts`): the
+  earlier claim in the log keeps the number, the later one takes a stand-in (`I-STA-12+seq`) until
+  the device that made it renumbers it (`settleOne`, from the idea counter through
+  `freshIdentifier`), with the system comment; a conflict record and its resolution as for tickets;
+- every move is remembered (`identifier-moves.ts`): the old number keeps resolving here, and the
+  write guard asks about it;
+- a joining workspace moves its ideas, and the numbers its promoted records kept, into the
+  repository's idea namespace and clear of every idea number the repository holds or kept, never
+  into its tickets' (`cloud/seed.ts`), each with a system comment.
 
-**Promotion allocates the number** through the tracker's own counter, on the same row
-(`promoteInPlace`): the identifier and the kind change in one journaled `update`, and
-`recordIdentifierMove` keeps the draft as an alias. An idea an earlier build numbered takes its
-draft back when planning is enabled (`draftNumberedIdeas`), and its old number still resolves.
+It never parses as a ticket ref (`IDENTIFIER_RE` is `^[A-Z]+-\d+$`; `I-STA-12` has two dashes), and
+consumes nothing from the ticket counter. Its own counter is `meta.next_idea_number`, a local
+provisional allocator like `next_issue_number`: never synchronized, advanced by the applier past
+every idea number that lands on the device (`advanceIdeaNumber`), and, when it allocates, past
+every number a row holds as identifier or kept number. **A number is never handed out twice.**
 
-## Storage: nine columns on `issues`, three tables, no new entity
+Every reference resolves it (`WorkspaceStore.lookupRow`): `I-STA-12` in any case, `I-12` in its
+own workspace, a stand-in, then the kept number of a promoted record, then an alias. A live
+identifier always wins over a kept number or an alias, as for tickets. The hub reads the workspace
+from the prefix (`Hub.resolveIdentifier`). `Issue.ideaNumber` carries it on every plan record and
+is absent on every other issue; `IdeaView.identifier` stays the ticket number (`null` until
+promotion) and `IdeaView.number` is the idea number. Refusals name an idea by title and number
+(`displayRef`).
 
-What an issue cannot already say lives in nine nullable `issues` columns, eight added by workspace
-migration **020** (`020-plan-fields.ts`) and one by **021** (`021-plan-delivered.ts`), NULL on
-every row outside the plan, and three tables:
+**Promotion allocates the ticket number** through the tracker's own counter, on the same row
+(`promoteInPlace`): the identifier, the kind and **`plan_idea_number`** change in one journaled
+`update`, and `recordIdentifierMove` keeps the idea number as an alias. The alias is this device's
+only (`meta`); the column is what a device that receives the promotion, or hydrates long after it,
+resolves and shows the number from. Scaffold promotes, so it keeps the number the same way.
+
+**A kept number is a claim too.** One idea number names one record, held as an identifier or
+kept. A write that leaves it on two records (a record promoted before an offline capture of the
+same number reached the promoting device, or two devices numbering different sets of legacy
+records) is settled by the applier (`claimKeptIdeaNumbers`, `cloud/apply.ts`) like any claim on a unique
+value: the earlier claim in the log keeps the number. An idea's claim is the write that gave it the
+number, a kept number's the write that kept it (the promotion), measured the same way on every
+device. Only the device that made the later claim settles it: a later idea is renumbered from the
+idea counter, a later kept number by an `update` of `planIdeaNumber` by `staple` with a system
+comment (`settleOne`, `claims.ts`). Every claim on an identifier is measured by the device's first
+write of that value (`ownValueClaimSeq`), never by its newest write of the field.
+
+**Promotion wins over a late idea number.** An idea number written onto a record that is no
+longer an idea (a device numbered a legacy idea before it heard it was promoted) is dropped on
+apply, and a promotion's ticket number arriving on a record this device later gave an idea number
+is applied. When the promoting device sees the late idea number sit after its promotion in the log,
+it states the ticket number again (`ticketNumber` settlement), so the service's fold and a device
+that hydrates read the ticket number.
+
+**With planning off** a promoted record says nothing of its kept number (`Issue.ideaNumber` is
+left out), and neither the kept number nor an idea number's alias resolves or matches a search.
+Nothing is deleted.
+
+**Ideas from before.** An idea an earlier build left under a draft identifier (`~` and its id's
+hex) or a ticket number, and a promoted record with no kept number, are numbered in creation order
+(`created_at`, `id`) by `PlanStore.numberIdeas`, run when planning is enabled and whenever the
+workspace is opened or synced with planning on. It journals as `staple`: an idea's number as a
+`renumber`, a claim settled by the log like a settlement's, so two devices that number the same
+records before hearing of each other converge with nothing left open; a promoted record's as an
+`update` of `planIdeaNumber`, which is exempt from field contests (`conflicts.ts`): staple assigns
+it, nobody chooses it, and the last write in the log is the value on every device. Nothing is
+numbered while planning is off.
+
+The draft rules still hold for a record still under a draft: in JSON it goes out as
+`identifier: null, draft: true` (`hideDraftIdentifiers`), a draft in text as the idea's id
+(`draftsAsIds`).
+
+## Storage: ten columns on `issues`, three tables, no new entity
+
+What an issue cannot already say lives in ten nullable `issues` columns, eight added by workspace
+migration **020** (`020-plan-fields.ts`), one by **021** (`021-plan-delivered.ts`) and one by
+**026** (`026-idea-numbers.ts`), NULL on every row outside the plan, and three tables:
 `plan_links` and `plan_rows` (synchronized, one field per link and per breakdown row) and
 `plan_members` (derived on each device, never sent).
 
@@ -160,6 +209,7 @@ every row outside the plan, and three tables:
 | `plan_rank` | both | order of records, and of horizons; a ranked milestone is a horizon |
 | `plan_run_mode` | horizon | its run setting: `work`, `goal`, `epic` or NULL |
 | `plan_delivered_on` | plan record | the day the person marked it delivered outside the tracker, `YYYY-MM-DD`, or NULL (below) |
+| `plan_idea_number` | promoted record | the idea number it kept when it was promoted, `I-<PREFIX>-<n>`; NULL on an unpromoted idea, which holds it as its identifier |
 
 A horizon's date is its milestone's `target_date`, and its goal is the milestone's acceptance
 criteria. An idea's brief, open questions, decisions and text and list plan sections are

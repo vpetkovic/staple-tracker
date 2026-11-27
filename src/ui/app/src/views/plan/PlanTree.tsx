@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 import { ideaPlanHref } from "@/detail/PlannedIdeaLinks";
 import { STATE_WORDS } from "@/detail/plan-record";
 import { ShippedCheck } from "@/detail/ShippedMark";
-import { Amber, Flag, PLAN_WIDTH, SegmentedBar, StateGlyph, planIncomplete, useElementWidth } from "./plan-parts";
+import { Amber, Flag, IdeaNumber, PLAN_WIDTH, SegmentedBar, StateGlyph, planIncomplete, useElementWidth } from "./plan-parts";
 import { dayLabel } from "./plan-model";
 import { outlineEntries, outlineKey, type OutlineEntry } from "./plan-outline";
 import type { TreeRow } from "./plan-tree";
@@ -239,6 +239,7 @@ function OutlineRow({
           </button>
         )}
         <StateGlyph state={idea.state} percent={idea.percent} className="@max-[760px]/tree:mt-[3px]" />
+        <IdeaNumber idea={idea} className="@max-[760px]/tree:mt-[2px]" />
         <RowTitle idea={idea} opener={opener} strong={depth === 0} shipped={shipped} />
         {depth === 0 && row.parentTitle ? <span className="max-w-[30%] shrink truncate text-caption text-text-tertiary @max-[760px]/tree:hidden">in {row.parentTitle}</span> : null}
         <span className="flex shrink-0 items-center gap-1.5 @max-[760px]/tree:hidden">{flags}</span>

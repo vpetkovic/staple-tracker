@@ -394,6 +394,34 @@ const SCENARIOS: readonly Scenario[] = [
     plan.migrateLegacyLater();
   } },
   {
+    method: "PlanStore.numberIdeas",
+    name: "number what an earlier build left: a draft idea and a promoted record with no kept number",
+    prep: (w) => {
+      const plan = w.a.store.plan();
+      w.ids["Legacy idea"] = plan.capture({ title: "Legacy idea" }, "alice", { person: { via: "test" } }).id;
+      w.ids["Legacy promoted"] = plan.capture({ title: "Legacy promoted", maturity: "shaped", plan: READY_PLAN }, "alice", { person: { via: "test" } }).id;
+      plan.promote(w.ids["Legacy promoted"], "alice", { person: { via: "test" } });
+    },
+    run: (w) => {
+      const id = w.ids["Legacy idea"]!;
+      w.a.db.prepare("UPDATE issues SET identifier = ? WHERE id = ?").run(`~${id.replace(/-/g, "")}`, id);
+      w.a.db.prepare("UPDATE issues SET plan_idea_number = NULL WHERE id = ?").run(w.ids["Legacy promoted"]!);
+      w.a.store.plan().numberIdeas();
+    },
+  },
+  {
+    method: "PlanStore.upgradeRecords",
+    name: "run the open-time upgrades: the old Later bucket and the idea numbers",
+    prep: (w) => {
+      w.ids["Upgraded idea"] = w.a.store.plan().capture({ title: "Upgraded idea" }, "alice", { person: { via: "test" } }).id;
+    },
+    run: (w) => {
+      const id = w.ids["Upgraded idea"]!;
+      w.a.db.prepare("UPDATE issues SET identifier = 'TST-77' WHERE id = ?").run(id);
+      w.a.store.plan().upgradeRecords();
+    },
+  },
+  {
     method: "PlanStore.capture",
     name: "capture a scheduled, dated idea",
     run: (w) => {

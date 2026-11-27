@@ -104,6 +104,8 @@ export interface IdeaData {
   id: string;
   /** The ticket number once promoted; null while it is an idea, which has none. */
   identifier: string | null;
+  /** Its permanent idea number, `I-<PREFIX>-<n>`, before and after promotion; null only on a record an earlier build left unnumbered. */
+  number: string | null;
   /** Promoted in place: the record is an epic in the tracker now. */
   promoted: boolean;
   kind: string;
@@ -253,4 +255,16 @@ export interface IdeaDetailData {
 export interface PlanWriteResult {
   plan: PlanData;
   idea: IdeaDetailData | null;
+}
+
+/**
+ * Whether a reference names this record by its idea number: `I-STA-12` in any case, or the short
+ * `I-12` its own workspace takes (`src/core/idea-numbers.ts`).
+ */
+export function namesIdeaNumber(idea: Pick<IdeaData, "number">, ref: string): boolean {
+  if (idea.number === null) return false;
+  const wanted = ref.trim().toUpperCase();
+  if (wanted === idea.number) return true;
+  const short = /^I-(\d+)$/.exec(wanted);
+  return short !== null && idea.number.endsWith(`-${Number(short[1])}`);
 }

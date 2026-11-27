@@ -14,6 +14,7 @@ function idea(id: string, title: string, extra: Partial<IdeaData> = {}): IdeaDat
   return {
     id,
     identifier: null,
+    number: null,
     promoted: false,
     kind: "idea",
     title,

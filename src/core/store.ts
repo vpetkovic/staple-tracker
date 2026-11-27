@@ -2,6 +2,7 @@ import { type ResolvedInstruction, resolveInstructions } from "./instructions.js
 import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { EVENT_ORDER, EVENT_ORDER_DESC, insertEvent } from "./event-log.js";
+import { canonicalIdeaRef, isIdeaNumber, nextIdeaNumber } from "./idea-numbers.js";
 import { RENUMBER_GUARD_MS, aliasedIssueId, removedByRestore, formerHolderOf, formerHolders, formerMove, noteRenumber, recordIdentifierMove, renumbersAcknowledged } from "./identifier-moves.js";
 import { connectionPath } from "./cloud/connection.js";
 import { MemberLens, withEventMembers } from "./cloud/member-lens.js";
@@ -98,7 +99,7 @@ import {
   type KindWithAppearance,
 } from "./kind-appearance.js";
 import { MILESTONE_KIND, MILESTONE_MEMBERSHIP, assertNotReservedActor, isGoalRunGate } from "./milestones.js";
-import { IDEA_KIND, PLAN_KINDS_MISSING_MESSAGE, PLAN_KINDS, assertPlanParent, assertPlanRekind, displayRef, draftIdentifier, isPlanKind, planKindRefusal, steeringRefusal } from "./plan.js";
+import { IDEA_KIND, PLAN_KINDS_MISSING_MESSAGE, PLAN_KINDS, assertPlanParent, assertPlanRekind, displayRef, isPlanKind, planKindRefusal, steeringRefusal } from "./plan.js";
 import { PlanStore } from "./plan-store.js";
 import { ExternalLinkStore } from "./integrations/link-store.js";
 import { LISTED_HORIZON } from "./plan-members.js";
@@ -338,7 +339,7 @@ export interface SetEstimateResult {
  * the issue_id primary keys.
  */
 const TEXT_MATCH_SQL = `(
-    issues.title LIKE ? ESCAPE '\\' OR issues.identifier LIKE ? ESCAPE '\\'
+    issues.title LIKE ? ESCAPE '\\' OR issues.identifier LIKE ? ESCAPE '\\' OR issues.plan_idea_number LIKE ? ESCAPE '\\'
     OR issues.description LIKE ? ESCAPE '\\' OR issues.assignee LIKE ? ESCAPE '\\'
     OR (json_valid(issues.labels) AND EXISTS (SELECT 1 FROM json_each(issues.labels) l WHERE l.value LIKE ? ESCAPE '\\'))
     OR (json_valid(issues.acceptance_criteria)
@@ -440,6 +441,8 @@ interface IssueRow {
   updated_at: string;
   /** The status derivation last wrote here; NULL once anything else moved the row (migration 017). */
   derived_status?: string | null;
+  /** The number a promoted idea keeps (migration 026); absent on a database from before it. */
+  plan_idea_number?: string | null;
 }
 
 /** An issue's stored criteria as a list: none stored reads as an empty one. */
@@ -486,7 +489,18 @@ function rowToIssue(row: IssueRow): Issue {
     cancelledAt: row.cancelled_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    ...ideaNumberOf(row),
   };
+}
+
+/**
+ * A plan record's permanent number (`idea-numbers.ts`): an idea's identifier, or the number a
+ * promoted one kept. Only present on a record that has one, so every other issue's shape is as it was.
+ */
+function ideaNumberOf(row: IssueRow): { ideaNumber?: string } {
+  const kept = row.plan_idea_number ?? null;
+  if (kept !== null) return { ideaNumber: kept };
+  return isIdeaNumber(row.identifier) ? { ideaNumber: row.identifier } : {};
 }
 
 interface CommentRow {
@@ -2446,7 +2460,9 @@ export class WorkspaceStore {
     const trimmed = ref.trim();
     if (trimmed === resolved.id) return [];
     const parsed = parseIdentifier(trimmed) ?? parseIdentifier(`${this.prefix}-${trimmed}`);
-    return [...new Set([trimmed.toUpperCase(), ...(parsed ? [`${parsed.prefix}-${parsed.number}`] : [])])];
+    // An idea number in any spelling, `I-12` included (`idea-numbers.ts`).
+    const idea = canonicalIdeaRef(trimmed, this.prefix);
+    return [...new Set([trimmed.toUpperCase(), ...(parsed ? [`${parsed.prefix}-${parsed.number}`] : []), ...(idea ? [idea] : [])])];
   }
 
   /**
@@ -2532,7 +2548,8 @@ export class WorkspaceStore {
     const trimmed = ref.trim();
     if (trimmed === row.id) return row;
     const parsed = parseIdentifier(trimmed) ?? parseIdentifier(`${this.prefix}-${trimmed}`);
-    const spellings = [...new Set([trimmed.toUpperCase(), ...(parsed ? [`${parsed.prefix}-${parsed.number}`] : [])])];
+    const ideaSpelling = canonicalIdeaRef(trimmed, this.prefix);
+    const spellings = [...new Set([trimmed.toUpperCase(), ...(parsed ? [`${parsed.prefix}-${parsed.number}`] : []), ...(ideaSpelling ? [ideaSpelling] : [])])];
     const device = resolveDeviceId();
     const hot: Array<{ issue: IssueRow; number: string; at: string; reasons: string[]; removed?: boolean }> = [];
     for (const number of spellings) {
@@ -2599,7 +2616,7 @@ export class WorkspaceStore {
    * the milestone, plan and project stores, whose writes take an issue reference too.
    */
   writeTarget(ref: string): Issue {
-    return rowToIssue(this.requireTarget(ref));
+    return this.toIssue(this.requireTarget(ref));
   }
 
   /**
@@ -2662,12 +2679,25 @@ export class WorkspaceStore {
       | undefined;
     if (exact) return exact;
     const parsed = parseIdentifier(trimmed) ?? parseIdentifier(`${this.prefix}-${trimmed}`);
-    const canonical = parsed ? `${parsed.prefix}-${parsed.number}` : null;
-    if (canonical !== null) {
-      const row = this.db.prepare("SELECT * FROM issues WHERE identifier = ?").get(canonical) as unknown as
+    const ideaRef = canonicalIdeaRef(trimmed, this.prefix);
+    const canonical = parsed ? `${parsed.prefix}-${parsed.number}` : ideaRef;
+    // `I-5` parses as a ticket of a workspace prefixed `I` too; that one is asked first.
+    for (const spelling of new Set([canonical, ideaRef])) {
+      if (spelling === null) continue;
+      const row = this.db.prepare("SELECT * FROM issues WHERE identifier = ?").get(spelling) as unknown as
         | IssueRow
         | undefined;
       if (row) return row;
+    }
+    /**
+     * The number a promoted idea kept (`idea-numbers.ts`): a record that went on to become an
+     * epic answers to the idea number it had, on every device, before any alias is asked.
+     */
+    if (ideaRef !== null && this.getSetting("features.planning") === true) {
+      const kept = this.db.prepare("SELECT * FROM issues WHERE plan_idea_number = ? ORDER BY created_at, id LIMIT 1").get(ideaRef) as unknown as
+        | IssueRow
+        | undefined;
+      if (kept) return kept;
     }
     /**
      * An identifier this issue used to carry, before sync or a conflict resolution moved
@@ -2675,7 +2705,12 @@ export class WorkspaceStore {
      * `TST-2+1` somebody copied into a handoff stopped naming anything the moment the
      * issue was given its settled number.
      */
-    const aliased = aliasedIssueId(this.db, trimmed.toUpperCase()) ?? (canonical ? aliasedIssueId(this.db, canonical) : null);
+    // An idea number a record moved off is planning's too: with planning off it names nothing here.
+    const ideaAliases = ideaRef === null || this.getSetting("features.planning") === true;
+    const aliased =
+      (ideaAliases || ideaRef !== trimmed.toUpperCase() ? aliasedIssueId(this.db, trimmed.toUpperCase()) : null) ??
+      (canonical && (ideaAliases || canonical !== ideaRef) ? aliasedIssueId(this.db, canonical) : null) ??
+      (ideaRef && ideaAliases ? aliasedIssueId(this.db, ideaRef) : null);
     if (aliased) {
       return this.db.prepare("SELECT * FROM issues WHERE id = ?").get(aliased) as unknown as IssueRow | undefined;
     }
@@ -2715,7 +2750,7 @@ export class WorkspaceStore {
   }
 
   getIssue(ref: string): Issue {
-    return rowToIssue(this.requireRow(ref));
+    return this.toIssue(this.requireRow(ref));
   }
 
   // ---------- events ----------
@@ -2814,7 +2849,7 @@ export class WorkspaceStore {
         const existing = this.db
           .prepare("SELECT * FROM issues WHERE idempotency_key = ?")
           .get(input.idempotencyKey) as unknown as IssueRow | undefined;
-        if (existing) return { issue: rowToIssue(existing), replayed: true };
+        if (existing) return { issue: this.toIssue(existing), replayed: true };
       }
 
       let parent: IssueRow | null = null;
@@ -2858,8 +2893,7 @@ export class WorkspaceStore {
        * An idea holds no ticket number until it is promoted: a draft identifier made from its own
        * UUID, which consumes nothing from the counter and is never shown (design/plan.md, "Identity").
        */
-      const draft = kind === IDEA_KIND;
-      const identifier = draft ? draftIdentifier(id) : `${this.prefix}-${this.nextIssueNumber()}`;
+      const identifier = kind === IDEA_KIND ? nextIdeaNumber(this.db, this.prefix) : `${this.prefix}-${this.nextIssueNumber()}`;
       const now = this.journal.mutationAt();
       const row = this.db
         .prepare(
@@ -3035,7 +3069,7 @@ export class WorkspaceStore {
       if (parent) {
         this.recomputeAncestorStatuses(row, input.createdBy ?? null);
       }
-      return { issue: rowToIssue(row), replayed: false };
+      return { issue: this.toIssue(row), replayed: false };
     });
   }
 
@@ -3194,7 +3228,7 @@ export class WorkspaceStore {
       });
       // Level check: the new set may already be fully resolved.
       this.maybeEmitBlockersResolved(row);
-      return rowToIssue(this.requireRow(row.id));
+      return this.toIssue(this.requireRow(row.id));
     });
   }
 
@@ -4751,7 +4785,7 @@ export class WorkspaceStore {
       // work anyone can pick up — so a grandparent with nothing else open reads
       // `blocked`, never `done` (see deriveStatusFromChildren).
       this.recomputeAncestorStatuses(updated, actor ?? null);
-      return rowToIssue(updated);
+      return this.toIssue(updated);
     });
   }
 
@@ -4832,7 +4866,7 @@ export class WorkspaceStore {
         }
         // The parent does not move: partial approval is not resolution. Re-read
         // so the caller sees the row as it now stands rather than as it was.
-        return rowToIssue(this.requireRow(row.id));
+        return this.toIssue(this.requireRow(row.id));
       }
 
       // ---- whole-gate approve ----
@@ -4946,7 +4980,7 @@ export class WorkspaceStore {
       if (this.isResolvedStatus(next)) this.afterResolution(updated);
       // Transition site 7 of 7 — unparking is a transition like any other.
       this.recomputeAncestorStatuses(updated, actor ?? null);
-      return rowToIssue(updated);
+      return this.toIssue(updated);
     });
   }
 
@@ -5026,7 +5060,7 @@ export class WorkspaceStore {
       });
       this.insertComment(row.id, actor ?? "unknown", opts.person ? "user" : actor ? "agent" : "system", comment);
       this.recomputeAncestorStatuses(updated, actor ?? null);
-      return rowToIssue(updated);
+      return this.toIssue(updated);
     });
   }
 
@@ -5108,7 +5142,7 @@ export class WorkspaceStore {
     return this.journaled(() => {
       const row = this.requireTarget(ref);
       const from = row.estimated_seconds ?? null;
-      if (from === to) return { issue: rowToIssue(row), from, to, changed: false };
+      if (from === to) return { issue: this.toIssue(row), from, to, changed: false };
       const issue = this.updateIssue(row.id, { estimatedSeconds: to }, actor);
       return { issue, from, to, changed: true };
     });
@@ -5395,7 +5429,7 @@ export class WorkspaceStore {
         this.insertComment(row.id, actor ?? "unknown", actor ? "agent" : "system", patch.comment);
       }
       return {
-        issue: rowToIssue(this.requireRow(row.id)),
+        issue: this.toIssue(this.requireRow(row.id)),
         criteriaChange: criteria === null ? null : { from: criteria.from, to: criteria.to, changed: criteria.changed, marks: marks ?? NO_MARK_MOVES },
         parentChange:
           move === null ? null : { from: move.from?.identifier ?? null, to: move.to?.identifier ?? null, changed: move.changed },
@@ -7519,7 +7553,7 @@ export class WorkspaceStore {
       if (this.isActiveStatus(row.status) && row.checkout_agent === agent) {
         // crash-recovery re-claim: the open attempt stays open, or a new one resumes an ended one
         this.attempts().reclaimed(row, agent, opts.attempt);
-        return rowToIssue(row);
+        return this.toIssue(row);
       }
       /**
        * The queue guard (STA-143), and its position in this method is the whole
@@ -7774,7 +7808,7 @@ export class WorkspaceStore {
                 // agent; if the epic went quiet in the meantime it must light up
                 // again, attributed to whoever took over.
                 this.recomputeAncestorStatuses(stolen, agent);
-                return rowToIssue(stolen);
+                return this.toIssue(stolen);
               }
             }
             // Too fresh to steal, or we lost the race — refuse against whatever
@@ -7830,7 +7864,7 @@ export class WorkspaceStore {
       // status = 'in_progress' directly. Hooking only `updateIssue` would have
       // missed the common case entirely.
       this.recomputeAncestorStatuses(claimed, agent);
-      return rowToIssue(claimed);
+      return this.toIssue(claimed);
     });
   }
 
@@ -7928,7 +7962,7 @@ export class WorkspaceStore {
       // nothing to say about. A recompute must see it, or an epic keeps
       // reporting in_progress after its last child was handed back.
       this.recomputeAncestorStatuses(updated, agent ?? null);
-      return rowToIssue(updated);
+      return this.toIssue(updated);
     });
   }
 
@@ -8508,7 +8542,7 @@ export class WorkspaceStore {
 
   listIssues(filters: IssueFilters = {}): Issue[] {
     const { sql, params } = this.issuesQuery(filters);
-    return (this.db.prepare(sql).all(...(params as never[])) as unknown as IssueRow[]).map(rowToIssue);
+    return (this.db.prepare(sql).all(...(params as never[])) as unknown as IssueRow[]).map(this.toIssue);
   }
 
   /**
@@ -8525,7 +8559,7 @@ export class WorkspaceStore {
     const rows = this.db
       .prepare(`${sql} LIMIT ? OFFSET ?`)
       .all(...([...params, page.limit + 1, page.offset] as never[])) as unknown as IssueRow[];
-    return { items: rows.slice(0, page.limit).map(rowToIssue), hasMore: rows.length > page.limit };
+    return { items: rows.slice(0, page.limit).map(this.toIssue), hasMore: rows.length > page.limit };
   }
 
   private issuesQuery(filters: IssueFilters = {}): { sql: string; params: unknown[] } {
@@ -8575,7 +8609,11 @@ export class WorkspaceStore {
       where.push(`(${TEXT_MATCH_SQL} OR id = ?)`);
       // `%`, `_` and `\` in the text are literal: a search for `100%` is not a wildcard.
       const like = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
-      params.push(...Array<string>(TEXT_MATCH_PARAMS).fill(like), formerHolderOf(this.db, q.toUpperCase()));
+      const match = Array<string>(TEXT_MATCH_PARAMS).fill(like);
+      // The kept idea number (`TEXT_MATCH_SQL`'s third), and one a record moved off, are planning's: with planning off they match nothing.
+      const planning = this.getSetting("features.planning") === true;
+      if (!planning) match[2] = "";
+      params.push(...match, planning || canonicalIdeaRef(q, this.prefix) === null ? formerHolderOf(this.db, q.toUpperCase()) : null);
     }
     /**
      * The status rank is GENERATED from the workspace's configuration (STA-140)
@@ -8795,7 +8833,7 @@ export class WorkspaceStore {
         | IssueRow
         | undefined;
       if (!parent) break;
-      if (planningVisible || parent.kind !== IDEA_KIND) ancestors.unshift(rowToIssue(parent));
+      if (planningVisible || parent.kind !== IDEA_KIND) ancestors.unshift(this.toIssue(parent));
       cursor = parent.parent_id;
       hops += 1;
     }
@@ -8803,7 +8841,7 @@ export class WorkspaceStore {
       this.db
         .prepare("SELECT * FROM issues WHERE parent_id = ? ORDER BY created_at")
         .all(row.id) as unknown as IssueRow[]
-    ).filter(child => planningVisible || child.kind !== IDEA_KIND).map(rowToIssue);
+    ).filter(child => planningVisible || child.kind !== IDEA_KIND).map(this.toIssue);
     const toRef = (r: IssueRow) => ({
       identifier: r.identifier,
       title: r.title,
@@ -8811,7 +8849,7 @@ export class WorkspaceStore {
     });
     const documents: Array<IssueDocumentMeta & { body?: string }> = this.listDocuments(row.id);
     return {
-      issue: rowToIssue(row),
+      issue: this.toIssue(row),
       ancestors,
       children,
       blockedBy: this.blockersOf(row.id).map(toRef),
@@ -8839,12 +8877,12 @@ export class WorkspaceStore {
         .all(...(parentId === null ? [IDEA_KIND, IDEA_KIND] : [parentId])) as unknown as IssueRow[];
       return rows
         .filter((r) => !isPlanKind(r.kind) || (planningVisible && ref !== undefined && depth > 0))
-        .map((r) => ({ issue: rowToIssue(r), children: build(r.id, depth + 1) }));
+        .map((r) => ({ issue: this.toIssue(r), children: build(r.id, depth + 1) }));
     };
     if (ref) {
       const row = this.requireRow(ref);
       if (row.kind === IDEA_KIND) this.plan().assertEnabled();
-      return [{ issue: rowToIssue(row), children: build(row.id, 1) }];
+      return [{ issue: this.toIssue(row), children: build(row.id, 1) }];
     }
     return build(null, 0);
   }
@@ -8929,7 +8967,7 @@ export class WorkspaceStore {
   }
 
   /**
-   * Promote an idea in place (design/plan.md, "Ticket numbers"): the same row takes the next ticket
+   * Promote an idea in place (design/plan.md, "Idea numbers"): the same row takes the next ticket
    * number and the given kind. Everything that hangs on the row (documents, comments, files,
    * events, links, its plan fields) stays. The number travels as an `identifier` write on the
    * issue, which is a claim like a create's: two devices that promote offline settle by the log,
@@ -8942,11 +8980,18 @@ export class WorkspaceStore {
       const row = this.requireRow(issueId);
       const now = this.journal.mutationAt();
       const identifier = `${this.prefix}-${this.nextIssueNumber()}`;
-      this.db.prepare("UPDATE issues SET identifier = ?, kind = ?, updated_at = ? WHERE id = ?").run(identifier, kind, now, row.id);
+      /**
+       * Its idea number stays on the row (`idea-numbers.ts`), written with the move in one
+       * journaled update, so every device that receives the promotion, or hydrates after it,
+       * reads the same number beside the ticket's. The alias below is this device's only.
+       */
+      const kept = row.plan_idea_number ?? (isIdeaNumber(row.identifier) ? row.identifier : null);
+      this.db.prepare("UPDATE issues SET identifier = ?, kind = ?, plan_idea_number = ?, updated_at = ? WHERE id = ?").run(identifier, kind, kept, now, row.id);
       recordIdentifierMove(this.db, { issueId: row.id, from: row.identifier, to: identifier, at: now });
+      // The kept number travels with the update as the column it is (`cloud/row-diff.ts`).
       this.journal.record({ entity: "issue", entityId: row.id, verb: "update", payload: { identifier, kind, updatedAt: now }, actor: actor ?? null });
       this.emitEvent({ kind: "idea_promoted", issueId: row.id, actor, payload: { identifier, kind } });
-      return rowToIssue(this.requireRow(row.id));
+      return this.toIssue(this.requireRow(row.id));
     });
   }
 
@@ -8976,6 +9021,17 @@ export class WorkspaceStore {
     const plan = blockers.find((blocker) => isPlanKind(blocker.kind));
     if (plan) throw planKindRefusal(plan, "a blocker");
   }
+
+  /**
+   * An issue as every read returns it. A promoted record's kept idea number is planning's
+   * (`idea-numbers.ts`): with planning off the record is an ordinary epic and says nothing of
+   * it. Read from the memoized setting, never a query, so a list pays nothing per row.
+   */
+  private readonly toIssue = (row: IssueRow): Issue => {
+    const issue = rowToIssue(row);
+    if (issue.ideaNumber !== undefined && this.getSetting("features.planning") !== true) delete issue.ideaNumber;
+    return issue;
+  };
 
   private planStore: PlanStore | null = null;
 

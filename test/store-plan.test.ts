@@ -6,10 +6,10 @@
  */
 import { beforeEach, describe, expect, it } from "vitest";
 import { openDb } from "../src/core/db.js";
-import { formerHolders, pendingIdentifierMoves } from "../src/core/identifier-moves.js";
+import { formerHolders, moveIdentifier, pendingIdentifierMoves } from "../src/core/identifier-moves.js";
 import { parseIdentifier } from "../src/core/ids.js";
 import { MILESTONE_KIND } from "../src/core/milestones.js";
-import { IDEA_KIND, PLAN_KINDS_MISSING_MESSAGE, isDraftIdentifier } from "../src/core/plan.js";
+import { IDEA_KIND, PLAN_KINDS_MISSING_MESSAGE } from "../src/core/plan.js";
 import { horizonWords, ideasOnHorizon, type PlanStore } from "../src/core/plan-store.js";
 import { migrateWorkspace } from "../src/core/schema.js";
 import { WorkspaceStore } from "../src/core/store.js";
@@ -146,32 +146,48 @@ describe("enabling", () => {
   });
 });
 
-describe("identity: an idea holds no ticket number until it is promoted", () => {
-  it("captures without consuming the counter, under an identifier that never parses as a ticket ref", () => {
+describe("identity: an idea holds its own number, I-<PREFIX>-<n>, and no ticket number until it is promoted", () => {
+  it("captures under the idea counter without consuming the ticket counter, under a number that never parses as a ticket ref", () => {
     const before = counter();
-    const id = idea("Numberless");
-    plan.capture({ title: "Agent's numberless" }, "agent");
-    store.createIssue({ title: "Raw via create", kind: IDEA_KIND, createdBy: "agent" });
+    const id = idea("Numbered");
+    const agents = plan.capture({ title: "Agent's numbered" }, "agent");
+    const created = store.createIssue({ title: "Raw via create", kind: IDEA_KIND, createdBy: "agent" });
     expect(counter()).toBe(before);
-    const stored = store.getIssue(id).identifier;
-    expect(isDraftIdentifier(stored)).toBe(true);
-    expect(parseIdentifier(stored)).toBeNull();
-    expect(stored).not.toMatch(/^[A-Z]+-\d+$/);
+    expect(store.getIssue(id).identifier).toBe("I-TST-1");
+    expect(store.getIssue(agents.id).identifier).toBe("I-TST-2");
+    expect(created.identifier).toBe("I-TST-3");
+    expect(parseIdentifier("I-TST-1")).toBeNull();
+    expect(store.getIssue(id).ideaNumber).toBe("I-TST-1");
+    // A ticket carries no idea number at all, so its shape is as it was.
+    expect("ideaNumber" in store.createIssue({ title: "A ticket" })).toBe(false);
   });
 
-  it("shows no identifier for an idea anywhere the plan answers, and names it by title in refusals", () => {
+  it("shows no ticket number for an idea, its idea number instead, and names it by that number in refusals", () => {
     const id = idea("Quiet one");
     expect(plan.ideaView(id).identifier).toBeNull();
-    expect(plan.view().ideas.find((i) => i.id === id)!.identifier).toBeNull();
+    expect(plan.ideaView(id).number).toBe("I-TST-1");
+    expect(plan.view().ideas.find((i) => i.id === id)!.number).toBe("I-TST-1");
     const error = refused(() => store.queue().enqueue(id, {}, "agent"));
-    expect(error.message).toMatch(/the idea "Quiet one"/i);
+    expect(error.message).toContain("I-TST-1");
     expect(error.message).not.toContain("~");
   });
 
-  it("gives each idea a distinct draft identifier", () => {
+  it("resolves an idea by its number in any case, and by I-<n> in its own workspace", () => {
+    const id = idea("Find me");
+    for (const ref of ["I-TST-1", "i-tst-1", "I-1", "i-1"]) expect(store.getIssue(ref).id).toBe(id);
+    expect(plan.ideaView("I-1").id).toBe(id);
+    expect(() => store.getIssue("I-TST-2")).toThrow(/No issue matches/);
+  });
+
+  it("gives each idea a distinct number in capture order, and never hands one out again", () => {
     const ids = Array.from({ length: 20 }, (_, n) => idea(`Idea ${n}`));
-    const drafts = new Set(ids.map((id) => store.getIssue(id).identifier));
-    expect(drafts.size).toBe(20);
+    expect(ids.map((id) => store.getIssue(id).identifier)).toEqual(ids.map((_, n) => `I-TST-${n + 1}`));
+    plan.promote(ids[19]!, "vp", PERSON);
+    // The promoted record left I-TST-20 as its identifier; the counter still passes it.
+    expect(store.getIssue(idea("After the promotion")).identifier).toBe("I-TST-21");
+    // Even when the counter is lost, a number a row holds or kept is never handed out again.
+    store.db.prepare("DELETE FROM meta WHERE key = 'next_idea_number'").run();
+    expect(store.getIssue(idea("After the counter was lost")).identifier).toBe("I-TST-22");
   });
 
   it("allocates the next real number at promotion, through the tracker's own counter", () => {
@@ -185,18 +201,86 @@ describe("identity: an idea holds no ticket number until it is promoted", () => 
     expect(store.createIssue({ title: "After" }).identifier).toBe(`TST-${n(promoted.identifier!) + 1}`);
   });
 
-  it("turns ideas an earlier build numbered back into drafts when planning is enabled again", () => {
-    const id = idea("Numbered by v1");
-    // What an earlier build left: the idea took a ticket number at capture.
-    store.db.prepare("UPDATE issues SET identifier = 'TST-77' WHERE id = ?").run(id);
+  it("keeps the idea number on the promoted record, beside its ticket number, and it still resolves", () => {
+    const id = idea("Promote and keep");
+    const promoted = plan.promote(id, "vp", PERSON);
+    expect(promoted.identifier).toMatch(/^TST-\d+$/);
+    expect(promoted.number).toBe("I-TST-1");
+    const issue = store.getIssue(id);
+    expect(issue.identifier).toBe(promoted.identifier);
+    expect(issue.ideaNumber).toBe("I-TST-1");
+    // Through the kept number, not only this device's alias: a device that hydrates holds no alias.
+    store.db.prepare("DELETE FROM meta WHERE key LIKE 'identifier_alias:%' OR key LIKE 'identifier_holders:%'").run();
+    expect(store.getIssue("I-TST-1").id).toBe(id);
+    expect(store.getIssue("I-1").id).toBe(id);
+    expect(store.writeTarget("I-TST-1").id).toBe(id);
+  });
+
+  it("numbers what an earlier build left, drafts, ticket-numbered ideas and promoted records, in creation order", () => {
+    const at = (n: number) => `2026-11-0${n}T12:00:00.000Z`;
+    const draft = idea("Left as a draft");
+    const numbered = idea("Numbered by v1");
+    const promoted = idea("Promoted by an earlier build");
+    plan.promote(promoted, "vp", PERSON);
+    // What earlier builds left: a draft identifier, a ticket number, and a promoted record with no kept number.
+    store.db.prepare("UPDATE issues SET identifier = ?, created_at = ? WHERE id = ?").run(`~${draft.replace(/-/g, "")}`, at(3), draft);
+    store.db.prepare("UPDATE issues SET identifier = 'TST-77', created_at = ? WHERE id = ?").run(at(1), numbered);
+    store.db.prepare("UPDATE issues SET plan_idea_number = NULL, created_at = ? WHERE id = ?").run(at(2), promoted);
+    store.db.prepare("DELETE FROM meta WHERE key = 'next_idea_number'").run();
     plan.enable("vp", { person: { via: "settings" } });
-    expect(isDraftIdentifier(store.getIssue(id).identifier)).toBe(true);
-    expect(store.db.prepare("SELECT 1 FROM issues WHERE identifier = 'TST-77'").get()).toBeUndefined();
-    const event = store.db.prepare("SELECT payload FROM events WHERE kind = 'idea_drafted' AND issue_id = ?").get(id) as { payload: string } | undefined;
-    expect(JSON.parse(event!.payload)).toEqual({ from: "TST-77" });
+    expect(store.getIssue(numbered).identifier).toBe("I-TST-1");
+    expect(store.getIssue(promoted).ideaNumber).toBe("I-TST-2");
+    expect(store.getIssue(promoted).identifier).toMatch(/^TST-\d+$/);
+    expect(store.getIssue(draft).identifier).toBe("I-TST-3");
+    const event = store.db.prepare("SELECT payload FROM events WHERE kind = 'idea_numbered' AND issue_id = ?").get(numbered) as { payload: string } | undefined;
+    expect(JSON.parse(event!.payload)).toEqual({ number: "I-TST-1", from: "TST-77" });
     // The number it gave up still names it here, as it does on every device that applies the move.
-    expect(formerHolders(store.db, "TST-77").map((holder) => holder.issueId)).toEqual([id]);
-    expect(store.getIssue("TST-77").id).toBe(id);
+    expect(formerHolders(store.db, "TST-77").map((holder) => holder.issueId)).toEqual([numbered]);
+    expect(store.getIssue("TST-77").id).toBe(numbered);
+    // Nothing is left to number, so running it again writes nothing.
+    const events = (store.db.prepare("SELECT COUNT(*) AS n FROM events").get() as { n: number }).n;
+    store.plan().upgradeRecords();
+    expect((store.db.prepare("SELECT COUNT(*) AS n FROM events").get() as { n: number }).n).toBe(events);
+    expect(store.getIssue(idea("Captured after")).identifier).toBe("I-TST-4");
+  });
+
+  it("numbers a legacy idea holding a ticket number of a workspace prefixed I, which looks like no idea number", () => {
+    const id = idea("Numbered I-77 by v1");
+    store.db.prepare("UPDATE issues SET identifier = 'I-77' WHERE id = ?").run(id);
+    store.plan().upgradeRecords();
+    expect(store.getIssue(id).identifier).toBe("I-TST-2");
+  });
+
+  it("refuses a write through a number another idea moved off less than a day ago, in every spelling, I-<n> included", () => {
+    const x = idea("Moved off");
+    const y = idea("Moved onto");
+    moveIdentifier(store.db, x, "I-TST-9");
+    moveIdentifier(store.db, y, "I-TST-1");
+    for (const ref of ["I-TST-1", "i-tst-1", "I-1", "i-1"]) expect(() => store.writeTarget(ref), ref).toThrow(/less than a day ago/);
+    expect(store.writeTarget(y).id).toBe(y);
+  });
+
+  it("says nothing of a promoted record's idea number while planning is off, and finds nothing by it", () => {
+    const id = idea("Promoted, then planning off");
+    const ticket = plan.promote(id, "vp", PERSON).identifier!;
+    expect(store.getIssue(ticket).ideaNumber).toBe("I-TST-1");
+    store.setSetting("features.planning", false, "vp", { via: "settings" });
+    expect("ideaNumber" in store.getIssue(ticket)).toBe(false);
+    expect(store.listIssues({ includeResolved: true }).find((issue) => issue.id === id)).not.toHaveProperty("ideaNumber");
+    expect(() => store.getIssue("I-TST-1")).toThrow(/No issue matches/);
+    expect(store.listIssues({ q: "I-TST-1" }).map((issue) => issue.id)).not.toContain(id);
+    // Nothing is deleted: planning on again, it is there.
+    store.setSetting("features.planning", true, "vp", { via: "settings" });
+    expect(store.getIssue("I-TST-1").id).toBe(id);
+    expect(store.listIssues({ q: "I-TST-1" }).map((issue) => issue.id)).toContain(id);
+  });
+
+  it("numbers nothing while planning is off, and hides nothing it numbered once turned off", () => {
+    const id = idea("Before off");
+    store.db.prepare("UPDATE issues SET identifier = ? WHERE id = ?").run(`~${id.replace(/-/g, "")}`, id);
+    store.setSetting("features.planning", false, "vp", { via: "settings" });
+    store.plan().upgradeRecords();
+    expect(store.getIssue(id).identifier.startsWith("~")).toBe(true);
   });
 });
 

@@ -97,8 +97,9 @@ import { assertHandoffStatus, assertHandoffWorklog, worklogNudge } from "./core/
 
 /**
  * Everything the CLI prints goes through one place on its way out, so no command can show an
- * unpromoted idea's draft identifier (design/plan.md, "Ticket numbers"): JSON hides it as
- * `identifier: null, draft: true`, text names the idea by its id (`publicOutput`).
+ * unpromoted idea's draft identifier (design/plan.md, "Idea numbers"): JSON hides it as
+ * `identifier: null, draft: true`, text names the idea by its id (`publicOutput`). A numbered idea
+ * (`idea-numbers.ts`) needs none of it: its identifier is its idea number.
  */
 for (const method of ["log", "error", "warn", "info"] as const) {
   const print = console[method].bind(console);
@@ -1268,7 +1269,9 @@ The plan (experimental; features.planning defaults off)
               not-started counts
   idea ls [--maturity M] [--horizon H]  ideas with stage, horizon and progress; ideas are
               never queued, checked out, picked by next or listed by ls. An idea has
-              no ticket number until it is promoted: its <ref> is the id idea ls prints.
+              no ticket number until it is promoted; it has an idea number, I-<PREFIX>-<n>,
+              from capture on, kept once promoted. Any <ref> takes it (I-STA-12, I-12),
+              the ticket number once promoted, or the id.
               --horizon H (identifier or name) lists what H carries, sub-ideas
               following a parent on H included, and the dropped ideas on H
   idea new <title> [--brief T] [--parent REF]
@@ -1289,7 +1292,7 @@ The plan (experimental; features.planning defaults off)
               --before REF|end, and --delivered D [--note T] (it was delivered outside the
               tracker on day D: it reads shipped with no ticket) or --undelivered
   idea promote <ref>                    the idea becomes an epic on the same record and takes
-              its ticket number; only a shaped idea offers it
+              its ticket number, keeping its idea number; only a shaped idea offers it
   idea scaffold <ref> [--confirm FP]   without --confirm, the preview: the epic and every task it
               would make (estimate, blockers, acceptance, a context document each), what
               holds it back, and its fingerprint; --confirm FP makes exactly that preview
@@ -1723,7 +1726,9 @@ function main() {
       // Led by the kind glyph, like the rows below it (STA-185): the detail header is
       // the one line of this surface a reader scans, and it should carry the same mark
       // the list carried for the same ticket.
-      console.log(`${kindGlyph(i.kind)} ${i.identifier} · ${i.title}`);
+      // A promoted idea's kept number sits beside its ticket number (`idea-numbers.ts`).
+      const kept = i.ideaNumber !== undefined && i.ideaNumber !== i.identifier ? ` · ${i.ideaNumber}` : "";
+      console.log(`${kindGlyph(i.kind)} ${i.identifier}${kept} · ${i.title}`);
       // `kind` is unconditional here — unlike `line()`, which suppresses the
       // default. This is the detail surface: "it is a task" is a fact somebody
       // asked for by name, and leaving it out would make its absence ambiguous

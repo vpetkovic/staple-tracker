@@ -13,7 +13,7 @@ const DATES = [{ id: "plan_dates", label: "Change the planned dates", who: "pers
 
 function idea(id: string, extra: Partial<IdeaData> = {}): IdeaData {
   return {
-    id, identifier: null, promoted: false, kind: "idea", title: `Idea ${id}`, description: null, briefLine: null,
+    id, identifier: null, number: null, promoted: false, kind: "idea", title: `Idea ${id}`, description: null, briefLine: null,
     maturity: "shaped", stage: "scheduled", parentId: null, horizonId: null, planned: { start: null, target: null }, baseline: null, rank: 0,
     links: [], missingLinks: [], linkCount: 0, resolvedLinks: 0, units: ZERO, unsized: false, own: ZERO, umbrella: false, carriedBy: null,
     nextStep: null, progress: null, percent: null, actual: { start: null, end: null, forecastEnd: null }, late: false, notStarted: false,

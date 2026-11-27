@@ -9,6 +9,7 @@
  *
  * Everything here is a type or a function of its arguments: no store, no database, no clock.
  */
+import { isIdeaNumber } from "./idea-numbers.js";
 import { StapleError } from "./types.js";
 
 export const IDEA_KIND = "idea";
@@ -91,9 +92,14 @@ export function publicOutput(text: string): string {
   return draftsAsIds(text);
 }
 
-/** How a message names an issue: its ticket number, or the idea's title while it has none. */
+/**
+ * How a message names an issue: its ticket number; an idea by its title and its idea number
+ * (`idea-numbers.ts`), or by its title alone while an earlier build's draft has none.
+ */
 export function displayRef(row: { identifier: string; title?: string | null }): string {
-  return isDraftIdentifier(row.identifier) ? `the idea "${row.title ?? "untitled"}"` : row.identifier;
+  if (isDraftIdentifier(row.identifier)) return `the idea "${row.title ?? "untitled"}"`;
+  if (isIdeaNumber(row.identifier)) return `the idea "${row.title ?? "untitled"}" (${row.identifier})`;
+  return row.identifier;
 }
 
 /** A kind named in a sentence, with its article: "an epic", "a task". */

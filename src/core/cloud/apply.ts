@@ -49,7 +49,8 @@ import { renumberedRanks } from "../milestones.js";
 import { criterionMarkFromValue, criterionMarkPosition, criterionMarkValue } from "../milestone-goal.js";
 import { planLinkFromValue, planLinkIssue, writePlanLink } from "../plan-links.js";
 import { planRowFromValue, planRowId, writePlanRow } from "../plan-rows.js";
-import { isDraftIdentifier } from "../plan.js";
+import { IDEA_KIND, isDraftIdentifier } from "../plan.js";
+import { advanceIdeaNumber, isIdeaNumber } from "../idea-numbers.js";
 import { writeCriterionMark } from "../milestone-marks.js";
 import { rederiveSubtreeDepths } from "../tree-depth.js";
 import { MAX_TREE_DEPTH } from "../types.js";
@@ -61,7 +62,7 @@ import {
 } from "../settings-registry.js";
 import { aliasedIssueId, moveIdentifier, recordIdentifierMove } from "../identifier-moves.js";
 import { ORIGIN_RELEASING_STATUSES, StapleError, holdsLiveOrigin, normalizeTitle, nowIso } from "../types.js";
-import { type OwnRevision, holderYields, oweSettlement, ownClaimSeq, ownOriginClaimSeq, ownRevisionOf, ownRevisions } from "./claims.js";
+import { type OwnRevision, holderYields, oweSettlement, ownClaimSeq, ownOriginClaimSeq, ownRevisionOf, ownRevisions, ownValueClaimSeq } from "./claims.js";
 import { applyAttempt, applyAttemptTransition } from "./apply-attempts.js";
 import { applyExternal } from "./apply-external.js";
 import { applyAttachment } from "./apply-attachments.js";
@@ -168,6 +169,8 @@ export const ISSUE_FIELDS: Record<string, Column> = {
   // The branch the work lives on and the commit it was cut from (migration 024, ticket-branch.ts).
   branch: col("branch"),
   baseCommit: col("base_commit"),
+  // The number a promoted idea keeps (migration 026, idea-numbers.ts).
+  planIdeaNumber: col("plan_idea_number"),
 };
 
 /**
@@ -189,6 +192,7 @@ export const SPARSE_ISSUE_FIELDS: ReadonlySet<string> = new Set([
   "planDeliveredOn",
   "branch",
   "baseCommit",
+  "planIdeaNumber",
 ]);
 
 export const COMMENT_FIELDS: Record<string, Column> = {
@@ -818,6 +822,9 @@ function applyIssue(db: DatabaseSync, input: ApplyInput): boolean {
       : null;
     // A settlement that lost its number to an earlier claim carries nothing else to write.
     if (values.size > 0) updateRow(db, "issues", "id", input.entityId, [...values]);
+    // A promoted idea's kept number is one the idea counter must pass too (`idea-numbers.ts`).
+    if (values.has("plan_idea_number")) advanceIdeaNumber(db, values.get("plan_idea_number"));
+    if (values.has("identifier") || values.has("plan_idea_number")) claimKeptIdeaNumbers(db, input);
     if (values.has("parent_id")) {
       // A move: the subtree's depth follows the moved row's, as on the device that moved it.
       rederiveSubtreeDepths(db, input.entityId);
@@ -1110,8 +1117,9 @@ function insertIssue(db: DatabaseSync, input: ApplyInput, pairs: Array<[string, 
      * record is closed (`closeIdentifierConflict`). Nothing is dropped either way: both
      * issues exist, both are reachable, and no value is chosen by arrival order.
      */
-    if (holderYields(db, "issue", owner, ["identifier"], claimSeqOf(input, ["identifier"]))) {
-      moveIdentifier(db, owner, provisionalIdentifier(db, identifier, ownClaimSeq(db, "issue", owner, ["identifier"])));
+    // The holder's claim on THIS number, not its newest write of the field (`ownValueClaimSeq`).
+    if (holderYields(db, "issue", owner, ["identifier"], claimSeqOf(input, ["identifier"]), (inner, id) => ownValueClaimSeq(inner, id, identifier))) {
+      moveIdentifier(db, owner, provisionalIdentifier(db, identifier, ownValueClaimSeq(db, owner, identifier)));
       oweSettlement(db, { entity: "issue", entityId: owner, field: "identifier", from: identifier });
     } else if (heldAheadOfRead(db, input, "issue", owner)) {
       moveIdentifier(db, owner, provisionalIdentifier(db, identifier));
@@ -1129,6 +1137,67 @@ function insertIssue(db: DatabaseSync, input: ApplyInput, pairs: Array<[string, 
   ).run(...(([...values.values()] as never[]) satisfies never[]));
 
   advanceIssueNumber(db, values.get("identifier") as string);
+  advanceIdeaNumber(db, values.get("plan_idea_number"));
+  claimKeptIdeaNumbers(db, input);
+}
+
+/**
+ * One idea number, one record (`idea-numbers.ts`): held as an idea's identifier, or kept by a
+ * record promoted from one. The identifier's `UNIQUE` index settles two identifiers; a kept
+ * number is a column, so a write that leaves one number on two records is settled here, as any
+ * claim on a unique value is (`claims.ts`): the earlier claim in the log keeps the number, and
+ * only the device that made the later one moves it.
+ *
+ * Each side's place is measured the same way on every device, or two devices would each find
+ * themselves earlier: an idea's claim is the write that gave it the number (`identifier`), a kept
+ * number's is the write that kept it (`planIdeaNumber`, the promotion). A later idea takes the
+ * stand-in a create would and its device renumbers it; a later kept number is renumbered by the
+ * device that promoted it. A person's renumber is a decision, not a claim, and is left alone.
+ * Promoting before syncing an offline capture, and two devices numbering different sets of legacy
+ * records, both reach this.
+ */
+function claimKeptIdeaNumbers(db: DatabaseSync, input: ApplyInput): void {
+  const row = db.prepare("SELECT identifier, plan_idea_number FROM issues WHERE id = ?").get(input.entityId) as
+    | { identifier: string; plan_idea_number: string | null }
+    | undefined;
+  if (!row) return;
+  const keptBy = db.prepare("SELECT id FROM issues WHERE plan_idea_number = ? AND id <> ?");
+  const decision = input.verb === "renumber" && input.actor !== "staple";
+
+  // This record holds an idea number as an idea; promoted records of this device's keep it too.
+  if (isIdeaNumber(row.identifier) && !decision) {
+    const number = row.identifier;
+    const ideaClaim = claimSeqOf(input, ["identifier"]);
+    for (const other of keptBy.all(number, input.entityId) as Array<{ id: string }>) {
+      const keptClaim = ownClaimSeq(db, "issue", other.id, ["planIdeaNumber"]);
+      if (keptClaim === null) continue;
+      if (ideaClaim !== null && keptClaim < ideaClaim) {
+        const standIn = provisionalIdentifier(db, number, ideaClaim);
+        moveIdentifier(db, input.entityId, standIn);
+        recordIdentifierConflict(db, input, number, standIn);
+        return;
+      }
+      oweSettlement(db, { entity: "issue", entityId: other.id, field: "planIdeaNumber", from: number });
+    }
+  }
+
+  // This record keeps an idea number; an idea of this device's holds it, or a record of this device's keeps it too.
+  const kept = row.plan_idea_number;
+  if (kept === null) return;
+  const keptClaim = claimSeqOf(input, ["planIdeaNumber"]);
+  const live = db.prepare("SELECT id FROM issues WHERE identifier = ? AND id <> ?").get(kept, input.entityId) as { id: string } | undefined;
+  if (live !== undefined) {
+    const ideaClaim = ownValueClaimSeq(db, live.id, kept);
+    if (ideaClaim !== null && keptClaim !== null && ideaClaim > keptClaim) {
+      moveIdentifier(db, live.id, provisionalIdentifier(db, kept, ideaClaim));
+      oweSettlement(db, { entity: "issue", entityId: live.id, field: "identifier", from: kept });
+    }
+    return;
+  }
+  for (const other of keptBy.all(kept, input.entityId) as Array<{ id: string }>) {
+    const mine = ownClaimSeq(db, "issue", other.id, ["planIdeaNumber"]);
+    if (mine !== null && keptClaim !== null && mine > keptClaim) oweSettlement(db, { entity: "issue", entityId: other.id, field: "planIdeaNumber", from: kept });
+  }
 }
 
 /**
@@ -1175,6 +1244,11 @@ function deriveIssueColumns(db: DatabaseSync, values: Map<string, unknown>, inse
  * not exist yet. See {@link provisionalIdentifier}.
  */
 function advanceIssueNumber(db: DatabaseSync, identifier: string): void {
+  // An idea's number has its own counter (`idea-numbers.ts`).
+  if (isIdeaNumber(identifier)) {
+    advanceIdeaNumber(db, identifier);
+    return;
+  }
   const dash = identifier.lastIndexOf("-");
   if (dash < 0) return;
   const number = Number(identifier.slice(dash + 1));
@@ -1315,8 +1389,34 @@ function displaceIdentifierHolder(
   if (!incoming || typeof incoming[1] !== "string") return;
 
   /**
+   * An idea's number never lands on a record that is no longer an idea (`idea-numbers.ts`): a
+   * device that numbered a legacy idea before it heard the idea was promoted wrote an idea
+   * number over what is now an epic's ticket number. Promotion wins, whatever the order: the
+   * write is dropped here, and when this device made the promotion and the dropped write sits
+   * later in the log, it states the ticket number again, so the log's last word is the ticket
+   * number and a device that hydrates reads what this one does.
+   */
+  if (isIdeaNumber(incoming[1])) {
+    const kindIndex = pairs.findIndex(([column]) => column === "kind");
+    const kind = kindIndex >= 0 ? pairs[kindIndex]![1] : (db.prepare("SELECT kind FROM issues WHERE id = ?").get(input.entityId) as { kind: string } | undefined)?.kind;
+    if (typeof kind === "string" && kind !== IDEA_KIND) {
+      pairs.splice(index, 1);
+      const mine = ownClaimSeq(db, "issue", input.entityId, ["identifier"]);
+      const theirs = claimSeqOf(input, ["identifier"]);
+      if (mine !== null && theirs !== null && mine < theirs) oweSettlement(db, { entity: "issue", entityId: input.entityId, field: "ticketNumber", from: incoming[1] });
+      return;
+    }
+  }
+  /**
+   * And the other way round: a promotion's ticket number arriving on a record this device later
+   * gave an idea number (a legacy record it numbered) is not a stale write of its own: promotion
+   * wins, so it is applied, and the next branch must not keep the idea number.
+   */
+  const promotionOverIdeaNumber = !isIdeaNumber(incoming[1]) && !isDraftIdentifier(incoming[1]) && isIdeaNumber(identifierOf(db, input.entityId));
+
+  /**
    * The record's own number, written on two devices: one idea promoted on both before either
-   * heard of the other (design/plan.md, "Ticket numbers"). Its identifier is one field, and the
+   * heard of the other (design/plan.md, "Idea numbers"). Its identifier is one field, and the
    * last write of it in the log is the value, as the service's fold keeps it. So a write this
    * device made later than the incoming one stands, and the incoming one names nothing: it
    * displaces no holder here, because on every device its number is about to be given up.
@@ -1324,7 +1424,7 @@ function displaceIdentifierHolder(
   const ownDecision = (input.verb === "renumber" && input.actor !== "staple") || input.seq === undefined || input.seq === null;
   const mine = ownDecision ? null : ownClaimSeq(db, "issue", input.entityId, ["identifier"]);
   const theirs = claimSeqOf(input, ["identifier"]);
-  if (mine !== null && theirs !== null && mine > theirs && identifierOf(db, input.entityId) !== incoming[1]) {
+  if (!promotionOverIdeaNumber && mine !== null && theirs !== null && mine > theirs && identifierOf(db, input.entityId) !== incoming[1]) {
     pairs.splice(index, 1);
     return;
   }
@@ -1350,8 +1450,8 @@ function displaceIdentifierHolder(
    */
   const settlement = input.verb === "renumber" && input.actor === "staple";
   const decision = (input.verb === "renumber" && !settlement) || input.seq === undefined || input.seq === null;
-  if (!decision && holderYields(db, "issue", owner, ["identifier"], claimSeqOf(input, ["identifier"]))) {
-    moveIdentifier(db, owner, provisionalIdentifier(db, incoming[1], ownClaimSeq(db, "issue", owner, ["identifier"])));
+  if (!decision && holderYields(db, "issue", owner, ["identifier"], claimSeqOf(input, ["identifier"]), (inner, id) => ownValueClaimSeq(inner, id, incoming[1] as string))) {
+    moveIdentifier(db, owner, provisionalIdentifier(db, incoming[1], ownValueClaimSeq(db, owner, incoming[1])));
     oweSettlement(db, { entity: "issue", entityId: owner, field: "identifier", from: incoming[1] });
     return;
   }
@@ -1369,7 +1469,7 @@ function displaceIdentifierHolder(
    * stand-in a create would, on the record until the promoting device settles it.
    */
   const current = identifierOf(db, input.entityId);
-  if (!decision && current !== null && isDraftIdentifier(current)) {
+  if (!decision && current !== null && (isDraftIdentifier(current) || (isIdeaNumber(current) && !isIdeaNumber(incoming[1])))) {
     const provisional = provisionalIdentifier(db, incoming[1], claimSeqOf(input, ["identifier"]));
     recordIdentifierConflict(db, input, incoming[1], provisional);
     pairs[index] = ["identifier", provisional];

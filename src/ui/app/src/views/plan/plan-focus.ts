@@ -35,14 +35,20 @@ export function focusing(focus: PlanFocus, text: string): boolean {
 
 /**
  * The plan with `ideas` narrowed to those that match the focus and the text (a title holding
- * it, case aside), plus every ancestor of a match, in plan order. The whole plan, unchanged,
+ * it, or the record's idea or ticket number spelled whole, case aside), plus every ancestor of a
+ * match, in plan order. The whole plan, unchanged,
  * when neither is on.
  */
 export function focusPlan(plan: PlanData, focus: PlanFocus, text: string): PlanData {
   if (!focusing(focus, text)) return plan;
   const query = text.trim().toLowerCase();
-  const matches = plan.ideas.filter((idea) => (focus === "all" || (live(idea) && FOCUS[focus](idea))) && (query === "" || idea.title.toLowerCase().includes(query)));
+  const matches = plan.ideas.filter((idea) => (focus === "all" || (live(idea) && FOCUS[focus](idea))) && (query === "" || idea.title.toLowerCase().includes(query) || numberedAs(idea, query)));
   const keep = new Set(matches.map((idea) => idea.id));
   for (const idea of matches) for (const ancestor of ancestorsOf(plan, idea)) keep.add(ancestor.id);
   return { ...plan, ideas: plan.ideas.filter((idea) => keep.has(idea.id)) };
+}
+
+/** Whether the text is the record's idea number or ticket number, whole: `i-sta-1` is not `I-STA-12`. */
+function numberedAs(idea: PlanData["ideas"][number], query: string): boolean {
+  return idea.number?.toLowerCase() === query || idea.identifier?.toLowerCase() === query;
 }

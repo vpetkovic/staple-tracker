@@ -25,6 +25,7 @@
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { insertEvent } from "./event-log.js";
 import { moveIdentifier } from "./identifier-moves.js";
+import { isIdeaNumber, nextIdeaNumber } from "./idea-numbers.js";
 import { MILESTONE_KIND, MILESTONE_MEMBERSHIP, rankBetween, renumberedRanks } from "./milestones.js";
 import {
   DEFAULT_HORIZONS,
@@ -36,7 +37,6 @@ import {
   assertPlanWindow,
   deriveStage,
   displayRef,
-  draftIdentifier,
   forecastEnd,
   isDelivered,
   isDraftIdentifier,
@@ -202,6 +202,11 @@ export interface IdeaView {
   id: string;
   /** The ticket number once promoted; null while it is an idea, which has none to show. */
   identifier: string | null;
+  /**
+   * Its permanent idea number, `I-<PREFIX>-<n>` (`idea-numbers.ts`), before and after promotion.
+   * Null only on a record an earlier build left unnumbered, until this build numbers it.
+   */
+  number: string | null;
   /** Promoted in place: this record is now an epic in the tracker. */
   promoted: boolean;
   /** Its kind: `idea`, or the kind it was promoted to. */
@@ -495,6 +500,8 @@ interface PlanRow {
   plan_rank: number | null;
   plan_run_mode: string | null;
   plan_delivered_on: string | null;
+  /** The idea number a promoted record kept (migration 026); null on an unpromoted idea, which holds it as its identifier. */
+  plan_idea_number: string | null;
 }
 
 interface HorizonRow extends PlanRow {
@@ -515,7 +522,7 @@ interface WorkRow {
 
 const RANK_STEP = 1024;
 const PLAN_COLUMNS = `id, identifier, title, description, kind, status, parent_id, depth, created_at, updated_at,
-  plan_maturity, plan_horizon_id, plan_start, plan_target, plan_baseline_start, plan_baseline_target, plan_rank, plan_run_mode, plan_delivered_on`;
+  plan_maturity, plan_horizon_id, plan_start, plan_target, plan_baseline_start, plan_baseline_target, plan_rank, plan_run_mode, plan_delivered_on, plan_idea_number`;
 
 /** Column name to the payload field the issue entity carries it as. */
 const FIELD_OF: Record<string, string> = {
@@ -594,9 +601,14 @@ function oneLine(text: string, what: string): string {
   return clean;
 }
 
-/** A plan record's number to show: none while it is an idea. */
+/** A plan record's ticket number to show: none while it is an idea, whose number is its idea number. */
 function shownIdentifier(identifier: string): string | null {
-  return isDraftIdentifier(identifier) ? null : identifier;
+  return isDraftIdentifier(identifier) || isIdeaNumber(identifier) ? null : identifier;
+}
+
+/** A plan record's permanent idea number (`idea-numbers.ts`): its identifier while an idea, then the one it kept. */
+function ideaNumberOf(row: { identifier: string; plan_idea_number?: string | null }): string | null {
+  return row.plan_idea_number ?? (isIdeaNumber(row.identifier) ? row.identifier : null);
 }
 
 /** The steering word a person-only idea action is refused with (`steeringRefusal`). */
@@ -777,8 +789,8 @@ export class PlanStore {
   /**
    * Turn planning on: the `idea` and `milestone` kinds when missing, and the horizons Now, Next
    * and Later, which are milestones. Refused while an issue uses the `idea` kind for other work.
-   * Run again on a workspace where planning is on, it converts what an earlier build left: a
-   * numbered idea back to a draft identifier.
+   * Run again on a workspace where planning is on, it numbers what an earlier build left: an
+   * idea with no idea number, and a promoted one that kept none (`numberIdeas`).
    */
   enable(actor: string | null, options: PlanWriteOptions = {}): PlanView {
     this.store.setSetting("features.planning", true, actor, options.person);
@@ -790,7 +802,7 @@ export class PlanStore {
     if (this.store.planningInitialized()) {
       this.store.journaled(() => {
         this.migrateLegacyLater();
-        this.draftNumberedIdeas(actor);
+        this.numberIdeas();
         this.settleMembership(actor);
       });
       return;
@@ -841,19 +853,56 @@ export class PlanStore {
     });
   }
 
-  /** An idea an earlier build numbered takes its draft identifier: ideas hold no ticket number. */
-  private draftNumberedIdeas(actor: string | null): void {
-    const numbered = this.db
-      .prepare("SELECT id, identifier FROM issues WHERE kind = ? AND plan_maturity IS NOT NULL AND identifier NOT LIKE '~%'")
-      .all(IDEA_KIND) as Array<{ id: string; identifier: string }>;
-    for (const idea of numbered) {
-      const draft = draftIdentifier(idea.id);
-      const now = this.store.journal.mutationAt();
-      moveIdentifier(this.db, idea.id, draft, now);
-      this.db.prepare("UPDATE issues SET updated_at = ? WHERE id = ?").run(now, idea.id);
-      this.store.journal.record({ entity: "issue", entityId: idea.id, verb: "renumber", payload: { identifier: draft }, actor: actor ?? null });
-      insertEvent(this.db, { kind: "idea_drafted", issueId: idea.id, actor, payload: { from: idea.identifier } });
-    }
+  /**
+   * The structural upgrades a workspace owes whenever it is opened or synchronized: the old
+   * default horizon (`migrateLegacyLater`) and the idea numbers (`numberIdeas`).
+   */
+  upgradeRecords(): void {
+    this.migrateLegacyLater();
+    this.numberIdeas();
+  }
+
+  /**
+   * Every plan record an earlier build left without an idea number takes one, in the order the
+   * records were created (design/plan.md, "Idea numbers"): an idea under a draft identifier, or
+   * one an older build gave a ticket number, is renumbered to it, and a promoted one keeps it
+   * beside its ticket number. The old identifier keeps resolving (`recordIdentifierMove`).
+   *
+   * Journaled by `staple`, as a settlement is: a renumber `staple` writes is a claim on the
+   * number, settled by the log like a create's (`claims.ts`), so two devices that number before
+   * hearing of each other converge on one number per idea with no conflict left open; the kept
+   * number is exempt from field contests for the same reason (`conflicts.ts`). A connected
+   * workspace whose device is not bound yet waits, as `migrateLegacyLater` does. Idempotent: a
+   * workspace with nothing to number costs one indexed-free read.
+   */
+  numberIdeas(): void {
+    if (!this.enabled()) return;
+    const owed = this.db
+      .prepare(
+        `SELECT id, identifier, kind, plan_idea_number FROM issues
+          WHERE plan_maturity IS NOT NULL
+            AND ((kind = ? AND identifier NOT GLOB 'I-[A-Z]*-[0-9]*') OR (kind <> ? AND plan_idea_number IS NULL))
+          ORDER BY created_at, id`,
+      )
+      .all(IDEA_KIND, IDEA_KIND) as Array<{ id: string; identifier: string; kind: string; plan_idea_number: string | null }>;
+    if (owed.length === 0) return;
+    const sync = this.db.prepare("SELECT epoch FROM sync_state WHERE id = 1").get() as { epoch: number } | undefined;
+    if ((sync?.epoch ?? 0) > 0 && !this.store.journal.deviceIdentity()) return;
+    this.store.journaled(() => {
+      for (const record of owed) {
+        const number = nextIdeaNumber(this.db, this.store.prefix);
+        const now = this.store.journal.mutationAt();
+        if (record.kind === IDEA_KIND) {
+          moveIdentifier(this.db, record.id, number, now);
+          this.db.prepare("UPDATE issues SET updated_at = ? WHERE id = ?").run(now, record.id);
+          this.store.journal.record({ entity: "issue", entityId: record.id, verb: "renumber", payload: { identifier: number }, actor: "staple" });
+        } else {
+          this.db.prepare("UPDATE issues SET plan_idea_number = ?, updated_at = ? WHERE id = ?").run(number, now, record.id);
+          this.store.journal.record({ entity: "issue", entityId: record.id, verb: "update", payload: { planIdeaNumber: number, updatedAt: now }, actor: "staple" });
+        }
+        insertEvent(this.db, { kind: "idea_numbered", issueId: record.id, actor: "staple", payload: { number, ...(record.kind === IDEA_KIND ? { from: record.identifier } : {}) } });
+      }
+    });
   }
 
   // ---------- reads ----------
@@ -1429,6 +1478,7 @@ export class PlanStore {
       return {
         id: row.id,
         identifier: shownIdentifier(row.identifier),
+        number: ideaNumberOf(row),
         promoted: row.kind !== IDEA_KIND,
         kind: row.kind,
         title: row.title,

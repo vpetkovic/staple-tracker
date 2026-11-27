@@ -700,7 +700,7 @@ describe("the timestamps derivation writes on a horizon, over sync", () => {
 });
 
 describe("an idea an earlier build numbered", () => {
-  it("is drafted on every device, and its old number names it on every device", async () => {
+  it("is given an idea number on every device, the same one, and its old number names it on every device", async () => {
     const server = new FakeSyncServer({ repositoryId: REPO });
     fleet = new Fleet(server, REPO);
     const a = fleet.machine("a");
@@ -709,19 +709,29 @@ describe("an idea an earlier build numbered", () => {
     // What an earlier build sent: the idea took a ticket number at capture.
     a.db.prepare("UPDATE issues SET identifier = 'TRA-77' WHERE id = ?").run(p);
     a.db.prepare("UPDATE sync_outbox SET payload = json_set(payload, '$.identifier', 'TRA-77') WHERE entity_id = ? AND verb = 'create'").run(p);
+    // Sent while planning was off, so nothing numbered it on the way out.
+    a.store.setSetting("features.planning", false, "vp", { via: "settings" });
     await a.sync();
     const b = fleet.machine("b");
     await b.sync();
     expect(b.store.getIssue(p).identifier).toBe("TRA-77");
 
+    // Planning on again: both devices number it before hearing of the other, and converge on one number.
     a.use();
     a.store.plan().enable("vp", { person: { via: "settings" } });
-    await both(a, b);
+    b.use();
+    b.store.setSetting("features.planning", true, "vp", { via: "settings" });
+    await both(a, b, 3);
+    const numbers = new Set<string>();
     for (const machine of [a, b]) {
-      expect(machine.store.getIssue(p).identifier.startsWith("~")).toBe(true);
+      machine.use();
+      numbers.add(machine.store.getIssue(p).identifier);
+      expect(machine.store.getIssue(p).identifier).toMatch(/^I-TRA-\d+$/);
       expect(formerHolders(machine.db, "TRA-77").map((holder) => holder.issueId)).toEqual([p]);
       expect(machine.store.getIssue("TRA-77").id).toBe(p);
+      expect(openConflicts(machine)).toEqual([]);
     }
+    expect(numbers.size).toBe(1);
   });
 });
 

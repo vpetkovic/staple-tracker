@@ -252,7 +252,7 @@ export function openWorkspace(dbPath: string): OpenedWorkspace {
   if (!isCheckoutBacked(dbPath)) tryReconcileWorkspaceIdentity(db, dbPath);
 
   const opened: OpenedWorkspace = { store: new WorkspaceStore(db, slug, prefix), dbPath };
-  opened.store.plan().migrateLegacyLater();
+  opened.store.plan().upgradeRecords();
   if (upgrade) opened.upgrade = upgrade;
   return opened;
 }

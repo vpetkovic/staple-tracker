@@ -65,6 +65,12 @@ describe("RefText", () => {
     const html = renderToStaticMarkup(<RefText text="XSTA-1 and STA-12 and STA-1x" issues={issues} onOpen={open} />);
     expect(html).not.toContain("data-ticket-chip");
   });
+
+  it("never reads the tail of an idea number as a ticket", () => {
+    const html = renderToStaticMarkup(<RefText text="I-STA-1 became STA-1 (from i-STA-1)" issues={issues} onOpen={open} />);
+    expect(html.match(/data-ticket-chip=/g)).toHaveLength(1);
+    expect(html).toContain("I-STA-1 became ");
+  });
 });
 
 describe("issueOf", () => {
