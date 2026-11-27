@@ -30,14 +30,14 @@ function refused(fn: () => unknown): StapleError {
   throw new Error("expected a refusal");
 }
 
-describe("migration 28", () => {
+describe("migration 29", () => {
   it("adds the explored flag as NULL on every existing record, so none of them moves", () => {
     const db = new DatabaseSync(":memory:");
     db.exec("PRAGMA foreign_keys=ON");
     const ordered = [...WORKSPACE_TARGET.migrations].sort((a, b) => a.version - b.version);
-    for (const migration of ordered.filter((m) => m.version < 28)) migration.up(db);
+    for (const migration of ordered.filter((m) => m.version < 29)) migration.up(db);
     db.prepare("INSERT INTO issues (id, identifier, title, normalized_title, status, priority, created_at, updated_at, kind, plan_maturity) VALUES ('idea', 'I-TST-1', 'Idea', 'idea', 'backlog', 'medium', 't', 't', 'idea', 'raw')").run();
-    ordered.find((m) => m.version === 28)!.up(db);
+    ordered.find((m) => m.version === 29)!.up(db);
     expect(db.prepare("SELECT plan_maturity, plan_explored FROM issues").all()).toEqual([{ plan_maturity: "raw", plan_explored: null }]);
     db.close();
   });

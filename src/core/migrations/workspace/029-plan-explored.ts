@@ -2,7 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Migration } from "../types.js";
 
 /**
- * Version 28: an idea made more complete since it was captured (design/plan.md, "Maturity moves
+ * Version 29: an idea made more complete since it was captured (design/plan.md, "Maturity moves
  * by enrichment").
  *
  * One nullable `issues` column, NULL on every row an enrichment never touched:
@@ -19,11 +19,11 @@ import type { Migration } from "../types.js";
  *
  * It replicates as the `issue` field `planExplored`, left out of a create while null like the
  * plan fields (`SPARSE_ISSUE_FIELDS`). Additive and nullable; the Worker carries the payload
- * field without knowing it. A device that has not migrated refuses an operation page stamped 28
+ * field without knowing it. A device that has not migrated refuses an operation page stamped 29
  * with `schema_ahead`, as for 20.
  */
 export const migration: Migration = {
-  version: 28,
+  version: 29,
   name: "plan-explored",
   up(db: DatabaseSync): void {
     db.exec(`ALTER TABLE issues ADD COLUMN plan_explored INTEGER;`);

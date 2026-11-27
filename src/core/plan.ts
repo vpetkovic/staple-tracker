@@ -129,7 +129,7 @@ export function parseMaturity(value: string): Maturity {
 /**
  * A record's maturity as every read sees it (design/plan.md, "Maturity moves by enrichment"): the
  * person's `plan_maturity`, except that a raw record made more complete since it was captured
- * (`plan_explored`, migration 028) reads `exploring`. One SQL expression, selected as
+ * (`plan_explored`, migration 029) reads `exploring`. One SQL expression, selected as
  * `plan_maturity`, so a device that made the change and one that received it by sync read the
  * same, and no read path can see the raw value by mistake.
  */

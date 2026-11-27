@@ -1307,6 +1307,12 @@ The plan (experimental; features.planning defaults off)
               holds it back, and its fingerprint; --confirm FP makes exactly that preview
               and is refused when the plan changed since; a retry makes only what is missing.
               Each task keeps the idea and row it came from: show prints "from I-STA-n · row K"
+  idea convert <ref>                    a ticket that should have been an idea becomes a raw idea
+              on the same record: its comments, documents, files and history stay, and its
+              ticket number still names it. Its children become its sub-ideas. Refused,
+              with the reasons, when it or anything under it is claimed, started, resolved,
+              has a dependency, is queued, is in a milestone or is linked to an idea; a
+              parent that is tracker work is left
   idea adopt <ref> <issue> [--research] link existing work to the idea; an exploring or shaped
               idea offers it (it then reads started), a raw one does not. --research
               links it as research or a POC instead: listed on its own, it does not
@@ -1740,7 +1746,10 @@ function main() {
       // the one line of this surface a reader scans, and it should carry the same mark
       // the list carried for the same ticket.
       // A promoted idea's kept number sits beside its ticket number (`idea-numbers.ts`).
-      const kept = i.ideaNumber !== undefined && i.ideaNumber !== i.identifier ? ` · ${i.ideaNumber}` : "";
+      const kept =
+        (i.ideaNumber !== undefined && i.ideaNumber !== i.identifier ? ` · ${i.ideaNumber}` : "") +
+        // And a converted idea's kept ticket number beside its idea number.
+        (i.ticketNumber !== undefined ? ` · was ${i.ticketNumber}` : "");
       console.log(`${kindGlyph(i.kind)} ${i.identifier}${kept} · ${i.title}`);
       // `kind` is unconditional here — unlike `line()`, which suppresses the
       // default. This is the detail surface: "it is a task" is a fact somebody

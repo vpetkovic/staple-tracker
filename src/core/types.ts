@@ -507,6 +507,12 @@ export interface Issue {
    * every issue that never was an idea.
    */
   ideaNumber?: string;
+  /**
+   * The ticket number an idea kept when a ticket was converted into it (migration 028,
+   * design/plan.md, "Converting a ticket into an idea"). The old number still names the idea.
+   * Absent on every issue that never was a ticket turned idea.
+   */
+  ticketNumber?: string;
 }
 
 // ---------- projects (migration 009) ----------

@@ -223,7 +223,7 @@ const featureInstructions = (() => {
 const server = new McpServer({ name: "staple", version: STAPLE_VERSION }, {
   instructions: `${featureInstructions} Planning is experimental, defaults off, and only a person changes it in Settings → Experimental or with staple settings set features.planning true --person. Read get_setting or show_about for the current workspace state; explicit ws may differ from this handshake. When off, use ordinary tasks and milestones; plan tools refuse. Ideas have their own numbers, I-<PREFIX>-<n>, and are never pickup work.`,
 });
-const PLANNING_TOOLS = new Set(["list_ideas", "get_idea", "list_horizons", "capture_idea", "update_idea", "scaffold_idea", "start_idea", "unlink_idea", "reset_idea_baseline"]);
+const PLANNING_TOOLS = new Set(["list_ideas", "get_idea", "list_horizons", "capture_idea", "update_idea", "scaffold_idea", "start_idea", "unlink_idea", "convert_to_idea", "reset_idea_baseline"]);
 
 /**
  * S10: this server's automatic-sync registration.
@@ -667,6 +667,7 @@ const issueShape = {
   createdAt: z.string(),
   updatedAt: z.string(),
   ideaNumber: z.string().optional().describe("The permanent idea number, I-<PREFIX>-<n>, on a plan record: an idea's, kept once it is promoted"),
+  ticketNumber: z.string().optional().describe("The ticket number an idea kept when a ticket was converted into it (convert_to_idea); the old number still names the idea"),
 };
 
 /** Plan provenance (`core/plan-provenance.ts`). */
@@ -3724,6 +3725,22 @@ server.registerTool(
       const plan = storeFor(ws).plan();
       plan.unlink(ref, issue, requireActor(actor));
       return plan.detail(ref);
+    }),
+);
+
+server.registerTool(
+  "convert_to_idea",
+  {
+    description:
+      "Convert a ticket that should have been an idea (a brainstorm, or a new unplanned capability filed as work) into a raw idea on the same record. Its comments, documents, files, history and external links stay; it takes an idea number, I-<PREFIX>-<n>, and its ticket number still names it (ticketNumber on the issue). Its children become its sub-ideas, each the same way. Refused, with every reason, when it or anything under it is claimed, started, done or cancelled, blocks or waits on other work, is queued, is in a milestone or is linked to an idea; a parent that is ordinary tracker work is left, since an idea's parent is an idea. Answers the idea, what was converted (from, to) and the parent it left, if any.",
+    inputSchema: { ref: refSchema, actor: actorSchema, ws: wsSchema },
+    annotations: { title: "Convert ticket to idea", ...milestoneWriteAnnotations },
+  },
+  ({ ref, actor, ws }) =>
+    run(() => {
+      const plan = storeFor(ws).plan();
+      const result = plan.convertTicket(ref, requireActor(actor));
+      return { ...result, idea: plan.detail(result.idea.id) };
     }),
 );
 

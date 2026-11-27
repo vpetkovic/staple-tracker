@@ -192,11 +192,11 @@ The draft rules still hold for a record still under a draft: in JSON it goes out
 `identifier: null, draft: true` (`hideDraftIdentifiers`), a draft in text as the idea's id
 (`draftsAsIds`).
 
-## Storage: eleven columns on `issues`, three tables, no new entity
+## Storage: twelve columns on `issues`, three tables, no new entity
 
-What an issue cannot already say lives in eleven nullable `issues` columns, eight added by workspace
+What an issue cannot already say lives in twelve nullable `issues` columns, eight added by workspace
 migration **020** (`020-plan-fields.ts`), one by **021** (`021-plan-delivered.ts`), one by
-**026** (`026-idea-numbers.ts`) and one by **028** (`028-plan-explored.ts`), NULL on every row outside the plan, and three tables:
+**026** (`026-idea-numbers.ts`), one by **028** (`028-plan-ticket-number.ts`) and one by **029** (`029-plan-explored.ts`), NULL on every row outside the plan, and three tables:
 `plan_links` and `plan_rows` (synchronized, one field per link and per breakdown row) and
 `plan_members` (derived on each device, never sent).
 
@@ -438,6 +438,54 @@ promoted is its child from the start.
 Exploring offers it as well as shaped: tickets that already exist can belong to an idea whose
 scope is still open. Raw never does.
 
+### Converting a ticket into an idea
+
+**Convert** (`PlanStore.convertTicket`, `WorkspaceStore.convertToIdea`) is promotion run
+backwards, for a ticket that should have been an idea: a brainstorm filed as work, or an unplanned
+capability found during ticket work. The same row takes the next idea number, the kind `idea`, and
+what a capture gives a record (maturity raw, rank at the end of the plan); its id, comments,
+documents, files, events, external links, title, description, labels and status stay. Its history
+shows it (`ticket_converted`). A person or an agent may convert, as either may capture a raw idea.
+
+*Its ticket number stays a name for it.* The identifier, the kind, the plan columns and
+**`plan_ticket_number`** (migration 028) change in one journaled `update`, and
+`recordIdentifierMove` keeps the old number as this device's alias. A device that receives the
+update records the same move; one that hydrates later has no alias, so `lookupRow` reads the column
+after a live identifier and a kept idea number, and before an alias. A live identifier still wins:
+a number another issue holds names that issue. The applier keeps the ticket counter past a kept
+number (`advanceIssueNumber`, as the record arrives), so a device that only hydrated never mints
+it again, and a text search that includes plan records (`kind idea`, `includePlan`) matches it;
+task lists, `ls -q` and the toolbar search leave ideas out, as they always do. With planning off neither the column nor an alias that leads to an idea
+resolves, on any device.
+
+*What converts.* The ticket and everything under it, parents first: each child becomes a sub-idea
+of the record above it, keeping its own history and number. A parent that is ordinary tracker work
+is left first, by the tracker's own move (`parent_changed`, the old parent re-derives), because an
+idea's parent is an idea; a parent in the plan (a promoted record) stays. Refused, naming every
+reason for every record, unless each record is open, in the unstarted or ready band, never started
+(`started_at`), not checked out or leased here, has no recorded branch, no blocking edge either way
+(a plan neither blocks nor waits), no place in the pickup queue or a milestone, no link to an idea,
+no pending review gate, and no stand-in number (sync settles a stand-in by renumbering it from the ticket counter, which
+would overwrite the idea number). A milestone or a plan record is never converted.
+
+*Across devices.* A conversion's idea number is the record's first claim on one, as a capture's is:
+an update that carries `planTicketNumber` and loses its number to an earlier claim takes the
+stand-in a create would (`displaceIdentifierHolder`), on the record until the converting device
+settles it. So two devices that convert one ticket and its subtree offline, each minting its own
+numbers, end on the log's numbers on every device with nothing open; dropped instead, the losing
+writes left each device on its own set. Both wrote the same kept numbers. Neither the kept number nor a conversion's rank is a field contest
+(`conflicts.ts`): staple assigned both. A ticket number written onto a record that is an idea once
+the write lands (a renumber from before a conversion) is not "promotion over an idea number"
+(`displaceIdentifierHolder`): a promotion carries its kind, and without one the log orders the
+two writes like any other. An edit another device made before it heard of the conversion is
+applied as written, and every device reads the same record: a checkout leaves an idea that is
+checked out and in progress, a queue entry stays (the effective queue skips a plan record), and a
+move under tracker work or a child filed under the ticket leaves an idea under that work, or work
+under the idea. Nothing reconciles these; the person releases, dequeues or moves them. A ticket
+converted before its create reached the log keeps the number it had here; if an earlier claim in
+the log gave that number to another ticket, the live identifier names that ticket and the kept
+number only says what the idea was called on this device.
+
 **Import** (`staple idea import <plan.md>`, `PlanStore.importPlan`) reads a plan file into one
 idea, in one transaction: the first heading outside a code fence is the title, the text before the
 first section is the brief, and each `##` heading is mapped by its words (Goal, Task or Step
@@ -601,7 +649,7 @@ raw row now offers). A capture, an import (`importPlan`, whatever plan, question
 brings) and an edit of the title or brief do not, and a write that changes nothing moves nothing.
 Nothing moves an idea to shaped on its own.
 
-**A flag, not a maturity write.** The move is `plan_explored = 1` (migration 028, the issue field
+**A flag, not a maturity write.** The move is `plan_explored = 1` (migration 029, the issue field
 `planExplored`), never a write of `plan_maturity`, which stays the person's. Every read of a
 record's maturity is one SQL expression, `MATURITY_READ` (`plan.ts`): `exploring` while
 `plan_maturity` is `raw` and the flag is set, otherwise `plan_maturity`. The plan store selects it
@@ -1294,7 +1342,7 @@ What converges, under both folds, on a tail device and a freshly hydrated one:
 
 ## Surfaces
 
-- **CLI** `staple plan enable|show`, `staple idea ls|new|show|set|propose|plan|task|promote|scaffold|import|adopt|unlink|ask|resolve|defer|decide|reset-baseline`,
+- **CLI** `staple plan enable|show`, `staple idea ls|new|show|set|propose|plan|task|promote|scaffold|import|convert|adopt|unlink|ask|resolve|defer|decide|reset-baseline`,
   `staple horizon ls|new|set|mv|rm`, with `--person` for steering. An idea's ref is its id.
   `staple idea set <ref> --delivered YYYY-MM-DD [--note T] --person` marks it delivered outside
   the tracker and `--undelivered` clears the mark. `staple idea propose <ref> [--note T]` proposes
@@ -1304,7 +1352,8 @@ What converges, under both folds, on a tail device and a freshly hydrated one:
   `undelivered` only to refuse them), `start_idea` (promote in place, or with
   `adopt` link an existing issue; answers the promoted `{ id, identifier, kind }` or `null`),
   `unlink_idea`, `scaffold_idea` (preview without `confirm`; with it and the preview's
-  `fingerprint`, create); `reset_idea_baseline` (a view button).
+  `fingerprint`, create); `convert_to_idea` (a ticket into a raw idea; answers the idea, each
+  `{ from, to, title }` converted and the parent it left); `reset_idea_baseline` (a view button).
 - **HTTP** `GET /api/plan` (each record with `state`, `actions`, `completeness`, `dependsOn`,
   `units` and `unsized`, each horizon with `shippedCount`, `units`, `unsizedCount`, `records`,
   `progress`, `runMode`, `goal` and `awaitingApproval`),
@@ -1339,7 +1388,7 @@ What converges, under both folds, on a tail device and a freshly hydrated one:
 | `test/plan-delivered.test.ts`, `test/cloud-plan-delivered-sync.test.ts` | a record delivered outside the tracker: shipped with no ticket and no number, never a member, queued, checked out or listed; late only when delivered after its line, never not started; offered in exploring and shaped only; its day required and not in the future; the person's alone, an agent told what to do instead; its edits and the clear; the note kept to the mark; reopened by open work linked since; refused with planning off and back when it is on; the same on a tail device and a fresh one under both folds |
 | `test/plan-surfaces.test.ts` | CLI, MCP and HTTP read one plan with no idea numbers and no draft shown on any surface, consume no number at capture, refuse the same agent writes, promote into the horizon's milestone, and let the person steer |
 | `test/plan-lifecycle.test.ts` | the table itself, pinned: every state's actions, who takes each, the promoted record's epic edits, Mark shaped on a record started while exploring, adopt from exploring on and never raw, back to raw offered nowhere, how a maturity change is named, the delivered mark in exploring and shaped and the marked record's edits and clear |
-| `test/plan-maturity-enrichment.test.ts` | maturity moves by enrichment: each plan write on a raw idea (section, row, question asked, answered or deferred, decision, research, a raw section document) explores it for an agent and the person alike; capture, import and title or brief edits do not; the shaped proposal is held to the gate, waits under Needs you, is accepted or dismissed only by the person; migration 028; and two devices converge with no conflict, the person's shape or drop standing over an agent's enrichment, on a tail and a fresh device under both folds |
+| `test/plan-maturity-enrichment.test.ts` | maturity moves by enrichment: each plan write on a raw idea (section, row, question asked, answered or deferred, decision, research, a raw section document) explores it for an agent and the person alike; capture, import and title or brief edits do not; the shaped proposal is held to the gate, waits under Needs you, is accepted or dismissed only by the person; migration 029; and two devices converge with no conflict, the person's shape or drop standing over an agent's enrichment, on a tail and a fresh device under both folds |
 | `test/plan-lifecycle-surfaces.test.ts` | every idea (state, write) cell and every horizon (state, action) cell agrees with the table on HTTP, MCP and the CLI with and without `--person`; every payload carries exactly the table's row; a record started while exploring carries the started row and Mark shaped, and only the person shapes it; a record delivered outside the tracker carries the shipped row with its edits and the clear, the mark and the clear are the person's on every surface, and a mark without a day is refused before anything is written; every document and file write in every state |
 | `test/plan-own-state.test.ts` | with hand-written expectations: a parent's own state against its rollup; a sub-idea promoted on its own and re-parented by its parent's promotion; a promoted record edited as an epic once shipped; an exploring idea that adopts work reads started, keeps its maturity, offers Mark shaped, joins its horizon, keeps its baseline and stays out of the tracker; every document key, restore and file on a shipped, dropped or raw idea |
 | `test/plan-lenses.test.ts`, `test/plan-lenses-review.test.ts` | what the lenses read: dependencies only from explicit references, a sub-idea's title key over its ancestor's row key, never a wait between a record and its ancestor or descendant; completeness and `dependsOn` on the payload; a horizon's shipped count, progress and server counts; Queue and the run setting offered and held back; each issue's horizon; the run setting is the person's on every path, reaches every ticket as the `horizon-run` instruction, and allows a goal run only when set to `goal` |

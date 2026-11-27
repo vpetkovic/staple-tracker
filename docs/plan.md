@@ -124,6 +124,30 @@ staple idea ask I-STA-12 "Do gift cards expire?"
   were captured, the next time the workspace is opened or synced with planning on. Records already
   promoted get the number they keep beside their ticket number.
 
+### A ticket that should have been an idea
+
+A brainstorm filed as a ticket, or a new capability somebody found while working a ticket and
+filed as work, can become an idea after the fact:
+
+```bash
+staple idea convert STA-287
+```
+
+The same record becomes a raw idea at the end of the plan, with the next idea number. Its comments,
+documents, files and history stay, and `STA-287` still opens it, on this device and on every other
+one (`staple show` prints `I-STA-14 · was STA-287`). Its children become its sub-ideas, each the
+same way. A parent that is ordinary tracker work is left, because an idea's parent is an idea.
+
+Only a ticket nobody has started converts. It is refused, with every reason, when the ticket or
+anything under it is checked out or leased by this device, was ever started, is done or cancelled,
+waits behind a review gate, has work on a recorded branch, blocks or waits on other work, is in the
+pickup queue or a milestone, is linked to an idea, or still holds a stand-in number sync has not
+settled. Agents use it too (`convert_to_idea`).
+
+If another device starts, queues or moves the ticket before it hears of the conversion, every
+device ends with the same record, an idea that still holds that checkout, queue place or parent.
+Release, dequeue or move it by hand.
+
 An idea opens in the same panel as a task. Its **Plan** tab holds the brief, the plan sections,
 open questions and decisions. Connections, Documents, Files, Activity, **For agents** (the
 payload an agent reads) and **Time** sit beside it. Sub-ideas go under a parent with **Part of**.
@@ -567,6 +591,7 @@ what it offers.
 | `staple idea promote`, `adopt` | `start_idea` | Promote the idea in place, or adopt a ticket |
 | `staple idea adopt --research` | `start_idea` (`research`) | Link a research or POC ticket; it does not start the idea |
 | `staple idea unlink` | `unlink_idea` | Remove a link, work or research |
+| `staple idea convert <ref>` | `convert_to_idea` | Turn an unstarted ticket that should have been an idea into one; its ticket number still names it |
 | `staple idea reset-baseline --person` | | Make the current window the baseline |
 | `staple horizon new`, `set`, `mv`, `rm` (`--person`) | | Define horizons and their run setting |
 

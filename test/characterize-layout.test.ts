@@ -169,10 +169,10 @@ describe("a fresh repo-local `staple init`", () => {
       // 016-milestone-goals, to "17" by 017-derived-status, to "18" by
       // 018-attachments, to "19" by 019-instruction-documents, to "20" by 020-plan-fields and to
       // "21" by 021-plan-delivered, then "22" by 022-external-links, "23" by 023, "24" by
-      // 024-ticket-branch, "25" by 025-attempt-heartbeats "26" by 026-idea-numbers, "27" by 027-plan-link-purpose and "28" by 028-plan-explored; the TEXT
+      // 024-ticket-branch, "25" by 025-attempt-heartbeats "26" by 026-idea-numbers "27" by 027-plan-link-purpose, "28" by 028-plan-ticket-number and "29" by 029-plan-explored; the TEXT
       // typing is the characterization, the number
       // just tracks the migration list.
-      { key: "schema_version", value: "28" },
+      { key: "schema_version", value: "29" },
       { key: "slug", value: "metarepo" },
     ]);
   }, 30_000);
@@ -213,6 +213,8 @@ describe("a fresh repo-local `staple init`", () => {
       "index:issues_plan_idea_number",
       // 020-plan-fields: the partial index that says planning is on.
       "index:issues_plan_ranked_idx",
+      // 028-plan-ticket-number: the ticket number a converted idea keeps, looked up by reference.
+      "index:issues_plan_ticket_number",
       // 009-projects: the partial index over `issues.project_id`, indexed only
       // over the rows that carry a project.
       "index:issues_project_idx",
@@ -518,9 +520,9 @@ describe("global workspaces", () => {
     ]);
     expect(metaRows(join(home, "workspaces", "solo.db"))).toEqual([
       { key: "prefix", value: "SOL" },
-      // WORKSPACE_SCHEMA_VERSION — 28 since 028-plan-explored. The hub beside it
+      // WORKSPACE_SCHEMA_VERSION — 29 since 029-plan-explored. The hub beside it
       // is still 8; the two databases version independently.
-      { key: "schema_version", value: "28" },
+      { key: "schema_version", value: "29" },
       { key: "slug", value: "solo" },
     ]);
   }, 30_000);
