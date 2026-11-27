@@ -480,6 +480,63 @@ describe.skipIf(Boolean(reason))("the Milestones page, pressed in a real browser
     await context.close();
   });
 
+  it("draws a write's result until the next read lands", async () => {
+    const { page, context } = await open(refs.order!);
+    const it_ = section(page, refs.order!);
+    const drawn = () => it_.locator("[data-member-row]").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-member-row")));
+    expect(await drawn()).toEqual([refs.first, refs.second]);
+    // Hold every read of this milestone once the write is sent.
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let writing = false;
+    await page.route((url) => url.pathname === "/api/milestone" && url.searchParams.get("ref") === refs.order, async (route) => {
+      if (writing) await held;
+      await route.continue();
+    });
+    writing = true;
+    await it_.locator(`[data-member-actions="${refs.first}"]`).click();
+    await page.locator('[role=menu] [data-menu-item="down"]').click();
+    await page.waitForTimeout(800);
+    expect(await drawn()).toEqual([refs.second, refs.first]);
+    release();
+    await page.waitForTimeout(600);
+    expect(await drawn()).toEqual([refs.second, refs.first]);
+    // Put the order back for the tests after this one.
+    await it_.locator(`[data-member-actions="${refs.first}"]`).click();
+    await page.locator('[role=menu] [data-menu-item="up"]').click();
+    await page.waitForTimeout(800);
+    expect(await drawn()).toEqual([refs.first, refs.second]);
+    await context.close();
+  });
+
+  it("ignores alt+arrow while a write is in flight", async () => {
+    const { page, context } = await open(refs.order!);
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let sent = 0;
+    await page.route("**/api/milestone/reorder", async (route) => {
+      sent++;
+      await held;
+      await route.continue();
+    });
+    await section(page, refs.order!).locator(`[data-member-row="${refs.first}"]`).focus();
+    await page.keyboard.press("Alt+ArrowDown");
+    await page.waitForTimeout(200);
+    await page.keyboard.press("Alt+ArrowDown");
+    await page.keyboard.press("Alt+ArrowUp");
+    await page.waitForTimeout(300);
+    expect(sent).toBe(1);
+    release();
+    await page.waitForTimeout(800);
+    const order = (await get<{ members: Array<{ identifier: string }> }>(`/api/milestone?ws=${WS}&ref=${refs.order}`)).members.map((m) => m.identifier);
+    expect(order).toEqual([refs.second, refs.first]);
+    // Put it back.
+    await section(page, refs.order!).locator(`[data-member-row="${refs.first}"]`).focus();
+    await page.keyboard.press("Alt+ArrowUp");
+    await page.waitForTimeout(800);
+    await context.close();
+  });
+
   it("approves the milestone's gate from the page, signed by the person, and the status follows", async () => {
     const { page, context } = await open(refs.gated!);
     const gated = section(page, refs.gated!);
@@ -510,6 +567,10 @@ describe.skipIf(Boolean(reason))("the Milestones page, pressed in a real browser
     // Its goal and work, read-only, open under it.
     expect(await line.locator("[data-milestone-goal-line]").count()).toBe(1);
     expect(await line.locator("[data-milestone-add-open]").count()).toBe(0);
+    // A record: its finished work is listed although Done is hidden.
+    expect(await page.locator('[data-filter-done="hidden"]').count()).toBeGreaterThan(0);
+    expect(await line.locator("[data-member-row]").count()).toBe(1);
+    expect(await line.locator("[data-hidden-done]").count()).toBe(0);
     await context.close();
   });
 
