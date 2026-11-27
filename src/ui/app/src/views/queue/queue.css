@@ -289,7 +289,7 @@
 
 /* the next pick where it sits in the order: the pinned row's tint, no second label */
 .q-row[data-next] { background: var(--q-next-bg); box-shadow: inset 2px 0 0 var(--q-next-edge); }
-.q-row[data-next-inside] { box-shadow: inset 2px 0 0 var(--q-next-edge); }
+.q-row[data-next-inside], .q-moreline[data-next-inside] { box-shadow: inset 2px 0 0 var(--q-next-edge); }
 .q-row[data-flash] { animation: q-flash 1.4s ease-out; }
 @keyframes q-flash { 0%, 35% { background: color-mix(in oklab, var(--status-task-in_progress) 22%, var(--card)); } }
 

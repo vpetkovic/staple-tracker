@@ -459,11 +459,15 @@ export function CaptionRow({ line }: { line: CaptionLine }) {
   );
 }
 
-/** "103 more in EXE-234 · Show all 108", and back. */
+/**
+ * "103 more in APP-10 · Show all 108", and back. It wears the next pick's edge when the pick is
+ * among the rows it hides, so the pinned row always has a counterpart in the list.
+ */
 export function MoreRow({
   total,
   page,
   whole,
+  holdsNext,
   inside,
   item = false,
   onToggle,
@@ -472,6 +476,7 @@ export function MoreRow({
   total: number;
   page: number;
   whole: boolean;
+  holdsNext: boolean;
   inside?: string;
   /** It sits in a list, as one of its items. */
   item?: boolean;
@@ -482,6 +487,8 @@ export function MoreRow({
     <div
       role={item ? "listitem" : undefined}
       className="q-moreline"
+      data-next-inside={holdsNext ? "" : undefined}
+      title={holdsNext ? "The next pick is in here" : undefined}
       {...marker}
     >
       {whole ? null : <span>{inside ? `${total - page} more in ${inside}` : `${total - page} more`}</span>}

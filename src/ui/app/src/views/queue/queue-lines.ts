@@ -54,6 +54,8 @@ export interface MoreLine {
   total: number;
   page: number;
   whole: boolean;
+  /** The next pick is among the rows it hides. */
+  holdsNext: boolean;
 }
 
 export interface EntryBlock {
@@ -121,7 +123,9 @@ export function sectionLayout(input: SectionInput, folds: SectionFolds, workspac
           children.push({ kind: "task", key: taskKey, row: line.row, isNext: line.row.issueId === nextId });
         }
       }
-      if (plan.expansion.length > EXPANSION_PAGE) more = { total: plan.expansion.length, page: EXPANSION_PAGE, whole };
+      if (plan.expansion.length > EXPANSION_PAGE) {
+        more = { total: plan.expansion.length, page: EXPANSION_PAGE, whole, holdsNext: !whole && hides(plan.expansion, EXPANSION_PAGE, nextId) };
+      }
     }
     return {
       key,
@@ -152,10 +156,18 @@ export function sectionLayout(input: SectionInput, folds: SectionFolds, workspac
       open,
       total: input.unqueued.length,
       rows,
-      more: open && input.unqueued.length > BAND_PAGE ? { total: input.unqueued.length, page: BAND_PAGE, whole: folds.bandWhole } : null,
+      more:
+        open && input.unqueued.length > BAND_PAGE
+          ? { total: input.unqueued.length, page: BAND_PAGE, whole: folds.bandWhole, holdsNext: !folds.bandWhole && hides(input.unqueued, BAND_PAGE, nextId) }
+          : null,
     };
   }
   return { entries, band, keys };
+}
+
+/** Whether the next pick is past the first page of a paged list. */
+function hides(rows: readonly EffectiveQueueRow[], page: number, nextId: string | null): boolean {
+  return nextId !== null && rows.slice(page).some((row) => row.issueId === nextId);
 }
 
 /**

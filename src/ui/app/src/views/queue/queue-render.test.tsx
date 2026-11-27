@@ -297,6 +297,17 @@ describe("what a container expands to", () => {
     expect(whole).toContain("Show the first 5 only");
   });
 
+  it("gives the more line the next pick's edge when the pick is among the tasks it hides", () => {
+    const many = queue({
+      entries: [entry({ identifier: "EXE-234", kind: "milestone" })],
+      effective: Array.from({ length: 8 }, (_, i) =>
+        effective({ identifier: `EXE-${300 + i}`, position: i + 1, via: "EXE-234", milestonePath: ["EXE-234"], eligibility: i === 6 ? "eligible" : "blocked" }),
+      ),
+    });
+    expect(renderSection(many)).toMatch(/class="q-moreline"[^>]*data-next-inside=""/);
+    expect(renderSection(many, {}, { ...NO_FOLDS, whole: new Set(["EXE-234"]) })).not.toContain("data-next-inside");
+  });
+
   it("marks a claimed task in flight and dims its number", () => {
     const held = queue({
       entries: [entry({ identifier: "STA-1", kind: "epic" })],

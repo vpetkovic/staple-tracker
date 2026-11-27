@@ -30,8 +30,17 @@ describe("which rows a section draws", () => {
     expect(epic!.container).toBe(true);
     expect(epic!.open).toBe(true);
     expect(epic!.children.map((line) => (line.kind === "task" ? line.row.identifier : "caption"))).toEqual(["STA-10", "STA-11", "STA-12", "STA-13", "STA-14"]);
-    expect(epic!.more).toEqual({ total: 8, page: 5, whole: false });
+    expect(epic!.more).toEqual({ total: 8, page: 5, whole: false, holdsNext: true });
     expect(leaf!.container).toBe(false);
+  });
+
+  it("marks an open container's more line when the next pick is among the tasks it hides", () => {
+    expect(sectionLayout(input(), page).entries[0]!.holdsNext).toBe(false);
+    expect(sectionLayout(input(), page).entries[0]!.more!.holdsNext).toBe(true);
+    expect(sectionLayout(input(), { ...page, whole: new Set(["STA-1"]) }).entries[0]!.more!.holdsNext).toBe(false);
+    const early = input();
+    const shown = { ...early, next: early.rows[0]!.expansion[0]! };
+    expect(sectionLayout(shown, page).entries[0]!.more!.holdsNext).toBe(false);
   });
 
   it("folds containers on All workspaces and marks the folded one holding the next pick", () => {
@@ -54,7 +63,10 @@ describe("which rows a section draws", () => {
     expect(sectionLayout(input(), page).band).toMatchObject({ open: false, total: 12, rows: [] });
     const open = sectionLayout(input(), { ...page, bandOpen: true }).band!;
     expect(open.rows).toHaveLength(10);
-    expect(open.more).toEqual({ total: 12, page: 10, whole: false });
+    expect(open.more).toEqual({ total: 12, page: 10, whole: false, holdsNext: false });
+    const late = input({ entries: false });
+    expect(sectionLayout({ ...late, next: late.unqueued[11]! }, { ...page, bandOpen: true }).band!.more!.holdsNext).toBe(true);
+    expect(sectionLayout({ ...late, next: late.unqueued[11]! }, { ...page, bandOpen: true, bandWhole: true }).band!.more!.holdsNext).toBe(false);
   });
 
   it("opens the band with no plan on a workspace page, and not on All workspaces", () => {
