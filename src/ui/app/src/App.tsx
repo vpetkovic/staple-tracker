@@ -100,6 +100,7 @@ import {
   type ViewPrefs,
 } from "@/lib/view-prefs";
 import { useDataVersion, useResource } from "@/lib/useStaple";
+import { AnalyticsView } from "@/views/analytics/AnalyticsView";
 import { BudgetView } from "@/views/budget/BudgetView";
 import { CalibrationView } from "@/views/calibration/CalibrationView";
 import { GraphView } from "@/views/GraphView";
@@ -125,6 +126,7 @@ const VIEW_COMPONENTS: Record<ViewName, typeof TreeView | typeof PlanView> = {
   queue: QueueView,
   attention: AttentionView,
   autopilot: AutopilotView,
+  analytics: AnalyticsView,
   calibration: CalibrationView,
   budget: BudgetView,
 };

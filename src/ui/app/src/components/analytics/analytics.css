@@ -1,0 +1,65 @@
+/*
+ * The analytics widgets' own colour roles. Everything else they wear is an app token
+ * (card, border, text-tertiary, --viz-*, --plain-*).
+ *
+ * Categorical series: six fixed slots in a fixed order, validated on the light card (#fff) and
+ * the dark card (#1f1f1f) for adjacent CVD separation and the normal-vision floor. A slot belongs
+ * to the entity it was given to (a workspace keeps its colour whatever else is on screen); what
+ * does not get a slot folds into "Other", which is the neutral. Three light steps sit under 3:1 on
+ * white, so every chart that uses them ships a legend, a tooltip and a table view.
+ */
+:root {
+  --viz-series-1: #2a78d6;
+  --viz-series-2: #eb6834;
+  --viz-series-3: #1baf7a;
+  --viz-series-4: #eda100;
+  --viz-series-5: #e87ba4;
+  --viz-series-6: #008300;
+  --viz-series-other: #a3a3a3;
+  --viz-grid: #ececec;
+  --viz-baseline: #c9c9c9;
+  /* A lone series, and the heat ramp's dark end. */
+  --viz-accent: var(--viz-likely);
+  --viz-muted-mark: #c7d7f5;
+}
+.dark {
+  --viz-series-1: #3987e5;
+  --viz-series-2: #d95926;
+  --viz-series-3: #199e70;
+  --viz-series-4: #c98500;
+  --viz-series-5: #d55181;
+  --viz-series-6: #008300;
+  --viz-series-other: #6b6b6b;
+  --viz-grid: #2c2c2c;
+  --viz-baseline: #454545;
+  --viz-muted-mark: #24467d;
+}
+
+/* The heat ramp: one hue, from the track (nothing) to the accent (the busiest cell). */
+.viz-heat-0 { background: var(--viz-track); }
+.viz-heat-1 { background: color-mix(in oklab, var(--viz-accent) 26%, var(--viz-track)); }
+.viz-heat-2 { background: color-mix(in oklab, var(--viz-accent) 45%, var(--viz-track)); }
+.viz-heat-3 { background: color-mix(in oklab, var(--viz-accent) 62%, var(--viz-track)); }
+.viz-heat-4 { background: color-mix(in oklab, var(--viz-accent) 82%, var(--viz-track)); }
+.viz-heat-5 { background: var(--viz-accent); }
+
+/* A figure the person can change in place: reads as text, edits as a field. */
+.inline-figure {
+  border-bottom: 1px dashed var(--viz-track-edge);
+}
+.inline-figure:hover,
+.inline-figure:focus-within {
+  border-bottom-color: var(--foreground);
+}
+
+/* A field exactly as wide as what is typed in it, so it sits in a sentence like a word. */
+.fit-field {
+  width: var(--w);
+}
+@supports (field-sizing: content) {
+  .fit-field {
+    field-sizing: content;
+    width: auto;
+    min-width: 1ch;
+  }
+}

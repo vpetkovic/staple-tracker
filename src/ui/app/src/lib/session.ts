@@ -27,7 +27,7 @@ import type { Resource } from "./useStaple";
  * preference. What the user sees is `VIEW_LABELS` — the tree view is called "Tasks"
  * everywhere a human reads it.
  */
-export const VIEWS = ["tree", "queue", "attention", "autopilot", "graph", "milestones", "plan", "calibration", "budget"] as const;
+export const VIEWS = ["tree", "queue", "attention", "autopilot", "graph", "milestones", "plan", "analytics", "calibration", "budget"] as const;
 export type ViewName = (typeof VIEWS)[number];
 
 /**
@@ -56,6 +56,9 @@ export const VIEW_LABELS: Record<ViewName, string> = {
   graph: "Graph",
   milestones: "Milestones",
   plan: "Plan",
+  // What the work delivered and what it cost (views/analytics): capacity, delivery, speed,
+  // reliability, and the return on AI spend as a lens of the same page.
+  analytics: "Analytics",
   // The ids stay `calibration` and `budget` (routes, saved preferences, commands key off them);
   // readers see one plain name for each, the same in the rail, the tab bar, the header and
   // the palette, and the same word Settings uses for the matching section ("Usage").
@@ -103,6 +106,7 @@ const VIEW_CONTROLS: Record<ViewName, ViewControls> = {
   graph: { arrange: false, filter: true, done: false },
   milestones: { arrange: false, filter: false, done: true },
   plan: { arrange: false, filter: false, done: false },
+  analytics: { arrange: false, filter: false, done: false },
   queue: { arrange: false, filter: false, done: false },
   attention: { arrange: false, filter: false, done: false },
   autopilot: { arrange: false, filter: false, done: false },

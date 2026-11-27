@@ -1,0 +1,170 @@
+/**
+ * PROTOTYPE DATA LAYER for the Analytics direction preview. It talks to a preview-only stand-in
+ * for the analytics routes; the types here are the design lead's PROPOSED payload, posted to the
+ * engineering track as the starting point for the `api-contract`. The real API client and hooks
+ * (owned by engineering) replace this file; the views read nothing else from it.
+ */
+export type PeriodPreset = "7d" | "30d" | "90d" | "ytd" | "all";
+
+/** A figure and the same figure for the period before (null when there is no period before). */
+export interface Measure {
+  value: number | null;
+  previous: number | null;
+}
+export interface Part {
+  id: string;
+  label: string;
+  value: number;
+}
+export interface TrendBucket {
+  /** The bucket's first day. */
+  t: string;
+  values: Record<string, number>;
+}
+export interface FeaturePayload {
+  ref: string;
+  title: string;
+  workspace: string;
+  status: string;
+  shipped: boolean;
+  children: number;
+  closed: number;
+  closedInPeriod: number;
+  agentHours: number;
+  spanDays: number | null;
+  completedOn: string | null;
+}
+export interface BurstPayload {
+  from: string;
+  to: string;
+  days: number;
+  ticketsDone: number;
+  agentHours: number;
+  bestDay: { day: string; count: number };
+  features: { title: string; workspace: string; closed: number; children: number }[];
+}
+export interface Covered {
+  covered: number;
+  total: number;
+}
+
+export interface AnalyticsReport {
+  generatedAt: string;
+  tz: string;
+  scope: { kind: "all" | "workspace"; workspaces: { slug: string; prefix: string; name: string }[] };
+  period: { preset: PeriodPreset; from: string; to: string; days: number; bucket: "day" | "week" | "month"; previous: { from: string; to: string } | null; firstActivity: string };
+  /** The workspaces drawn as their own series (`slot` is the workspace's stable colour slot; 0 = Other). */
+  series: { id: string; label: string; slot: number }[];
+  empty: boolean;
+  capacity: {
+    agentHours: Measure;
+    agentHoursUncapped: number;
+    capHours: number;
+    workWeeks: number;
+    calendarWeeks: number;
+    fte: number;
+    activeDays: Measure;
+    fteOnActiveDays: number | null;
+    attempts: Measure;
+    agentNames: number;
+    peakParallel: { count: number; at: string | null };
+    trend: TrendBucket[];
+    parallelByDay: { t: string; value: number }[];
+  };
+  delivery: {
+    ticketsDone: Measure;
+    featuresDone: Measure;
+    bugsFixed: Measure;
+    ticketsTotal: number;
+    open: number;
+    daysWithDone: number;
+    bestDay: { day: string; count: number } | null;
+    trend: TrendBucket[];
+    features: FeaturePayload[];
+    byWorkspace: { id: string; slug: string; label: string; agentHours: number; ticketsDone: number; featuresDone: number; bugsFixed: number; open: number }[];
+    bursts: BurstPayload[];
+    mix: { byKind: Part[]; byPriority: Part[] };
+  };
+  speed: {
+    cycleMedianHours: Measure;
+    cycleP25Hours: number | null;
+    cycleP75Hours: number | null;
+    measured: number;
+    leadMedianHours: number | null;
+    under1h: number;
+    under4h: number;
+    sameDay: number;
+    ticketsDone: number;
+    histogram: { label: string; count: number }[];
+    byKind: { id: string; label: string; medianHours: number; count: number }[];
+  };
+  reliability: {
+    success: Measure;
+    attempts: number;
+    ended: number;
+    medianAttemptMinutes: number | null;
+    outcomes: Part[];
+    byModel: (Part & { completed: number })[];
+  };
+  rhythm: { heat: number[][]; night: number; weekend: number; ticketsDone: number };
+  estimates: { plannedHours: number; estimatedTickets: number; doneTickets: number; pairs: { count: number; estimatedHours: number; actualHours: number; medianRatio: number | null; beat: number } };
+  record: { comments: number; documents: number; files: number; fileBytes: number; docTypes: Part[] };
+  coverage: { estimates: Covered; model: Covered; timing: { recorded: number; rebuilt: number }; openAttempts: number; cappedAttempts: number };
+}
+
+export interface RoleMatch {
+  labels: string[];
+  kinds: string[];
+  title: string[];
+  agent: string[];
+  workspaces: string[];
+}
+export interface CostRole {
+  id: string;
+  title: string;
+  rate: number;
+  match: RoleMatch;
+}
+export interface CostModel {
+  scenario: "solo" | "company";
+  currency: string;
+  person: { rate: number; hoursPerActiveDay: number };
+  spend: { id: string; label: string; perMonth: number }[];
+  /** In match order; the last role takes everything no other role matched. */
+  roles: CostRole[];
+  /** Fields still holding a shipped default, shown as assumptions until the person changes them. */
+  assumed: string[];
+  updatedAt: string | null;
+}
+export interface RoleHours {
+  roleId: string;
+  measuredHours: number;
+  plannedHours: number;
+  tickets: number;
+  estimatedTickets: number;
+  attempts: number;
+  by: Record<"label" | "title" | "agent" | "kind" | "workspace" | "rest", number>;
+  examples: { ref: string; title: string; by: string; plannedHours: number | null }[];
+}
+export interface ReturnReport {
+  scope: AnalyticsReport["scope"];
+  period: { preset: PeriodPreset; from: string; to: string; days: number; months: number };
+  model: CostModel;
+  roles: RoleHours[];
+  directing: { activeDays: number };
+  capacity: { agentHours: number; calendarWeeks: number };
+  coverage: { estimates: Covered; capHours: number };
+}
+
+async function json<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(path, init);
+  const body = (await response.json().catch(() => ({}))) as { error?: { message?: string } } & T;
+  if (!response.ok) throw new Error(body.error?.message ?? `The analytics preview data is not available (${response.status}).`);
+  return body;
+}
+const query = (ws: string, period: PeriodPreset) => `?ws=${encodeURIComponent(ws)}&period=${period}`;
+
+export const getAnalytics = (ws: string, period: PeriodPreset) => json<AnalyticsReport>(`/api/analytics${query(ws, period)}`);
+export const getReturn = (ws: string, period: PeriodPreset) => json<ReturnReport>(`/api/analytics/return${query(ws, period)}`);
+export const saveCostModel = (model: CostModel) => json<CostModel>("/api/analytics/cost-model", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(model) });
+export const resetCostModel = () => json<CostModel>("/api/analytics/cost-model", { method: "DELETE" });
