@@ -12,6 +12,56 @@ import { join } from "node:path";
 
 export const AGENTS_GUIDE_FILENAME = "AGENTS.md";
 
+/**
+ * Where a new piece of work goes, and how an idea matures. The guide renders it under
+ * "Idea or ticket"; the shipped skill and docs/plan.md carry the same words, and
+ * test/agents-guide.test.ts holds them to it. The CLI column drops the leading `staple `,
+ * as the skill's tables do, and its examples run in test/skill-cli-examples.test.ts.
+ */
+export const IDEA_ROUTING = `With planning on, decide what a new piece of work is before you file it. First
+match wins. The CLI column leaves out the leading \`staple\`.
+
+| You have | File it as | MCP | CLI |
+|---|---|---|---|
+| What the findings rules fix here: something the ticket you hold needs to meet its criteria or outcome, a defect included | No new record: the fix goes in that ticket's branch and pull request | none | none |
+| A defect, a review finding the findings rules file (a blocker, follow-up or independent one), upkeep, or work the ticket's or its epic's plan already calls for | A \`bug\`, \`chore\` or \`task\` ticket; a finding is filed as the findings rules say (\`found_in\`, and \`blocks\` for a blocker) | \`create_task\` with \`kind\`, or with \`found_in\` | \`new <title> --kind bug\`, \`new <title> --found-in <ref>\` |
+| Research or a proof of concept for an idea still being worked out | A \`spike\` ticket, linked to the idea as research | \`create_task\` with \`kind: "spike"\`, then \`start_idea\` with \`research\` | \`new <title> --kind spike\`, \`idea adopt <idea> <ref> --research\` |
+| A new capability nobody planned, found while working a ticket | An idea sparked by that ticket | \`capture_idea\` with \`sparked_by\` | \`idea new <title> --sparked-by <ref>\` |
+| A brainstorm: something to discuss, a "what if", an outcome nobody has settled | A raw idea | \`capture_idea\` | \`idea new <title>\` |
+| Settled work: the breakdown of an idea the person marked shaped, or an outcome they asked for as work | Tickets; for a shaped idea, Scaffold makes them | \`scaffold_idea\`, \`create_task\` | \`idea scaffold <idea>\`, \`new <title>\` |
+
+Ask of anything you find while working a ticket: does this ticket need it to meet
+its criteria or outcome? If not, is it a defect, a review finding, upkeep, or work
+the ticket's or its epic's plan already calls for? Then it is a ticket. If none of these,
+it is a new capability: an idea sparked by the ticket, never a ticket filed beside it,
+even when it extends what the epic builds. For example, while working one rung of an exercise
+catalogue you find that every exercise needs a structural key naming its family.
+Nobody planned that, so it is an idea sparked by the rung's ticket. Never file a
+ticket to hold a brainstorm. A ticket that should have been an idea and that nobody
+has started becomes one with \`convert_to_idea\`. With planning off, ideas are
+hidden and none can be captured: use tickets, and bring a brainstorm to the person
+instead of filing it as work they did not ask for.
+
+An idea's maturity is raw, exploring or shaped (or dropped):
+
+- **Raw**: captured for discussion, such as "App supports passkey sign-in".
+  Capturing or importing it, and editing its title or brief, leave it raw.
+- **Exploring**: being worked until every section is shaped. Writing a plan section
+  or a breakdown row, asking, answering or deferring a question, recording a
+  decision, or linking research or a POC moves a raw idea to exploring by itself.
+  Do that work; never set the stage by hand.
+- **Shaped**: brainstormed with the person, the details settled, with enough context
+  and a plan for an agent to start. Only the person marks an idea shaped. When its
+  plan passes the gate, propose it (\`update_idea\` with \`propose_shaped\`) and it
+  waits under their Needs you.
+- Dropping an idea, restoring a dropped one and moving a shaped one back to
+  exploring are the person's too.
+- A shaped sub-idea can sit on any horizon while an idea above it is still
+  exploring, but it is not scaffolded until every idea above it is shaped and every
+  idea it or one above it waits on has shipped or been dropped. Research and POCs never start an
+  idea or count as its delivery.
+`;
+
 export interface AgentsGuideContext {
   /** Workspace slug, e.g. `staple`. */
   slug: string;
@@ -50,6 +100,9 @@ mark (delivered outside the tracker), never a placeholder ticket an agent files 
 an idea read shipped. Turning it off keeps all data, and turning it on restores the
 plan. The feature may change.
 
+### Idea or ticket
+
+${IDEA_ROUTING}
 ### Working a horizon
 
 With planning on, a pickup answer on a horizon (\`queue next\`, \`next_task\`,
