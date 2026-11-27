@@ -1697,6 +1697,16 @@ export interface QueueView {
   effective: EffectiveQueueRow[];
   /** Only on an enqueue: the issue was already in the plan and nothing was written. */
   replayed?: boolean;
+  /** The workspace's `queue.policy`: under `strict` a later row cannot be claimed. */
+  policy?: QueuePolicy;
+}
+
+export type QueuePolicy = "advisory" | "strict";
+
+/** `GET /api/queues`: every workspace's plan, one section each, and the ones that could not be read. */
+export interface HubQueues {
+  workspaces: Array<QueueView & { slug: string; prefix: string; policy: QueuePolicy }>;
+  failed: Array<{ workspace: string; message: string }>;
 }
 
 /** `GET /api/queue/next`: the one row an agent should take, and what it stepped over. */

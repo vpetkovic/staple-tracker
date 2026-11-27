@@ -845,6 +845,8 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/queue/prune",
       "/api/queue/remove",
       "/api/queue/reorder",
+      // Every workspace's plan, one section each: the Queue page on All workspaces.
+      "/api/queues",
       "/api/revisions",
       /**
        * Autopilot runs (design/runs.md): the page watches and stops, nothing more. Two reads

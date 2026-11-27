@@ -21,6 +21,7 @@ import {
   reasonLabel,
   retryOrder,
   rowOrdinal,
+  skippedBefore,
 } from "./queue-model";
 
 describe("the plan joined to its expansion", () => {
@@ -236,5 +237,22 @@ describe("the retry a conflict offers", () => {
     const current = ["A", "B"].map((id, i) => entry({ identifier: id, planPosition: i + 1 }));
     expect(retryOrder(["A", "B"], current)).toBeNull();
     expect(retryOrder(["A", "B", "GONE"], current)).toBeNull();
+  });
+});
+
+describe("what the next pick stepped over", () => {
+  it("is every row ahead of the pick, in effective order, as queue next answers skipped", () => {
+    const view = workedExample();
+    const next = nextEligible(view.effective);
+    // STA-31 is resolved: queue next lists it as skipped too, so the view can say so.
+    expect(skippedBefore(view.effective, next).map((r) => [r.identifier, r.eligibility])).toEqual([["STA-31", "resolved"]]);
+  });
+
+  it("is the whole order when nothing is pickable, and nothing when the first row is the pick", () => {
+    const blocked = effective({ identifier: "STA-1", eligibility: "blocked" });
+    const gated = effective({ identifier: "STA-2", eligibility: "gated", position: 2 });
+    expect(skippedBefore([blocked, gated], null)).toEqual([blocked, gated]);
+    const first = effective({ identifier: "STA-3" });
+    expect(skippedBefore([first, blocked], first)).toEqual([]);
   });
 });
