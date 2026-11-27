@@ -169,10 +169,10 @@ describe("a fresh repo-local `staple init`", () => {
       // 016-milestone-goals, to "17" by 017-derived-status, to "18" by
       // 018-attachments, to "19" by 019-instruction-documents, to "20" by 020-plan-fields and to
       // "21" by 021-plan-delivered, then "22" by 022-external-links, "23" by 023, "24" by
-      // 024-ticket-branch, "25" by 025-attempt-heartbeats "26" by 026-idea-numbers "27" by 027-plan-link-purpose, "28" by 028-plan-ticket-number and "29" by 029-plan-explored; the TEXT
+      // 024-ticket-branch, "25" by 025-attempt-heartbeats "26" by 026-idea-numbers "27" by 027-plan-link-purpose, "28" by 028-plan-ticket-number "29" by 029-plan-explored and "30" by 030-plan-blockers; the TEXT
       // typing is the characterization, the number
       // just tracks the migration list.
-      { key: "schema_version", value: "29" },
+      { key: "schema_version", value: "30" },
       { key: "slug", value: "metarepo" },
     ]);
   }, 30_000);
@@ -254,6 +254,8 @@ describe("a fresh repo-local `staple init`", () => {
       "index:sqlite_autoindex_milestone_members_1",
       "index:sqlite_autoindex_milestone_members_2",
       "index:sqlite_autoindex_milestone_meta_1",
+      // 030-plan-blockers: one edge per (idea, blocker).
+      "index:sqlite_autoindex_plan_blockers_1",
       // 020-plan-fields: one link per (idea, issue).
       "index:sqlite_autoindex_plan_links_1",
       "index:sqlite_autoindex_plan_members_1",
@@ -315,6 +317,7 @@ describe("a fresh repo-local `staple init`", () => {
       "table:milestone_criterion_marks",
       "table:milestone_members",
       "table:milestone_meta",
+      "table:plan_blockers",
       "table:plan_links",
       // 020-plan-fields: machine-local, rebuilt from the plan after every write and pull.
       "table:plan_members",
@@ -522,7 +525,7 @@ describe("global workspaces", () => {
       { key: "prefix", value: "SOL" },
       // WORKSPACE_SCHEMA_VERSION — 29 since 029-plan-explored. The hub beside it
       // is still 8; the two databases version independently.
-      { key: "schema_version", value: "29" },
+      { key: "schema_version", value: "30" },
       { key: "slug", value: "solo" },
     ]);
   }, 30_000);
