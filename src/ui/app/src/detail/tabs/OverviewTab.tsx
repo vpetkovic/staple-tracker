@@ -57,6 +57,7 @@ import { openDetailTab, type TabProps } from "./registry";
 import { MilestoneMembers } from "../MilestoneParts";
 import { MilestoneGoalSection } from "../MilestoneGoal";
 import { InstructionsSection } from "../InstructionsSection";
+import { SparkedIdeas } from "../Provenance";
 
 /**
  * A related task as one quiet row: its status icon, its title, and its reference at the end.
@@ -361,6 +362,9 @@ export function OverviewTab({ detail, workspace, onAuthError }: TabProps) {
           </ul>
         </section>
       ) : null}
+
+      {/* The ideas this ticket's work turned up, each opening in Plan. */}
+      <SparkedIdeas workspace={workspace} ideas={detail.sparked ?? []} />
 
       {detail.milestonePlan ? <MilestoneMembers plan={detail.milestonePlan} workspace={workspace} /> : null}
 
