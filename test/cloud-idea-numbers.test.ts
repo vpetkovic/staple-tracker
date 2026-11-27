@@ -63,8 +63,12 @@ describe("two devices capture ideas offline", () => {
       // Neither has heard of the other: both minted I-TRA-1.
       expect(a.store.getIssue(onA.id).identifier).toBe("I-TRA-1");
       expect(b.store.getIssue(onB.id).identifier).toBe("I-TRA-1");
+      const ticketCounter = (m: Machine) => (m.db.prepare("SELECT value FROM meta WHERE key = 'next_issue_number'").get() as { value: string } | undefined)?.value;
+      const ticketsBefore = [ticketCounter(a), ticketCounter(b)];
 
       await rounds([a, b], 6);
+      // Settling an idea's number takes the next idea number, never a ticket's.
+      expect([ticketCounter(a), ticketCounter(b)]).toEqual(ticketsBefore);
       const fresh = fleet.machine("fresh");
       await fresh.sync();
       for (const m of [a, b, fresh]) {

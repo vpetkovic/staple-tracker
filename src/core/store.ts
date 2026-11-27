@@ -8977,8 +8977,8 @@ export class WorkspaceStore {
       const kept = row.plan_idea_number ?? (isIdeaNumber(row.identifier) ? row.identifier : null);
       this.db.prepare("UPDATE issues SET identifier = ?, kind = ?, plan_idea_number = ?, updated_at = ? WHERE id = ?").run(identifier, kind, kept, now, row.id);
       recordIdentifierMove(this.db, { issueId: row.id, from: row.identifier, to: identifier, at: now });
-      const keptField = kept !== null && kept !== (row.plan_idea_number ?? null) ? { planIdeaNumber: kept } : {};
-      this.journal.record({ entity: "issue", entityId: row.id, verb: "update", payload: { identifier, kind, ...keptField, updatedAt: now }, actor: actor ?? null });
+      // The kept number travels with the update as the column it is (`cloud/row-diff.ts`).
+      this.journal.record({ entity: "issue", entityId: row.id, verb: "update", payload: { identifier, kind, updatedAt: now }, actor: actor ?? null });
       this.emitEvent({ kind: "idea_promoted", issueId: row.id, actor, payload: { identifier, kind } });
       return rowToIssue(this.requireRow(row.id));
     });
