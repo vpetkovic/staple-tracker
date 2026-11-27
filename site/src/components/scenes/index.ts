@@ -14,5 +14,7 @@ export {default as MilestoneGoal} from './MilestoneGoal';
 export {default as IdeaToShipped} from './IdeaToShipped';
 export {default as TrackerSync} from './TrackerSync';
 export {default as Budget} from './Budget';
+export {default as Analytics} from './Analytics';
+export {default as ReturnOnSpend} from './ReturnOnSpend';
 export {default as OneStore} from './OneStore';
 export {SCENES, type SceneEntry} from './catalog';

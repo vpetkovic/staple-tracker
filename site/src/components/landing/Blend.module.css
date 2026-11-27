@@ -181,6 +181,13 @@
   padding: var(--st-space-8) var(--pad) var(--pad-y);
 }
 
+/* Two scenes for one feature: stacked in the figure's column. */
+.figure.pair {
+  display: grid;
+  gap: var(--st-space-5);
+  align-content: start;
+}
+
 /* The solid tick on a heading, on the rule at the left edge of its column. */
 .tick {
   position: relative;
