@@ -985,6 +985,8 @@ export interface RoleTallies {
   readonly agentHours: number;
   /** Days of the window on which any attempt ran. */
   readonly activeDays: number;
+  /** The months (`YYYY-MM`) each priced role's attempts ran in, inside the window. */
+  readonly monthsByRole: Map<string, Set<string>>;
 }
 
 /**
@@ -1005,6 +1007,7 @@ export function roleTallies(workspaces: readonly WorkspaceRows[], resolved: Reso
   const plannedOf = (id: string) => upsert(planned, id, () => ({ hours: 0, types: new Set<AgentType>(), tickets: 0, plannedTickets: 0 }));
   let agentHours = 0;
   const activeDays = new Set<number>();
+  const monthsByRole: RoleTallies["monthsByRole"] = new Map();
   const done = scope.issues.filter((issue) => isWork(issue) && issue.category === "done" && within(issue.completedAt, window));
   const doneKeys = new Set(done.map((issue) => keyOf(issue.workspace, issue.id)));
   for (const attempt of scope.attempts) {
@@ -1017,7 +1020,11 @@ export function roleTallies(workspaces: readonly WorkspaceRows[], resolved: Reso
     agentHours += hours(seconds);
     const first = Math.max(0, dayIndex(window, Math.max(attempt.startMs, window.startMs)));
     const last = attempt.endMs === attempt.startMs ? first : dayIndex(window, Math.min(attempt.endMs, window.endMs) - 1);
-    for (let index = first; index <= (last < 0 ? first : last); index += 1) activeDays.add(index);
+    const months = upsert(monthsByRole, id, () => new Set<string>());
+    for (let index = first; index <= (last < 0 ? first : last); index += 1) {
+      activeDays.add(index);
+      months.add(window.days[index]!.slice(0, 7));
+    }
     if (!doneKeys.has(keyOf(attempt.workspace, attempt.issueId))) otherHours.set(id, (otherHours.get(id) ?? 0) + hours(seconds));
   }
   for (const issue of done) {
@@ -1043,5 +1050,5 @@ export function roleTallies(workspaces: readonly WorkspaceRows[], resolved: Reso
     });
   }
   for (const list of tickets.values()) list.sort((a, b) => b.agentSeconds - a.agentSeconds || a.identifier.localeCompare(b.identifier));
-  return { measured, planned, tickets, otherHours, agentHours, activeDays: activeDays.size };
+  return { measured, planned, tickets, otherHours, agentHours, activeDays: activeDays.size, monthsByRole };
 }

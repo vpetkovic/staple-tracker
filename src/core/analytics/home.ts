@@ -75,13 +75,8 @@ function readHeldModel(store: WorkspaceStore): HeldModel {
     }
     const saved = view.source === "workspace";
     source[part] = saved ? "saved" : "default";
-    const value = (saved ? view.value : DEFAULT_COST_MODEL[part]) as { assumed?: readonly string[]; entries?: ReadonlyArray<{ kind?: string }> };
-    parts[part] = {
-      ...value,
-      assumed: value.assumed ?? [],
-      // A spend entry always reads with its bill: `subscription` when the stored entry leaves it out.
-      ...(part === "aiSpend" ? { entries: (value.entries ?? []).map((entry) => ({ ...entry, kind: entry.kind ?? "subscription" })) } : {}),
-    };
+    const value = (saved ? view.value : DEFAULT_COST_MODEL[part]) as { assumed?: readonly string[] };
+    parts[part] = { ...value, assumed: value.assumed ?? [] };
   }
   const model = parts as unknown as CostModel;
   const stamps = [
@@ -146,8 +141,10 @@ function responseOf(resolved: Resolved): CostModelResponse {
   const refusal = resolved.home?.unreadable.values().next().value;
   if (refusal) throw refusal;
   const held = resolved.home ?? { model: DEFAULT_COST_MODEL, source: Object.fromEntries(COST_MODEL_PARTS.map((part) => [part, "default"])) as Record<CostModelPart, "saved" | "default"> };
-  // Every default carries `assumed`, and `readHeldModel` filled it for a save without one.
-  return { model: held.model as unknown as CostModelValue, source: held.source, home: resolved.view, agentTypes: [...AGENT_TYPES] };
+  // Every default carries `assumed`, and `readHeldModel` filled it for a save without one. A
+  // spend entry reads with its bill here only, so a move carries the stored entries as they are.
+  const aiSpend = { ...held.model.aiSpend, entries: held.model.aiSpend.entries.map((entry) => ({ ...entry, kind: entry.kind ?? "subscription" })) };
+  return { model: { ...held.model, aiSpend } as unknown as CostModelValue, source: held.source, home: resolved.view, agentTypes: [...AGENT_TYPES] };
 }
 
 /** `GET /api/analytics/cost-model`. */

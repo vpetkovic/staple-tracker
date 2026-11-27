@@ -345,10 +345,10 @@ export function aiSpendFor(spend: AiSpendValue, days: readonly string[], kind?: 
   return total;
 }
 
-/** True when some entry of `kind` is in force on at least one of `days`. */
+/** True when some entry of `kind` with a non-zero amount is in force on at least one of `days`. */
 export function spendCovers(spend: AiSpendValue, days: readonly string[], kind: Billing): boolean {
   const months = new Set(days.map((day) => day.slice(0, 7)));
-  return spend.entries.some((entry) => kindOf(entry) === kind && [...months].some((month) => inForce(entry, month)));
+  return spend.entries.some((entry) => kindOf(entry) === kind && entry.monthlyAmount > 0 && [...months].some((month) => inForce(entry, month)));
 }
 
 /** One role's share of the value: the hours attributed to it and what they cost at its rate. */

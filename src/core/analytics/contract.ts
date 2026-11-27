@@ -488,8 +488,13 @@ export interface RoiResponse {
     /** Days agents ran anywhere in the hub. */
     readonly activeDaysHub: number;
     readonly hoursPerActiveDay: number;
-    /** This scope's share of the hub's agent-hours in the period: 1 for the hub. Costs are multiplied by it. */
+    /** This scope's share of the hub's agent-hours in the period: 1 for the hub. The director's time is multiplied by it. */
     readonly share: number;
+    /**
+     * This scope's share of each bill: its agent-hours in roles billed that way over the hub's
+     * (`share` for a bill no role of its kind ran against). Each bill is multiplied by its own.
+     */
+    readonly shareByKind: Readonly<Record<BillingKind, number>>;
     readonly scopeAgentHours: number;
     readonly hubAgentHours: number;
   };
