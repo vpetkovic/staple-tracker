@@ -246,6 +246,49 @@ to the shaped gate. An imported idea has no sub-ideas
 yet, so importing straight into shaped needs breakdown rows; import a parent as exploring, add
 its sub-ideas, then mark it shaped.
 
+#### Plan files already in the workspace
+
+Plans you already keep in the repository show up in a tray. Open **Import**, then **Plan files in
+this workspace…** under the form. The tray lists the plan files under the workspace root (the
+folder that holds `.staple/`): Markdown files in the root, and every `.md`, `.html` and `.jsx`
+under `plans/`, in any case, so `Plans/` counts too. It leaves out README, AGENTS, CLAUDE,
+CHANGELOG, CONTRIBUTING, LICENSE and the like, anything whose name starts with `_` (templates),
+`assets/` folders, handoffs (`Handoffs/`, `handoff-*.md`), hidden folders and `node_modules`.
+
+A folder below `plans/` that holds an `assets/` folder is one plan. Its main file is the one named
+for the folder, else `plan`, `index` or `readme`, else the first Markdown file. The main file
+becomes the idea, and every file in the folder is attached with it. A plan whose status reads done,
+completed or implemented (front matter `status:`, or a `Status:` line near the top), or that sits
+in a `done/`, `completed/` or `implemented/` folder, is marked **done**. **Select all** leaves done
+plans out.
+
+Each file is in one of four groups, matched by its path and its content hash:
+
+| Group | Means |
+|---|---|
+| **New** | No idea came from it |
+| **Changed since import** | An idea came from this path, and the file has changed since. **Import again** makes a new idea |
+| **Imported** | An idea came from it as it stands, at this path or with the same content at another one |
+| **Ignored** | You ignored it (this path, or this content). **Unignore** lists it again |
+
+**Import** takes one file, **Import selected** takes the ones you ticked (all or none), and
+**Ignore** hides one without importing it. An import works like an uploaded file: no stage chosen,
+so an agent classifies it. Nothing is imported until you press one of these. Opening the tray only
+reads the files. Agents cannot import or ignore plan files.
+
+**Change** beside *Looking in* edits where the tray looks: repo-relative paths, one per line, in
+the workspace setting `plan.discoveryPaths` (default `*.md` and `plans/**`). `*` matches within a
+folder name and `**` matches any depth. A plain path is that file, or everything under that folder.
+The paths, the imports and the ignores sync to every device, and each device reads its own
+checkout. Ignores from two devices both land.
+
+```bash
+staple idea files                                # list them, with their group
+staple idea files import plans/passkeys.md plans/sso --person
+staple idea files ignore roadmap.md --person
+staple settings set plan.discoveryPaths '["*.md", "plans/**", "docs/superpowers/plans/**"]'
+```
+
 ### Sub-ideas and blockers
 
 An idea can wait on another one. Under **Blocked by** on its Plan tab, add the idea it waits on by
@@ -596,7 +639,7 @@ come back as they were.
 > [!IMPORTANT]
 > **Agents capture and write. The person steers.**
 >
-> Agents can capture raw ideas, import them from files (always raw, to classify), edit titles and briefs, write plan sections and breakdown rows,
+> Agents can capture raw ideas, import them from files (always raw, to classify; importing the workspace's own plan files is yours), edit titles and briefs, write plan sections and breakdown rows,
 > add, answer and defer questions, record decisions, adopt or unlink work, link research and POCs,
 > say which ideas an idea waits on (Blocked by), and scaffold or
 > promote an idea **you** marked shaped (preview first, then confirm). Their plan writes move a raw
@@ -639,6 +682,8 @@ what it offers.
 | `staple idea set --delivered D [--note T] --person`, `--undelivered` | | Mark an idea delivered outside the tracker, or clear the mark |
 | `staple idea plan`, `task` | `update_idea` (`plan`) | Write plan sections and breakdown rows |
 | `staple idea import <file>` | `import_idea` | Create an idea from a `.md`, `.html` or `.jsx` file, the original under Files |
+| `staple idea files` | | List the plan files under the workspace root: new, changed since import, imported or ignored |
+| `staple idea files import <path>... --person`, `ignore`, `unignore` | | Import plan files one or many at a time, or ignore one (the person's) |
 | `staple idea set --classified` | `update_idea` (`classified`) | Settle an import's classify step: it stays raw on purpose |
 | `staple idea scaffold [--confirm FP]` | `scaffold_idea` | Preview, then create the epic and its tasks |
 | `staple idea promote`, `adopt` | `start_idea` | Promote the idea in place, or adopt a ticket |
