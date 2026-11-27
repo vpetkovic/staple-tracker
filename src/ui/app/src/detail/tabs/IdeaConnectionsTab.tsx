@@ -2,8 +2,9 @@
  * Connections for an idea: what it is attached to in the plan. Its parent idea, its sub-ideas,
  * the horizon it is scheduled on (a milestone), the tracker work it is linked to, and the research
  * and proofs of concept linked to it, listed apart because they are not its work. Each row
- * opens that record in this drawer. An idea is never a blocker or blocked, so there are no
- * dependency edges to draw; the task version of this tab draws those.
+ * opens that record in this drawer. An idea never blocks tracker work nor waits on it; the ideas
+ * it waits on are edited in its Plan tab ("Blocked by"), and the task version of this tab draws
+ * tickets' dependency edges.
  */
 import { ChevronRight } from "lucide-react";
 import type { ReactNode } from "react";

@@ -266,7 +266,44 @@ export interface IdeaDetailData {
   planWarnings: string[];
   breakdownRevision: string;
   scaffold: ScaffoldPreviewData | null;
+  /** The records it is blocked by, named; one this device no longer holds is `missing`. Absent from an older server. */
+  blockedBy?: BlockerRefData[];
+  /** The records blocked by it. Absent from an older server. */
+  blocks?: BlockerRefData[];
   today: string;
+}
+
+/** A plan record one is blocked by, or that it blocks (`core/plan-store.ts`, BlockerRef). */
+export interface BlockerRefData {
+  id: string;
+  number: string | null;
+  identifier: string | null;
+  title: string;
+  state: IdeaState | null;
+  missing: boolean;
+}
+
+/** A hold in a few words, as the CLI prints it: `waiting on parent`, `waiting on blockers`. */
+export function holdLabel(hold: IdeaHold): string {
+  if (hold.parents.length > 0) return hold.parents.length === 1 ? "waiting on parent" : "waiting on parents";
+  return hold.blockers.length === 1 ? "waiting on blocker" : "waiting on blockers";
+}
+
+/** What a hold waits on, for a tooltip or a sentence: `SSO (exploring)`. */
+export function holdNames(hold: IdeaHold): string {
+  return [...hold.parents.map((parent) => `${parent.title} (${parent.maturity})`), ...hold.blockers.map((blocker) => `${blocker.title} (${blocker.state})`)].join(", ");
+}
+
+/**
+ * The chip a record wears for its hold: a shaped one reads `waiting on parent` (or on its
+ * blockers); a promoted one under an idea that went back to exploring or was dropped is flagged
+ * `parent not shaped`. Null when it wears none.
+ */
+export function holdChip(idea: Pick<IdeaData, "state" | "heldBy">): string | null {
+  if (!idea.heldBy) return null;
+  if (idea.state === "shaped") return holdLabel(idea.heldBy);
+  if (idea.state === "started" && idea.heldBy.parents.length > 0) return "parent not shaped";
+  return null;
 }
 
 /** What every plan write answers: the whole plan, and the idea's detail when it named one. */

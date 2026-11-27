@@ -5,7 +5,7 @@
  */
 import { ArrowUpRight, Sparkles } from "lucide-react";
 import { StatusIcon } from "@/components/task-list";
-import { scaffoldedFromWords, sparkedIdeaWords } from "../../../../core/plan-provenance-words";
+import { parentUnsettledWords, scaffoldedFromWords, sparkedIdeaWords } from "../../../../core/plan-provenance-words";
 import { useOptionalSession } from "@/lib/session";
 import { statusLabel } from "@/lib/settings";
 import type { IssueDetail, IssueRef, ScaffoldedFromRef, SparkedIdeaRef } from "@/lib/types";
@@ -57,10 +57,17 @@ export function ProvenanceChips({ detail, className }: { detail: IssueDetail; cl
   const sparkedBy = detail.sparkedBy ?? null;
   if (from === null && sparkedBy === null) return null;
   const onOpen = (identifier: string) => session?.open(detail.workspace, identifier);
+  const unsettled = from?.parentUnsettled ?? null;
   return (
     <div data-provenance="" className={cn("flex min-w-0 flex-wrap items-center gap-2", className)}>
       {from ? <ScaffoldedFromChip workspace={detail.workspace} from={from} /> : null}
       {sparkedBy ? <SparkedByChip sparkedBy={sparkedBy} onOpen={onOpen} /> : null}
+      {unsettled ? (
+        // Flagged, never cancelled: an idea above the one it came from went back to exploring or was dropped.
+        <span data-parent-unsettled={unsettled.maturity} className="basis-full text-label text-flag-todo">
+          Flagged: {parentUnsettledWords(unsettled)} since this was scaffolded. Nothing was cancelled.
+        </span>
+      ) : null}
     </div>
   );
 }

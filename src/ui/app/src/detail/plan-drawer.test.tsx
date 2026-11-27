@@ -430,6 +430,56 @@ describe("the Plan tab", () => {
     expect(html).toContain("Held back, the plan is incomplete: a goal.");
   });
 
+  it("reads shaped · waiting on parent while an idea above is not shaped, on the tab, the status line and the held scaffold", () => {
+    const rec = planned("shaped", { heldBy: { parents: [{ id: "p1", title: "SSO", maturity: "exploring" }], blockers: [] } });
+    rec.scaffold = {
+      idea: { id: ID, title: "Coach shares a program" },
+      epic: { identifier: null, kind: "epic", planDocument: "# x", acceptance: ["Works"], promoted: false },
+      tasks: [],
+      children: [],
+      problems: ['waiting on parent: parent "SSO" (exploring)'],
+      warnings: [],
+      fingerprint: "f0",
+    };
+    const html = renderTab(rec);
+    expect(html).toContain('data-plan-held="parent"');
+    expect(html).toContain("Shaped · waiting on parent &quot;SSO&quot; (exploring). It can be scheduled; Scaffold waits until every idea above it is shaped and what it is blocked by has shipped.");
+    expect(html).toContain("Held back: waiting on parent: parent &quot;SSO&quot; (exploring).");
+    expect(html).not.toContain("Held back, the plan is incomplete");
+    const drawer = render(ideaDetail(rec.idea));
+    expect(drawer).toContain('data-idea-held="waiting on parent"');
+    expect(drawer).toContain('title="SSO (exploring)"');
+  });
+
+  it("flags a promoted record whose parent went back to exploring, and keeps its tickets", () => {
+    const rec = planned("started", { promoted: true, heldBy: { parents: [{ id: "p1", title: "SSO", maturity: "exploring" }], blockers: [] } });
+    const html = renderTab(rec);
+    expect(html).toContain('data-plan-held="flagged"');
+    expect(html).toContain("Flagged: the idea above it, &quot;SSO&quot; (exploring), is not shaped any more. Its tickets stay; nothing was cancelled.");
+  });
+
+  it("lists what it is blocked by, removable and added to where it can be edited, and what it blocks", () => {
+    const rec = planned("shaped");
+    rec.blockedBy = [
+      { id: "b1", number: "I-STA-3", identifier: null, title: "Audit log", state: "exploring", missing: false },
+      { id: "gone", number: null, identifier: null, title: "Missing: this record is no longer on this device", state: null, missing: true },
+    ];
+    rec.blocks = [{ id: "b2", number: "I-STA-9", identifier: "STA-40", title: "Reports", state: "started", missing: false }];
+    const html = renderTab(rec);
+    expect(html).toContain('data-plan-section="blockers"');
+    expect(html).toContain('data-plan-blockers="blocked-by"');
+    expect(html).toContain('data-plan-blocker="I-STA-3"');
+    expect(html).toContain("Audit log");
+    expect(html).toContain('data-plan-unblock="I-STA-3"');
+    expect(html).toContain('data-plan-unblock="gone"');
+    expect(html).toContain('data-plan-add="add-blocker"');
+    expect(html).toContain('data-plan-blockers="blocks"');
+    expect(html).toContain("STA-40");
+    expect(html).not.toContain('data-plan-unblock="I-STA-9"');
+    // Nothing to edit and nothing to list: no section.
+    expect(renderTab(planned("started", { actions: [] }))).not.toContain('data-plan-section="blockers"');
+  });
+
   it("reads the brief and the sections as formatted Markdown, with Edit only where the state offers edits", () => {
     const rec = planned("raw", { state: "exploring", maturity: "exploring", stage: "exploring", actions: [{ id: "edit", label: "Edit title and brief", who: "anyone" }] });
     rec.brief = "**Window**: soon\n\n> Merchants integrate through the SDKs.";

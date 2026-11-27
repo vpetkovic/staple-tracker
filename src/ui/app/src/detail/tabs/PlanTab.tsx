@@ -14,13 +14,13 @@
  * Maturity moves and promotion are the header's buttons. What is derived (stage, progress,
  * actual dates, lateness) is shown, never edited.
  */
-import { ChevronDown, Link2, Unlink } from "lucide-react";
+import { ChevronDown, Link2, Octagon, Unlink } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ComponentProps, type CSSProperties, type RefObject } from "react";
 import { GuardRefusal } from "@/components/GuardRefusal";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { getPlan } from "@/lib/api";
-import type { IdeaDetailData, PlanData } from "@/lib/plan-types";
+import type { BlockerRefData, IdeaDetailData, PlanData } from "@/lib/plan-types";
 import { useSession } from "@/lib/session";
 import { useResource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
@@ -66,6 +66,7 @@ export function PlanTab({ detail, workspace, onAuthError, refresh }: TabProps) {
       <PlanSectionsView record={record} write={write} />
       <Decisions record={record} write={write} />
       <SubIdeas record={record} workspace={workspace} />
+      <Blockers record={record} workspace={workspace} write={write} />
       {workFirst ? null : <Work record={record} write={write} />}
       <Research record={record} write={write} />
       <RareActions record={record} write={write} />
@@ -314,6 +315,74 @@ function SubIdeas({ record, workspace }: { record: IdeaDetailData; workspace: st
         ))}
       </ul>
     </Section>
+  );
+}
+
+/**
+ * The plan records it waits on, and those that wait on it. Until each it is blocked by has
+ * shipped or been dropped, its Scaffold and Promote are held back and its plan step waits. Text in
+ * its Dependencies section names records too; only these edges hold Scaffold back.
+ */
+function Blockers({ record, workspace, write }: { record: IdeaDetailData; workspace: string; write: PlanWrite }) {
+  const session = useSession();
+  const { idea } = record;
+  const ref = idea.id;
+  const blockedBy = record.blockedBy ?? [];
+  const blocks = record.blocks ?? [];
+  const editable = offers(idea, "edit");
+  if (!editable && blockedBy.length === 0 && blocks.length === 0) return null;
+  return (
+    <Section label="Blocked by" testId="blockers" hint={blockedBy.length > 0 ? String(blockedBy.length) : undefined}>
+      <p className="m-0 mb-2 text-label text-text-tertiary">Ideas it waits on: until each has shipped or been dropped, it is not scaffolded.</p>
+      <BlockerRows refs={blockedBy} kind="blocked-by" onOpen={(entry) => session.open(workspace, entry.identifier ?? entry.id)} onRemove={editable ? (blocker) => void write("blocker", { ref, blocker, remove: true }) : null} />
+      {editable ? (
+        <AddLine
+          placeholder="Wait on an idea by its number (I-12)"
+          onAdd={(blocker) => write("blocker", { ref, blocker })}
+          testId="add-blocker"
+          icon={<Octagon className="size-3.5 shrink-0" aria-hidden />}
+          button="Add"
+          className="mt-2"
+        />
+      ) : null}
+      {blocks.length > 0 ? (
+        <>
+          <h4 className="m-0 mt-3 mb-1.5 text-caption font-semibold tracking-wide text-text-tertiary uppercase">Blocks</h4>
+          <BlockerRows refs={blocks} kind="blocks" onOpen={(entry) => session.open(workspace, entry.identifier ?? entry.id)} onRemove={null} />
+        </>
+      ) : null}
+    </Section>
+  );
+}
+
+function BlockerRows({ refs, kind, onOpen, onRemove }: { refs: BlockerRefData[]; kind: "blocked-by" | "blocks"; onOpen: (entry: BlockerRefData) => void; onRemove: ((id: string) => void) | null }) {
+  if (refs.length === 0) return null;
+  return (
+    <ul className="m-0 list-none overflow-hidden rounded-lg border p-0" data-plan-blockers={kind}>
+      {refs.map((entry) => (
+        <li key={entry.id} className={cn("flex min-h-10 items-center gap-2 border-t px-3 py-1.5 text-body first:border-t-0", entry.missing && "border-dashed")} data-plan-blocker={entry.number ?? entry.id}>
+          {entry.missing ? (
+            <span className="min-w-0 flex-1 truncate text-label text-text-tertiary">
+              <Flag tone="notStarted">missing</Flag> <span className="font-mono">{entry.id}</span>
+            </span>
+          ) : (
+            <button type="button" className="focus-ring flex min-w-0 flex-1 items-center gap-2 rounded text-left hover:text-foreground pointer-coarse:min-h-11" onClick={() => onOpen(entry)}>
+              {entry.state ? <StateGlyph state={entry.state} percent={null} /> : null}
+              <span className="shrink-0 font-mono text-label text-text-tertiary">{entry.identifier ?? entry.number}</span>
+              <span className="min-w-0 flex-1 truncate" title={entry.title}>
+                {entry.title}
+              </span>
+              <span className="shrink-0 text-label text-text-tertiary">{entry.state ? (STATE_WORDS[entry.state] ?? entry.state) : ""}</span>
+            </button>
+          )}
+          {onRemove ? (
+            <Button variant="ghost" size="icon" className="size-7 shrink-0 pointer-coarse:size-9" aria-label={`No longer wait on ${entry.number ?? entry.id}`} onClick={() => onRemove(entry.id)} data-plan-unblock={entry.number ?? entry.id}>
+              <Unlink aria-hidden className="size-3.5" />
+            </Button>
+          ) : null}
+        </li>
+      ))}
+    </ul>
   );
 }
 

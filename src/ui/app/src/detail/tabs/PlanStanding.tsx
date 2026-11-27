@@ -48,10 +48,36 @@ export function WhereItStands({ record, write, scaffold, onJump }: { record: Ide
           {idea.planIncomplete.length > 5 ? `; and ${idea.planIncomplete.length - 5} more` : ""}. Scaffold and Promote wait until it passes again.
         </p>
       ) : null}
-      {record.scaffold ? <ScaffoldSection preview={record.scaffold} {...scaffold} /> : null}
+      {idea.heldBy && (idea.state === "shaped" || idea.state === "started") ? <Held idea={idea} /> : null}
+      {record.scaffold ? <ScaffoldSection preview={record.scaffold} {...scaffold} waiting={idea.heldBy !== null} /> : null}
       <Delivered record={record} write={write} />
       <Questions record={record} write={write} />
     </section>
+  );
+}
+
+/**
+ * What holds it: a shaped record waits for every idea above it to be shaped and for what it is
+ * blocked by to ship; a promoted one is flagged when an idea above it went back or was dropped.
+ */
+function Held({ idea }: { idea: IdeaData }) {
+  const hold = idea.heldBy!;
+  const parents = hold.parents.map((parent) => `"${parent.title}" (${parent.maturity})`).join(", ");
+  const blockers = hold.blockers.map((blocker) => `"${blocker.title}" (${STATE_WORDS[blocker.state]?.toLowerCase() ?? blocker.state})`).join(", ");
+  if (idea.state === "started") {
+    if (hold.parents.length === 0) return null;
+    return (
+      <p className="m-0 mt-2 text-label text-flag-todo" data-plan-held="flagged">
+        Flagged: the idea above it, {parents}, is not shaped any more. Its tickets stay; nothing was cancelled.
+      </p>
+    );
+  }
+  return (
+    <p className="m-0 mt-2 text-label text-flag-todo" data-plan-held={hold.parents.length > 0 ? "parent" : "blockers"}>
+      Shaped · {hold.parents.length > 0 ? `waiting on ${hold.parents.length === 1 ? "parent" : "parents"} ${parents}` : ""}
+      {hold.parents.length > 0 && hold.blockers.length > 0 ? " and " : ""}
+      {hold.blockers.length > 0 ? `waiting on ${blockers}` : ""}. It can be scheduled; Scaffold waits until every idea above it is shaped and what it is blocked by has shipped.
+    </p>
   );
 }
 

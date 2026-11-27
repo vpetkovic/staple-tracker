@@ -9,7 +9,7 @@ import { Ellipsis } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import type { HorizonData, IdeaData, IdeaDetailData } from "@/lib/plan-types";
+import { holdChip, holdNames, type HorizonData, type IdeaData, type IdeaDetailData } from "@/lib/plan-types";
 import { useSession } from "@/lib/session";
 import type { IssueDetail } from "@/lib/types";
 import { PlanTree } from "@/views/plan/PlanTree";
@@ -64,6 +64,14 @@ export function IdeaStatusLine({ record, className, children }: { record: IdeaDe
           <>
             {" · "}
             <Amber data-idea-plan-incomplete="">plan incomplete</Amber>
+          </>
+        ) : null}
+        {holdChip(idea) && idea.heldBy ? (
+          <>
+            {" · "}
+            <span title={holdNames(idea.heldBy)}>
+              <Amber data-idea-held={holdChip(idea) ?? undefined}>{holdChip(idea)}</Amber>
+            </span>
           </>
         ) : null}
         {idea.late && idea.state !== "shipped" ? <Flag tone="late" /> : null}

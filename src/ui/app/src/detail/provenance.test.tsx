@@ -48,6 +48,28 @@ const SCAFFOLDED = detail({
   scaffoldedFrom: { ideaId: "idea-1", ideaNumber: "I-STA-4", identifier: "STA-88", title: "Checkout", rowId: "row-2", rowKey: "R2" },
 });
 
+describe("a scaffolded ticket whose idea's parent went back", () => {
+  it("is flagged under its chip, saying nothing was cancelled; a ticket with no flag says nothing", () => {
+    const flagged = detail({
+      workspace: "staple",
+      issue: issue({ identifier: "STA-91", title: "Third task" }),
+      scaffoldedFrom: {
+        ideaId: "idea-1",
+        ideaNumber: "I-STA-4",
+        identifier: "STA-88",
+        title: "Passkeys",
+        rowId: "row-3",
+        rowKey: "R3",
+        parentUnsettled: { ideaId: "idea-0", ideaNumber: "I-STA-2", identifier: null, title: "SSO", maturity: "exploring" },
+      },
+    });
+    const html = render(flagged);
+    expect(html).toContain('data-parent-unsettled="exploring"');
+    expect(html).toContain("Flagged: its parent idea &quot;SSO&quot; went back to exploring since this was scaffolded. Nothing was cancelled.");
+    expect(render(SCAFFOLDED)).not.toContain("data-parent-unsettled");
+  });
+});
+
 describe("a scaffolded ticket's chip", () => {
   for (const presentation of ["drawer", "sheet", "full"] as const) {
     it(`reads "from I-STA-n · row K" and opens the idea in Plan (${presentation})`, () => {

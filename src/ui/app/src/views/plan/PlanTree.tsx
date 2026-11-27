@@ -9,7 +9,7 @@
  */
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
-import type { IdeaData } from "@/lib/plan-types";
+import { holdChip, holdNames, type IdeaData } from "@/lib/plan-types";
 import { useIsDesk, useMediaQuery } from "@/lib/use-media";
 import { cn } from "@/lib/utils";
 import { ideaPlanHref } from "@/detail/PlannedIdeaLinks";
@@ -362,6 +362,13 @@ function NextCell({ row }: { row: TreeRow }) {
   }
   // Shaped, but its plan no longer passes the gate: Scaffold is held back until it does.
   if (!dimmed && planIncomplete(idea)) parts.push(<Amber key="pi" data-plan-card-incomplete="">plan incomplete</Amber>);
+  // Held: a shaped sub-idea waiting on its parent or blockers, or a promoted one whose parent went back.
+  const held = holdChip(idea);
+  if (!dimmed && held && idea.heldBy && !(idea.state === "shaped" && row.step)) parts.push(
+      <span key="held" title={holdNames(idea.heldBy)}>
+        <Amber data-plan-card-held={held}>{held}</Amber>
+      </span>,
+    );
   if (row.step && !dimmed) {
     parts.push(
       <span key="s" className={cn(row.step.person ? "font-medium text-foreground" : "text-text-secondary")} data-plan-tree-step={idea.nextStep?.need} data-plan-tree-person={row.step.person ? "" : undefined}>
