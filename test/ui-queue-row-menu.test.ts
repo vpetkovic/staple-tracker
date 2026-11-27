@@ -95,8 +95,8 @@ async function openMenu(ref: string): Promise<{ page: Page; context: BrowserCont
   const port = (ui.server.address() as AddressInfo).port;
   await page.goto(`http://127.0.0.1:${port}/?view=queue&token=${ui.token}`, { waitUntil: "networkidle" });
   const entry = page.locator(`[data-queue-entry="${ref}"]`);
-  // The desk row reveals its quick actions on hover, as a pointer would.
-  await entry.locator('[data-testid="task-row"]').hover();
+  // The desk row reveals its menu button on hover, as a pointer would.
+  await entry.hover();
   await entry.getByRole("button", { name: `Actions for ${ref}` }).click();
   await page.locator(`[data-queue-row-menu="${ref}"]`).waitFor();
   return { page, context, errors };

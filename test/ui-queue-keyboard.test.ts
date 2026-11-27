@@ -3,9 +3,9 @@
  * A QUEUE ROW OPENS FROM THE KEYBOARD, in a real browser against the real server and the
  * built app.
  *
- * The queue's nested lists (what a queued epic expands to, and the work that is not in the
- * plan) are listboxes of `role="option"` rows with a roving tab stop. Enter and Space open
- * the focused row's details, as they do in the task list, and Space does not scroll the
+ * The queue's rows nested under the plan (what a queued epic expands to, and the work after
+ * the plan) are `role="listitem"` rows under the page's one roving tab stop. Enter and Space
+ * open the focused row's details, as they do in the task list, and Space does not scroll the
  * page. A key pressed on a control inside the row (its `⋯` menu) belongs to that control.
  *
  * SKIPPED, SAYING WHY, when there is no built bundle or no Chromium for `playwright-core`
@@ -108,6 +108,8 @@ async function openQueue(device: typeof DESK | typeof PHONE): Promise<{ page: Pa
 }
 
 const detail = (page: Page) => page.locator("[data-detail-overlay]");
+/** What the queued epic expands to: its tasks, under its plan entry. */
+const expansion = (page: Page) => page.locator(`[data-queue-expansion="${epic}"]`);
 const openedIssue = (page: Page) => new URL(page.url()).searchParams.get("issue");
 const keysSeen = (page: Page) =>
   page.evaluate(() => (window as unknown as { keys: { key: string; prevented: boolean }[] }).keys);
@@ -119,8 +121,7 @@ describe.skipIf(Boolean(reason))("a queue row opens from the keyboard", () => {
       it(`opens the focused row of a queued epic's expansion with ${name} on ${device}`, async () => {
         const { page, context, errors } = await openQueue(options);
         try {
-          const list = page.getByRole("listbox", { name: `What ${epic} expands to` });
-          const second = list.locator(`[role="option"][data-identifier="${children[1]}"]`);
+          const second = expansion(page).locator(`[role="listitem"][data-identifier="${children[1]}"]`);
           await second.waitFor();
           expect(await detail(page).count()).toBe(0);
           await second.focus();
@@ -140,8 +141,7 @@ describe.skipIf(Boolean(reason))("a queue row opens from the keyboard", () => {
     const { page, context, errors } = await openQueue(DESK);
     try {
       await page.locator("[data-queue-unqueued-toggle]").click();
-      const list = page.getByRole("listbox", { name: "Work that is not in the plan" });
-      const options = list.getByRole("option");
+      const options = page.locator('[data-queue-unqueued="true"]').getByRole("listitem");
       await options.nth(1).waitFor();
       await options.first().focus();
       await page.keyboard.press("ArrowDown");
@@ -159,8 +159,7 @@ describe.skipIf(Boolean(reason))("a queue row opens from the keyboard", () => {
   it("leaves Enter on the row's own menu button to the menu", async () => {
     const { page, context } = await openQueue(DESK);
     try {
-      const list = page.getByRole("listbox", { name: `What ${epic} expands to` });
-      const trigger = list.getByRole("button", { name: `Actions for ${children[0]}` });
+      const trigger = expansion(page).getByRole("button", { name: `Actions for ${children[0]}` });
       await trigger.waitFor();
       await trigger.focus();
       await page.keyboard.press("Enter");

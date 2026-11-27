@@ -168,15 +168,18 @@ async function holdRereads(page: Page): Promise<void> {
   });
 }
 
-const moveButton = (page: Page, ref: string, control: "up" | "down") =>
-  page.locator(`[data-reorder-row="${ref}"] [data-reorder-control="${control}"]`);
+/** Move a plan entry one place with Alt and an arrow on its row, the page's keyboard reorder. */
+async function moveKey(page: Page, ref: string, direction: "up" | "down"): Promise<void> {
+  await page.locator(`[data-queue-entry="${ref}"]`).focus();
+  await page.keyboard.press(direction === "up" ? "Alt+ArrowUp" : "Alt+ArrowDown");
+}
 
-async function press(page: Page, ref: string, control: "up" | "down"): Promise<void> {
+async function press(page: Page, ref: string, direction: "up" | "down"): Promise<void> {
   const answered = page.waitForResponse((response) => response.url().includes("/api/queue/reorder"));
-  await moveButton(page, ref, control).click();
+  await moveKey(page, ref, direction);
   await answered;
-  // The answer is drawn on the next render; the controls come back once `busy` clears.
-  await expect.poll(() => moveButton(page, ref, control === "up" ? "down" : "up").isDisabled()).toBe(false);
+  // The answer is drawn on the next render; the handles come back once `busy` clears.
+  await expect.poll(() => page.locator("[data-queue-handle][aria-disabled]").count()).toBe(0);
 }
 
 describe.skipIf(Boolean(reason))("the queue page through a write", () => {
@@ -215,9 +218,7 @@ describe.skipIf(Boolean(reason))("the queue page through a write", () => {
     const before = plan();
     const { page, context, errors } = await openQueue();
     try {
-      const nested = page
-        .getByRole("listbox", { name: `What ${epic} expands to` })
-        .locator(`[role="option"][data-identifier="${children[0]}"]`);
+      const nested = page.locator(`[data-queue-expansion="${epic}"] [role="listitem"][data-identifier="${children[0]}"]`);
       await nested.waitFor();
       await nested.focus();
       await page.keyboard.press("Alt+ArrowDown");
@@ -285,7 +286,7 @@ describe.skipIf(Boolean(reason))("the queue page through a write", () => {
         route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "busy", message: "The server is busy." }) }),
       );
       const answered = page.waitForResponse((response) => response.url().includes("/api/queue/reorder"));
-      await moveButton(page, first, "down").click();
+      await moveKey(page, first, "down");
       expect((await answered).status()).toBe(409);
       await page.getByText("The server is busy.").waitFor({ timeout: 5_000 });
       expect(await page.locator("[data-queue-conflict]").count()).toBe(0);
