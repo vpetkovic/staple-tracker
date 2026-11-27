@@ -445,7 +445,7 @@ describe("the guide routes new work to an idea or a ticket", () => {
     expect(IDEA_ROUTING).toMatch(/With planning on[^.]*\.\s+First\s+match wins\. The CLI column leaves out the leading `staple`/);
     const expected: Array<[RegExp, RegExp]> = [
       [/^\| What the findings rules fix here: something the ticket you hold needs to meet its criteria or outcome, a defect included/, /No new record: the fix goes in that ticket's branch and pull request \| none \| none \|$/],
-      [/^\| A defect, a review finding the findings rules file \(a blocker, follow-up or independent one\), upkeep, or more work on what the ticket or its epic builds/, /a finding is filed as the findings rules say \(`found_in`, and `blocks` for a blocker\) \|[^|]*`found_in`[^|]*\| `new <title> --kind bug`, `new <title> --found-in <ref>`/],
+      [/^\| A defect, a review finding the findings rules file \(a blocker, follow-up or independent one\), upkeep, or work the ticket's or its epic's plan already calls for/, /a finding is filed as the findings rules say \(`found_in`, and `blocks` for a blocker\) \|[^|]*`found_in`[^|]*\| `new <title> --kind bug`, `new <title> --found-in <ref>`/],
       [/^\| Research or a proof of concept for an idea still being worked out/, /`spike` ticket, linked to the idea as research \| `create_task` with `kind: "spike"`, then `start_idea` with `research` \| `new <title> --kind spike`, `idea adopt <idea> <ref> --research`/],
       [/^\| A new capability nobody planned, found while working a ticket/, /An idea sparked by that ticket \|[^|]*`capture_idea` with `sparked_by`[^|]*\| `idea new <title> --sparked-by <ref>`/],
       [/^\| A brainstorm: something to discuss/, /A raw idea \| `capture_idea` \| `idea new <title>`/],
@@ -461,7 +461,7 @@ describe("the guide routes new work to an idea or a ticket", () => {
 
   it("names the test for a discovery, the counter-example, the conversion and planning off", () => {
     const text = IDEA_ROUTING.replace(/\s+/g, " ");
-    expect(text).toMatch(/does this ticket need it to meet its criteria or outcome\? If not, is it a defect, a review finding, upkeep, or more work on what the ticket or its epic builds\? Then it is a ticket\. If none of these, it is a new capability: an idea sparked by the ticket, never a ticket filed beside it/);
+    expect(text).toMatch(/does this ticket need it to meet its criteria or outcome\? If not, is it a defect, a review finding, upkeep, or work the ticket's or its epic's plan already calls for\? Then it is a ticket\. If none of these, it is a new capability: an idea sparked by the ticket, never a ticket filed beside it/);
     expect(text).toMatch(/structural key naming its family\. Nobody planned that, so it is an idea sparked by the rung's ticket/);
     expect(text).toMatch(/Never file a ticket to hold a brainstorm/);
     expect(text).toMatch(/nobody has started becomes one with `convert_to_idea`/);
@@ -576,7 +576,7 @@ describe("the filing tools carry the routing and the maturity rules", () => {
       const tools = (await harness.client.listTools()).tools;
       const description = (name: string) => tools.find((candidate) => candidate.name === name)?.description ?? "";
       const create = description("create_task");
-      expect(create).toMatch(/With features\.planning on, file a ticket for a defect \(kind bug\), for more work on what a ticket or its epic builds that the ticket is correct without \(a review finding takes found_in\), for research or a POC on an idea \(a spike, then start_idea with research\) or for settled work/);
+      expect(create).toMatch(/With features\.planning on, file a ticket for a defect \(kind bug\), for work a ticket's or its epic's plan already calls for that the ticket is correct without \(a review finding takes found_in\), for research or a POC on an idea \(a spike, then start_idea with research\) or for settled work/);
       expect(create).toMatch(/What the ticket you hold needs to meet its criteria or outcome is no new ticket: fix it in that ticket/);
       expect(create).toMatch(/A brainstorm, or a new capability nobody planned found while working a ticket, is an idea instead: capture_idea, with sparked_by naming the ticket/);
       expect(create).toMatch(/Never a ticket to hold a brainstorm; an unstarted ticket that should have been an idea converts with convert_to_idea/);
@@ -584,7 +584,7 @@ describe("the filing tools carry the routing and the maturity rules", () => {
 
       const capture = description("capture_idea");
       expect(capture).toMatch(/Capture a brainstorm \(something to discuss, a what-if, an outcome nobody has settled\) or a new capability nobody planned that turned up while working a ticket \(pass sparked_by\); never file a ticket to hold either/);
-      expect(capture).toMatch(/What the ticket you hold needs to meet its criteria or outcome is fixed in that ticket, not captured\. A defect, more work on what a ticket or its epic builds \(a review finding takes found_in\), research or a POC for an idea \(a spike linked with start_idea research\) and settled work are tickets instead \(create_task\)/);
+      expect(capture).toMatch(/What the ticket you hold needs to meet its criteria or outcome is fixed in that ticket, not captured\. A defect, work a ticket's or its epic's plan already calls for \(a review finding takes found_in\), research or a POC for an idea \(a spike linked with start_idea research\) and settled work are tickets instead \(create_task\)/);
       expect(capture).toMatch(/capture makes it raw \(an import and title or brief edits keep it raw\); writing a plan section or breakdown row, asking, answering or deferring a question, recording a decision or linking research moves it to exploring by itself/);
       expect(capture).toMatch(/shaped \(details settled, enough context and plan for an agent to start\) is only the person's, so propose it with update_idea propose_shaped once its plan passes the gate/);
       expect(capture).toMatch(/A shaped sub-idea may sit on any horizon but is not scaffolded until every idea above it is shaped and every idea it or one above it waits on has shipped or been dropped/);

@@ -63,16 +63,17 @@ match wins. The CLI column leaves out the leading `staple`.
 | You have | File it as | MCP | CLI |
 |---|---|---|---|
 | What the findings rules fix here: something the ticket you hold needs to meet its criteria or outcome, a defect included | No new record: the fix goes in that ticket's branch and pull request | none | none |
-| A defect, a review finding the findings rules file (a blocker, follow-up or independent one), upkeep, or more work on what the ticket or its epic builds | A `bug`, `chore` or `task` ticket; a finding is filed as the findings rules say (`found_in`, and `blocks` for a blocker) | `create_task` with `kind`, or with `found_in` | `new <title> --kind bug`, `new <title> --found-in <ref>` |
+| A defect, a review finding the findings rules file (a blocker, follow-up or independent one), upkeep, or work the ticket's or its epic's plan already calls for | A `bug`, `chore` or `task` ticket; a finding is filed as the findings rules say (`found_in`, and `blocks` for a blocker) | `create_task` with `kind`, or with `found_in` | `new <title> --kind bug`, `new <title> --found-in <ref>` |
 | Research or a proof of concept for an idea still being worked out | A `spike` ticket, linked to the idea as research | `create_task` with `kind: "spike"`, then `start_idea` with `research` | `new <title> --kind spike`, `idea adopt <idea> <ref> --research` |
 | A new capability nobody planned, found while working a ticket | An idea sparked by that ticket | `capture_idea` with `sparked_by` | `idea new <title> --sparked-by <ref>` |
 | A brainstorm: something to discuss, a "what if", an outcome nobody has settled | A raw idea | `capture_idea` | `idea new <title>` |
 | Settled work: the breakdown of an idea the person marked shaped, or an outcome they asked for as work | Tickets; for a shaped idea, Scaffold makes them | `scaffold_idea`, `create_task` | `idea scaffold <idea>`, `new <title>` |
 
 Ask of anything you find while working a ticket: does this ticket need it to meet
-its criteria or outcome? If not, is it a defect, a review finding, upkeep, or more
-work on what the ticket or its epic builds? Then it is a ticket. If none of these,
-it is a new capability: an idea sparked by the ticket, never a ticket filed beside it. For example, while working one rung of an exercise
+its criteria or outcome? If not, is it a defect, a review finding, upkeep, or work
+the ticket's or its epic's plan already calls for? Then it is a ticket. If none of these,
+it is a new capability: an idea sparked by the ticket, never a ticket filed beside it,
+even when it extends what the epic builds. For example, while working one rung of an exercise
 catalogue you find that every exercise needs a structural key naming its family.
 Nobody planned that, so it is an idea sparked by the rung's ticket. Never file a
 ticket to hold a brainstorm. A ticket that should have been an idea and that nobody
