@@ -15,7 +15,7 @@ function idea(id: string, extra: Partial<IdeaData> = {}): IdeaData {
   return {
     id, identifier: null, number: null, promoted: false, kind: "idea", title: `Idea ${id}`, description: null, briefLine: null,
     maturity: "shaped", stage: "scheduled", parentId: null, horizonId: null, planned: { start: null, target: null }, baseline: null, rank: 0,
-    links: [], missingLinks: [], linkCount: 0, resolvedLinks: 0, units: ZERO, unsized: false, own: ZERO, umbrella: false, carriedBy: null,
+    links: [], explorations: [], missingLinks: [], linkCount: 0, resolvedLinks: 0, units: ZERO, unsized: false, own: ZERO, umbrella: false, carriedBy: null,
     nextStep: null, progress: null, percent: null, actual: { start: null, end: null, forecastEnd: null }, late: false, notStarted: false,
     delivered: null, childIds: [], openQuestions: 0, planIncomplete: [], completeness: { starred: 3, starredTotal: 3, filled: 5, total: 10 },
     dependsOn: [], state: "shaped", actions: [], createdAt: "2026-11-01T00:00:00.000Z", updatedAt: "2026-11-01T00:00:00.000Z",

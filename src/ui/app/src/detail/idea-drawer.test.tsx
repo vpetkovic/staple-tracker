@@ -37,6 +37,7 @@ function idea(patch: Partial<IdeaData> = {}): IdeaData {
     baseline: null,
     rank: 1024,
     links: [],
+    explorations: [],
     missingLinks: [],
     linkCount: 0,
     resolvedLinks: 0,
@@ -75,6 +76,7 @@ function record(view: IdeaData, patch: Partial<IdeaDetailData> = {}): IdeaDetail
     questions: [],
     decisions: [],
     linked: [],
+    exploration: [],
     plan: {
       goal: "Ship the sharing link.",
       context: null,
@@ -338,6 +340,29 @@ describe("the properties and the work", () => {
     expect(html.indexOf('data-plan-section="decisions"')).toBeLessThan(html.indexOf('data-plan-section="work"'));
     expect(html.indexOf("data-plan-section-nav")).toBeLessThan(html.indexOf('data-plan-section="work"'));
     expect(html).toContain('data-plan-add="adopt"');
+  });
+
+  it("lists research and POCs on their own, apart from the work, with their own add and unlink", () => {
+    const exploring = idea({ actions: [...EDITS, act("adopt"), act("link_research"), act("unlink_research")] });
+    const rec = record(exploring, {
+      exploration: [{ missing: false, id: "r1", identifier: "LAR-20", title: "Spike: storage options", kind: "task", status: "done", resolved: true, leaves: 1, doneLeaves: 1, progress: 1, percent: 100, startedAt: null, completedAt: null, milestone: null }],
+    });
+    const html = tab(rec);
+    const research = html.slice(html.indexOf('data-plan-section="research"'));
+    expect(html.indexOf('data-plan-section="work"')).toBeLessThan(html.indexOf('data-plan-section="research"'));
+    expect(text(research)).toContain("Research and POCs");
+    expect(text(research)).toContain("does not start the idea or count toward its progress or horizon");
+    expect(research).toContain('data-plan-link="LAR-20"');
+    expect(research).toContain('data-plan-unlink="LAR-20"');
+    expect(research).toContain('data-plan-add="link-research"');
+    // The research is not drawn as the idea's work.
+    const work = html.slice(html.indexOf('data-plan-section="work"'), html.indexOf('data-plan-section="research"'));
+    expect(work).not.toContain("LAR-20");
+  });
+
+  it("draws no research section where the state offers none and nothing is linked", () => {
+    const html = tab(record(idea({ actions: [...EDITS] })));
+    expect(html).not.toContain('data-plan-section="research"');
   });
 });
 

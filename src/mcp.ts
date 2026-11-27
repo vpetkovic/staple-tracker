@@ -3645,19 +3645,25 @@ server.registerTool(
   "start_idea",
   {
     description:
-      "Take an idea into the tracker. Without adopt: promote it in place, so the same record becomes an epic and takes its ticket number now (an idea has none before); its brief, questions, decisions, comments, files and history stay on it, and on a horizon its work joins that horizon's milestone. An agent may promote only an idea the person has marked shaped; a sub-idea promotes on its own, and its epic moves under its parent's epic when the parent is promoted. With adopt: link that existing issue (an epic or a ticket) instead; an exploring or shaped idea offers it, a raw one does not, and an exploring idea keeps its maturity, so the person can still mark it shaped and its questions are still asked, answered and deferred. Either way the idea reads started and its progress and actual dates come from the work. A parent's own state never moves with its sub-ideas' work: that work is its rollup (progress, dates, late).",
+      "Take an idea into the tracker. Without adopt: promote it in place, so the same record becomes an epic and takes its ticket number now (an idea has none before); its brief, questions, decisions, comments, files and history stay on it, and on a horizon its work joins that horizon's milestone. An agent may promote only an idea the person has marked shaped; a sub-idea promotes on its own, and its epic moves under its parent's epic when the parent is promoted. With adopt: link that existing issue (an epic or a ticket) instead; an exploring or shaped idea offers it, a raw one does not, and an exploring idea keeps its maturity, so the person can still mark it shaped and its questions are still asked, answered and deferred. Either way the idea reads started and its progress and actual dates come from the work. A parent's own state never moves with its sub-ideas' work: that work is its rollup (progress, dates, late). With research: link that existing issue as exploration work (research, a proof of concept) instead; an exploring, shaped or started idea offers it. It is listed in the idea's own exploration list and does not start the idea, count toward its progress or dates, or join its horizon; an issue already linked the other way is relinked for this purpose. Answers the idea's detail.",
     inputSchema: {
       ref: ideaRefSchema,
       adopt: refSchema.optional().describe("An existing issue to link instead of promoting the idea"),
+      research: refSchema.optional().describe("An existing issue to link as research or a POC: it does not start the idea or count as its delivery"),
       actor: actorSchema,
       ws: wsSchema,
     },
     annotations: { title: "Start idea", ...milestoneWriteAnnotations },
   },
-  ({ ref, adopt, actor, ws }) =>
+  ({ ref, adopt, research, actor, ws }) =>
     run(() => {
       const plan = storeFor(ws).plan();
       const who = requireActor(actor);
+      if (adopt !== undefined && research !== undefined) throw new StapleError("validation", "start_idea takes adopt or research, not both.");
+      if (research !== undefined) {
+        plan.adopt(ref, research, who, { purpose: "exploration" });
+        return { idea: plan.detail(ref), promoted: null };
+      }
       if (adopt !== undefined) {
         plan.adopt(ref, adopt, who);
         return { idea: plan.detail(ref), promoted: null };
@@ -3670,7 +3676,7 @@ server.registerTool(
 server.registerTool(
   "unlink_idea",
   {
-    description: "Remove one linked issue from an idea. The issue itself is untouched.",
+    description: "Remove one linked issue from an idea, work or research. The issue itself is untouched.",
     inputSchema: { ref: ideaRefSchema, issue: refSchema, actor: actorSchema, ws: wsSchema },
     annotations: { title: "Unlink idea", ...milestoneWriteAnnotations },
   },

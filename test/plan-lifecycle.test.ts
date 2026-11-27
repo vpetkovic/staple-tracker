@@ -24,9 +24,9 @@ describe("the idea table", () => {
   it("offers exactly the agreed actions in each state", () => {
     expect(IDEA_LIFECYCLE).toEqual({
       raw: ["edit", "ask", "decide", "explore", "shape", "drop", "reparent", "reorder"],
-      exploring: ["edit", "ask", "decide", "shape", "drop", "schedule", "plan_dates", "reparent", "reorder", "adopt", "mark_delivered"],
-      shaped: ["edit", "ask", "decide", "unshape", "drop", "schedule", "plan_dates", "reparent", "reorder", "promote", "scaffold", "adopt", "mark_delivered"],
-      started: ["edit", "ask", "decide", "schedule", "plan_dates", "reorder", "scaffold", "adopt", "unlink", "reset_baseline", "open_epic"],
+      exploring: ["edit", "ask", "decide", "shape", "drop", "schedule", "plan_dates", "reparent", "reorder", "adopt", "link_research", "unlink_research", "mark_delivered"],
+      shaped: ["edit", "ask", "decide", "unshape", "drop", "schedule", "plan_dates", "reparent", "reorder", "promote", "scaffold", "adopt", "link_research", "unlink_research", "mark_delivered"],
+      started: ["edit", "ask", "decide", "schedule", "plan_dates", "reorder", "scaffold", "adopt", "unlink", "link_research", "unlink_research", "reset_baseline", "open_epic"],
       shipped: ["adopt", "open_epic"],
       dropped: ["restore"],
     });
@@ -49,6 +49,12 @@ describe("the idea table", () => {
     expect(ideaOffered("shipped", true)).toEqual(["adopt", "open_epic", "edit", "ask", "decide"]);
     expect(ideaOffered("started", true)).toEqual(IDEA_LIFECYCLE.started);
     expect(ideaOffered("shipped", false)).toEqual(["adopt", "open_epic"]);
+  });
+
+  it("lets research be linked while exploring, shaped or started, never while raw", () => {
+    for (const state of ["exploring", "shaped", "started"] as const) expect(IDEA_LIFECYCLE[state], state).toEqual(expect.arrayContaining(["link_research", "unlink_research"]));
+    for (const state of ["raw", "shipped", "dropped"] as const) expect(IDEA_LIFECYCLE[state], state).not.toContain("link_research");
+    expect([IDEA_ACTIONS.link_research.who, IDEA_ACTIONS.unlink_research.who]).toEqual(["anyone", "anyone"]);
   });
 
   it("lets work be linked from exploring on, never while raw", () => {

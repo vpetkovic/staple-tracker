@@ -27,6 +27,7 @@ import { migration as m022 } from "./022-external-links.js";
 import { migration as m024 } from "./024-ticket-branch.js";
 import { migration as m025 } from "./025-attempt-heartbeats.js";
 import { migration as m026 } from "./026-idea-numbers.js";
+import { migration as m027 } from "./027-plan-link-purpose.js";
 
 /**
  * The workspace database — the per-repo (or global) task store.
@@ -73,13 +74,14 @@ import { migration as m026 } from "./026-idea-numbers.js";
  * private unless shared. 024 (the ticket branch) follows: two nullable `issues` columns that ride the
  * `issue` entity as fields, like 021's. 025 (the attempt heartbeat) follows: one machine-local table,
  * one row per attempt, never named by an operation, like 015's. 026 (idea numbers) follows: one nullable
- * `issues` column, the number a promoted idea keeps, that rides the `issue` entity as a field, like 021's.
+ * `issues` column, the number a promoted idea keeps, that rides the `issue` entity as a field, like 021's. 027 (link purpose) follows: one
+ * `plan_links` column, delivery or exploration, that rides the link's own field of the idea's `milestone` entity.
  */
 export const WORKSPACE_TARGET: MigrationTarget = {
   label: "workspace database",
   // `issues` has existed since version 1, so its absence means an empty file.
   sentinelTable: "issues",
-  migrations: [m001, m002, m003, m004, m005, m006, m007, m008, m009, m010, m011, m012, m013, m014, m015, m016, m017, m018, m019, m020, m021, m022, m023, m024, m025, m026],
+  migrations: [m001, m002, m003, m004, m005, m006, m007, m008, m009, m010, m011, m012, m013, m014, m015, m016, m017, m018, m019, m020, m021, m022, m023, m024, m025, m026, m027],
   consolidated: CONSOLIDATED_DDL,
 };
 

@@ -213,7 +213,7 @@ need `--person`, which records the change under `humanName`.
 | `staple idea task <ref> add\|set\|rm <key>` | One breakdown row: title, `--estimate`, `--depends`, `--acceptance`, `--owner`, `--notes`. |
 | `staple idea import <plan.md>` | Capture an idea from a plan file, with `--parent`, `--horizon`, `--maturity`; prints what it kept in Context instead of its section. |
 | `staple idea defer <ref> <n>` | Leave question `n` open on purpose; it no longer holds shaping back. |
-| `staple idea adopt <ref> <issue>` / `unlink` | Link existing work, or remove a link. |
+| `staple idea adopt <ref> <issue> [--research]` / `unlink` | Link existing work, or remove a link (work or research). `--research` links the issue as research or a POC: it shows in the idea's own research list and does not start the idea or count toward its progress or horizon. |
 | `staple idea ask` / `resolve <ref> <n>` / `decide` | Add a question, resolve question `n`, record a decision. |
 | `staple idea reset-baseline <ref> --person` | The current planned window becomes the baseline. |
 | `staple horizon new <name> --person` | Add a horizon; `--date D` makes it a release line. `set`, `mv --before H\|--end` and `rm` likewise need `--person`. |

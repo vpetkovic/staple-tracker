@@ -1297,9 +1297,11 @@ The plan (experimental; features.planning defaults off)
               would make (estimate, blockers, acceptance, a context document each), what
               holds it back, and its fingerprint; --confirm FP makes exactly that preview
               and is refused when the plan changed since; a retry makes only what is missing
-  idea adopt <ref> <issue>              link existing work to the idea; an exploring or shaped
-              idea offers it (it then reads started), a raw one does not
-  idea unlink <ref> <issue>
+  idea adopt <ref> <issue> [--research] link existing work to the idea; an exploring or shaped
+              idea offers it (it then reads started), a raw one does not. --research
+              links it as research or a POC instead: listed on its own, it does not
+              start the idea or count toward its progress or horizon
+  idea unlink <ref> <issue>             remove a link, work or research
   idea ask <ref> <question>             add an open question
   idea resolve <ref> <n> [--reopen]     resolve question n (1-based)
   idea defer <ref> <n> [--reopen]       leave question n open on purpose: it no longer holds

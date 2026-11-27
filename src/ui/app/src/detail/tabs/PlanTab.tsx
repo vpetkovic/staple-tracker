@@ -67,6 +67,7 @@ export function PlanTab({ detail, workspace, onAuthError, refresh }: TabProps) {
       <Decisions record={record} write={write} />
       <SubIdeas record={record} workspace={workspace} />
       {workFirst ? null : <Work record={record} write={write} />}
+      <Research record={record} write={write} />
       <RareActions record={record} write={write} />
     </div>
   );
@@ -326,40 +327,75 @@ function Work({ record, write }: { record: IdeaDetailData; write: PlanWrite }) {
   return (
     <Section label="Work in the tracker" testId="work" hint={record.linked.length > 0 ? String(record.linked.length) : undefined}>
       {record.linked.length === 0 && idea.linkCount > 0 ? <p className="m-0 text-label text-text-tertiary">{idea.promoted ? "This record is the epic; its tasks are its work." : "Linked through its sub-ideas."}</p> : null}
-      {record.linked.length > 0 ? (
-        <ul className="m-0 list-none overflow-hidden rounded-lg border p-0">
-          {record.linked.map((link) => (
-            <li key={link.id} className={cn("staple-plan-link grid items-center gap-x-3 gap-y-1 border-t px-3 py-2 text-body first:border-t-0", link.missing && "border-dashed")} data-plan-link={link.identifier} data-plan-link-missing={link.missing || undefined}>
-              {link.missing ? (
-                <div className="staple-plan-link-wide min-w-0">
-                  <div className="flex items-center gap-1.5">
-                    <Flag tone="notStarted">missing</Flag>
-                    <span className="truncate font-mono text-label text-text-tertiary">{link.id}</span>
-                  </div>
-                  <div className="mt-0.5 text-caption text-text-tertiary">This issue is no longer on this device. The idea keeps its stage; unlink it if it is gone for good.</div>
-                </div>
-              ) : (
-                <>
-                  <span className="font-mono text-label text-text-tertiary">{link.identifier}</span>
-                  <span className="min-w-0 truncate" title={link.title}>
-                    {link.title}
-                  </span>
-                  <span className="staple-plan-wide truncate text-label text-text-tertiary">{link.status.replace(/_/g, " ")}</span>
-                  {/* The server's percent: a cancelled issue has no leaves to split, and still reads done. */}
-                  <Progress percent={link.percent} className="staple-plan-link-bar mt-0" />
-                </>
-              )}
-              {unlinks ? (
-                <Button variant="ghost" size="icon" className="staple-plan-link-unlink size-7 pointer-coarse:size-9" aria-label={`Unlink ${link.identifier}`} onClick={() => void write("unlink", { ref, issue: link.id })} data-plan-unlink={link.identifier}>
-                  <Unlink aria-hidden className="size-3.5" />
-                </Button>
-              ) : null}
-            </li>
-          ))}
-        </ul>
-      ) : null}
+      <LinkRows links={record.linked} onUnlink={unlinks ? (issue) => void write("unlink", { ref, issue }) : null} kind="work" />
       {adopts ? <AddLine placeholder="Adopt an issue by its identifier" onAdd={(issue) => write("adopt", { ref, issue })} testId="adopt" icon={<Link2 className="size-3.5 shrink-0" aria-hidden />} button="Adopt" className="mt-2" /> : null}
     </Section>
+  );
+}
+
+/**
+ * Research and proofs of concept linked to it, as their own list: the same rows as its work, and
+ * nothing it is measured by. Linking one starts nothing and counts toward no progress or horizon.
+ */
+function Research({ record, write }: { record: IdeaDetailData; write: PlanWrite }) {
+  const { idea } = record;
+  const ref = idea.id;
+  const links = record.exploration ?? [];
+  const unlinks = offers(idea, "unlink_research");
+  const adds = offers(idea, "link_research");
+  if (!adds && links.length === 0) return null;
+  return (
+    <Section label="Research and POCs" testId="research" hint={links.length > 0 ? String(links.length) : undefined}>
+      <p className="m-0 mb-2 text-label text-text-tertiary">Exploration work: it does not start the idea or count toward its progress or horizon.</p>
+      <LinkRows links={links} onUnlink={unlinks ? (issue) => void write("unlink", { ref, issue }) : null} kind="research" />
+      {adds ? (
+        <AddLine
+          placeholder="Link research or a POC by its identifier"
+          onAdd={(issue) => write("adopt", { ref, issue, purpose: "exploration" })}
+          testId="link-research"
+          icon={<Link2 className="size-3.5 shrink-0" aria-hidden />}
+          button="Link"
+          className="mt-2"
+        />
+      ) : null}
+    </Section>
+  );
+}
+
+/** Linked issues as rows: identifier, title, status, a bar and the percent, or a missing row; unlink when given. */
+function LinkRows({ links, onUnlink, kind }: { links: IdeaDetailData["linked"]; onUnlink: ((issue: string) => void) | null; kind: "work" | "research" }) {
+  if (links.length === 0) return null;
+  return (
+    <ul className="m-0 list-none overflow-hidden rounded-lg border p-0" data-plan-links={kind}>
+      {links.map((link) => (
+        <li key={link.id} className={cn("staple-plan-link grid items-center gap-x-3 gap-y-1 border-t px-3 py-2 text-body first:border-t-0", link.missing && "border-dashed")} data-plan-link={link.identifier} data-plan-link-missing={link.missing || undefined}>
+          {link.missing ? (
+            <div className="staple-plan-link-wide min-w-0">
+              <div className="flex items-center gap-1.5">
+                <Flag tone="notStarted">missing</Flag>
+                <span className="truncate font-mono text-label text-text-tertiary">{link.id}</span>
+              </div>
+              <div className="mt-0.5 text-caption text-text-tertiary">This issue is no longer on this device. The idea keeps its stage; unlink it if it is gone for good.</div>
+            </div>
+          ) : (
+            <>
+              <span className="font-mono text-label text-text-tertiary">{link.identifier}</span>
+              <span className="min-w-0 truncate" title={link.title}>
+                {link.title}
+              </span>
+              <span className="staple-plan-wide truncate text-label text-text-tertiary">{link.status.replace(/_/g, " ")}</span>
+              {/* The server's percent: a cancelled issue has no leaves to split, and still reads done. */}
+              <Progress percent={link.percent} className="staple-plan-link-bar mt-0" />
+            </>
+          )}
+          {onUnlink ? (
+            <Button variant="ghost" size="icon" className="staple-plan-link-unlink size-7 pointer-coarse:size-9" aria-label={`Unlink ${link.identifier}`} onClick={() => onUnlink(link.id)} data-plan-unlink={link.identifier}>
+              <Unlink aria-hidden className="size-3.5" />
+            </Button>
+          ) : null}
+        </li>
+      ))}
+    </ul>
   );
 }
 
