@@ -1,6 +1,7 @@
 /**
  * Connections for an idea: what it is attached to in the plan. Its parent idea, its sub-ideas,
- * the horizon it is scheduled on (a milestone), and the tracker work it is linked to. Each row
+ * the horizon it is scheduled on (a milestone), the tracker work it is linked to, and the research
+ * and proofs of concept linked to it, listed apart because they are not its work. Each row
  * opens that record in this drawer. An idea is never a blocker or blocked, so there are no
  * dependency edges to draw; the task version of this tab draws those.
  */
@@ -17,7 +18,8 @@ export function IdeaConnectionsTab({ detail, workspace }: TabProps) {
   const record = planRecordOf(detail);
   if (!record) return null;
   const open = (ref: string) => session.open(workspace, ref);
-  const empty = !record.parent && record.children.length === 0 && !record.horizon && record.linked.length === 0;
+  const exploration = record.exploration ?? [];
+  const empty = !record.parent && record.children.length === 0 && !record.horizon && record.linked.length === 0 && exploration.length === 0;
   return (
     <div className="space-y-5" data-idea-connections={record.idea.id}>
       {empty ? <p className="m-0 text-body text-text-secondary">Nothing is attached yet: no parent idea, no sub-ideas, no horizon and no linked work.</p> : null}
@@ -49,6 +51,15 @@ export function IdeaConnectionsTab({ detail, workspace }: TabProps) {
         <Group label={`Linked work (${record.linked.length})`}>
           {record.linked.map((link) => (
             <Row key={link.id} onOpen={link.missing ? undefined : () => open(link.identifier)} testId="link" trailing={<span className="text-caption text-text-tertiary">{link.missing ? "missing" : link.status}</span>}>
+              <span className="font-mono text-text-tertiary">{link.missing ? link.id : link.identifier}</span> {link.title}
+            </Row>
+          ))}
+        </Group>
+      ) : null}
+      {exploration.length > 0 ? (
+        <Group label={`Research and POCs (${exploration.length})`}>
+          {exploration.map((link) => (
+            <Row key={link.id} onOpen={link.missing ? undefined : () => open(link.identifier)} testId="research" trailing={<span className="text-caption text-text-tertiary">{link.missing ? "missing" : link.status}</span>}>
               <span className="font-mono text-text-tertiary">{link.missing ? link.id : link.identifier}</span> {link.title}
             </Row>
           ))}

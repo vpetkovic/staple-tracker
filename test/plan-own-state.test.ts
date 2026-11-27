@@ -56,8 +56,8 @@ function childWithWork(parent: string, done: boolean): { child: string; work: st
 }
 
 const RAW = ["edit", "ask", "decide", "explore", "shape", "drop", "reparent", "reorder"];
-const EXPLORING = ["edit", "ask", "decide", "shape", "drop", "schedule", "plan_dates", "reparent", "reorder", "adopt", "mark_delivered"];
-const SHAPED = ["edit", "ask", "decide", "unshape", "drop", "schedule", "plan_dates", "reparent", "reorder", "promote", "scaffold", "adopt", "mark_delivered"];
+const EXPLORING = ["edit", "ask", "decide", "shape", "drop", "schedule", "plan_dates", "reparent", "reorder", "adopt", "link_research", "unlink_research", "mark_delivered"];
+const SHAPED = ["edit", "ask", "decide", "unshape", "drop", "schedule", "plan_dates", "reparent", "reorder", "promote", "scaffold", "adopt", "link_research", "unlink_research", "mark_delivered"];
 
 describe("a parent's own state is its own; its sub-ideas' work is a rollup", () => {
   it("keeps a raw parent raw while a sub-idea's work is underway: never schedulable, still refinable", () => {
@@ -208,7 +208,7 @@ describe("a promoted record is an ordinary epic", () => {
 
   it("takes title and brief edits once shipped, on the plan and on the tracker alike", () => {
     const ref = shippedEpic();
-    expect(actionsOf(ref)).toEqual(["adopt", "open_epic", "edit", "ask", "decide"]);
+    expect(actionsOf(ref)).toEqual(["adopt", "link_research", "unlink_research", "open_epic", "edit", "ask", "decide"]);
     expect(plan.update(ref, { title: "Renamed on the plan" }, "agent").title).toBe("Renamed on the plan");
     expect(store.updateIssue(ref, { title: "Renamed on the tracker" }, "agent").title).toBe("Renamed on the tracker");
     expect(plan.update(ref, { brief: "Written after it landed" }, "agent").state).toBe("shipped");
@@ -283,7 +283,7 @@ describe("an idea's documents and files are its edit", () => {
 });
 
 describe("an exploring idea adopts work", () => {
-  const STARTED = ["edit", "ask", "decide", "schedule", "plan_dates", "reorder", "adopt", "unlink", "reset_baseline"];
+  const STARTED = ["edit", "ask", "decide", "schedule", "plan_dates", "reorder", "adopt", "unlink", "link_research", "unlink_research", "reset_baseline"];
 
   it("links existing work while exploring and reads started, its maturity still exploring and still the person's to shape", () => {
     const ref = idea("Billing export", "exploring");

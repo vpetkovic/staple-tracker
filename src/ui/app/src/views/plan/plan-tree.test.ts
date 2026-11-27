@@ -28,6 +28,7 @@ function idea(id: string, title: string, extra: Partial<IdeaData> = {}): IdeaDat
     baseline: null,
     rank: 0,
     links: [],
+    explorations: [],
     missingLinks: [],
     linkCount: 0,
     resolvedLinks: 0,

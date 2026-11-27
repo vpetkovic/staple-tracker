@@ -290,6 +290,16 @@ Two alternatives:
   It then reads started, but its maturity stays exploring: you can still mark it shaped, and its
   questions are still asked, answered and deferred.
 
+**Research and POCs are not delivery.** A spike, a proof of concept or a research ticket done while
+an idea is still being worked out is linked as exploration work: **Link research or a POC** under
+**Research and POCs** on the idea's Plan tab, `staple idea adopt <id> <issue> --research`, or
+`start_idea` with `research`. It shows in its own list on the idea (and under Connections), and it
+does not make the idea started, count toward its progress or dates, or join its horizon. An
+exploring, shaped, started or shipped idea can link and unlink research (`staple idea unlink`
+removes either kind of link); a dropped idea keeps its research until it is restored, and one that
+holds research is restored to exploring or shaped, not raw. Linking an issue the other way moves it
+between the two lists.
+
 ## 7. From started to shipped
 
 Once it is scaffolded, promoted or linked to work, the idea reads **started**. Its progress and
@@ -470,7 +480,7 @@ come back as they were.
 > **Agents capture and write. The person steers.**
 >
 > Agents can capture raw ideas, edit titles and briefs, write plan sections and breakdown rows,
-> add, answer and defer questions, record decisions, adopt or unlink work, and scaffold or
+> add, answer and defer questions, record decisions, adopt or unlink work, link research and POCs, and scaffold or
 > promote an idea **you** marked shaped (preview first, then confirm).
 >
 > Agents cannot move maturity, schedule ideas on horizons, set dates or order, re-parent ideas,
@@ -483,10 +493,10 @@ come back as they were.
 | State | Offers |
 |---|---|
 | Raw | Edit, ask, decide, start exploring, mark shaped, drop, move under another idea, reorder |
-| Exploring | The same, plus schedule on a horizon, plan dates, adopt existing work and mark delivered outside the tracker |
-| Shaped | Edit, schedule, plan dates, scaffold, promote, adopt, mark delivered outside the tracker, back to exploring, drop |
-| Started | Re-plan, adopt more work, unlink work, reset the baseline, open the epic; scaffold again only if it was scaffolded; mark shaped if it started while exploring |
-| Shipped | Open the epic, or link more work (open work reopens it). An idea that was never promoted takes no more edits, unless it was marked delivered outside the tracker: then it is still edited, and you can clear the mark. |
+| Exploring | The same, plus schedule on a horizon, plan dates, adopt existing work, link or unlink research and POCs, and mark delivered outside the tracker |
+| Shaped | Edit, schedule, plan dates, scaffold, promote, adopt, link or unlink research and POCs, mark delivered outside the tracker, back to exploring, drop |
+| Started | Re-plan, adopt more work, unlink work, link or unlink research and POCs, reset the baseline, open the epic; scaffold again only if it was scaffolded; mark shaped if it started while exploring |
+| Shipped | Open the epic, link more work (open work reopens it), or link and unlink research. An idea that was never promoted takes no more edits, unless it was marked delivered outside the tracker: then it is still edited, and you can clear the mark. |
 | Dropped | Restore |
 | Horizon planned | Rename, date, reorder, run setting, remove |
 | Horizon active | Rename, date, reorder, queue, run setting |
@@ -510,7 +520,8 @@ what it offers.
 | `staple idea import <plan.md>` | | Capture an idea from a plan file |
 | `staple idea scaffold [--confirm FP]` | `scaffold_idea` | Preview, then create the epic and its tasks |
 | `staple idea promote`, `adopt` | `start_idea` | Promote the idea in place, or adopt a ticket |
-| `staple idea unlink` | `unlink_idea` | Remove a link |
+| `staple idea adopt --research` | `start_idea` (`research`) | Link a research or POC ticket; it does not start the idea |
+| `staple idea unlink` | `unlink_idea` | Remove a link, work or research |
 | `staple idea reset-baseline --person` | | Make the current window the baseline |
 | `staple horizon new`, `set`, `mv`, `rm` (`--person`) | | Define horizons and their run setting |
 

@@ -121,6 +121,8 @@ export interface IdeaData {
   baseline: PlanWindow | null;
   rank: number;
   links: string[];
+  /** Research and proofs of concept it links: shown on their own, never measured. */
+  explorations: string[];
   missingLinks: string[];
   linkCount: number;
   resolvedLinks: number;
@@ -242,6 +244,8 @@ export interface IdeaDetailData {
   questions: Array<{ text: string; resolved: boolean; deferred?: boolean }>;
   decisions: string[];
   linked: LinkData[];
+  /** Its research and proofs of concept: its own list, nothing it is measured by. */
+  exploration: LinkData[];
   plan: PlanSections;
   completeness: { starred: number; starredTotal: number; filled: number; total: number };
   missingForShaped: string[];

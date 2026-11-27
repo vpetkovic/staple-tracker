@@ -222,10 +222,19 @@ key on a create reads as NULL, the column default.
 
 ## Links and breakdown rows: one synced field each
 
-`plan_links (idea_id, issue_id, linked_by, linked_at)` holds one row per link. On the wire each
+`plan_links (idea_id, issue_id, linked_by, linked_at, purpose)` holds one row per link. On the wire each
 link is one field of the record's `milestone` entity, `planLink.<issue id>`, whose value is
 `{ linkedBy, linkedAt }` and whose `null` unlinks. That is the shape criterion marks already use
 (`criterion<n>`, [milestones.md](milestones.md#goal)).
+
+A link's `purpose` is `delivery` (the work the record stands for) or `exploration` (research or a
+proof of concept done while it is worked out). An exploration link's value carries
+`purpose: "exploration"`; a delivery link's value carries none, as before. Only delivery links are
+the record's work: they start it, measure its progress, dates and lateness, and make its horizon's
+members. Exploration links are listed on the record on their own (`explorations` on its view,
+`exploration` on its detail) and change none of that. An issue is linked one way at a time, since
+the purpose rides the one field: relinking it the other way rewrites that field, and two devices
+linking it two ways offline disagree on one field, a conflict like linking and unlinking it.
 
 The task breakdown is structured: rows `{ id, key, title, estimate, dependsOn, acceptance, owner,
 notes }`, because a row's fields become a task's at scaffold. `key` is how rows depend on each

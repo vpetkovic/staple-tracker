@@ -24,10 +24,10 @@ describe("the idea table", () => {
   it("offers exactly the agreed actions in each state", () => {
     expect(IDEA_LIFECYCLE).toEqual({
       raw: ["edit", "ask", "decide", "explore", "shape", "drop", "reparent", "reorder"],
-      exploring: ["edit", "ask", "decide", "shape", "drop", "schedule", "plan_dates", "reparent", "reorder", "adopt", "mark_delivered"],
-      shaped: ["edit", "ask", "decide", "unshape", "drop", "schedule", "plan_dates", "reparent", "reorder", "promote", "scaffold", "adopt", "mark_delivered"],
-      started: ["edit", "ask", "decide", "schedule", "plan_dates", "reorder", "scaffold", "adopt", "unlink", "reset_baseline", "open_epic"],
-      shipped: ["adopt", "open_epic"],
+      exploring: ["edit", "ask", "decide", "shape", "drop", "schedule", "plan_dates", "reparent", "reorder", "adopt", "link_research", "unlink_research", "mark_delivered"],
+      shaped: ["edit", "ask", "decide", "unshape", "drop", "schedule", "plan_dates", "reparent", "reorder", "promote", "scaffold", "adopt", "link_research", "unlink_research", "mark_delivered"],
+      started: ["edit", "ask", "decide", "schedule", "plan_dates", "reorder", "scaffold", "adopt", "unlink", "link_research", "unlink_research", "reset_baseline", "open_epic"],
+      shipped: ["adopt", "link_research", "unlink_research", "open_epic"],
       dropped: ["restore"],
     });
   });
@@ -46,9 +46,15 @@ describe("the idea table", () => {
 
   it("gives a promoted record the epic's own edits in every state, on top of its row", () => {
     expect(PROMOTED_ALWAYS).toEqual(["edit", "ask", "decide"]);
-    expect(ideaOffered("shipped", true)).toEqual(["adopt", "open_epic", "edit", "ask", "decide"]);
+    expect(ideaOffered("shipped", true)).toEqual(["adopt", "link_research", "unlink_research", "open_epic", "edit", "ask", "decide"]);
     expect(ideaOffered("started", true)).toEqual(IDEA_LIFECYCLE.started);
-    expect(ideaOffered("shipped", false)).toEqual(["adopt", "open_epic"]);
+    expect(ideaOffered("shipped", false)).toEqual(["adopt", "link_research", "unlink_research", "open_epic"]);
+  });
+
+  it("lets research be linked while exploring, shaped, started or shipped, never while raw or dropped", () => {
+    for (const state of ["exploring", "shaped", "started", "shipped"] as const) expect(IDEA_LIFECYCLE[state], state).toEqual(expect.arrayContaining(["link_research", "unlink_research"]));
+    for (const state of ["raw", "dropped"] as const) expect(IDEA_LIFECYCLE[state], state).not.toContain("link_research");
+    expect([IDEA_ACTIONS.link_research.who, IDEA_ACTIONS.unlink_research.who]).toEqual(["anyone", "anyone"]);
   });
 
   it("lets work be linked from exploring on, never while raw", () => {
@@ -70,11 +76,11 @@ describe("the idea table", () => {
     for (const state of ["raw", "started", "shipped", "dropped"] as const) expect(IDEA_LIFECYCLE[state], state).not.toContain("mark_delivered");
     for (const row of Object.values(IDEA_LIFECYCLE)) expect(row).not.toContain("clear_delivered");
     expect(DELIVERED_MARKED).toEqual(["edit", "ask", "decide", "clear_delivered"]);
-    expect(ideaOffered("shipped", false, "shaped", true)).toEqual(["adopt", "open_epic", "edit", "ask", "decide", "clear_delivered"]);
+    expect(ideaOffered("shipped", false, "shaped", true)).toEqual(["adopt", "link_research", "unlink_research", "open_epic", "edit", "ask", "decide", "clear_delivered"]);
     expect(ideaOffered("started", false, "exploring", true)).toEqual([...IDEA_LIFECYCLE.started, "shape", "clear_delivered"]);
     expect(ideaOffered("shipped", false, "shaped", false)).toEqual(IDEA_LIFECYCLE.shipped);
     expect(ideaLifecycleRefusal('the idea "X"', "shipped", "schedule", false, "shaped", true).message).toBe(
-      'The idea "X" is shipped; it cannot be scheduled. A shipped idea offers: adopt existing work, edit title and brief, ask a question, record a decision or clear the delivered mark.',
+      'The idea "X" is shipped; it cannot be scheduled. A shipped idea offers: adopt existing work, link research, unlink research, edit title and brief, ask a question, record a decision or clear the delivered mark.',
     );
   });
 

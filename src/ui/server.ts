@@ -5473,7 +5473,7 @@ export function startUiServer(options: UiOptions): UiHandle {
             plan.promote(ref, actor, person);
             break;
           case "/api/plan/adopt":
-            plan.adopt(ref, (body.issue as string) ?? "", actor);
+            plan.adopt(ref, (body.issue as string) ?? "", actor, { purpose: body.purpose === "exploration" ? "exploration" : "delivery" });
             break;
           case "/api/plan/unlink":
             plan.unlink(ref, (body.issue as string) ?? "", actor);
