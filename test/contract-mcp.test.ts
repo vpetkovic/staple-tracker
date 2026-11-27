@@ -1474,6 +1474,10 @@ describe("tool response shapes (31/31)", () => {
       // Not filed for a finding, and none filed against it.
       foundIn: null,
       findings: [],
+      // Not scaffolded from an idea, not an idea, and it sparked none (planning is off here too).
+      scaffoldedFrom: null,
+      sparkedBy: null,
+      sparked: [],
       comments: [commentGolden({ body: "contract comment", idempotencyKey: "c-1" })],
       documents: [
         { issueId: UUID, key: "plan", currentRevision: 1, title: "Plan", updatedAt: ISO, instructions: false, body: "# plan v1\n" },

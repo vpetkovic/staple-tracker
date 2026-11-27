@@ -93,6 +93,7 @@ import { sharedLine, sharedStatus } from "./core/cloud/shared-status.js";
 import { readConnection } from "./core/cloud/connection.js";
 import { format } from "node:util";
 import { hideDraftIdentifiers, publicOutput } from "./core/plan.js";
+import { scaffoldedFromWords, sparkedIdeaWords } from "./core/plan-provenance.js";
 import { assertHandoffStatus, assertHandoffWorklog, worklogNudge } from "./core/worklog-standing.js";
 
 /**
@@ -1274,8 +1275,9 @@ The plan (experimental; features.planning defaults off)
               the ticket number once promoted, or the id.
               --horizon H (identifier or name) lists what H carries, sub-ideas
               following a parent on H included, and the dropped ideas on H
-  idea new <title> [--brief T] [--parent REF]
-              capture a raw idea (an agent captures raw ideas only)
+  idea new <title> [--brief T] [--parent REF] [--sparked-by TICKET]
+              capture a raw idea (an agent captures raw ideas only); --sparked-by names
+              the ticket whose work turned it up, shown on both records
   idea show <ref>                       stage, windows, plan sections, questions, decisions, links
   idea plan <ref> [--goal T] [--context T|-] [--acceptance T]... [--dependency T]...
               [--out-of-scope T] [--risks T] [--source T]...
@@ -1296,7 +1298,8 @@ The plan (experimental; features.planning defaults off)
   idea scaffold <ref> [--confirm FP]   without --confirm, the preview: the epic and every task it
               would make (estimate, blockers, acceptance, a context document each), what
               holds it back, and its fingerprint; --confirm FP makes exactly that preview
-              and is refused when the plan changed since; a retry makes only what is missing
+              and is refused when the plan changed since; a retry makes only what is missing.
+              Each task keeps the idea and row it came from: show prints "from I-STA-n · row K"
   idea adopt <ref> <issue>              link existing work to the idea; an exploring or shaped
               idea offers it (it then reads started), a raw one does not
   idea unlink <ref> <issue>
@@ -1877,6 +1880,15 @@ function main() {
       }
       if (ctx.findings.length) {
         console.log(`findings:   ${ctx.findings.map((f) => `${f.identifier}(${f.status}, ${f.disposition})`).join(", ")}`);
+      }
+      if (ctx.scaffoldedFrom) {
+        console.log(`${scaffoldedFromWords(ctx.scaffoldedFrom)}: ${ctx.scaffoldedFrom.title}`);
+      }
+      if (ctx.sparkedBy) {
+        console.log(`sparked by: ${ctx.sparkedBy.identifier}(${ctx.sparkedBy.status}) ${ctx.sparkedBy.title}`);
+      }
+      if (ctx.sparked.length) {
+        console.log(`sparked:    ${ctx.sparked.map((idea) => `${sparkedIdeaWords(idea)} ${idea.title}`).join(", ")}`);
       }
       if (ctx.children.length) {
         console.log("\nchildren:");
