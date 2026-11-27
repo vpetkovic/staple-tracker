@@ -187,10 +187,9 @@ export function saveWords(save: SaveStatus): string | null {
 }
 
 /** Where the model is kept, as the foot says it. */
-export function homeWords(home: CostApi["response"]["home"], saved: boolean): string {
+export function homeWords(home: CostApi["response"]["home"]): string {
   if (home.slug === null) return home.suggested ? `Not saved yet. Your first change is saved with ${home.suggested}.` : "Not saved yet.";
-  if (saved) return home.synced ? `Saved with ${home.slug}, and it follows you to your other devices.` : `Saved on this computer only, with ${home.slug}.`;
-  return home.synced ? `Kept with ${home.slug}, and it follows you to your other devices.` : `Kept on this computer only, with ${home.slug}.`;
+  return home.synced ? `Saved with ${home.slug}, and it follows you to your other devices.` : `Saved on this computer only, with ${home.slug}.`;
 }
 
 /** The foot: how the save went, where the model lives, a way to move it, and any older copies the next save gathers. */
@@ -202,7 +201,7 @@ function SavedWhere({ cost, className }: { cost: CostApi; className?: string }) 
   return (
     <div className={cn("flex flex-col gap-1", className)} data-saved-where>
       <p role="status" className={cn("text-label text-pretty text-muted-foreground", cost.save.state === "failed" && "text-[var(--plain-risk-fg)]")} data-save-state={cost.save.state}>
-        {status ?? homeWords(home, cost.save.state === "saved")}
+        {status ?? homeWords(home)}
         {home.slug !== null && others.length > 0 && cost.save.state !== "saving" ? (
           moving ? (
             <select

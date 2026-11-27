@@ -172,7 +172,7 @@ describe("Just me, on the shipped defaults, every workspace", () => {
   it("says where the first save will go", async () => {
     const model = await modelOf();
     expect(model.home.slug).toBeNull();
-    expect(homeWords(model.home, false)).toBe(`Not saved yet. Your first change is saved with ${model.home.suggested}.`);
+    expect(homeWords(model.home)).toBe(`Not saved yet. Your first change is saved with ${model.home.suggested}.`);
   });
 });
 
@@ -338,8 +338,8 @@ describe("where it is saved", () => {
     const model = await modelOf();
     expect(model.home.slug).not.toBeNull();
     expect(model.home.synced).toBe(false);
-    expect(homeWords(model.home, true)).toBe(`Saved on this computer only, with ${model.home.slug}.`);
-    expect(homeWords({ ...model.home, synced: true }, false)).toBe(`Kept with ${model.home.slug}, and it follows you to your other devices.`);
+    expect(homeWords(model.home)).toBe(`Saved on this computer only, with ${model.home.slug}.`);
+    expect(homeWords({ ...model.home, synced: true })).toBe(`Saved with ${model.home.slug}, and it follows you to your other devices.`);
     expect((await roiOf()).caveats).toContainEqual({ code: "home_not_synced", count: 1, of: null });
   });
 });

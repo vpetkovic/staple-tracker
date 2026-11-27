@@ -80,7 +80,8 @@ export function useCostEditor(read: CostModelResponse | undefined, scope: string
             const reason = error instanceof ApiError && (error.code === "conflict" || error.code === "validation") ? error.code : "other";
             const message = error instanceof Error ? error.message : String(error);
             refused.current = { state: "failed", reason, message: reason === "validation" ? refusalSentence(message) : message, field };
-            if (sequence !== latest.current) return;
+            // The latest save already settled: this refusal must not hide behind its "Saved".
+            if (sequence !== latest.current && inFlight.current > 1) return;
             setDraft(null);
             setSave(refused.current);
           },

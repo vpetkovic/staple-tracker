@@ -207,3 +207,15 @@ describe("a refusal, as the field says it", () => {
     expect(refusalSentence("Nothing is saved yet: name the workspace to save the cost model in (home). Suggested: none.")).toBe("Nothing is saved yet: name the workspace to save the cost model in (home). Suggested: none.");
   });
 });
+
+describe("several chips typed at once", () => {
+  it("are saved together in one write", () => {
+    const model = withRules(read(), [{ label: "ci", roleId: "design-engineer" }]);
+    expect(valid(costEdits.chipsAdd(model, "design-engineer", "label", ["ci", "infra", "ux"])).write.roleMapping?.rules).toEqual([
+      { label: "ci", roleId: "design-engineer" },
+      { label: "infra", roleId: "design-engineer" },
+      { label: "ux", roleId: "design-engineer" },
+    ]);
+    expect(costEdits.chipsAdd(model, "design-engineer", "label", ["ci"])).toBeNull();
+  });
+});

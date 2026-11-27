@@ -155,6 +155,16 @@ export const costEdits = {
     if (stored === "" || model.roleMapping.rules.some((rule) => isChip(rule, roleId) && rule[field] === stored)) return null;
     return withMapping(model, { types: model.roleMapping.types, rules: [...model.roleMapping.rules, { [field]: stored, roleId }] }, `rules.${roleId}.${field}`);
   },
+  /** Several chips of one field at once, in one write. Null when none is new. */
+  chipsAdd: (model: CostModelValue, roleId: string, field: RuleField, values: readonly string[]): CostEdit | null => {
+    let current = model;
+    let changed = false;
+    for (const value of values) {
+      const edit = costEdits.chipAdd(current, roleId, field, value);
+      if (edit) [current, changed] = [edit.next, true];
+    }
+    return changed ? withMapping(current, current.roleMapping, `rules.${roleId}.${field}`) : null;
+  },
   /** Remove a chip: the single-field rule naming the role with that value. */
   chipRemove: (model: CostModelValue, roleId: string, field: RuleField, stored: string): CostEdit =>
     withMapping(model, { types: model.roleMapping.types, rules: model.roleMapping.rules.filter((rule) => !(isChip(rule, roleId) && rule[field] === stored)) }, `rules.${roleId}.${field}`),

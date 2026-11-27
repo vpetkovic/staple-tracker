@@ -48,9 +48,12 @@ const REASON_WORDS: Record<RoiTicket["reason"]["code"], string> = {
 export function reasonWords(reason: RoiTicket["reason"]): string {
   return reason.code === "rule" && reason.detail !== null ? `rule ${Number(reason.detail) + 1}` : REASON_WORDS[reason.code];
 }
+const DETAIL_WORDS: Partial<Record<RoiTicket["reason"]["code"], string>> = { label: "label", agent_name: "agent name word", title: "title word", kind: "kind" };
 /** The longer form, for a tooltip: "title word redesign". */
-const reasonDetail = (reason: RoiTicket["reason"]): string | undefined =>
-  reason.detail === null || reason.code === "rule" ? undefined : `${{ label: "label", agent_name: "agent name word", title: "title word", kind: "kind" }[reason.code as "label"] ?? reason.code} ${reason.detail}`;
+const reasonDetail = (reason: RoiTicket["reason"]): string | undefined => {
+  const words = DETAIL_WORDS[reason.code];
+  return words === undefined || reason.detail === null ? undefined : `${words} ${reason.detail}`;
+};
 
 const shown = (field: RuleField, value: string): string => (field === "agent" ? agentWords(value) : value);
 
@@ -228,7 +231,7 @@ function Recognition({ roleId, cost, recognized }: { roleId: string; cost: CostA
           label={field.label}
           placeholder={field.placeholder}
           values={values.map((value) => shown(field.key, value))}
-          onAdd={(value) => cost.apply(costEdits.chipAdd(model, roleId, field.key, value))}
+          onAdd={(values) => cost.apply(costEdits.chipsAdd(model, roleId, field.key, values))}
           onRemove={(index) => cost.apply(costEdits.chipRemove(model, roleId, field.key, values[index]!))}
           problem={cost.problem(`rules.${roleId}.${field.key}`)}
         />

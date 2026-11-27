@@ -162,13 +162,13 @@ export function Chip({ children, tone = "plain", onRemove, removeLabel, title }:
  * One way a role is recognized, as chips: remove one with its ×, add one by typing and pressing
  * Enter or a comma. `values` are the chips as shown, `onRemove` gets the index of the one removed.
  */
-export function ChipField({ label, placeholder, values, onAdd, onRemove, problem, children }: { label: string; placeholder: string; values: readonly string[]; onAdd?: (value: string) => void; onRemove?: (index: number) => void; problem?: string; /** In place of the text box: a control of its own, given the label's id. */ children?: (id: string) => ReactNode }) {
+export function ChipField({ label, placeholder, values, onAdd, onRemove, problem, children }: { label: string; placeholder: string; values: readonly string[]; /** Every new value typed at once ("ci, infra"), so they save together. */ onAdd?: (values: string[]) => void; onRemove?: (index: number) => void; problem?: string; /** In place of the text box: a control of its own, given the label's id. */ children?: (id: string) => ReactNode }) {
   const id = useId();
   const [text, setText] = useState("");
   const add = (source: string = text) => {
     setText("");
-    if (!onAdd) return;
-    for (const value of source.split(",").map((part) => part.trim())) if (value !== "" && !values.includes(value)) onAdd(value);
+    const added = [...new Set(source.split(",").map((part) => part.trim()))].filter((value) => value !== "" && !values.includes(value));
+    if (onAdd && added.length > 0) onAdd(added);
   };
   return (
     <div className="min-w-0" data-chip-field>
