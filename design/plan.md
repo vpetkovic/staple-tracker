@@ -429,8 +429,9 @@ shows it (`ticket_converted`). A person or an agent may convert, as either may c
 update records the same move; one that hydrates later has no alias, so `lookupRow` reads the column
 after a live identifier and a kept idea number, and before an alias. A live identifier still wins:
 a number another issue holds names that issue. The applier keeps the ticket counter past a kept
-number (`advanceIssueNumber`), so a device that only hydrated never mints it again, and a text
-search matches it. With planning off neither the column nor an alias that leads to an idea
+number (`advanceIssueNumber`, as the record arrives), so a device that only hydrated never mints
+it again, and a text search that includes plan records (`kind idea`, `includePlan`) matches it;
+task lists, `ls -q` and the toolbar search leave ideas out, as they always do. With planning off neither the column nor an alias that leads to an idea
 resolves, on any device.
 
 *What converts.* The ticket and everything under it, parents first: each child becomes a sub-idea
@@ -440,17 +441,26 @@ idea's parent is an idea; a parent in the plan (a promoted record) stays. Refuse
 reason for every record, unless each record is open, in the unstarted or ready band, never started
 (`started_at`), not checked out or leased here, has no recorded branch, no blocking edge either way
 (a plan neither blocks nor waits), no place in the pickup queue or a milestone, no link to an idea,
-and no stand-in number (sync settles a stand-in by renumbering it from the ticket counter, which
+no pending review gate, and no stand-in number (sync settles a stand-in by renumbering it from the ticket counter, which
 would overwrite the idea number). A milestone or a plan record is never converted.
 
-*Across devices.* Two devices that convert one ticket offline both write its identifier, and the
-last write in the log is its number on every device, as for two promotions of one idea; both wrote
-the same kept number. Neither the kept number nor a conversion's rank is a field contest
+*Across devices.* A conversion's idea number is the record's first claim on one, as a capture's is:
+an update that carries `planTicketNumber` and loses its number to an earlier claim takes the
+stand-in a create would (`displaceIdentifierHolder`), on the record until the converting device
+settles it. So two devices that convert one ticket and its subtree offline, each minting its own
+numbers, end on the log's numbers on every device with nothing open; dropped instead, the losing
+writes left each device on its own set. Both wrote the same kept numbers. Neither the kept number nor a conversion's rank is a field contest
 (`conflicts.ts`): staple assigned both. A ticket number written onto a record that is an idea once
 the write lands (a renumber from before a conversion) is not "promotion over an idea number"
 (`displaceIdentifierHolder`): a promotion carries its kind, and without one the log orders the
-two writes like any other. A device that checked the ticket out before it heard of the conversion
-keeps its claim on what is now an idea; both devices read the same.
+two writes like any other. An edit another device made before it heard of the conversion is
+applied as written, and every device reads the same record: a checkout leaves an idea that is
+checked out and in progress, a queue entry stays (the effective queue skips a plan record), and a
+move under tracker work or a child filed under the ticket leaves an idea under that work, or work
+under the idea. Nothing reconciles these; the person releases, dequeues or moves them. A ticket
+converted before its create reached the log keeps the number it had here; if an earlier claim in
+the log gave that number to another ticket, the live identifier names that ticket and the kept
+number only says what the idea was called on this device.
 
 **Import** (`staple idea import <plan.md>`, `PlanStore.importPlan`) reads a plan file into one
 idea, in one transaction: the first heading outside a code fence is the title, the text before the

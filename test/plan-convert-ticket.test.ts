@@ -126,6 +126,14 @@ describe("converting a ticket on one device", () => {
     expect(refused(() => plan.convertTicket(research.identifier, "agent")).message).toContain("is linked to the idea \"Exploring\" (I-TST-1)");
 
     expect(refused(() => plan.convertTicket(exploring.id, "agent")).message).toContain("is already part of the plan");
+
+    // A review gate parks a parent; it is refused for that, not as started work.
+    const gated = store.createIssue({ title: "Gated", kind: "epic" });
+    store.createIssue({ title: "Gated child", parent: gated.identifier });
+    store.gateIssue(gated.identifier, { owner: "VP" }, "agent");
+    const gate = refused(() => plan.convertTicket(gated.identifier, "agent")).message;
+    expect(gate).toContain("is parked behind a review gate");
+    expect(gate).not.toContain("was started");
   });
 
   it("is hidden with planning off, with nothing deleted, on the number it left too", () => {
@@ -195,12 +203,14 @@ describe("a conversion across devices", () => {
       expect([ticket.identifier, child.identifier]).not.toContain(minted.identifier);
     });
 
-    it(`converges when two devices convert one ticket offline, with nothing to answer (${fold} fold)`, async () => {
+    it(`converges when two devices convert one ticket and its subtree offline, with nothing to answer (${fold} fold)`, async () => {
       const server = new FakeSyncServer({ repositoryId: REPO, ...(fold === "tail" ? { maxSnapshotFoldOps: 3 } : {}) });
       fleet = new Fleet(server, REPO);
       const a = fleet.machine("a");
       a.store.plan().enable("vp", { person: { via: "settings" } });
       const ticket = a.store.createIssue({ title: "Twice misfiled" });
+      const child = a.store.createIssue({ title: "Its child", parent: ticket.identifier });
+      const grandchild = a.store.createIssue({ title: "Its grandchild", parent: child.identifier });
       await a.sync();
       const b = fleet.machine("b");
       await b.sync();
@@ -216,12 +226,15 @@ describe("a conversion across devices", () => {
 
       for (const m of [a, b, fresh]) {
         m.use();
-        expect(record(m, ticket.id)).toEqual(record(a, ticket.id));
-        expect(m.store.getIssue(ticket.identifier).id).toBe(ticket.id);
+        // The subtree too: each device minted its own numbers for it, and every device ends on one set.
+        for (const converted of [ticket, child, grandchild]) {
+          expect(record(m, converted.id)).toEqual(record(a, converted.id));
+          expect(m.store.getIssue(converted.identifier).id).toBe(converted.id);
+        }
         expect(open(m)).toEqual([]);
       }
       const numbers = (m: Machine) => (m.db.prepare("SELECT identifier FROM issues WHERE kind = 'idea' ORDER BY identifier").all() as Array<{ identifier: string }>).map((r) => r.identifier);
-      expect(new Set(numbers(a)).size).toBe(2);
+      expect(new Set(numbers(a)).size).toBe(4);
       expect(numbers(b)).toEqual(numbers(a));
       expect(numbers(fresh)).toEqual(numbers(a));
     });

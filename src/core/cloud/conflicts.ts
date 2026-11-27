@@ -515,7 +515,12 @@ interface LocalSide {
 function conversionOp(db: DatabaseSync, opId: string | null): boolean {
   if (opId === null) return false;
   const row = db.prepare("SELECT payload FROM sync_outbox WHERE op_id = ?").get(opId) as { payload: string } | undefined;
-  return row !== undefined && row.payload.includes('"planTicketNumber"');
+  if (row === undefined) return false;
+  try {
+    return "planTicketNumber" in (JSON.parse(row.payload) as Record<string, unknown>);
+  } catch {
+    return false;
+  }
 }
 /**
  * The fields written on this device since the version the sender claims.

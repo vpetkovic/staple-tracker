@@ -137,9 +137,14 @@ one (`staple show` prints `I-STA-14 · was STA-287`). Its children become its su
 same way. A parent that is ordinary tracker work is left, because an idea's parent is an idea.
 
 Only a ticket nobody has started converts. It is refused, with every reason, when the ticket or
-anything under it is checked out, was ever started, is done or cancelled, blocks or waits on other
-work, is in the pickup queue or a milestone, or is linked to an idea. Agents use it too
-(`convert_to_idea`).
+anything under it is checked out or leased by this device, was ever started, is done or cancelled,
+waits behind a review gate, has work on a recorded branch, blocks or waits on other work, is in the
+pickup queue or a milestone, is linked to an idea, or still holds a stand-in number sync has not
+settled. Agents use it too (`convert_to_idea`).
+
+If another device starts, queues or moves the ticket before it hears of the conversion, every
+device ends with the same record, an idea that still holds that checkout, queue place or parent.
+Release, dequeue or move it by hand.
 
 An idea opens in the same panel as a task. Its **Plan** tab holds the brief, the plan sections,
 open questions and decisions. Connections, Documents, Files, Activity, **For agents** (the

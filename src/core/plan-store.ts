@@ -2074,17 +2074,20 @@ export class PlanStore {
   /** Why one record of a conversion cannot become an idea, each as a clause; empty when it can. */
   private conversionProblems(row: PlanRow, isRoot: boolean): string[] {
     const problems: string[] = [];
-    const full = this.db.prepare("SELECT status, started_at, checkout_agent, branch FROM issues WHERE id = ?").get(row.id) as {
+    const full = this.db.prepare("SELECT status, started_at, checkout_agent, branch, gate_state FROM issues WHERE id = ?").get(row.id) as {
       status: string;
       started_at: string | null;
       checkout_agent: string | null;
       branch: string | null;
+      gate_state: string | null;
     };
     if (row.kind === MILESTONE_KIND) problems.push("is a milestone");
     else if (!isRoot && (row.kind === IDEA_KIND || row.plan_maturity !== null)) problems.push("is already part of the plan");
     if (row.identifier.includes("+")) problems.push(`holds a stand-in number until sync settles it; sync first`);
     const category = this.store.categoryOf(full.status);
     if (category === "done" || category === "cancelled") problems.push(`is ${full.status}`);
+    // A review gate parks a parent until a person answers it; that is not work started.
+    else if (full.gate_state === "pending") problems.push("is parked behind a review gate (approve it or request changes first)");
     else if (category !== "unstarted" && category !== "ready") problems.push(`was started (it is ${full.status})`);
     else if (full.started_at !== null) problems.push(`was started on ${full.started_at.slice(0, 10)}`);
     if (full.checkout_agent !== null) problems.push(`is checked out by ${full.checkout_agent}`);

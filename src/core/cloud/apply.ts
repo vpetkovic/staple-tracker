@@ -827,8 +827,6 @@ function applyIssue(db: DatabaseSync, input: ApplyInput): boolean {
     if (values.size > 0) updateRow(db, "issues", "id", input.entityId, [...values]);
     // A promoted idea's kept number is one the idea counter must pass too (`idea-numbers.ts`).
     if (values.has("plan_idea_number")) advanceIdeaNumber(db, values.get("plan_idea_number"));
-    // And a converted idea's kept ticket number is one the ticket counter must pass, so it is never minted again.
-    if (typeof values.get("plan_ticket_number") === "string") advanceIssueNumber(db, values.get("plan_ticket_number") as string);
     if (values.has("identifier") || values.has("plan_idea_number")) claimKeptIdeaNumbers(db, input);
     if (values.has("parent_id")) {
       // A move: the subtree's depth follows the moved row's, as on the device that moved it.
@@ -1418,18 +1416,7 @@ function displaceIdentifierHolder(
    * gave an idea number (a legacy record it numbered) is not a stale write of its own: promotion
    * wins, so it is applied, and the next branch must not keep the idea number.
    */
-  /**
-   * Only onto a record that is not an idea once this write lands: a promotion carries its kind.
-   * A ticket number reaching an idea without one is a write from before a conversion (a ticket
-   * settled or renumbered before another device converted it, design/plan.md, "Converting a
-   * ticket into an idea"), which the log orders like any other write of the field below.
-   */
-  const kindAfter = (() => {
-    const kindIndex = pairs.findIndex(([column]) => column === "kind");
-    return kindIndex >= 0 ? pairs[kindIndex]![1] : (db.prepare("SELECT kind FROM issues WHERE id = ?").get(input.entityId) as { kind: string } | undefined)?.kind;
-  })();
-  const promotionOverIdeaNumber =
-    kindAfter !== IDEA_KIND && !isIdeaNumber(incoming[1]) && !isDraftIdentifier(incoming[1]) && isIdeaNumber(identifierOf(db, input.entityId));
+  const promotionOverIdeaNumber = !isIdeaNumber(incoming[1]) && !isDraftIdentifier(incoming[1]) && isIdeaNumber(identifierOf(db, input.entityId));
 
   /**
    * The record's own number, written on two devices: one idea promoted on both before either
@@ -1484,9 +1471,15 @@ function displaceIdentifierHolder(
    * A promoted idea's first number is a claim like a create's (design/plan.md, "Identity"): the
    * row holds a draft identifier, which is never shown, so a later claim it lost takes the
    * stand-in a create would, on the record until the promoting device settles it.
+   *
+   * And so is a conversion's idea number (design/plan.md, "Converting a ticket into an idea"): the
+   * update that carries the kept ticket number is the record's first claim on an idea number, as a
+   * capture's create is. Dropped, a device whose own conversion of the same ticket gave it (or its
+   * children) other numbers kept its own and never took the converting device's settlement.
    */
   const current = identifierOf(db, input.entityId);
-  if (!decision && current !== null && (isDraftIdentifier(current) || (isIdeaNumber(current) && !isIdeaNumber(incoming[1])))) {
+  const conversion = "planTicketNumber" in input.payload && isIdeaNumber(incoming[1]);
+  if (!decision && current !== null && (isDraftIdentifier(current) || (isIdeaNumber(current) && !isIdeaNumber(incoming[1])) || conversion)) {
     const provisional = provisionalIdentifier(db, incoming[1], claimSeqOf(input, ["identifier"]));
     recordIdentifierConflict(db, input, incoming[1], provisional);
     pairs[index] = ["identifier", provisional];
