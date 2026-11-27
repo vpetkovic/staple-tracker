@@ -42,49 +42,51 @@ export interface HomeCandidate {
   readonly store: WorkspaceStore;
 }
 
-interface HeldModel {
-  readonly model: CostModel;
-  readonly source: Record<CostModelPart, "saved" | "default">;
-  /** True when any part is saved here. */
-  readonly saved: boolean;
+/** One part as one workspace holds it. */
+interface HeldPart {
+  readonly status: "saved" | "default" | "unreadable";
+  /** The stored value (raw, as written), or the default. */
+  readonly value: unknown;
   /**
-   * When the newest saved part here was saved, as an instant: compared numerically, so an
-   * offset stamp (`…+05:00`) ranks by the moment it names. A saved part without a usable
-   * stamp (written by hand with `staple settings set`) ranks as the oldest save, not as none.
+   * When it was saved, as an instant: compared numerically, so an offset stamp (`…+05:00`)
+   * ranks by the moment it names. A save without a usable stamp (written by hand with
+   * `staple settings set`) ranks as the oldest save, not as none. -Infinity when not saved.
    */
-  readonly savedAtMs: number;
-  readonly savedAt: string | null;
-  /** Parts saved here that this build cannot read (a newer device's value), with the refusal. */
-  readonly unreadable: ReadonlyMap<CostModelPart, StapleError>;
+  readonly stampMs: number;
+  readonly error: StapleError | null;
 }
 
-/** The model one workspace holds: each part saved there, or its default. `assumed` is always present. */
-function readHeldModel(store: WorkspaceStore): HeldModel {
-  const source = {} as Record<CostModelPart, "saved" | "default">;
-  const parts = {} as Record<CostModelPart, unknown>;
-  const unreadable = new Map<CostModelPart, StapleError>();
+interface Held extends HomeCandidate {
+  readonly parts: Readonly<Record<CostModelPart, HeldPart>>;
+  /** True when any part is saved here (readable or not). */
+  readonly saved: boolean;
+  /** The newest save here. */
+  readonly stampMs: number;
+}
+
+/** What one workspace holds, part by part. `assumed` is always present on a value. */
+function readHeld(candidate: HomeCandidate): Held {
+  const parts = {} as Record<CostModelPart, HeldPart>;
   for (const part of COST_MODEL_PARTS) {
-    let view;
     try {
-      view = store.settingValue(COST_MODEL_KEYS[part]);
+      const view = candidate.store.settingValue(COST_MODEL_KEYS[part]);
+      if (view.source === "workspace") {
+        const value = view.value as { assumed?: readonly string[]; savedAt?: string | null };
+        const at = Date.parse(value.savedAt ?? "");
+        parts[part] = { status: "saved", value: { ...value, assumed: value.assumed ?? [] }, stampMs: Number.isFinite(at) ? at : 0, error: null };
+      } else {
+        parts[part] = { status: "default", value: DEFAULT_COST_MODEL[part], stampMs: Number.NEGATIVE_INFINITY, error: null };
+      }
     } catch (error) {
       if (!(error instanceof StapleError)) throw error;
-      // Never carried or reset; ranked by the stamp its raw row still names, and refused if it is the home's.
-      unreadable.set(part, error);
-      view = { source: "default" as const, value: DEFAULT_COST_MODEL[part] };
+      // Never carried or reset; ranked by the stamp its raw row still names.
+      const at = rawSavedAt(candidate.store, part);
+      parts[part] = { status: "unreadable", value: DEFAULT_COST_MODEL[part], stampMs: Number.isFinite(at) ? at : 0, error };
     }
-    const saved = view.source === "workspace";
-    source[part] = saved ? "saved" : "default";
-    const value = (saved ? view.value : DEFAULT_COST_MODEL[part]) as { assumed?: readonly string[] };
-    parts[part] = { ...value, assumed: value.assumed ?? [] };
   }
-  const model = parts as unknown as CostModel;
-  const stamps = [
-    ...COST_MODEL_PARTS.filter((part) => source[part] === "saved").map((part) => Date.parse(model[part].savedAt ?? "")),
-    ...[...unreadable.keys()].map((part) => rawSavedAt(store, part)),
-  ];
-  const savedAtMs = stamps.length === 0 ? Number.NEGATIVE_INFINITY : Math.max(0, ...stamps.filter((at) => Number.isFinite(at)));
-  return { model, source, saved: stamps.length > 0, savedAtMs, savedAt: stamps.length === 0 ? null : new Date(savedAtMs).toISOString(), unreadable };
+  const stamps = COST_MODEL_PARTS.map((part) => parts[part].stampMs);
+  const stampMs = Math.max(...stamps);
+  return { ...candidate, parts, saved: stampMs > Number.NEGATIVE_INFINITY, stampMs };
 }
 
 /** The `savedAt` a stored row names, read from its raw JSON (for a row the registry cannot read), as epoch ms; NaN when none. */
@@ -106,55 +108,84 @@ function isSynced(store: WorkspaceStore, home: string): boolean {
   return connection !== null && connection.removed === undefined;
 }
 
+/** The effective value of one part: its newest save in any workspace, else the default. */
+interface EffectivePart {
+  readonly value: unknown;
+  /** The workspace holding that save, or null for the default. */
+  readonly from: Held | null;
+  readonly unreadable: StapleError | null;
+}
+
 interface Resolved {
-  readonly home: (HomeCandidate & HeldModel) | null;
-  /** Every candidate with what it holds. */
-  readonly held: readonly (HomeCandidate & HeldModel)[];
+  readonly held: readonly Held[];
+  readonly effective: Readonly<Record<CostModelPart, EffectivePart>>;
+  /** The workspace holding the newest save of any part, or null when nothing is saved. */
+  readonly home: Held | null;
   readonly view: CostModelHome;
 }
 
 /**
- * The home among `candidates`, and the rest that also hold a save. `scopeSlug` is the workspace
- * the page is about (null for the hub): where a first save is suggested to go.
+ * The effective model and where it lives. Each part is read from its own newest save, in
+ * whichever registered workspace holds it, so two devices saving different parts (one the
+ * company profile, the other a move of the whole model) can never hide one another's parts.
+ * The home is the workspace holding the newest save of all; `others` are the rest that still
+ * hold a save, which the next write gathers into the home. `scopeSlug` is the workspace the
+ * page is about (null for the hub): where a first save is suggested to go.
  */
 function resolveHome(candidates: readonly HomeCandidate[], scopeSlug: string | null, home: string): Resolved {
-  const held = candidates.map((candidate) => ({ ...candidate, ...readHeldModel(candidate.store) }));
-  const saved = held.filter((candidate) => candidate.saved).sort((a, b) => b.savedAtMs - a.savedAtMs || a.slug.localeCompare(b.slug));
+  const held = candidates.map(readHeld);
+  const effective = {} as Record<CostModelPart, EffectivePart>;
+  for (const part of COST_MODEL_PARTS) {
+    const newest = held
+      .filter((candidate) => candidate.parts[part].status !== "default")
+      .sort((a, b) => b.parts[part].stampMs - a.parts[part].stampMs || a.slug.localeCompare(b.slug))[0];
+    effective[part] = newest
+      ? { value: newest.parts[part].value, from: newest, unreadable: newest.parts[part].error }
+      : { value: { ...(DEFAULT_COST_MODEL[part] as object) }, from: null, unreadable: null };
+  }
+  const saved = held.filter((candidate) => candidate.saved).sort((a, b) => b.stampMs - a.stampMs || a.slug.localeCompare(b.slug));
   const chosen = saved[0] ?? null;
   const inScope = scopeSlug === null ? undefined : candidates.find((candidate) => candidate.slug === scopeSlug);
   const suggested = chosen?.slug ?? inScope?.slug ?? candidates.find((candidate) => isSynced(candidate.store, home))?.slug ?? candidates[0]?.slug ?? null;
   return {
-    home: chosen,
     held,
+    effective,
+    home: chosen,
     view: {
       slug: chosen?.slug ?? null,
       prefix: chosen?.prefix ?? null,
       synced: chosen !== null && isSynced(chosen.store, home),
-      others: saved.slice(1).map((candidate) => ({ slug: candidate.slug, prefix: candidate.prefix, savedAt: candidate.savedAt! })),
+      others: saved.slice(1).map((candidate) => ({ slug: candidate.slug, prefix: candidate.prefix, savedAt: new Date(candidate.stampMs).toISOString() })),
       suggested,
     },
   };
 }
 
 function responseOf(resolved: Resolved): CostModelResponse {
-  // The home's model is incomplete without a part this build cannot read: say so rather than mix in a default.
-  const refusal = resolved.home?.unreadable.values().next().value;
-  if (refusal) throw refusal;
-  const held = resolved.home ?? { model: DEFAULT_COST_MODEL, source: Object.fromEntries(COST_MODEL_PARTS.map((part) => [part, "default"])) as Record<CostModelPart, "saved" | "default"> };
-  // Every default carries `assumed`, and `readHeldModel` filled it for a save without one. The
-  // read-time defaults below are applied here only, so a move carries stored values as they are.
-  const model = { ...held.model, solo: profileView(held.model.solo, held.model), company: profileView(held.model.company, held.model) };
-  return { model: model as unknown as CostModelValue, source: held.source, home: resolved.view, agentTypes: [...AGENT_TYPES] };
+  // A part whose newest save this build cannot read: say so rather than mix in a default.
+  for (const part of COST_MODEL_PARTS) {
+    const refusal = resolved.effective[part].unreadable;
+    if (refusal) throw refusal;
+  }
+  const model = Object.fromEntries(COST_MODEL_PARTS.map((part) => [part, resolved.effective[part].value])) as unknown as CostModel;
+  const source = Object.fromEntries(COST_MODEL_PARTS.map((part) => [part, resolved.effective[part].from === null ? "default" : "saved"])) as Record<CostModelPart, "saved" | "default">;
+  // The read-time defaults below are applied here only, so a write carries stored values as they are.
+  const view = { ...model, solo: profileView(model.solo, model), company: profileView(model.company, model) };
+  return { model: view as unknown as CostModelValue, source, home: resolved.view, agentTypes: [...AGENT_TYPES] };
 }
 
+const own = (record: Readonly<Record<string, number>>, key: string): number | undefined => (Object.hasOwn(record, key) ? record[key] : undefined);
+
 /**
- * A profile as a read answers it: every role in the list has a rate (one the profile does not
- * set reads at `DEFAULT_ROLE_RATE` and is listed as assumed), and every entry has its kind, its
+ * A profile as a read answers it: exactly the roles in the list have a rate (one the profile
+ * does not set reads at `DEFAULT_ROLE_RATE` and is listed as assumed; a removed role's rate is
+ * left out, so the read can be echoed back as a valid write), and every entry has its kind, its
  * quantity (null for an API bill) and its role (null for shared spend).
  */
 function profileView(profile: ProfileValue, model: CostModel): ProfileValue {
-  const missing = model.roles.roles.filter((role) => profile.rates[role.id] === undefined).map((role) => role.id);
-  const rates = { ...profile.rates, ...Object.fromEntries(missing.map((id) => [id, DEFAULT_ROLE_RATE])) };
+  const ids = model.roles.roles.map((role) => role.id);
+  const missing = ids.filter((id) => own(profile.rates, id) === undefined);
+  const rates = Object.fromEntries(ids.map((id) => [id, own(profile.rates, id) ?? DEFAULT_ROLE_RATE]));
   const assumed = [...new Set([...(profile.assumed ?? []), ...missing.map((id) => `roles.${id}.hourlyRate`)])];
   const entries = profile.entries.map((entry) => {
     const kind = kindOf(entry);
@@ -200,12 +231,12 @@ function assertNoConflict(store: WorkspaceStore, parts: readonly CostModelPart[]
  * `POST /api/analytics/cost-model`: save, reset or move. Answers the model as it now stands
  * and the slugs written, so the caller can trigger their sync.
  *
- * Every write leaves exactly one workspace holding the model. The target (the named home, else
- * the current one) is written to hold the effective model with this write on top: a part this
- * write sets, a part the current home holds, or the default, in that order. Any other workspace
- * still holding a saved part (the old home after a move, or an older save that arrived by sync)
- * has it reset, so a later reset or move can never bring a superseded value back. No workspace
- * is touched while any part it would change has an open cloud conflict.
+ * Every write gathers the model into one workspace, the target (the named home, else the
+ * current one): each part is written there as this write sets it, else as its newest save
+ * anywhere, else left at (or reset to) its default. Every other workspace still holding a saved
+ * part has it reset, so a later reset or move can never bring a superseded value back. No
+ * workspace is touched while a part it would change has an open cloud conflict, and a part
+ * whose newest save this build cannot read is refused unless the write replaces it.
  */
 export function writeCostModel(
   candidates: readonly HomeCandidate[],
@@ -229,32 +260,33 @@ export function writeCostModel(
     throw new StapleError("validation", `Nothing is saved yet: name the workspace to save the cost model in (home). Suggested: ${before.view.suggested ?? "none"}.`);
   }
   const target = before.held.find((candidate) => candidate.slug === targetSlug)!;
-  const basis = before.home;
 
   type Op = { op: "set"; key: string; value: unknown } | { op: "reset"; key: string };
-  const plan: Array<{ candidate: HomeCandidate & HeldModel; ops: Op[]; parts: CostModelPart[] }> = [];
   const targetOps: Op[] = [];
   const targetParts: CostModelPart[] = [];
   for (const part of COST_MODEL_PARTS) {
     const key = COST_MODEL_KEYS[part];
-    const carried = basis !== null && basis.slug !== target.slug && basis.source[part] === "saved" ? basis.model[part] : undefined;
-    const value = reset.includes(part) ? undefined : (parts[part] ?? carried);
-    if (value !== undefined) targetOps.push({ op: "set", key, value });
-    // A part the effective model holds at its default must not survive as an older save here.
-    else if (target.source[part] === "saved" && (reset.includes(part) || basis === null || basis.slug !== target.slug)) targetOps.push({ op: "reset", key });
-    else continue;
+    const effective = before.effective[part];
+    const heldHere = target.parts[part].status === "saved";
+    let op: Op | null = null;
+    if (reset.includes(part)) op = heldHere ? { op: "reset", key } : null;
+    else if (parts[part] !== undefined) op = { op: "set", key, value: parts[part] };
+    else if (effective.unreadable) throw effective.unreadable;
+    else if (effective.from !== null && effective.from.slug !== target.slug) op = { op: "set", key, value: effective.value };
+    else if (effective.from === null && heldHere) op = { op: "reset", key };
+    if (op === null) continue;
+    targetOps.push(op);
     targetParts.push(part);
   }
-  plan.push({ candidate: target, ops: targetOps, parts: targetParts });
+  const plan: Array<{ candidate: Held; ops: Op[]; parts: CostModelPart[] }> = [{ candidate: target, ops: targetOps, parts: targetParts }];
   for (const other of before.held) {
-    if (other.slug === target.slug || !other.saved) continue;
-    const held = COST_MODEL_PARTS.filter((part) => other.source[part] === "saved");
-    plan.push({ candidate: other, ops: held.map((part) => ({ op: "reset" as const, key: COST_MODEL_KEYS[part] })), parts: held });
+    if (other.slug === target.slug) continue;
+    const held = COST_MODEL_PARTS.filter((part) => other.parts[part].status === "saved");
+    if (held.length > 0) plan.push({ candidate: other, ops: held.map((part) => ({ op: "reset" as const, key: COST_MODEL_KEYS[part] })), parts: held });
   }
   for (const step of plan) assertNoConflict(step.candidate.store, step.parts);
   const written: string[] = [];
   for (const step of plan) {
-    if (step.ops.length === 0 && step.candidate.slug !== target.slug) continue;
     if (step.ops.length > 0) step.candidate.store.applySettingOps(step.ops, options.actor);
     written.push(step.candidate.slug);
   }

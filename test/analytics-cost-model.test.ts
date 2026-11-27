@@ -320,6 +320,11 @@ describe("the ROI", () => {
     expect(roi({ lens: "measured", byRole: byRole({ engineering: 1 }), aiEntries: [], ...onHub("eng"), directorHours: 0, model: unset }).byRole[0]!.hourlyRate).toBe(100);
   });
 
+  it("prices a role named like a built-in object key by its own rate only", () => {
+    const odd: CostModel = { ...model, roles: { roles: [{ id: "constructor", title: "Builder" }], savedAt: null }, solo: { ...model.solo, rates: {} } };
+    expect(resolveRoles(odd).role("constructor").hourlyRate).toBe(100);
+  });
+
   it("answers null, not infinity, when there is no cost or no hours", () => {
     const result = roi({ lens: "measured", byRole: new Map(), aiEntries: [], ...onHub(), directorHours: 0, model });
     expect(result).toMatchObject({ value: 0, totalCost: 0, sharedAiCost: 0, returnOnTotalCost: null, returnOnAiSpend: null, breakEvenRate: null });

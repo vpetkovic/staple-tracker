@@ -118,7 +118,9 @@ describe("on one machine", () => {
     candidates[1]!.store.setSetting("analytics.scenario", { ...SCENARIO, savedAt: at(5) }, "other-device");
     const response = readCostModel(candidates, null, home);
     expect(response.home).toMatchObject({ slug: "beta", others: [{ slug: "alpha", prefix: "ALP", savedAt: at(0) }] });
-    expect(response.source).toEqual({ ...DEFAULT_SOURCE, scenario: "saved" });
+    // Each part is read from its own newest save, wherever it is: nothing alpha saved is hidden.
+    expect(response.source).toEqual({ ...DEFAULT_SOURCE, roles: "saved", scenario: "saved" });
+    expect(response.model.roles.roles).toEqual(ROLES.roles);
   });
 
   it("moves the whole model to another workspace and clears the old home", () => {
@@ -131,25 +133,32 @@ describe("on one machine", () => {
     for (const key of ["analytics.roles", "analytics.scenario", "analytics.company"]) expect(candidates[0]!.store.settingValue(key).source).toBe("default");
   });
 
-  it("resets to the defaults, not to an older save another workspace still holds, and clears that save", () => {
+  it("resets a part everywhere, gathering every other part's newest save into the home", () => {
     writeCostModel(candidates, { home: "alpha", roles: ROLES }, { scopeSlug: null, actor: "ui", now: at(5), home });
     // An older save arrives by sync in another workspace: alpha stays the home.
     candidates[1]!.store.setSetting("analytics.solo", { ...DEFAULT_COST_MODEL.solo, entries: [{ id: "old", label: "Old", monthlyAmount: 9999, from: "2026-01", to: null }], savedAt: at(0) }, "sync");
     expect(readCostModel(candidates, null, home).home).toMatchObject({ slug: "alpha", others: [{ slug: "beta" }] });
     const { response, written } = writeCostModel(candidates, { reset: ["roles"] }, { scopeSlug: null, actor: "ui", now: at(6), home });
     expect(written).toEqual(["alpha", "beta"]);
-    expect(response.source).toEqual(DEFAULT_SOURCE);
-    expect(response.model.solo.entries[0]!.monthlyAmount).toBe(200);
+    expect(response.source).toEqual({ ...DEFAULT_SOURCE, solo: "saved" });
+    expect(response.model.roles.roles.map((role) => role.id)).toEqual(["software-engineer", "design-engineer", "technical-writer"]);
+    // Beta held the only solo save: it moved into the home, and beta holds nothing any more.
+    expect(response.model.solo.entries[0]!.monthlyAmount).toBe(9999);
+    expect(response.home).toMatchObject({ slug: "alpha", others: [] });
     expect(candidates[1]!.store.settingValue("analytics.solo").source).toBe("default");
+    // A second reset of that part leaves no older copy anywhere to come back.
+    expect(writeCostModel(candidates, { reset: ["solo"] }, { scopeSlug: null, actor: "ui", now: at(7), home }).response.source).toEqual(DEFAULT_SOURCE);
   });
 
-  it("moves into a workspace with an older save without reviving its values", () => {
+  it("moves the whole model into a workspace that holds a part of its own, keeping each part's newest save", () => {
     writeCostModel(candidates, { home: "alpha", roles: ROLES }, { scopeSlug: null, actor: "ui", now: at(5), home });
     candidates[1]!.store.setSetting("analytics.company", { ...company(999), director: { title: "Employee", hourlyRate: 999, hoursPerActiveDay: 6 }, savedAt: at(0) }, "sync");
     const { response } = writeCostModel(candidates, { home: "beta" }, { scopeSlug: null, actor: "ui", now: at(6), home });
     expect(response.home).toMatchObject({ slug: "beta", others: [] });
-    expect(response.model.company.director.hourlyRate).toBe(100);
-    expect(response.source).toEqual({ ...DEFAULT_SOURCE, roles: "saved" });
+    // Beta's company profile is the only company save, so it stays; alpha's roles came along.
+    expect(response.model.company.director.hourlyRate).toBe(999);
+    expect(response.source).toEqual({ ...DEFAULT_SOURCE, roles: "saved", company: "saved" });
+    expect(candidates[0]!.store.settingValue("analytics.roles").source).toBe("default");
   });
 
   it("ranks saves by the instant they name, and keeps a save with no stamp as the oldest home", () => {
@@ -161,6 +170,24 @@ describe("on one machine", () => {
     candidates[1]!.store.setSetting("analytics.roles", { ...ROLES, savedAt: null }, "cli");
     candidates[0]!.store.resetSetting("analytics.roles");
     expect(readCostModel(candidates, null, home).home).toMatchObject({ slug: "beta", others: [] });
+  });
+
+  it("answers a read that is a valid write after roles are removed, and prices a role named like a built-in only by its own rate", () => {
+    const many = Array.from({ length: 30 }, (_, index) => ({ id: `role-${index}`, title: `Role ${index}` }));
+    writeCostModel(
+      candidates,
+      { home: "alpha", roles: { roles: many }, solo: { ...company(), rates: Object.fromEntries(many.map((role) => [role.id, 50])) } },
+      { scopeSlug: null, actor: "ui", now: at(0), home },
+    );
+    // One role replaced: the read lists rates for exactly the 30 roles there are now.
+    writeCostModel(candidates, { roles: { roles: [...many.slice(1), { id: "constructor", title: "Builder" }] } }, { scopeSlug: null, actor: "ui", now: at(1), home });
+    const read = readCostModel(candidates, null, home);
+    expect(Object.keys(read.model.solo.rates)).toHaveLength(30);
+    expect(read.model.solo.rates.constructor).toBe(100);
+    expect(read.model.solo.assumed).toContain("roles.constructor.hourlyRate");
+    // Echoed back as it was read, it saves.
+    const { savedAt: _savedAt, ...echo } = read.model.solo;
+    expect(() => writeCostModel(candidates, { solo: echo as never }, { scopeSlug: null, actor: "ui", now: at(2), home })).not.toThrow();
   });
 
   it("refuses a malformed write by name rather than failing on it", () => {
@@ -313,6 +340,32 @@ describe("across devices", () => {
     expect(error.code).toBe("conflict");
     expect(local.store.settingValue("analytics.company").source).toBe("default");
     expect(a.store.settingValue("analytics.company").source).toBe("workspace");
+  });
+
+  it("keeps a moved model whole when another device saves one profile in the old home meanwhile", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const a = fleet.machine("a");
+    const b = fleet.machine("b");
+    save(a, { roles: ROLES, solo: { ...company(40), director: { title: "You", hourlyRate: 100, hoursPerActiveDay: 8 } } }, "2026-11-27T09:00:00.000Z");
+    await a.sync();
+    await b.sync();
+    // A moves the whole model to a workspace only it has; B, not knowing, saves the company profile in the old home.
+    a.use();
+    const db = openDb(":memory:");
+    migrateWorkspace(db);
+    const local: HomeCandidate = { slug: "local", prefix: "LOC", store: new WorkspaceStore(db, "local", "LOC") };
+    writeCostModel([...only(a), local], { home: "local" }, { scopeSlug: null, actor: "ui", now: "2026-11-27T09:05:00.000Z", home: a.home });
+    save(b, { company: company(120) }, "2026-11-27T09:06:00.000Z");
+    await a.sync();
+    await b.sync();
+    await a.sync();
+    a.use();
+    const onA = readCostModel([...only(a), local], null, a.home);
+    // B's company edit is there, and so is everything A moved: nothing blanked, the solo profile untouched.
+    expect(onA.model.company.rates.engineer).toBe(120);
+    expect(onA.model.roles.roles).toEqual(ROLES.roles);
+    expect(onA.model.solo.rates.engineer).toBe(40);
+    expect(onA.source).toEqual({ ...DEFAULT_SOURCE, roles: "saved", solo: "saved", company: "saved" });
   });
 
   it("carries a reset to the other device, and a later save after it", async () => {

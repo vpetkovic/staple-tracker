@@ -142,6 +142,24 @@ describe("a role with finished tickets but no agent time", () => {
     expect(writer.share).toBeCloseTo(1 / 3);
     expect(writer.aiCost).toBeCloseTo(100);
   });
+
+  it("shares the team's spend by finished tickets too when no agent ran, so the workspaces add up to the hub", () => {
+    const closed = (on: HomeCandidate, title: string): void => {
+      vi.setSystemTime(Date.parse("2026-09-10T10:00:00.000Z"));
+      const id = on.store.createIssue({ title }).id;
+      vi.setSystemTime(Date.parse("2026-09-10T12:00:00.000Z"));
+      on.store.updateIssue(id, { status: "done" }, "person");
+    };
+    closed(alpha, "Build one");
+    closed(beta, "Build two");
+    closed(beta, "Build three");
+    save({ solo: { ...PROFILE, entries: [{ id: "team", label: "Team plan", monthlyAmount: 90, from: "2026-09", to: null }] } });
+    const hub = roiFor(scopeOf(alpha, beta), "2026-09-01", "2026-09-30").measured.aiCost;
+    const parts = [alpha, beta].map((on) => roiFor(scopeOf(on), "2026-09-01", "2026-09-30").measured.aiCost);
+    expect(hub).toBeCloseTo(90);
+    expect(parts[0]).toBeCloseTo(30);
+    expect(parts[0]! + parts[1]!).toBeCloseTo(hub);
+  });
 });
 
 describe("no AI spend", () => {

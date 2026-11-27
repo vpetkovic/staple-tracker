@@ -490,7 +490,8 @@ export function resolveRoles(model: CostModel): {
   fallbacks: MappingFallback[];
 } {
   const profile = activeProfile(model);
-  const priced = (role: Role): PricedRole => ({ ...role, hourlyRate: profile.rates[role.id] ?? DEFAULT_ROLE_RATE });
+  // Own keys only: a role id such as `constructor` must not find `Object.prototype`.
+  const priced = (role: Role): PricedRole => ({ ...role, hourlyRate: Object.hasOwn(profile.rates, role.id) ? profile.rates[role.id]! : DEFAULT_ROLE_RATE });
   const roles = new Map(model.roles.roles.map((role) => [role.id, priced(role)]));
   const first = roles.get(model.roles.roles[0]!.id)!;
   const fallbacks: MappingFallback[] = [];

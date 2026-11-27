@@ -165,7 +165,7 @@ describe("the cost model over HTTP", () => {
     expect(saved.body.home).toMatchObject({ slug: "beta", synced: false });
     expect(saved.body.source).toEqual({ roles: "saved", roleMapping: "saved", scenario: "saved", solo: "saved", company: "default" });
     // Every role has a rate on a read, in both profiles; the company's are the shipped default, assumed.
-    expect(saved.body.model.company.rates).toEqual({ "software-engineer": 100, "design-engineer": 95, "technical-writer": 70, engineer: 100, writer: 100 });
+    expect(saved.body.model.company.rates).toEqual({ engineer: 100, writer: 100 });
     expect(saved.body.model.company.assumed).toEqual(expect.arrayContaining(["roles.engineer.hourlyRate", "roles.writer.hourlyRate"]));
     expect((await http(`/api/analytics/cost-model?scope=alpha`)).body.home.slug).toBe("beta");
 

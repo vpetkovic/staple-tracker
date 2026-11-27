@@ -544,7 +544,11 @@ export interface RoiResponse {
     /** Days agents ran anywhere in the hub. */
     readonly activeDaysHub: number;
     readonly hoursPerActiveDay: number;
-    /** This scope's share of the hub's agent-hours in the period: 1 for the hub. The spend and the director's time are multiplied by it. */
+    /**
+     * This scope's share of the hub's agent-hours in the period (its finished tickets' share
+     * when no agent ran anywhere): 1 for the hub. The shared spend and the director's time are
+     * multiplied by it; each role's own spend by that role's `share`.
+     */
     readonly share: number;
     readonly scopeAgentHours: number;
     readonly hubAgentHours: number;

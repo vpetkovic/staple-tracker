@@ -66,7 +66,11 @@ export function readRoi(input: {
   const roleOf = (type: AgentType): string => costModel.roleMapping.types[type];
   const scoped = roleTallies(scopeRows, resolved, rules, roleOf);
   const hub = hubRows === scopeRows ? scoped : roleTallies(hubRows, resolved, rules, roleOf);
-  const share = hubRows === scopeRows ? 1 : hub.agentHours > 0 ? scoped.agentHours / hub.agentHours : 0;
+  // The scope's share of the shared spend and the director's time: its agent-hours over the
+  // hub's, or its finished tickets over the hub's when no agent ran anywhere, so the
+  // workspaces' costs still add up to the hub's.
+  const doneOf = (tallies: typeof scoped): number => [...tallies.measured.values()].reduce((sum, tally) => sum + tally.tickets, 0);
+  const share = hubRows === scopeRows ? 1 : hub.agentHours > 0 ? scoped.agentHours / hub.agentHours : doneOf(hub) > 0 ? doneOf(scoped) / doneOf(hub) : 0;
   const days = resolved.window.days;
   const profile = activeProfile(costModel);
   const aiEntries = profile.entries.map((entry) => ({ entry, cost: aiSpendFor([entry], days) }));
