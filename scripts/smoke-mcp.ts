@@ -109,7 +109,7 @@ try {
   await pinned.handshake();
 
   const tools = await rpc("tools/list", {});
-  assert(tools.tools.length === 91, `tools/list exposes ${tools.tools.length} tools`);
+  assert(tools.tools.length === 92, `tools/list exposes ${tools.tools.length} tools`);
 
   const byName = new Map<string, any>(tools.tools.map((t: any) => [t.name, t]));
   assert(
@@ -985,7 +985,7 @@ try {
 
   const coldTools = await cold.rpc("tools/list", {});
   assert(
-    coldTools.tools.length === tools.tools.length && coldTools.tools.length === 91,
+    coldTools.tools.length === tools.tools.length && coldTools.tools.length === 92,
     `server connects and lists ${coldTools.tools.length} tools with no workspace anywhere above cwd`,
   );
 
@@ -1022,8 +1022,8 @@ try {
   // reset_idea_baseline read and write one workspace's ideas, 73, and scaffold_idea, 74.
   // Integration read/write/configure add three workspace-targetable tools, 77, and attention, 78.
   // set_branch records a ticket's branch in one workspace, 79, and checkpoint writes one
-  // ticket's worklog and branch, 80, and convert_to_idea turns one workspace's ticket into an idea, 81.
-  assert(wsTargetable.length === 81, `81 workspace tools accept ws targeting (${wsTargetable.length} found)`);
+  // ticket's worklog and branch, 80, and convert_to_idea turns one workspace's ticket into an idea, 81, and import_idea creates one in a workspace from a file, 82.
+  assert(wsTargetable.length === 82, `82 workspace tools accept ws targeting (${wsTargetable.length} found)`);
   // A person's click in a view is recorded under the person only while hosts keep these two
   // away from the model: both declare MCP Apps visibility ["app"] and take no actor.
   for (const name of ["approve_gate_from_view", "request_changes_from_view"]) {
@@ -1247,6 +1247,8 @@ try {
         "dequeue_task",
         "enqueue_task",
         "gate_task",
+        // Importing an idea from a file names who imported it, on the idea and its attached file.
+        "import_idea",
         // Shared operations expose the optional actor on their common command schema.
         "integration_read",
         "integration_write",

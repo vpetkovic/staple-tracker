@@ -100,6 +100,8 @@ export function stepLabel(step: PlanStepData | null): StepLabel | null {
       return { label: "ready to mark shaped", person };
     case "brainstorm":
       return { label: "to develop", person };
+    case "classify":
+      return { label: "to classify", person };
   }
 }
 

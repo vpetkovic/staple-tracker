@@ -75,7 +75,9 @@ function ideaLine(idea: IdeaView, plan: PlanView): string {
   const progress = idea.progress === null ? "" : ` ${Math.round(idea.progress * 100)}%`;
   // An idea is named by its idea number until it is promoted, then by its ticket number with the idea number beside it.
   const kept = idea.identifier !== null && idea.number !== null ? ` (${idea.number})` : "";
-  return `${(idea.identifier ?? idea.number ?? idea.id).padEnd(9)} ${idea.stage.padEnd(9)} ${horizon.padEnd(14)} ${"  ".repeat(depth)}${idea.title}${kept}${progress}${flags ? `  [${flags}]` : ""}`;
+  // An import waiting for an agent says so: it is an agent's to take, on a horizon or not.
+  const classify = idea.nextStep?.need === "classify" ? "  (to classify)" : "";
+  return `${(idea.identifier ?? idea.number ?? idea.id).padEnd(9)} ${idea.stage.padEnd(9)} ${horizon.padEnd(14)} ${"  ".repeat(depth)}${idea.title}${kept}${progress}${flags ? `  [${flags}]` : ""}${classify}`;
 }
 
 function printScaffold(preview: ScaffoldPreview, dry: boolean, depth = 0): void {
@@ -213,6 +215,7 @@ export function runIdeaCommand(rest: string[]): void {
       undelivered: { type: "boolean" },
       research: { type: "boolean" },
       "dismiss-proposal": { type: "boolean" },
+      classified: { type: "boolean" },
     },
   });
   const [sub = "ls", first, ...others] = positionals;
@@ -277,6 +280,7 @@ export function runIdeaCommand(rest: string[]): void {
           before: values.before === undefined ? undefined : values.before === "end" ? null : values.before,
           delivered: values.undelivered ? null : values.delivered === undefined ? undefined : { on: values.delivered, note: values.note ?? null },
           ...(values["dismiss-proposal"] ? { dismissProposal: true } : {}),
+          ...(values.classified ? { classified: true } : {}),
         },
         actor,
         options,
@@ -399,9 +403,9 @@ export function runIdeaCommand(rest: string[]): void {
       return;
     }
     case "import": {
-      const path = need(first, "a plan file (markdown)");
+      const path = need(first, "a file to import (.md, .html or .jsx)");
       const result = plan.importPlan(
-        { name: basename(path), markdown: readInputFile(path, "idea import", "utf8") },
+        { name: basename(path), content: readInputFile(path, "idea import") },
         { parent: values.parent ?? null, horizon: values.horizon ?? null, maturity: values.maturity },
         actor,
         options,
@@ -409,6 +413,7 @@ export function runIdeaCommand(rest: string[]): void {
       if (values.json) return console.log(JSON.stringify(result));
       console.log(`imported ${result.idea.idea.title} (idea ${result.idea.idea.number ?? result.idea.idea.id}): ${result.rows} task${result.rows === 1 ? "" : "s"}, ${result.idea.completeness.filled}/${result.idea.completeness.total} sections`);
       for (const warning of result.warnings) console.log(`  warning: ${warning}`);
+      if (result.idea.idea.nextStep?.need === "classify") console.log(`  to classify: no maturity was chosen, so an agent reads the file and gives it its stage (staple idea show ${result.idea.idea.number ?? result.idea.idea.id})`);
       return;
     }
     default:

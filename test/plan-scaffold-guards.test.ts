@@ -116,15 +116,15 @@ describe("import into shaped", () => {
   it("is held to the gate over everything it writes, open questions included, and writes nothing when refused", () => {
     const markdown = "# Imp\n\n## Goal\n\ng\n\n## Task breakdown\n\n| # | Task |\n|---|---|\n| 1.1 | Do |\n\n## Acceptance criteria\n\n- ok\n\n## Open questions\n\n- [ ] Who pays?\n";
     const before = store.listIssues({}).length;
-    expect(refusal(() => plan.importPlan({ name: "imp.md", markdown }, { maturity: "shaped" }, "vp", PERSON))).toContain("1 open question answered or deferred");
+    expect(refusal(() => plan.importPlan({ name: "imp.md", content: markdown }, { maturity: "shaped" }, "vp", PERSON))).toContain("1 open question answered or deferred");
     expect(store.listIssues({}).length).toBe(before);
-    const deferred = plan.importPlan({ name: "imp.md", markdown: markdown.replace("- [ ] Who pays?", "- [~] Who pays?") }, { maturity: "shaped" }, "vp", PERSON);
+    const deferred = plan.importPlan({ name: "imp.md", content: markdown.replace("- [ ] Who pays?", "- [~] Who pays?") }, { maturity: "shaped" }, "vp", PERSON);
     expect(deferred.idea.idea.state).toBe("shaped");
   });
 
   it("attaches the source file, byte for byte", () => {
     const markdown = "# Attached\n\n## Goal\n\ng\n";
-    const result = plan.importPlan({ name: "attached.md", markdown }, {}, "agent");
+    const result = plan.importPlan({ name: "attached.md", content: markdown }, {}, "agent");
     const files = store.listFiles(result.idea.idea.id);
     expect(files.map((file) => [file.filename, file.size])).toEqual([["attached.md", Buffer.byteLength(markdown)]]);
     expect(result.idea.plan.sources).toEqual(["attached.md (attached)"]);

@@ -276,6 +276,15 @@ export const DELIVERED_NOTE_KEY = "delivered-note";
 export const SHAPE_PROPOSAL_KEY = "shape-proposal";
 
 /**
+ * The document that asks an agent to classify an idea imported from a file with no maturity
+ * chosen: its body is the file's name. Written by the import; emptied when an agent settles it
+ * (proposing it shaped, or leaving it raw on purpose). While it holds a name and the record still
+ * reads raw, the record's plan step is `classify`; enriching it moves it to exploring, which
+ * settles it with no write.
+ */
+export const CLASSIFY_KEY = "classify";
+
+/**
  * The day a delivered-outside-the-tracker mark names: required, a calendar day, and not after
  * `today` (work is marked once it was delivered, not before).
  */
