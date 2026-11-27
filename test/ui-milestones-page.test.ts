@@ -15,7 +15,9 @@
  *   - the calendar sets the milestone's own target through the store, signed by the person,
  *     and clearing it falls back to the estimate; the `⋯` menu's Change due date opens it too;
  *   - approving from the page lands the gate as approved, signed by the person;
- *   - reorder (buttons, menu, alt+arrow), add and remove, and the queue write, land in the store;
+ *   - every work row is one line from 760px and starts chevron, glyph, title at one x per depth;
+ *   - reorder (menu, alt+arrow, to the top and bottom, said aloud), add (from the header, folded
+ *     or not, and from the menu on a phone) and remove, and the queue write, land in the store;
  *   - a fold, Collapse all and Expand all survive a reload; a phone starts folded;
  *   - a `focus=` link lands on its section, a finished one on its line, a missing one says so;
  *   - every control keeps its look on a phone, with a tap of at least 32px;
@@ -134,7 +136,20 @@ beforeAll(async () => {
     const second = store.createIssue({ title: "Second thing" });
     const spare = store.createIssue({ title: "Spare thing" });
     for (const issue of [first, second]) store.milestones().addMember(order.milestone.id, issue.id, {}, null);
+    // The row grammar: an epic with a task and a bug under it, then a task and a bug, each with a long note.
+    const rows = store.milestones().create({ title: "Rows" }, null) as MilestoneCreateResult;
+    const rowsEpic = store.createIssue({ title: "Rows epic", kind: "epic" });
+    store.createIssue({ title: "Rows child task", parent: rowsEpic.id });
+    store.createIssue({ title: "Rows child bug", parent: rowsEpic.id, kind: "bug" });
+    const rowsTask = store.createIssue({ title: "Rows task" });
+    const rowsBug = store.createIssue({ title: "Rows bug", kind: "bug" });
+    const longNote = "Kept here because the release cannot ship without it, and the reason runs on well past the width of any row";
+    store.milestones().addMember(rows.milestone.id, rowsEpic.id, {}, null);
+    store.milestones().addMember(rows.milestone.id, rowsTask.id, { note: longNote }, null);
+    store.milestones().addMember(rows.milestone.id, rowsBug.id, { note: longNote }, null);
     Object.assign(refs, {
+      rows: rows.milestone.identifier,
+      rowsEpic: rowsEpic.identifier,
       order: order.milestone.identifier,
       first: first.identifier,
       second: second.identifier,
@@ -246,7 +261,7 @@ describe.skipIf(Boolean(reason))("the Milestones page, pressed in a real browser
   it("opens a member's task on a click anywhere on its row", async () => {
     const { page, context } = await open(refs.plan!);
     await unfoldEpic(page, refs.plan!, refs.epic!);
-    await page.locator(`[data-member-row="${refs.open}"] .staple-row-title`).click();
+    await page.locator(`[data-member-row="${refs.open}"] [data-work-title]`).click();
     expect(await openedTask(page)).toBe(refs.open);
     await context.close();
   });
@@ -470,13 +485,50 @@ describe.skipIf(Boolean(reason))("the Milestones page, pressed in a real browser
     await context.close();
   });
 
-  it("draws one full-width hairline under each work row: the list item's, not the task row's own", async () => {
-    const { page, context } = await open(refs.order!);
-    const lines = await section(page, refs.order!).locator(`[data-milestone-member="${refs.first}"]`).evaluate((item) => ({
-      item: getComputedStyle(item).borderBottomWidth,
-      row: getComputedStyle(item.querySelector(".staple-row")!).borderBottomWidth,
-    }));
-    expect(lines).toEqual({ item: "1px", row: "0px" });
+  it("draws every row one line high from 760px, each starting chevron, glyph, title at one x for its depth", async () => {
+    const { page, context } = await open(refs.rows!);
+    await unfoldEpic(page, refs.rows!, refs.rowsEpic!);
+    const rows = await section(page, refs.rows!)
+      .locator("[data-member-row]")
+      .evaluateAll((elements) =>
+        elements.map((row) => {
+          const left = (element: Element | null) => (element ? Math.round(element.getBoundingClientRect().left) : null);
+          const cell = row.querySelector("[data-work-cell]")!;
+          return {
+            id: row.getAttribute("data-member-row"),
+            depth: Number(row.getAttribute("data-work-depth")),
+            kind: row.querySelector("[data-work-kind]")?.textContent ?? "task",
+            height: Math.round(row.getBoundingClientRect().height),
+            chevron: left(cell.querySelector("[data-work-chevron], [data-work-chevron-spacer]")),
+            glyph: left(cell.querySelector('svg[role="img"]')),
+            title: left(cell.querySelector("[data-work-title]")),
+          };
+        }),
+      );
+    // An epic, a task and a bug at each depth.
+    expect(rows.map((row) => `${row.depth}:${row.kind}`).sort()).toEqual(["0:bug", "0:task", "0:task", "1:bug", "1:task"]);
+    // One line each, every row the same height.
+    expect(new Set(rows.map((row) => row.height)).size, JSON.stringify(rows)).toBe(1);
+    expect(rows[0]!.height).toBeLessThanOrEqual(40);
+    for (const depth of [0, 1]) {
+      const at = rows.filter((row) => row.depth === depth);
+      for (const part of ["chevron", "glyph", "title"] as const) expect(new Set(at.map((row) => row[part])).size, `${part} at depth ${depth}: ${JSON.stringify(at)}`).toBe(1);
+    }
+    // A level deeper is one guide further in.
+    const step = rows.find((row) => row.depth === 1)!.chevron! - rows.find((row) => row.depth === 0)!.chevron!;
+    expect(step).toBeGreaterThan(16);
+    // No position number and no hover arrows on any row.
+    expect(await section(page, refs.rows!).locator("[data-member-position]").count()).toBe(0);
+    expect(await section(page, refs.rows!).getByRole("button", { name: /^Move .* (up|down)$/ }).count()).toBe(0);
+    // The note takes what the title leaves: truncated, whole in its title; the title is whole.
+    const note = await section(page, refs.rows!)
+      .locator(`[data-member-row] [data-member-note]`)
+      .first()
+      .evaluate((element) => {
+        const title = element.closest("[data-work-cell]")!.querySelector<HTMLElement>("[data-work-title]")!;
+        return { cut: element.scrollWidth > element.clientWidth, full: element.getAttribute("title"), shown: element.clientWidth > 0, titleCut: title.scrollWidth > title.clientWidth };
+      });
+    expect(note).toEqual({ cut: true, full: expect.stringContaining("well past the width of any row"), shown: true, titleCut: false });
     await context.close();
   });
 
@@ -661,38 +713,110 @@ describe.skipIf(Boolean(reason))("the Milestones page, pressed in a real browser
     await phone.context.close();
   });
 
-  it("reorders with the buttons, the menu and alt+arrow, adds and removes, and every write lands in the store", async () => {
+  it("reorders with the menu and alt+arrow, says where a move landed, adds and removes, and every write lands in the store", async () => {
     const { page, context } = await open(refs.order!);
     const order = async () => (await get<{ members: Array<{ identifier: string }> }>(`/api/milestone?ws=${WS}&ref=${refs.order}`)).members.map((m) => m.identifier);
     const it_ = section(page, refs.order!);
     expect(await order()).toEqual([refs.first, refs.second]);
-    // alt+arrow on the row.
+    // alt+arrow on the row, said through the live region.
     await it_.locator(`[data-member-row="${refs.first}"]`).focus();
     await page.keyboard.press("Alt+ArrowDown");
     await page.waitForTimeout(800);
     expect(await order()).toEqual([refs.second, refs.first]);
-    // The hover button.
-    await it_.locator(`[data-member-row="${refs.first}"]`).hover();
-    await it_.getByRole("button", { name: `Move ${refs.first} up` }).click();
+    expect(await it_.locator("[data-work-announce]").getAttribute("aria-live")).toBe("polite");
+    expect(await it_.locator("[data-work-announce]").innerText()).toBe("Moved to 2 of 2");
+    // The row's menu opens on its place, then moves it to the top.
+    await it_.locator(`[data-member-actions="${refs.first}"]`).click();
+    expect(await page.locator("[role=menu] [data-member-place]").innerText()).toBe("2 of 2 in the order");
+    await page.locator('[role=menu] [data-menu-item="top"]').click();
     await page.waitForTimeout(800);
     expect(await order()).toEqual([refs.first, refs.second]);
-    // The row's menu.
+    expect(await it_.locator("[data-work-announce]").innerText()).toBe("Moved to 1 of 2");
     await it_.locator(`[data-member-actions="${refs.first}"]`).click();
     await page.locator('[role=menu] [data-menu-item="down"]').click();
     await page.waitForTimeout(800);
     expect(await order()).toEqual([refs.second, refs.first]);
-    // Add work, then remove it.
-    await it_.locator("[data-milestone-add-open]").click();
-    await it_.locator('[aria-label="Identifier to add"]').fill(refs.spare!);
-    await it_.locator("[data-milestone-add] button[type=submit]").click();
+    await it_.locator(`[data-member-actions="${refs.second}"]`).click();
+    await page.locator('[role=menu] [data-menu-item="bottom"]').click();
     await page.waitForTimeout(800);
-    expect(await order()).toEqual([refs.second, refs.first, refs.spare]);
+    expect(await order()).toEqual([refs.first, refs.second]);
+    // Add work from the header; the field stays open for the next one, and clears once it landed.
+    await it_.locator("[data-milestone-add-open]").click();
+    const field = page.locator('[data-milestone-add] [aria-label="Identifier to add"]');
+    await field.fill(refs.spare!);
+    await field.press("Enter");
+    await page.waitForTimeout(800);
+    expect(await order()).toEqual([refs.first, refs.second, refs.spare]);
     expect(lastEventActor("milestone_member_added")).toBe(PERSON);
+    expect(await field.isVisible()).toBe(true);
+    expect(await field.inputValue()).toBe("");
+    // A refused add keeps the field's text and says why, in the popover.
+    await field.fill("ALPHA-99999");
+    await field.press("Enter");
+    await page.waitForTimeout(800);
+    expect(await field.inputValue()).toBe("ALPHA-99999");
+    expect(await page.locator("[data-milestone-add-error]").count()).toBe(1);
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(300);
+    expect(await page.locator("[data-milestone-add]").count()).toBe(0);
     await it_.locator(`[data-member-actions="${refs.spare}"]`).click();
     await page.locator('[role=menu] [data-menu-item="remove"]').click();
     await page.waitForTimeout(800);
-    expect(await order()).toEqual([refs.second, refs.first]);
+    expect(await order()).toEqual([refs.first, refs.second]);
+    // No Add work line under the work.
+    expect(await it_.locator("[data-milestone-add-line]").count()).toBe(0);
     await context.close();
+  });
+
+  it("adds work to a folded section from its header, and on a phone from its menu", async () => {
+    const order = async () => (await get<{ members: Array<{ identifier: string }> }>(`/api/milestone?ws=${WS}&ref=${refs.order}`)).members.map((m) => m.identifier);
+    const remove = async () => {
+      const at = await get<{ revision: number; milestone: { id: string } }>(`/api/milestone?ws=${WS}&ref=${refs.order}`);
+      const response = await fetch(`${origin}/api/milestone/remove`, {
+        method: "POST",
+        headers: { "x-staple-token": token, "content-type": "application/json" },
+        body: JSON.stringify({ ws: WS, milestone: at.milestone.id, ref: refs.spare, baseRevision: at.revision, actor: "test" }),
+      });
+      expect(response.status).toBe(200);
+    };
+    const desk = await open(refs.order!);
+    const it_ = section(desk.page, refs.order!);
+    await it_.locator("[data-milestone-fold]").click();
+    expect(await it_.getAttribute("data-milestone-folded")).toBe("");
+    await it_.locator("[data-milestone-add-open]").click();
+    const field = desk.page.locator('[data-milestone-add] [aria-label="Identifier to add"]');
+    await field.fill(refs.spare!);
+    await field.press("Enter");
+    await desk.page.waitForTimeout(900);
+    expect(await order()).toEqual([refs.first, refs.second, refs.spare]);
+    // Still folded: adding needed nothing unfolded.
+    expect(await it_.getAttribute("data-milestone-folded")).toBe("");
+    // Unfold it again for the tests after this one.
+    await desk.page.keyboard.press("Escape");
+    await it_.locator("[data-milestone-fold]").click();
+    await desk.context.close();
+    await remove();
+
+    const phone = await open(refs.order!, WS, { width: 375, height: 812 }, true);
+    const onPhone = section(phone.page, refs.order!);
+    expect(await onPhone.locator("[data-milestone-add-open]").count()).toBe(0);
+    await onPhone.locator("[data-milestone-menu]").click();
+    await phone.page.locator('[role=menu] [data-menu-item="add"]').click();
+    await phone.page.waitForTimeout(400);
+    const phoneField = phone.page.locator('[data-milestone-add] [aria-label="Identifier to add"]');
+    const box = await phoneField.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return { top: rect.top, bottom: rect.bottom, height: window.innerHeight, focused: document.activeElement === element };
+    });
+    expect(box.top).toBeGreaterThanOrEqual(0);
+    expect(box.bottom).toBeLessThanOrEqual(box.height);
+    expect(box.focused).toBe(true);
+    await phoneField.fill(refs.spare!);
+    await phoneField.press("Enter");
+    await phone.page.waitForTimeout(900);
+    expect(await order()).toEqual([refs.first, refs.second, refs.spare]);
+    await phone.context.close();
+    await remove();
   });
 
   it("queues the milestone from its header and takes it off from its menu", async () => {
@@ -731,8 +855,8 @@ describe.skipIf(Boolean(reason))("the Milestones page, pressed in a real browser
       [`${carried} [data-milestone-goal-line]`, 36],
       // The lifted row's own control: the hidden member's `⋯` it carries.
       [`[data-milestone-member="${refs.late}"] [data-member-actions]`, 28],
-      [`${carried} [data-milestone-add-open]`, 28],
-      [`${carried} [data-show-done]`, 28],
+      // The gathered "finished hidden" line is a row: Plan's 36px line, the whole of it the tap.
+      [`${carried} [data-show-done]`, 36],
       ["[data-add-milestone-row]", 32],
       ["[data-phone-header-slot] [data-milestones-fold-all]", 32],
     ] as const) {
@@ -740,21 +864,24 @@ describe.skipIf(Boolean(reason))("the Milestones page, pressed in a real browser
       expect(height, selector).toBeCloseTo(drawn, 0);
       expect(tap, selector).toBeGreaterThanOrEqual(32);
     }
-    await page.locator(`${carried} [data-milestone-add-open]`).click();
-    for (const selector of [`${carried} [data-milestone-add] button[type=submit]`, `${carried} [data-milestone-add] button[type=button]`]) {
-      const { drawn, tap } = await measureTap(page, selector);
-      expect(drawn, selector).toBeCloseTo(28, 0);
-      expect(tap, selector).toBeGreaterThanOrEqual(32);
-    }
-    expect((await measureTap(page, `${carried} [aria-label="Identifier to add"]`)).drawn).toBeLessThanOrEqual(32);
+    // Add work, from the section's `⋯` on a phone: its button keeps the text button's look.
+    await page.locator(`${carried} [data-milestone-menu]`).click();
+    await page.locator('[role=menu] [data-menu-item="add"]').click();
+    await page.waitForTimeout(400);
+    const submit = await measureTap(page, "[data-milestone-add] button[type=submit]");
+    expect(submit.drawn).toBeCloseTo(28, 0);
+    expect(submit.tap).toBeGreaterThanOrEqual(32);
+    expect((await measureTap(page, '[data-milestone-add] [aria-label="Identifier to add"]')).drawn).toBeLessThanOrEqual(32);
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(300);
     // A finished milestone's name on the opened shelf.
     await page.locator("[data-milestones-shelf]").click();
     const finishedName = `[data-milestone-finished-line="${refs.finished}"] [data-milestone-open]`;
     expect(await measureTap(page, finishedName)).toEqual({ drawn: 32, tap: 32 });
-    // The lifted child's parent chip is the Tasks list's own: it keeps its drawn size and grows a 44px target.
-    const chip = page.locator(`[data-member-row="${refs.late}"] .staple-row-breadcrumb`);
-    const target = await chip.evaluate((element) => parseFloat(getComputedStyle(element, "::before").height));
-    expect(target).toBeGreaterThanOrEqual(44);
+    // The lifted child names the hidden parent it came from: quiet words with a 32px tap.
+    const chip = await measureTap(page, `[data-member-row="${refs.late}"] [data-member-parent]:visible`);
+    expect(chip.drawn).toBeLessThan(32);
+    expect(chip.tap).toBeGreaterThanOrEqual(32);
     await context.close();
 
     // Bordered text buttons: 28px drawn, a 32px tap counted from inside the border.

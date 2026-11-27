@@ -1,10 +1,48 @@
 /*
- * A milestone's work tree draws the Tasks list's own row inside a list item that carries the
- * full-width hairline (it spans the position number and the `⋯` column too). The row's own
- * bottom border would be a second, shorter line under it. The row's rule is unlayered
- * (`components/task-list/task-list.css`), so a utility class on the cell cannot take it off;
- * this rule is unlayered too and more specific, and reaches only rows inside the work tree.
+ * A parent's rollup in a milestone's work tree, in Plan's Progress column from 760px of the
+ * tree: the bar fills the column at Plan's 6px and the count sits after it in a fixed slot, as
+ * Plan prints its percent. Every row's bar is the column's width, so two epics stay comparable.
+ * The rollup's own rules are unlayered (`components/task-list/task-list.css`), so this is too;
+ * it reaches only the work tree's Progress cell.
  */
-[data-milestone-work-cell] > .staple-row {
-  border-bottom: 0;
+@container tree (min-width: 760px) {
+  [data-work-progress] .staple-rollup {
+    flex: 1 1 auto;
+    flex-direction: row-reverse;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  [data-work-progress] .staple-rollup-bar {
+    width: auto;
+    height: 6px;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  [data-work-progress] .staple-rollup-count {
+    width: 38px;
+    flex-shrink: 0;
+    color: var(--text-secondary);
+    font-size: var(--text-label, 12px);
+    text-align: right;
+  }
+}
+
+/*
+ * The dependency chips are buttons outside a task row here, so the base layer's touch floor
+ * would draw them 44px tall on a coarse pointer. They keep their 20px look and take a 32px tap
+ * through an invisible inset instead, as every control on this page does.
+ */
+[data-desk-cues] .staple-dep-badge {
+  position: relative;
+  min-height: 0;
+}
+
+@media (pointer: coarse) {
+  [data-desk-cues] .staple-dep-badge::before {
+    content: "";
+    position: absolute;
+    inset: -7px 0;
+  }
 }

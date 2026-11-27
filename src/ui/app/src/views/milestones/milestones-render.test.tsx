@@ -18,12 +18,13 @@ import type { EffectiveQueueRow, MilestoneListRow, MilestoneView } from "@/lib/t
 import { fakeSession } from "@/views/fake-session";
 import { effective } from "@/views/queue/fixtures";
 import { criterion, goal, listRow, member, progress, view, work } from "./fixtures";
-import { AddWork, goalStartsOpen, MilestoneGlyph, StatusSubmenu } from "./milestone-parts";
+import { AddWorkForm, goalStartsOpen, MilestoneGlyph, StatusSubmenu } from "./milestone-parts";
 import { milestonesMemoryKey } from "./milestones-memory";
 import { landingOf, MilestonesOutline, outlineGroups } from "./MilestonesOutline";
-import { openInPlan, SectionBody, SectionView, type SectionQueue } from "./MilestoneSection";
+import { openInPlan, SectionBody, SectionMenuItems, sectionAddable, SectionView, type SectionQueue } from "./MilestoneSection";
 import type { MilestoneWork } from "./useMilestoneWork";
-import { memberRowKey, WorkTree } from "./WorkTree";
+import { memberListRows } from "./milestones-model";
+import { MemberMenuItems, memberMenuMove, memberRowKey, movedAnnouncement, WorkTree } from "./WorkTree";
 
 const NOW = new Date("2026-09-04T12:00:00.000Z");
 const noop = () => {};
@@ -224,56 +225,161 @@ describe("a section's goal and plan", () => {
 
 describe("a section's work", () => {
   const body = (w: MilestoneWork, rowData = rowOf(w.view!)) => inSession(<SectionBody work={w} workspace="staple" row={rowData} />);
+  /** One row's own markup, from its opening tag to the next row's. */
+  const rowOf_ = (html: string, identifier: string) => {
+    const at = html.indexOf(`data-member-row="${identifier}"`);
+    const start = html.lastIndexOf("<div", at);
+    const next = html.indexOf('role="row"', at + 1);
+    return html.slice(start, next === -1 ? undefined : next);
+  };
 
-  it("heads the work with its count and draws each member with the shared row, an epic's children under it", () => {
+  it("heads the work with Plan's strip and draws each member in Plan's outline grammar, an epic's children under it", () => {
     const html = body(loaded());
-    expect(text(html)).toContain("Work, in order 2 items");
-    expect(html.match(/data-testid="task-row"/g)).toHaveLength(3);
-    expect(html).toMatch(/<ul role="treegrid" aria-label="Work in October cut"/);
+    // The strip: the work's own name with its count beside it, then the columns from 760px.
+    expect(text(html)).toContain("Work, in order · 2 items Progress Now Updated");
+    expect(html).toMatch(/<div role="treegrid" aria-label="Work in October cut"/);
+    expect(html).toContain("@container/tree");
     expect(html).toMatch(/role="row" aria-level="1" aria-expanded="true"[^>]*data-member-row="STA-66"/);
     expect(html).toMatch(/role="row" aria-level="2"[^>]*data-member-row="STA-67"/);
-    expect(html).toContain("staple-row-bare");
-    expect(html).toContain('aria-label="Collapse STA-66"');
+    // No task list row inside: the row is the outline's own.
+    expect(html).not.toContain('data-testid="task-row"');
     expect(html.match(/data-member-role="member"/g)).toHaveLength(2);
     expect(html.match(/data-member-role="child"/g)).toHaveLength(1);
-    // The note, on its own line; the true position of each member, and none on a child.
-    expect(html).toContain("the flake, no epic");
-    expect(html).toMatch(/data-member-position="1"[^>]*>1</);
-    expect(html).toMatch(/data-member-position="2"[^>]*>2</);
-    expect(html.match(/data-member-position=/g)).toHaveLength(2);
-    const childAt = html.indexOf('data-identifier="STA-67"');
-    expect(html.slice(childAt, childAt + 400)).toContain("padding-left:28px");
+    // A child's depth is one Plan guide in front of its chevron.
+    expect(rowOf_(html, "STA-67").match(/data-work-guide=""/g)).toHaveLength(1);
+    expect(rowOf_(html, "STA-66")).not.toContain("data-work-guide");
+    expect(html).toContain('aria-label="Collapse STA-66"');
   });
 
-  it("names every control after the member it acts on, gives a child only Open, and keeps them outside the clickable row", () => {
+  it("starts every row with its chevron, its status glyph and its title, with no position number, priority or kind glyph before them", () => {
     const html = body(loaded());
-    expect(html).toContain('aria-label="Move STA-146 up"');
-    expect(html).toContain('aria-label="Move STA-66 down"');
+    for (const identifier of ["STA-146", "STA-66", "STA-67"]) {
+      const line = rowOf_(html, identifier);
+      const cell = line.slice(line.indexOf("data-work-cell"));
+      const chevron = cell.search(/data-work-chevron|data-work-chevron-spacer/);
+      const glyph = cell.indexOf('role="img" aria-label="Status:');
+      const title = cell.indexOf("data-work-title");
+      expect(chevron, identifier).toBeGreaterThan(-1);
+      expect(glyph, identifier).toBeGreaterThan(chevron);
+      expect(title, identifier).toBeGreaterThan(glyph);
+      expect(cell.slice(0, title), identifier).not.toMatch(/staple-row-priority|data-kind-glyph|data-member-position/);
+    }
+    expect(html).not.toContain("data-member-position");
+    // A direct member's title is the strong one, as Plan's depth-0 rows.
+    expect(rowOf_(html, "STA-66")).toMatch(/data-work-title=""[^>]*font-medium|font-medium[^"]*"[^>]*data-work-title/);
+    expect(rowOf_(html, "STA-67")).not.toMatch(/font-medium[^"]*"[^>]*data-work-title/);
+  });
+
+  it("says the identifier, a kind that is not a task or an epic in a word, and the note on the member's own line", () => {
+    const bug = view({ ...data, members: [member({ identifier: "STA-9", kind: "bug", note: "found in the October run, see the log" }), ...data.members] });
+    const html = body(work(bug, { issues, now: NOW }));
+    const line = rowOf_(html, "STA-9");
+    expect(line).toMatch(/data-work-id=""[^>]*>STA-9</);
+    expect(line).toMatch(/data-work-kind=""[^>]*>bug</);
+    // The note: one quiet truncated line, the whole of it in its title, inside the row.
+    expect(line).toMatch(/data-member-note=""[^>]*title="found in the October run, see the log"|title="found in the October run, see the log"[^>]*data-member-note=""/);
+    expect(line).toMatch(/class="[^"]*truncate[^"]*"[^>]*data-member-note|data-member-note=""[^>]*class="[^"]*truncate/);
+    // An epic and a task say no kind word.
+    expect(rowOf_(html, "STA-66")).not.toContain("data-work-kind");
+    expect(rowOf_(html, "STA-146")).not.toContain("data-work-kind");
+    // Nothing under a member: every row is one row.
+    expect(html.match(/role="row"/g)).toHaveLength(4);
+  });
+
+  it("says where a row stands: a parent's rollup, a leaf's status in words, then what stands in the way", () => {
+    const blocked = { ...row(), issue: issue({ id: "s1", identifier: "STA-146", title: "Flake", status: "awaiting_approval" }), deps: { blockedBy: ["STA-1", "STA-2"], blocks: ["STA-3"] } };
+    const html = body(work(data, { issues: [...issues, blocked], now: NOW }));
+    expect(rowOf_(html, "STA-66")).toContain('data-testid="parent-rollup"');
+    expect(rowOf_(html, "STA-146")).toMatch(/data-work-state="awaiting_approval"[^>]*>Awaiting Approval</);
+    const now = rowOf_(html, "STA-146").slice(rowOf_(html, "STA-146").indexOf("data-work-now"));
+    const order = ["Blocked by 2", "waiting for approval", "Blocks 1"].map((words) => now.indexOf(words));
+    expect(order.every((at) => at > -1)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(now).toContain("data-desk-cues");
+  });
+
+  it("draws no hover arrows: the moves are in the row's menu", () => {
+    const html = body(loaded());
+    expect(html).not.toMatch(/aria-label="Move STA-\d+ (up|down)"/);
     expect(html).toContain('data-member-actions="STA-146"');
     expect(html).toContain('data-member-actions="STA-66"');
-    // The child's `⋯` opens it and nothing that would rewrite an order.
     expect(html).toContain('aria-label="Actions for STA-67"');
-    expect(html).not.toContain('aria-label="Move STA-67 up"');
-    const li = /<li role="none" data-milestone-member="STA-66"[\s\S]*?<\/li>/.exec(html)![0];
-    const controls = li.indexOf("data-member-controls");
-    expect(controls).toBeGreaterThan(li.indexOf('role="row"'));
-    for (const label of ["Move STA-66 up", "Move STA-66 down", "Actions for STA-66"]) expect(li.indexOf(`aria-label="${label}"`), label).toBeGreaterThan(controls);
     // The rows rove: one of them takes Tab, the arrows move between them.
     expect(html.match(/role="row"[^>]*tabindex="0"/g)).toHaveLength(1);
   });
 
-  it("keeps a member's true place when Done hides an earlier one", () => {
+  it("puts each member's place in the order on its row for assistive technology, also when Done hides an earlier one", () => {
+    const html = body(loaded());
+    expect(rowOf_(html, "STA-146")).toMatch(/aria-posinset="1" aria-setsize="2"/);
+    expect(rowOf_(html, "STA-66")).toMatch(/aria-posinset="2" aria-setsize="2"/);
+    expect(rowOf_(html, "STA-67")).not.toContain("aria-posinset");
     const three = view({ members: [member({ identifier: "STA-1", status: "done", position: 1 }), member({ identifier: "STA-2", position: 2 }), member({ identifier: "STA-3", position: 3 })] });
-    const html = body(work(three, { now: NOW, members: work(three).members.slice(1), hiddenDone: 1 }));
-    expect(html).toMatch(/data-member-position="2"[^>]*>2</);
-    expect(html).not.toMatch(/data-member-position="1"/);
-    expect(html).toContain('data-hidden-done="1"');
+    const hidden = body(work(three, { now: NOW, members: work(three).members.slice(1), hiddenDone: 1 }));
+    expect(rowOf_(hidden, "STA-2")).toMatch(/aria-posinset="2" aria-setsize="3"/);
+    expect(hidden).toContain('data-hidden-done="1"');
   });
 
-  it("disables the edge moves, and every move while a write is in flight", () => {
-    expect(body(loaded())).toMatch(/aria-label="Move STA-146 up"[^>]*disabled=""/);
-    expect(body(loaded())).not.toMatch(/aria-label="Move STA-146 down"[^>]*disabled=""/);
-    expect(body(loaded({ busy: true }))).toMatch(/aria-label="Move STA-146 down"[^>]*disabled=""/);
+  it("opens the row's menu on its place in the order, then the moves to the top and the bottom", () => {
+    const menu = (index: number, over: Partial<Parameters<typeof MemberMenuItems>[0]> = {}) =>
+      inSession(
+        <Menu.Root open>
+          <Menu.Content forceMount>
+            <MemberMenuItems target={{ identifier: "STA-66", memberIndex: index }} identifier="STA-66" count={3} busy={false} onOpen={noop} onMove={noop} onRemove={noop} {...over} />
+          </Menu.Content>
+        </Menu.Root>,
+      );
+    const middle = menu(1);
+    expect(middle).toMatch(/data-member-place=""[^>]*>2 of 3 in the order</);
+    expect(middle).not.toMatch(/role="menuitem"[^>]*data-member-place/);
+    const items = [...middle.matchAll(/data-menu-item="([a-z]+)"/g)].map((match) => match[1]);
+    expect(items).toEqual(["open", "up", "down", "top", "bottom", "remove"]);
+    expect(middle.indexOf("data-member-place")).toBeLessThan(middle.indexOf('data-menu-item="open"'));
+    const first = menu(0);
+    for (const edge of ["up", "top"]) expect(first).toMatch(new RegExp(`data-disabled=""[^>]*data-menu-item="${edge}"|data-menu-item="${edge}"[^>]*data-disabled=""`));
+    expect(first).not.toMatch(/data-menu-item="bottom"[^>]*data-disabled=""|data-disabled=""[^>]*data-menu-item="bottom"/);
+    const last = menu(2);
+    for (const edge of ["down", "bottom"]) expect(last).toMatch(new RegExp(`data-disabled=""[^>]*data-menu-item="${edge}"|data-menu-item="${edge}"[^>]*data-disabled=""`));
+    // A row lifted into a hidden member's place names the member it moves.
+    expect(menu(1, { identifier: "STA-67" })).toMatch(/data-member-place=""[^>]*>STA-66 is 2 of 3 in the order</);
+    // A child is context: it opens, and nothing would rewrite an order.
+    const child = menu(1, { target: null, identifier: "STA-67" });
+    expect([...child.matchAll(/data-menu-item="([a-z]+)"/g)].map((match) => match[1])).toEqual(["open"]);
+    expect(child).not.toContain("data-member-place");
+  });
+
+  it("moves to the top and the bottom with the same reorder write", () => {
+    const moves: [number, number][] = [];
+    const onMove = (from: number, to: number) => moves.push([from, to]);
+    for (const item of ["top", "bottom", "up", "down"] as const) memberMenuMove(item, 1, 3, onMove);
+    expect(moves).toEqual([
+      [1, 0],
+      [1, 2],
+      [1, 0],
+      [1, 2],
+    ]);
+    expect(movedAnnouncement(1, 3)).toBe("Moved to 2 of 3");
+  });
+
+  it("flags the member that holds the milestone's next ticket, and the ticket itself once its parent is unfolded", () => {
+    const next = view({ ...data, next: { identifier: "STA-67", position: 4 } });
+    const folded = work(next, { issues, now: NOW, members: memberListRows(next, issues, "staple", { collapsed: new Set(["STA-66"]) }) });
+    const foldedHtml = inSession(<SectionBody work={folded} workspace="staple" row={rowOf(next)} />, { issues: { data: issues, error: undefined, loading: false, reload: noop } });
+    expect(rowOf_(foldedHtml, "STA-66")).toMatch(/data-work-next=""[^>]*>next up</);
+    expect(rowOf_(foldedHtml, "STA-146")).not.toContain("data-work-next");
+    const open = body(work(next, { issues, now: NOW }));
+    expect(rowOf_(open, "STA-66")).toContain("data-work-next");
+    expect(rowOf_(open, "STA-67")).toMatch(/data-work-next=""[^>]*>next up</);
+    expect(open).toMatch(/data-plan-flag="you"[^>]*data-work-next|data-work-next=""[^>]*data-plan-flag="you"/);
+    expect(body(loaded())).not.toContain("data-work-next");
+  });
+
+  it("gathers the finished rows Done hides into one line at the end, as Plan gathers shipped work", () => {
+    const html = body(loaded({ hiddenDone: 9 }));
+    const line = html.slice(html.indexOf("data-hidden-done"));
+    expect(html).toMatch(/role="row"[^>]*data-hidden-done="9"/);
+    expect(line).toContain("data-shipped-check");
+    expect(text(line)).toContain("9 finished hidden · show");
+    expect(html.indexOf("data-hidden-done")).toBeGreaterThan(html.lastIndexOf("data-member-row"));
   });
 
   it("says the members are finished, and offers them, when Done hides every one", () => {
@@ -284,16 +390,48 @@ describe("a section's work", () => {
     expect(html).not.toContain("Nothing is in this milestone yet");
   });
 
-  it("offers Add work as one quiet line that opens the reference and note fields", () => {
-    const html = body(loaded());
-    expect(html).toContain("data-milestone-add-open");
-    expect(html).not.toContain("data-milestone-add=");
-    const open = inSession(<AddWork busy={false} exampleRef="STA-12" onAdd={noop} defaultOpen />);
+  it("offers Add work in the header, not as a line under the work", () => {
+    const html = section(rowOf(data), loaded());
+    expect(html).not.toContain("data-milestone-add-line");
+    const header = html.slice(0, html.indexOf("</header>"));
+    expect(header).toMatch(/data-milestone-add-open="STA-190"/);
+    // Left of Queue, the lens's 28px outline button.
+    expect(header.indexOf("data-milestone-add-open")).toBeLessThan(header.indexOf("data-milestone-queue"));
+    expect(header).toMatch(/class="[^"]*\bh-7\b[^"]*min-h-0[^"]*"[^>]*data-milestone-add-open/);
+    // Folded, it is still there: adding does not need the section unfolded.
+    expect(section(rowOf(data), work(null, { now: NOW }), { folded: true })).toContain("data-milestone-add-open");
+    const open = inSession(<AddWorkForm busy={false} ready exampleRef="STA-12" failure={null} onAdd={noop} />);
     expect(open).toContain('aria-label="Identifier to add"');
     expect(open).toContain('placeholder="Task or epic, like STA-12"');
     expect(open).toContain('aria-label="Note for the new member"');
-    expect(text(open)).toContain("Add");
-    expect(text(open)).toContain("Done");
+    expect(open).toMatch(/type="submit"[^>]*>Add</);
+  });
+
+  it("keeps the add field's text while the write is in flight, and says a refusal in the field's own popover", () => {
+    const busy = inSession(<AddWorkForm busy ready exampleRef={null} failure={null} onAdd={noop} />);
+    expect(busy).toMatch(/aria-label="Identifier to add"[^>]*readOnly=""/i);
+    expect(busy).not.toMatch(/aria-label="Identifier to add"[^>]*disabled=""/);
+    const refused = inSession(<AddWorkForm busy={false} ready exampleRef={null} failure={{ kind: "refusal", refusal: { message: "STA-9 is not in this workspace", code: "not_found", blockers: [], retryable: false, fromServer: true } }} onAdd={noop} />);
+    expect(refused).toMatch(/role="alert"[^>]*>STA-9 is not in this workspace</);
+    // Before the milestone is read, Add waits for it.
+    expect(inSession(<AddWorkForm busy={false} ready={false} exampleRef={null} failure={null} onAdd={noop} />)).toMatch(/type="submit"[^>]*disabled=""/);
+  });
+
+  it("puts Add work in the section's menu under 760px", () => {
+    const items = (over: Partial<Parameters<typeof SectionMenuItems>[0]>) =>
+      inSession(
+        <Menu.Root open>
+          <Menu.Content forceMount>
+            <SectionMenuItems status="in_progress" decision={null} folded={false} queued={false} queue={idle} addable={false} onOpenDetails={noop} onChangeDue={noop} onRequestApproval={noop} onAddWork={noop} onFold={noop} {...over} />
+          </Menu.Content>
+        </Menu.Root>,
+      );
+    expect(items({ addable: true })).toContain('data-menu-item="add"');
+    expect(items({ addable: false })).not.toContain('data-menu-item="add"');
+    // Only a phone's open milestone: the desk has the header's button, a finished one offers none.
+    expect(sectionAddable({ narrow: true, finished: false })).toBe(true);
+    expect(sectionAddable({ narrow: false, finished: false })).toBe(false);
+    expect(sectionAddable({ narrow: true, finished: true })).toBe(false);
   });
 
   it("shows a finished milestone's work read-only: Open only, no moves and no Add work", () => {
@@ -301,13 +439,13 @@ describe("a section's work", () => {
     const html = body(work(finished, { now: NOW }));
     expect(html).toContain('data-milestone-member="STA-10"');
     expect(html).toContain('aria-label="Actions for STA-10"');
-    expect(html).not.toContain("Move STA-10 up");
     expect(html).not.toContain("data-milestone-add");
+    expect(rowOf_(html, "STA-10")).not.toContain("aria-posinset");
   });
 
   it("shows a stale base as a conflict with a Reload, and any other refusal as the store's sentence", () => {
     const refusal = (message: string, code: string) => ({ message, code, blockers: [], retryable: false, fromServer: true });
-    const conflict = renderToStaticMarkup(<WorkTree work={loaded({ failure: { kind: "conflict", refusal: refusal("STA-190 members are at revision 4, not 3. Re-read the milestone and retry.", "revision_conflict") } })} />);
+    const conflict = inSession(<WorkTree work={loaded({ failure: { kind: "conflict", refusal: refusal("STA-190 members are at revision 4, not 3. Re-read the milestone and retry.", "revision_conflict") } })} />);
     expect(conflict).toContain("data-milestone-conflict");
     expect(conflict).toContain('role="alert"');
     expect(conflict).toContain("Member order changed elsewhere.");
@@ -316,10 +454,13 @@ describe("a section's work", () => {
     // The touch floor is lifted: Reload is the small text button, never a 44px box.
     expect(conflict).toMatch(/<button[^>]*\bmin-h-0\b[^>]*data-milestone-reload/);
     expect(conflict).not.toContain("data-guard-refusal");
-    const refused = renderToStaticMarkup(<WorkTree work={loaded({ failure: { kind: "refusal", refusal: refusal("STA-66 is an epic, not a milestone", "validation") } })} />);
+    const refused = inSession(<WorkTree work={loaded({ failure: { kind: "refusal", refusal: refusal("STA-66 is an epic, not a milestone", "validation") } })} />);
     expect(refused).toContain("data-guard-refusal");
     expect(refused).toContain("STA-66 is an epic, not a milestone");
     expect(refused).not.toContain("data-milestone-conflict");
+    // Folded, a write's failure still shows in its section.
+    const folded = section(rowOf(data), loaded({ failure: { kind: "refusal", refusal: refusal("STA-9 is not in this workspace", "not_found") } }), { folded: true });
+    expect(folded).toContain("STA-9 is not in this workspace");
   });
 
   it("shows a failed read with Retry in that section, and Loading while it reads", () => {
@@ -353,7 +494,7 @@ describe("control sizes", () => {
       section(rowOf(data), loaded()),
       section(rowOf(data), loaded(), { narrow: true }),
       section(rowOf(data), loaded({ members: [], hiddenDone: 2 })),
-      inSession(<AddWork busy={false} exampleRef={null} onAdd={noop} defaultOpen />),
+      inSession(<AddWorkForm busy={false} ready exampleRef={null} failure={null} onAdd={noop} />),
     ];
     // (The sticky first line under 760px is 44px high: a line, not a control.)
     for (const html of pages) expect(html.replaceAll("@max-[760px]/ms:h-11", "")).not.toMatch(/size-11|min-h-11|\bh-11\b|size-9\b/);

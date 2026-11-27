@@ -1,7 +1,7 @@
 /**
  * One open milestone in the outline, the shape of a horizon's section in Plan's Horizons lens:
  * a sticky header, its gate when it has one, then (unless folded) its Goal line, its Plan line
- * when it is a horizon, and its work with the Add work line.
+ * when it is a horizon, and its work.
  *
  * The header renders from the list row alone, so a folded section asks the server for nothing
  * more. Its one-milestone reads (`useMilestoneWork`) run only while something needs them: it is
@@ -11,16 +11,20 @@
  * the section is folded keeps its failure, shown when the section is next unfolded.
  *
  * The header's first line: the fold chevron, the glyph, the name (opens the drawer), the due
- * date with its calendar, then `Queued #n` or `Queue`, and `⋯`. The status control lives in the
- * `⋯` menu: a milestone's status follows its members and a person changes it rarely. Under 760px
+ * date with its calendar, then `+ Add work`, `Queued #n` or `Queue`, and `⋯`. Add work opens a
+ * popover with the reference and the note; on a folded section it starts the reads it needs, and
+ * a write's failure is shown under the header until the section is unfolded. The status control
+ * lives in the `⋯` menu: a milestone's status follows its members and a person changes it rarely. Under 760px
  * of the page only the first line sticks (chevron, glyph, name, percent, `⋯`); the bar, flags and
- * facts scroll away under it, and the due date and the queue chip move to the facts as text.
+ * facts scroll away under it, and the due date and the queue chip move to the facts as text;
+ * Add work is in `⋯`, its popover anchored to the stuck `⋯`.
  */
-import { ArrowUpRight, CalendarDays, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, ListMinus, ListPlus, MoreHorizontal, RefreshCw } from "lucide-react";
+import { ArrowUpRight, CalendarDays, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, ListMinus, ListPlus, MoreHorizontal, Plus, RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from "react";
 import { GuardRefusal } from "@/components/GuardRefusal";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ActionRefusal, GateSection } from "@/detail/IssueActions";
 import { HorizonPlanTree } from "@/detail/PlanActions";
 import { dequeueTask, enqueueTask, type AuthError } from "@/lib/api";
@@ -32,7 +36,7 @@ import { cn } from "@/lib/utils";
 import { ErrorState } from "@/views/ViewChrome";
 import { projectedDue, shownState } from "./milestone-plain";
 import {
-  AddWork,
+  AddWorkForm,
   FINISHED_LINE,
   FINISHED_NAME,
   FinishedFacts,
@@ -54,7 +58,7 @@ import {
 import { MilestoneDueControl } from "./MilestoneDue";
 import { isFinishedMilestone } from "./milestones-model";
 import { useMilestoneWork, type MilestoneWork } from "./useMilestoneWork";
-import { WorkTree } from "./WorkTree";
+import { WorkFailure, WorkTree } from "./WorkTree";
 
 /** Writing the milestone's own row in the pickup queue, and what went wrong with the last write. */
 export interface SectionQueue {
@@ -225,7 +229,10 @@ export function SectionView({
 }) {
   const [requestOpen, setRequestOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  const asking = menuOpen || requestOpen;
+  const [addOpen, setAddOpen] = useState(false);
+  useBackToClose(addOpen, () => setAddOpen(false));
+  // The add field reads what it needs: an open popover keeps the section's reads running.
+  const asking = menuOpen || requestOpen || addOpen;
   useEffect(() => onAsking?.(asking), [asking, onAsking]);
   const [dueOpen, setDueOpen] = useState(false);
   const sentinel = useRef<HTMLSpanElement>(null);
@@ -255,6 +262,24 @@ export function SectionView({
     />
   );
   const queued = milestone.planPosition !== null;
+  const finished = isFinishedMilestone(milestone.state);
+  const addWork = finished ? null : (
+    <Popover open={addOpen} onOpenChange={setAddOpen}>
+      {narrow ? (
+        <PopoverAnchor virtualRef={menuButton} />
+      ) : (
+        <PopoverTrigger asChild>
+          <Button variant="outline" size="sm" className="h-7 min-h-0" data-milestone-add-open={milestone.identifier}>
+            <Plus aria-hidden />
+            Add work
+          </Button>
+        </PopoverTrigger>
+      )}
+      <PopoverContent align="end" className="w-80" aria-label={`Add work to ${milestone.title}`} data-milestone-add-popover="">
+        <AddWorkForm busy={work.busy} ready={work.view !== null} exampleRef={work.exampleRef} failure={work.failure} onAdd={work.onAdd} />
+      </PopoverContent>
+    </Popover>
+  );
   return (
     <section
       ref={sectionRef}
@@ -297,7 +322,9 @@ export function SectionView({
           {narrow ? null : <span className="shrink-0 text-label text-text-secondary">{due}</span>}
           <div className="ms-auto flex shrink-0 items-center gap-1.5">
             <NarrowPercent percent={progress.percent} />
+            {narrow ? addWork : null}
             <span className="contents @max-[760px]/ms:hidden">
+              {narrow ? null : addWork}
               {queued ? (
                 <QueuedMark position={milestone.planPosition} />
               ) : (
@@ -315,6 +342,8 @@ export function SectionView({
               folded={folded}
               queued={queued}
               queue={queue}
+              addable={sectionAddable({ narrow, finished })}
+              onAddWork={() => setAddOpen(true)}
               onOpenChange={setMenuOpen}
               triggerRef={menuButton}
               onOpenDetails={() => work.onOpen("", milestone.identifier)}
@@ -335,55 +364,41 @@ export function SectionView({
           <GateSection detail={decision.detail} controller={decision.controller} requestOpen={requestOpen} onCloseRequest={() => setRequestOpen(false)} showState />
         </div>
       ) : null}
-      {folded ? null : <SectionBody work={work} workspace={workspace} row={row} />}
+      {/* Unfolded, a write's failure is at the top of the work; folded, it is here. */}
+      {folded ? <WorkFailure work={work} className="mx-4 my-2 @max-[760px]/ms:mx-3" /> : <SectionBody work={work} workspace={workspace} row={row} />}
     </section>
   );
 }
 
-/** The header's `⋯`: Open details, Status, Change due date, the queue, and the fold. */
+/** Add work is in the header's `⋯` on a phone's open milestone: the desk has the header's button, a finished one offers none. */
+export function sectionAddable({ narrow, finished }: { narrow: boolean; finished: boolean }): boolean {
+  return narrow && !finished;
+}
+
+/** The header's `⋯`: Open details, Status, Change due date, Add work on a phone, the queue, and the fold. */
 function SectionMenu({
   title,
   identifier,
-  status,
-  decision,
-  folded,
-  queued,
-  queue,
   onOpenChange,
   triggerRef,
-  onOpenDetails,
-  onChangeDue,
-  onRequestApproval,
-  onFold,
+  ...items
 }: {
   title: string;
   identifier: string;
-  status: string;
-  decision: MilestoneWork["decision"];
-  folded: boolean;
-  queued: boolean;
-  queue: SectionQueue;
   onOpenChange: (open: boolean) => void;
   triggerRef: RefObject<HTMLButtonElement | null>;
-  onOpenDetails: () => void;
-  onChangeDue: () => void;
-  onRequestApproval: () => void;
-  onFold: () => void;
-}) {
+} & Omit<SectionMenuItemsProps, "handOver">) {
   const [open, setOpen] = useState(false);
   useBackToClose(open, () => setOpen(false));
   useEffect(() => onOpenChange(open), [open, onOpenChange]);
-  // The due field and the approval form take the focus; giving it back to `⋯` would close them.
+  // The due field, the add field and the approval form take the focus; giving it back to `⋯` would close them.
   const handingFocus = useRef(false);
   const handOver = (next: () => void) => () => {
     handingFocus.current = true;
     next();
   };
   return (
-    <DropdownMenu
-      open={open}
-      onOpenChange={setOpen}
-    >
+    <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
         <Button ref={triggerRef} variant="ghost" size="icon" className={cn("size-7 text-text-tertiary @max-[760px]/ms:-my-2", TAP_28)} aria-label={`${title} options`} data-milestone-menu={identifier}>
           <MoreHorizontal aria-hidden />
@@ -399,33 +414,65 @@ function SectionMenu({
           event.preventDefault();
         }}
       >
-        <DropdownMenuItem data-menu-item="open" onSelect={onOpenDetails}>
-          <ArrowUpRight aria-hidden />
-          Open details
-        </DropdownMenuItem>
-        <StatusSubmenu decision={decision} status={status} onRequestApproval={handOver(onRequestApproval)} />
-        <DropdownMenuItem data-menu-item="due" onSelect={handOver(onChangeDue)}>
-          <CalendarDays aria-hidden />
-          Change due date
-        </DropdownMenuItem>
-        {queued ? (
-          <DropdownMenuItem data-menu-item="dequeue" disabled={queue.busy || !queue.onDequeue} onSelect={queue.onDequeue}>
-            <ListMinus aria-hidden />
-            Remove from the queue
-          </DropdownMenuItem>
-        ) : (
-          <DropdownMenuItem data-menu-item="queue" disabled={queue.busy || !queue.onQueue} onSelect={queue.onQueue}>
-            <ListPlus aria-hidden />
-            Queue
-          </DropdownMenuItem>
-        )}
-        <DropdownMenuSeparator />
-        <DropdownMenuItem data-menu-item="fold" onSelect={onFold}>
-          {folded ? <ChevronsUpDown aria-hidden /> : <ChevronsDownUp aria-hidden />}
-          {folded ? "Expand" : "Collapse"}
-        </DropdownMenuItem>
+        <SectionMenuItems {...items} handOver={handOver} />
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+interface SectionMenuItemsProps {
+  status: string;
+  decision: MilestoneWork["decision"];
+  folded: boolean;
+  queued: boolean;
+  queue: SectionQueue;
+  /** Add work is offered here (a phone's open milestone, `sectionAddable`). */
+  addable: boolean;
+  onOpenDetails: () => void;
+  onChangeDue: () => void;
+  onRequestApproval: () => void;
+  onAddWork: () => void;
+  onFold: () => void;
+  /** Wraps an item that opens a field which takes the focus. */
+  handOver?: (next: () => void) => () => void;
+}
+
+/** The header menu's items. */
+export function SectionMenuItems({ status, decision, folded, queued, queue, addable, onOpenDetails, onChangeDue, onRequestApproval, onAddWork, onFold, handOver = (next) => next }: SectionMenuItemsProps) {
+  return (
+    <>
+      <DropdownMenuItem data-menu-item="open" onSelect={onOpenDetails}>
+        <ArrowUpRight aria-hidden />
+        Open details
+      </DropdownMenuItem>
+      <StatusSubmenu decision={decision} status={status} onRequestApproval={handOver(onRequestApproval)} />
+      <DropdownMenuItem data-menu-item="due" onSelect={handOver(onChangeDue)}>
+        <CalendarDays aria-hidden />
+        Change due date
+      </DropdownMenuItem>
+      {addable ? (
+        <DropdownMenuItem data-menu-item="add" onSelect={handOver(onAddWork)}>
+          <Plus aria-hidden />
+          Add work
+        </DropdownMenuItem>
+      ) : null}
+      {queued ? (
+        <DropdownMenuItem data-menu-item="dequeue" disabled={queue.busy || !queue.onDequeue} onSelect={queue.onDequeue}>
+          <ListMinus aria-hidden />
+          Remove from the queue
+        </DropdownMenuItem>
+      ) : (
+        <DropdownMenuItem data-menu-item="queue" disabled={queue.busy || !queue.onQueue} onSelect={queue.onQueue}>
+          <ListPlus aria-hidden />
+          Queue
+        </DropdownMenuItem>
+      )}
+      <DropdownMenuSeparator />
+      <DropdownMenuItem data-menu-item="fold" onSelect={onFold}>
+        {folded ? <ChevronsUpDown aria-hidden /> : <ChevronsDownUp aria-hidden />}
+        {folded ? "Expand" : "Collapse"}
+      </DropdownMenuItem>
+    </>
   );
 }
 
@@ -476,7 +523,7 @@ function FoldLine({ open, onToggle, children, end, ...data }: { open: boolean; o
   );
 }
 
-/** Under a header: the Goal line, the Plan line for a horizon, then the work and its add line. */
+/** Under a header: the Goal line, the Plan line for a horizon, then the work. */
 export function SectionBody({ work, workspace, row, defaultGoalOpen, defaultPlanOpen = false }: { work: MilestoneWork; workspace: string; row: MilestoneListRow; defaultGoalOpen?: boolean; defaultPlanOpen?: boolean }) {
   const [goalOpen, setGoalOpen] = useState(defaultGoalOpen ?? goalStartsOpen(row));
   const [planOpen, setPlanOpen] = useState(defaultPlanOpen);
@@ -493,8 +540,6 @@ export function SectionBody({ work, workspace, row, defaultGoalOpen, defaultPlan
   }
   if (!work.view) return <p className="m-0 py-3 pr-4 pl-[42px] text-label text-text-tertiary @max-[760px]/ms:px-3" data-milestone-loading="">Loading…</p>;
   const { view, now } = work;
-  const finished = isFinishedMilestone(view.milestone.state);
-  const items = view.members.length;
   const plan = work.decision?.detail.horizonPlan ?? null;
   const ideas = plan ? plan.ideas.filter((idea) => idea.horizonId === plan.horizon.id).length : 0;
   return (
@@ -526,15 +571,7 @@ export function SectionBody({ work, workspace, row, defaultGoalOpen, defaultPlan
           {planOpen ? <HorizonPlanTree workspace={workspace} horizon={plan.horizon} ideas={plan.ideas} horizons={plan.horizons} className="border-b" /> : null}
         </>
       ) : null}
-      <div aria-hidden className="flex items-baseline gap-2 border-b bg-surface-sunken py-1.5 pr-4 pl-[42px] text-caption text-text-tertiary @max-[760px]/ms:px-3">
-        <span>Work, in order</span>
-        <span className="ms-auto tabular-nums">
-          {items} {items === 1 ? "item" : "items"}
-        </span>
-      </div>
       <WorkTree work={work} />
-      {/* A finished milestone is a record: its work is listed, not edited. */}
-      {finished ? null : <AddWork busy={work.busy} exampleRef={work.exampleRef} onAdd={work.onAdd} className="border-t border-border/60 py-1 pr-4 pl-[34px] @max-[760px]/ms:px-2" />}
     </>
   );
 }

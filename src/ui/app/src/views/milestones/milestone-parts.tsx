@@ -1,15 +1,15 @@
 /**
  * The pieces the Milestones outline draws a milestone with, in the Plan view's vocabulary: a
  * state glyph, filled flags for what needs attention, one bar with the server's percent, the
- * goal with its criteria, the fold chevron, the Add work line and the status submenu. Every
+ * goal with its criteria, the fold chevron, the Add work form and the status submenu. Every
  * count, percent, verdict and sentence is the server's or `milestone-plain.ts`'s.
  *
  * Control sizes: a control keeps its desk look at every width. Under 760px of the page
  * container its tap grows to at least 32px through an invisible inset (`TAP_*`), never a
  * bigger box.
  */
-import { Check, ChevronDown, ChevronRight, Plus, ShieldCheck } from "lucide-react";
-import { useState, type FormEvent, type ReactNode } from "react";
+import { Check, ChevronDown, ChevronRight, ShieldCheck } from "lucide-react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { RunStatePill } from "@/components/autopilot/RunParts";
 import { StatusIcon } from "@/components/task-list";
 import { Button } from "@/components/ui/button";
@@ -28,6 +28,7 @@ import { ProgressStrip } from "@/views/ProgressStrip";
 import { Flag } from "@/views/plan/plan-parts";
 import { cancelledSentence, dueText, nextSentence, progressSegments, progressSentence, riskSentence, shownState, waitBreakdown } from "./milestone-plain";
 import { isFinishedMilestone, milestoneRisk } from "./milestones-model";
+import type { MemberWriteFailure } from "./useMilestoneWork";
 
 type SummaryRow = Pick<MilestoneListRow, "milestone" | "progress" | "next">;
 
@@ -39,6 +40,8 @@ type SummaryRow = Pick<MilestoneListRow, "milestone" | "progress" | "next">;
 const TAP_20 = "relative @max-[760px]/ms:before:absolute @max-[760px]/ms:before:-inset-1.5 @max-[760px]/ms:before:content-['']";
 /** A 28px icon control: a 36px tap at every width (a work row's `⋯`, the section's `⋯`). */
 export const TAP_28 = "relative min-h-0 before:absolute before:-inset-1 before:content-['']";
+/** A 28px text button in a popover, which sits outside the page's container: a 32px tap on a phone's window. */
+const POPOVER_TAP_TEXT = "relative h-7 min-h-0 max-md:before:absolute max-md:before:-inset-y-[3px] max-md:before:inset-x-0 max-md:before:content-['']";
 /** A 28px text button: a 32px tap under 760px. */
 export const TAP_TEXT = "relative h-7 min-h-0 @max-[760px]/ms:before:absolute @max-[760px]/ms:before:-inset-y-[3px] @max-[760px]/ms:before:inset-x-0 @max-[760px]/ms:before:content-['']";
 
@@ -216,73 +219,73 @@ export function FoldButton({ folded, label, onClick, className, ...data }: { fol
   );
 }
 
-/** Add work: one quiet line that opens the reference and note fields in place (Add, Done, Escape). */
-export function AddWork({
+/**
+ * Add work, as the section header's popover holds it: the reference, an optional note, and Add.
+ * Enter adds and keeps the fields for the next one: they clear once the add has landed, and a
+ * refused add keeps them, with the store's sentence, to be fixed. The fields stay focusable while
+ * the write is in flight (read-only, not disabled), so the focus is still there for the next one.
+ * `ready` false: the milestone has not been read yet, so there is no revision to add against.
+ */
+export function AddWorkForm({
   busy,
+  ready,
   exampleRef,
+  failure,
   onAdd,
-  defaultOpen = false,
-  className,
 }: {
   busy: boolean;
+  ready: boolean;
   exampleRef: string | null;
+  failure: MemberWriteFailure | null;
   onAdd: (ref: string, note: string) => void;
-  /** Tests render the fields open; the page opens them on a click. */
-  defaultOpen?: boolean;
-  className?: string;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
   const [ref, setRef] = useState("");
   const [note, setNote] = useState("");
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
-    if (!ref.trim()) return;
-    onAdd(ref.trim(), note.trim());
+  const [sent, setSent] = useState(false);
+  useEffect(() => {
+    if (!sent || busy) return;
+    setSent(false);
+    if (failure) return;
     setRef("");
     setNote("");
+  }, [sent, busy, failure]);
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (!ref.trim() || busy || !ready) return;
+    setSent(true);
+    onAdd(ref.trim(), note.trim());
   };
-  if (!open) {
-    return (
-      <div className={className}>
-        <Button variant="ghost" size="sm" className={cn(TAP_TEXT, "gap-1.5 px-2 text-label text-text-secondary")} onClick={() => setOpen(true)} data-milestone-add-open="">
-          <Plus aria-hidden className="size-3.5" />
-          Add work
-        </Button>
-      </div>
-    );
-  }
   return (
-    <form
-      onSubmit={submit}
-      onKeyDown={(event) => {
-        if (event.key === "Escape") setOpen(false);
-      }}
-      className={cn("flex flex-wrap items-center gap-2", className)}
-      data-milestone-add=""
-    >
+    <form onSubmit={submit} className="flex flex-col gap-2.5" data-milestone-add="">
       <Input
         value={ref}
         autoFocus
         aria-label="Identifier to add"
         placeholder={exampleRef ? `Task or epic, like ${exampleRef}` : "Task or epic"}
-        disabled={busy}
+        readOnly={busy}
+        aria-busy={busy || undefined}
         onChange={(event) => setRef(event.target.value)}
-        className="h-8 min-h-0 w-48 text-label @max-[760px]/ms:flex-1"
+        className="h-8 min-h-0 text-label"
       />
       <Input
         value={note}
         aria-label="Note for the new member"
         placeholder="Why it is here (optional)"
-        disabled={busy}
+        readOnly={busy}
         onChange={(event) => setNote(event.target.value)}
-        className="h-8 min-h-0 min-w-0 flex-1 basis-40 text-label @max-[760px]/ms:basis-full"
+        className="h-8 min-h-0 text-label"
       />
-      <Button type="submit" size="sm" className={TAP_TEXT} disabled={busy || ref.trim() === ""}>
-        Add
-      </Button>
-      <Button type="button" variant="ghost" size="sm" className={TAP_TEXT} onClick={() => setOpen(false)}>
-        Done
-      </Button>
+      {failure && !busy ? (
+        <p role="alert" className="m-0 text-label text-[var(--plain-risk-fg)]" data-milestone-add-error="">
+          {failure.refusal.message}
+        </p>
+      ) : null}
+      <div className="flex justify-end">
+        {/* In a popover, outside the page's container: its tap follows the window's width. */}
+        <Button type="submit" size="sm" className={POPOVER_TAP_TEXT} disabled={busy || !ready || ref.trim() === ""}>
+          Add
+        </Button>
+      </div>
     </form>
   );
 }

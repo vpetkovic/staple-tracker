@@ -17,7 +17,7 @@
  * `useMilestoneWork` does.
  *
  * WHAT IT PINS: the outline and its sections drawn from the wire; the accessible row order
- * matching the server's member order; a name on every reorder control; the state said in words
+ * matching the server's member order; each member's place on its row and a name on its menu; the state said in words
  * with the glyph hidden from a screen reader; the keyboard move and the button move being one
  * computation, accepted verbatim by the real store; and the conflict banner after a genuinely
  * stale reorder.
@@ -42,6 +42,7 @@ import { fakeSession } from "@/views/fake-session";
 import { plainDue, projectedDue } from "./milestone-plain";
 import { work } from "./fixtures";
 import { StatusSubmenu } from "./milestone-parts";
+import { MemberMenuItems } from "./WorkTree";
 import { MilestonesOutline } from "./MilestonesOutline";
 import { SectionView } from "./MilestoneSection";
 import type { MemberWriteFailure, MilestoneWork } from "./useMilestoneWork";
@@ -111,6 +112,26 @@ function renderSection(view: MilestoneView, over: Partial<MilestoneWork> = {}, e
 function renderOutline(effective: EffectiveQueueRow[] = []): string {
   return inSession(<MilestonesOutline workspace={ws} rows={sortMilestones(list)} effective={effective} queueRevision={1} onAuthError={noop} />);
 }
+
+/** A row's place in the order as assistive technology reads it: `aria-posinset` of `aria-setsize`, or null on a child. */
+function placeOf(html: string, identifier: string): string | null {
+  const tag = new RegExp(`<div[^>]*data-member-row="${identifier}"[^>]*>`).exec(html)?.[0] ?? "";
+  const at = /aria-posinset="(\d+)" aria-setsize="(\d+)"/.exec(tag);
+  return at ? `${at[1]} of ${at[2]}` : null;
+}
+
+/** A member's `⋯` menu, open, as its row builds it. */
+function menuOf(index: number, count: number): string {
+  return inSession(
+    <Menu.Root open>
+      <Menu.Content forceMount>
+        <MemberMenuItems target={{ identifier: `M${index}`, memberIndex: index }} identifier={`M${index}`} count={count} busy={false} onOpen={noop} onMove={noop} onRemove={noop} />
+      </Menu.Content>
+    </Menu.Root>,
+  );
+}
+
+const disabled = (html: string, item: string) => new RegExp(`data-disabled=""[^>]*data-menu-item="${item}"|data-menu-item="${item}"[^>]*data-disabled=""`).test(html);
 
 /** Every member/child row in the order the markup puts it — the accessible tree's order. */
 function rowOrder(html: string): string[] {
@@ -192,23 +213,27 @@ describe("the accessible tree", () => {
     expect(new Set(order).size).toBe(order.length);
   });
 
-  it("names every control after the member it acts on, and disables only the true edges", () => {
+  it("names every control after the member it acts on, puts each member's place on its row, and disables only the true edges", () => {
     const html = renderSection(october);
     const members = october.members.map((member) => member.identifier);
-    for (const identifier of members) {
+    members.forEach((identifier, index) => {
       expect(html, identifier).toContain(`aria-label="Actions for ${identifier}"`);
-      expect(html, identifier).toContain(`aria-label="Move ${identifier} up"`);
-      expect(html, identifier).toContain(`aria-label="Move ${identifier} down"`);
-    }
-    // The first member cannot move up and the last cannot move down; nothing else
-    // is disabled, which is the same edge `movedOrder` refuses to compute.
-    expect(html).toMatch(new RegExp(`aria-label="Move ${members[0]} up"[^>]*disabled=""`));
-    expect(html).toMatch(new RegExp(`aria-label="Move ${members.at(-1)} down"[^>]*disabled=""`));
-    expect(html).not.toMatch(new RegExp(`aria-label="Move ${members[0]} down"[^>]*disabled=""`));
+      expect(placeOf(html, identifier), identifier).toBe(`${index + 1} of ${members.length}`);
+    });
+    // The first member cannot move up or to the top and the last cannot move down or to the
+    // bottom; nothing else is disabled, which is the same edge `movedOrder` refuses to compute.
+    const first = menuOf(0, members.length);
+    const last = menuOf(members.length - 1, members.length);
+    expect(disabled(first, "up") && disabled(first, "top")).toBe(true);
+    expect(disabled(first, "down") || disabled(first, "bottom")).toBe(false);
+    expect(disabled(last, "down") && disabled(last, "bottom")).toBe(true);
+    expect(disabled(last, "up") || disabled(last, "top")).toBe(false);
+    // No hover arrows: the moves are the menu's.
+    expect(html).not.toMatch(/aria-label="Move [A-Z]+-\d+ (up|down)"/);
 
-    // A child is context, not plan: its `⋯` opens it, and nothing would rewrite an order.
+    // A child is context, not plan: its `⋯` opens it, and it carries no place in the order.
     expect(html).toContain(`aria-label="Actions for ${refs.q1}"`);
-    expect(html).not.toContain(`aria-label="Move ${refs.q1} up"`);
+    expect(placeOf(html, refs.q1!)).toBeNull();
 
     // The fold, the name, the menu and the progress bar are named too.
     expect(html).toContain('aria-label="Hide October cut"');
@@ -236,9 +261,9 @@ describe("the accessible tree", () => {
 describe("reordering members", () => {
   it("computes one move for the buttons and the Alt+Arrow keys, and the store takes it verbatim", async () => {
     const members = october.members.map((member) => member.identifier);
-    // The keyboard handler on each member row and its two buttons call the same
+    // The keyboard handler on each member row and its menu's moves call the same
     // `onMove(from, to)`, which goes through `movedOrder` — so proving the function
-    // proves both paths. At the edges it returns null, which is why the edge buttons
+    // proves both paths. At the edges it returns null, which is why the edge items
     // are disabled: a move that would change nothing never becomes a write.
     expect(movedOrder(october.members, 0, -1)).toBeNull();
     expect(movedOrder(october.members, members.length - 1, members.length)).toBeNull();
@@ -261,8 +286,8 @@ describe("reordering members", () => {
     // And the accessible order followed the store, without a re-read.
     const html = renderSection(after);
     expect(rowOrder(html).filter((identifier) => order.includes(identifier))).toEqual(order);
-    // The edge that moved is the edge that is disabled now.
-    expect(html).toMatch(new RegExp(`aria-label="Move ${order[0]} up"[^>]*disabled=""`));
+    // The member that moved carries its new place.
+    expect(placeOf(html, order[0]!)).toBe(`1 of ${order.length}`);
 
     // Put the plan back and re-read, so the conflict case below starts from the store.
     const restored = await post("/api/milestone/reorder", {
