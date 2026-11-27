@@ -510,6 +510,13 @@ interface LocalSide {
   readonly baseValue: unknown;
 }
 
+
+/** Whether this device's own operation was a ticket's conversion into an idea: its update carries the kept ticket number. */
+function conversionOp(db: DatabaseSync, opId: string | null): boolean {
+  if (opId === null) return false;
+  const row = db.prepare("SELECT payload FROM sync_outbox WHERE op_id = ?").get(opId) as { payload: string } | undefined;
+  return row !== undefined && row.payload.includes('"planTicketNumber"');
+}
 /**
  * The fields written on this device since the version the sender claims.
  *
@@ -810,6 +817,14 @@ function contest(
      * idea differently would hold a record nobody can answer.
      */
     if (op.entity === "issue" && named.name === "plan_idea_number") continue;
+    /**
+     * Nor the ticket number a converted idea keeps, for the same reason, nor the rank a conversion
+     * puts it at (design/plan.md, "Converting a ticket into an idea"): the end of the plan as each
+     * converting device saw it, which nobody chose. Two devices that converted one ticket offline
+     * land on the later rank in the log, with nothing to answer.
+     */
+    if (op.entity === "issue" && named.name === "plan_ticket_number") continue;
+    if (op.entity === "issue" && named.name === "plan_rank" && ("planTicketNumber" in op.payload || conversionOp(db, localWrites.get(named.name)?.opId ?? null))) continue;
     // One record per field: an attempt's end is seven keys and one field.
     if (contested.has(named.name)) continue;
     const side = localWrites.get(named.name);
