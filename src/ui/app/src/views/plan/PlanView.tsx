@@ -38,6 +38,7 @@ import { workspaceScope } from "@/views/workspace-scope";
 import { AddHorizon, FoldAll, HorizonsBoard, NONE } from "./HorizonsLens";
 import { IdeasBoard, IdeasNothing } from "./IdeasLens";
 import { ImportForm, ImportIdea } from "./ImportIdea";
+import { PlanFilesDialog } from "./PlanFiles";
 import { PlanTimeline } from "./PlanTimeline";
 import type { BoardProps, Write } from "./plan-board";
 import { focusCounts, focusing, focusPlan, type PlanFocus } from "./plan-focus";
@@ -135,6 +136,7 @@ function WorkspacePlan({ workspace, onAuthError }: { workspace: string; onAuthEr
     return () => cancelAnimationFrame(id);
   }, [lens, resource.data !== undefined]);
 
+  const [filesOpen, setFilesOpen] = useState(false);
   // A fresh read replaces what the last write answered.
   useEffect(() => setWritten(null), [resource.data]);
 
@@ -190,6 +192,7 @@ function WorkspacePlan({ workspace, onAuthError }: { workspace: string; onAuthEr
         onText={setText}
         onCapture={capture}
         onImport={(body) => write("import", body)}
+        onPlanFiles={() => setFilesOpen(true)}
         onViewIdeas={() => chooseLens("ideas")}
         tools={
           lens === "horizons" ? (
@@ -199,6 +202,17 @@ function WorkspacePlan({ workspace, onAuthError }: { workspace: string; onAuthEr
             </>
           ) : null
         }
+      />
+      <PlanFilesDialog
+        ws={ws}
+        actor={personActor() ?? "ui"}
+        open={filesOpen}
+        onOpenChange={setFilesOpen}
+        onWritten={(next) => {
+          setWritten(next);
+          session.refresh();
+        }}
+        onOpenIdea={open}
       />
       {refusal ? (
         <div className="px-gutter pt-2" data-plan-refusal>
@@ -301,7 +315,7 @@ const PILLS: ReadonlyArray<{ id: Exclude<PlanFocus, "all">; label: string; dot: 
  * and under 620px of the Plan container the rest is one 44px row of compact controls, each with a
  * 40px tap through an invisible inset.
  */
-export function PlanBar({ lens, plan, focus, onFocus, text, onText, onCapture, onImport, onViewIdeas, tools }: {
+export function PlanBar({ lens, plan, focus, onFocus, text, onText, onCapture, onImport, onPlanFiles, onViewIdeas, tools }: {
   lens: Lens;
   plan: PlanData;
   focus: PlanFocus;
@@ -311,6 +325,8 @@ export function PlanBar({ lens, plan, focus, onFocus, text, onText, onCapture, o
   onCapture: (title: string) => Promise<boolean>;
   /** Import an idea from a file (`ImportIdea`); left out, the bar offers no import. */
   onImport?: (body: Record<string, unknown>) => Promise<boolean>;
+  /** Open the Plan files tray (`PlanFiles.tsx`), offered under the Import form. */
+  onPlanFiles?: () => void;
   onViewIdeas: () => void;
   tools: ReactNode;
 }) {
@@ -359,8 +375,8 @@ export function PlanBar({ lens, plan, focus, onFocus, text, onText, onCapture, o
       {/* Under 900px a lens's tools move into the lens (Horizons draws + Horizon at its end). */}
       {tools ? <span className="contents @max-[900px]/plan:hidden">{tools}</span> : null}
       <PlanSearch text={text} onText={onText} />
-      {onImport ? <ImportIdea onImport={onImport} onViewIdeas={onViewIdeas} compact={lens !== "ideas"} /> : null}
-      {lens === "ideas" ? null : <CapturePopover onCapture={onCapture} onImport={onImport} onViewIdeas={onViewIdeas} />}
+      {onImport ? <ImportIdea onImport={onImport} onViewIdeas={onViewIdeas} onPlanFiles={onPlanFiles} compact={lens !== "ideas"} /> : null}
+      {lens === "ideas" ? null : <CapturePopover onCapture={onCapture} onImport={onImport} onPlanFiles={onPlanFiles} onViewIdeas={onViewIdeas} />}
     </div>
   );
 }
@@ -408,7 +424,7 @@ function PlanSearch({ text, onText }: { text: string; onText: (text: string) => 
  * stays put. "Import a file instead" turns it into the Import form, which is how a phone, whose
  * bar has no room for Import beside + Idea, imports from these lenses.
  */
-function CapturePopover({ onCapture, onImport, onViewIdeas }: { onCapture: (title: string) => Promise<boolean>; onImport?: (body: Record<string, unknown>) => Promise<boolean>; onViewIdeas: () => void }) {
+function CapturePopover({ onCapture, onImport, onPlanFiles, onViewIdeas }: { onCapture: (title: string) => Promise<boolean>; onImport?: (body: Record<string, unknown>) => Promise<boolean>; onPlanFiles?: () => void; onViewIdeas: () => void }) {
   const [open, setOpen] = useState(false);
   const [captured, setCaptured] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -432,7 +448,7 @@ function CapturePopover({ onCapture, onImport, onViewIdeas }: { onCapture: (titl
       </PopoverTrigger>
       <PopoverContent align="end" className="w-80 max-w-[calc(100vw-2rem)] p-3">
         {importing && onImport ? (
-          <ImportForm onImport={onImport} onViewIdeas={onViewIdeas} onDone={() => setOpen(false)} />
+          <ImportForm onImport={onImport} onViewIdeas={onViewIdeas} onDone={() => setOpen(false)} onPlanFiles={onPlanFiles} />
         ) : (
         <>
         <CaptureForm

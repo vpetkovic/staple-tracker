@@ -183,6 +183,7 @@ import {
 import { usagePollingStatus } from "../core/telemetry/polling/run.js";
 import { hideDraftIdentifiers } from "../core/plan.js";
 import { horizonTreeRecords } from "../core/plan-store.js";
+import { workspaceRootOf } from "../core/plan-discovery.js";
 
 interface UiOptions {
   port: number;
@@ -5397,6 +5398,13 @@ export function startUiServer(options: UiOptions): UiHandle {
         return;
       }
 
+      // The Plan files tray: what discovery finds under the workspace root now, and what each is to the tracker. Reads only.
+      if (url.pathname === "/api/plan-files") {
+        const handle = handleFor(url.searchParams.get("ws") ?? undefined);
+        json(res, 200, handle.store.plan().discoverFiles(workspaceRootOf(handle.dbPath)));
+        return;
+      }
+
       if (url.pathname === "/api/plan-idea") {
         const handle = handleFor(url.searchParams.get("ws") ?? undefined);
         handle.store.plan().assertEnabled();
@@ -5470,6 +5478,16 @@ export function startUiServer(options: UiOptions): UiHandle {
             if (body.deferred !== undefined) plan.deferQuestion(ref, Number(body.position), actor, body.deferred === true);
             else plan.resolveQuestion(ref, Number(body.position), actor, body.resolved !== false);
             break;
+          case "/api/plan/files-import": {
+            // The plan files the person picked in the tray, by path: only ones discovery finds now are read.
+            const paths = Array.isArray(body.paths) ? body.paths.filter((path): path is string => typeof path === "string") : [];
+            const result = plan.importDiscovered(workspaceRootOf(handle.dbPath), paths, { horizon: optional<string | null>("horizon") ?? null, maturity: optional<string>("maturity") }, actor, person);
+            json(res, 200, { ...result, plan: plan.view(), idea: result.imported.length === 1 ? plan.detail(result.imported[0]!.idea.id) : null });
+            return;
+          }
+          case "/api/plan/files-ignore":
+            json(res, 200, { files: plan.ignoreDiscovered(workspaceRootOf(handle.dbPath), typeof body.path === "string" ? body.path : "", body.ignored !== false, actor, person), plan: plan.view(), idea: null });
+            return;
           case "/api/plan/scaffold":
             // A preview writes nothing; the confirm creates what the preview showed.
             if (body.preview === true) {

@@ -15,7 +15,7 @@
  */
 import { replaceUrl } from "./back-to-close";
 import type { AttentionList, AttentionRow } from "./types";
-import type { IdeaDetailData, PlanData, PlanWriteResult } from "./plan-types";
+import type { IdeaDetailData, PlanData, PlanFilesData, PlanFilesWriteResult, PlanWriteResult } from "./plan-types";
 import type {
   ActionPayload,
   AgentContext,
@@ -1312,6 +1312,17 @@ export const startLinkJoin = (target: { link: string; consent: ConsentTicket }) 
 export const getPlan = (params: { ws?: string } = {}) => request<PlanData>(`/api/plan${qs(params)}`);
 
 export const getPlanIdea = (params: { ws?: string; ref: string }) => request<IdeaDetailData>(`/api/plan-idea${qs(params)}`);
+
+/** The Plan files tray: the plan files under the workspace root and what each is to the tracker. Reads only. */
+export const getPlanFiles = (params: { ws?: string } = {}) => request<PlanFilesData>(`/api/plan-files${qs(params)}`);
+
+/** Import the picked plan files, or ignore or stop ignoring one; the page is the person. */
+export const planFilesWrite = (verb: "files-import" | "files-ignore", body: Record<string, unknown>) =>
+  request<PlanFilesWriteResult>(`/api/plan/${verb}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ actor: "ui", ...body }),
+  });
 
 /**
  * Every plan write: the route's verb and its fields. The page is the person, so the server

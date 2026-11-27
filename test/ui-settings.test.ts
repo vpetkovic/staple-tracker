@@ -496,6 +496,8 @@ describe("registered settings on /api/settings", () => {
           { key: `analytics.${part}`, scope: "workspace", value: DEFAULT_COST_MODEL[part], source: "default", version: 1 },
         ]),
       ),
+      // Where the Plan files tray looks: served, edited in the tray.
+      "plan.discoveryPaths": { key: "plan.discoveryPaths", scope: "workspace", value: ["*.md", "plans/**"], source: "default", version: 1 },
     });
     expect(settings.unknownKeys).toEqual([]);
     expect(settings.global.path).toBe(join(home, "config.json"));

@@ -3,13 +3,15 @@
  * stage it starts at. The server makes it an idea (Markdown maps to its sections), keeps the
  * original under the idea's Files, and with no stage chosen leaves it raw for an agent to
  * classify: read the file, fill the plan and set or propose its stage. Nothing is imported until
- * the person presses Import.
+ * the person presses Import. Under the form, Plan files opens the tray of plan files already in
+ * the workspace (`PlanFiles.tsx`).
  */
 import { FileUp } from "lucide-react";
 import { useRef, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import { PlanFilesButton } from "./PlanFiles";
 
 /** What the file picker offers, as the server takes them. */
 export const IMPORT_ACCEPT = ".md,.markdown,.html,.htm,.jsx";
@@ -40,7 +42,7 @@ export async function importBody(file: File, stage: ImportStage): Promise<Record
  * The Import form: the file, the stage, Import, and what was imported. `onDone` closes whatever
  * holds it when the import is refused, so the refusal shown under the toolbar is not covered.
  */
-export function ImportForm({ onImport, onViewIdeas, onDone }: { onImport: (body: Record<string, unknown>) => Promise<boolean>; onViewIdeas: () => void; onDone: () => void }) {
+export function ImportForm({ onImport, onViewIdeas, onDone, onPlanFiles }: { onImport: (body: Record<string, unknown>) => Promise<boolean>; onViewIdeas: () => void; onDone: () => void; /** Opens the Plan files tray; left out, the form offers none. */ onPlanFiles?: () => void }) {
   const [file, setFile] = useState<File | null>(null);
   const [stage, setStage] = useState<ImportStage>("classify");
   const [busy, setBusy] = useState(false);
@@ -113,6 +115,16 @@ export function ImportForm({ onImport, onViewIdeas, onDone }: { onImport: (body:
           </button>
         </p>
       ) : null}
+      {onPlanFiles ? (
+        <div className="-mx-3 -mb-3 border-t px-1.5 py-1.5">
+          <PlanFilesButton
+            onOpen={() => {
+              onDone();
+              onPlanFiles();
+            }}
+          />
+        </div>
+      ) : null}
     </form>
   );
 }
@@ -122,7 +134,7 @@ export function ImportForm({ onImport, onViewIdeas, onDone }: { onImport: (body:
  * has no room for both: under 620px of the Plan container it gives way, and + Idea's popover
  * offers the same form (`compact`).
  */
-export function ImportIdea({ onImport, onViewIdeas, compact = false }: { onImport: (body: Record<string, unknown>) => Promise<boolean>; onViewIdeas: () => void; compact?: boolean }) {
+export function ImportIdea({ onImport, onViewIdeas, onPlanFiles, compact = false }: { onImport: (body: Record<string, unknown>) => Promise<boolean>; onViewIdeas: () => void; onPlanFiles?: () => void; compact?: boolean }) {
   const [open, setOpen] = useState(false);
   // A fresh form on every opening.
   const [round, setRound] = useState(0);
@@ -151,7 +163,7 @@ export function ImportIdea({ onImport, onViewIdeas, compact = false }: { onImpor
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-80 max-w-[calc(100vw-2rem)] p-3">
-        <ImportForm key={round} onImport={onImport} onViewIdeas={onViewIdeas} onDone={() => setOpen(false)} />
+        <ImportForm key={round} onImport={onImport} onViewIdeas={onViewIdeas} onDone={() => setOpen(false)} onPlanFiles={onPlanFiles} />
       </PopoverContent>
     </Popover>
   );

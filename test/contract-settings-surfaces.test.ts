@@ -182,6 +182,7 @@ describe("the queue policy is the same object on every surface", () => {
       "features.planning = false  (default)",
       // The Analytics cost model (STA-575) is structured, so each part prints as JSON.
       ...(["roles", "roleMapping", "scenario", "solo", "company"] as const).map((part) => `analytics.${part} = ${JSON.stringify(DEFAULT_COST_MODEL[part])}  (default)`),
+      'plan.discoveryPaths = ["*.md","plans/**"]  (default)',
     ]);
   });
 });
