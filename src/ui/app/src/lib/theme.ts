@@ -93,10 +93,13 @@ let pageStore: ThemeStore | null = null;
 
 /** The page's one theme store, made on first use. `main.tsx` makes it before the first render. */
 export function startTheme(): ThemeStore {
+  // Only a real page has a theme to keep: a string render (a test stubbing `window`) has no
+  // document, and gets a store that reads nothing and listens to nothing.
+  const page = typeof document !== "undefined" && typeof window.matchMedia === "function";
   pageStore ??= createThemeStore({
-    storage: typeof localStorage === "undefined" ? undefined : localStorage,
-    media: typeof window === "undefined" || typeof window.matchMedia !== "function" ? undefined : window.matchMedia(SYSTEM_DARK_QUERY),
-    root: typeof document === "undefined" ? undefined : document.documentElement.classList,
+    storage: page ? localStorage : undefined,
+    media: page ? window.matchMedia(SYSTEM_DARK_QUERY) : undefined,
+    root: page ? document.documentElement.classList : undefined,
   });
   return pageStore;
 }
