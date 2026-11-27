@@ -33,6 +33,9 @@ page.
 
 Five figures lead, each with its change against the period before:
 
+
+![The Analytics Overview: five figures across the top (agent capacity, features shipped, time to done, agent reliability, return on AI spend), then tickets closed per day by workspace and the kinds of work](../site/static/img/screens/analytics-overview-light.webp)
+
 | Figure | Means |
 | --- | --- |
 | **Agent capacity** | Hours agents spent working, and the number of full-time engineers that is over the period. |
@@ -69,6 +72,9 @@ The figure at the top is the **return on total cost**: the first divided by the
 second. A scale beside it marks break-even at 1×; left of it, the work cost more
 than it returned.
 
+
+![The Return lens: the return on total cost as a range beside a scale with break-even marked, five figures, and the start of the role-by-role table](../site/static/img/screens/analytics-return-light.webp)
+
 The return is a range, because the hours of work are counted two ways and never
 mixed:
 
@@ -87,6 +93,9 @@ and the rows add up to the total.
 Open a role for its page: the four figures with where each comes from, the
 tickets it caught with why (the 200 with the most agent time when there are
 more), and how staple recognizes it.
+
+
+![A role's page for Design Engineer: agent time, estimates and the cost to hire, the tickets it caught with what caught each, and the editor for the kinds of agent work it holds](../site/static/img/screens/analytics-role-light.webp)
 
 ### How a role is recognized
 
@@ -134,6 +143,9 @@ profiles' figures and keeps your roles and chips.
 ## 5. Estimates: how far off they run
 
 The Estimates lens says how long work really takes against its estimate.
+
+
+![The Estimates lens for one workspace: a 10-hour estimate usually takes agents about 5.9 h, a box to try an estimate, and each kind of work on one scale](../site/static/img/screens/analytics-estimates-light.webp)
 
 - One sentence gives the answer (*A 10-hour estimate usually takes agents about
   1.3 h*).
