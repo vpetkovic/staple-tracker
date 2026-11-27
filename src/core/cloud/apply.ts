@@ -171,6 +171,8 @@ export const ISSUE_FIELDS: Record<string, Column> = {
   baseCommit: col("base_commit"),
   // The number a promoted idea keeps (migration 026, idea-numbers.ts).
   planIdeaNumber: col("plan_idea_number"),
+  // The ticket number a ticket converted into an idea keeps (migration 028, design/plan.md).
+  planTicketNumber: col("plan_ticket_number"),
 };
 
 /**
@@ -193,6 +195,7 @@ export const SPARSE_ISSUE_FIELDS: ReadonlySet<string> = new Set([
   "branch",
   "baseCommit",
   "planIdeaNumber",
+  "planTicketNumber",
 ]);
 
 export const COMMENT_FIELDS: Record<string, Column> = {
@@ -1138,6 +1141,7 @@ function insertIssue(db: DatabaseSync, input: ApplyInput, pairs: Array<[string, 
 
   advanceIssueNumber(db, values.get("identifier") as string);
   advanceIdeaNumber(db, values.get("plan_idea_number"));
+  if (typeof values.get("plan_ticket_number") === "string") advanceIssueNumber(db, values.get("plan_ticket_number") as string);
   claimKeptIdeaNumbers(db, input);
 }
 
@@ -1467,9 +1471,15 @@ function displaceIdentifierHolder(
    * A promoted idea's first number is a claim like a create's (design/plan.md, "Identity"): the
    * row holds a draft identifier, which is never shown, so a later claim it lost takes the
    * stand-in a create would, on the record until the promoting device settles it.
+   *
+   * And so is a conversion's idea number (design/plan.md, "Converting a ticket into an idea"): the
+   * update that carries the kept ticket number is the record's first claim on an idea number, as a
+   * capture's create is. Dropped, a device whose own conversion of the same ticket gave it (or its
+   * children) other numbers kept its own and never took the converting device's settlement.
    */
   const current = identifierOf(db, input.entityId);
-  if (!decision && current !== null && (isDraftIdentifier(current) || (isIdeaNumber(current) && !isIdeaNumber(incoming[1])))) {
+  const conversion = "planTicketNumber" in input.payload && isIdeaNumber(incoming[1]);
+  if (!decision && current !== null && (isDraftIdentifier(current) || (isIdeaNumber(current) && !isIdeaNumber(incoming[1])) || conversion)) {
     const provisional = provisionalIdentifier(db, incoming[1], claimSeqOf(input, ["identifier"]));
     recordIdentifierConflict(db, input, incoming[1], provisional);
     pairs[index] = ["identifier", provisional];

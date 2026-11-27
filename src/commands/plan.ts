@@ -270,6 +270,15 @@ export function runIdeaCommand(rest: string[]): void {
       console.log(`promoted to ${promoted.identifier}: ${promoted.title} is ${aKind(promoted.kind)} in the tracker now (${promoted.stage})`);
       return;
     }
+    case "convert": {
+      const result = plan.convertTicket(need(first, "a ticket reference"), actor);
+      if (values.json) return console.log(JSON.stringify(result));
+      const [root, ...under] = result.converted;
+      console.log(`converted ${root!.from} into the raw idea ${root!.to}: ${root!.title}. ${root!.from} still names it.`);
+      for (const child of under) console.log(`  ${child.from} -> ${child.to}: ${child.title} (a sub-idea)`);
+      if (result.detachedFrom !== null) console.log(`It left ${result.detachedFrom}: an idea's parent is an idea.`);
+      return;
+    }
     case "adopt":
       plan.adopt(need(first, "an idea reference"), need(others[0], "the issue to adopt"), actor, { purpose: values.research ? "exploration" : "delivery" });
       return show(first!);
@@ -370,7 +379,7 @@ export function runIdeaCommand(rest: string[]): void {
       return;
     }
     default:
-      throw new StapleError("validation", `Unknown idea verb "${sub}". Use: ls, new, show, set, plan, task, promote, scaffold, import, adopt, unlink, ask, resolve, defer, decide, reset-baseline`);
+      throw new StapleError("validation", `Unknown idea verb "${sub}". Use: ls, new, show, set, plan, task, promote, scaffold, import, convert, adopt, unlink, ask, resolve, defer, decide, reset-baseline`);
   }
 }
 

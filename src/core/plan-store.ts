@@ -78,6 +78,7 @@ import {
 } from "./plan-lifecycle.js";
 import { createHash, randomUUID } from "node:crypto";
 import { readStoredRepositoryId } from "./repo-identity.js";
+import { readLocalLease } from "./cloud/lease-store.js";
 import { allPlanLinks, planLinkField, planLinkPurposeOf, planLinkValue, planLinksOf, writePlanLink, type PlanLinkPurpose } from "./plan-links.js";
 import { planRowsByRecord, planRowField, planRowsOf, planRowValue, writePlanRow, type PlanRowValue } from "./plan-rows.js";
 import {
@@ -2058,6 +2059,96 @@ export class PlanStore {
       .all(id, IDEA_KIND) as Array<{ id: string }>;
     if (promotedChildren.length > 0) this.store.rederiveParents(promotedChildren.map((child) => child.id), "plan", actor);
     this.keepBaselines(id, actor);
+  }
+
+  // ---------- a misfiled ticket becomes an idea ----------
+
+  /**
+   * Convert a ticket that should have been an idea into one (design/plan.md, "Converting a ticket
+   * into an idea"). The same record becomes a raw idea at the end of the plan, keeping its
+   * comments, documents, files, history and external links, and its ticket number names it still.
+   * Its children convert with it, as its sub-ideas, each keeping its own. A person or an agent may
+   * do it, as either may capture a raw idea.
+   *
+   * Refused, naming every reason, unless the ticket and everything under it is open, unclaimed and
+   * not started, with nothing that would make a plan record wait or be waited on: no dependency,
+   * no place in the pickup queue or a milestone, no link to an idea. A parent that is ordinary
+   * tracker work is left (an idea's parent is an idea); a parent in the plan stays its parent.
+   */
+  convertTicket(ref: string, actor: string | null): { idea: IdeaView; converted: Array<{ from: string; to: string; title: string }>; detachedFrom: string | null } {
+    this.assertEnabled();
+    const root = this.row(ref);
+    const subject = `${root.identifier} "${root.title}"`;
+    if (root.kind === IDEA_KIND || root.plan_maturity !== null) {
+      throw new StapleError("validation", `${displayRef(root)} is already part of the plan; only a ticket can be converted into an idea.`, { identifier: root.identifier });
+    }
+    const subtree = this.subtreeRows(root.id);
+    const reasons = subtree.flatMap((row) => this.conversionProblems(row, row.id === root.id).map((problem) => (row.id === root.id ? problem : `${row.identifier} "${row.title}" under it ${problem}`)));
+    if (reasons.length > 0) {
+      throw new StapleError("validation", `${subject} cannot be converted into an idea: ${reasons.join("; ")}.`, { identifier: root.identifier, reasons });
+    }
+    const parent = root.parent_id === null ? null : (this.db.prepare("SELECT identifier, kind, plan_maturity FROM issues WHERE id = ?").get(root.parent_id) as { identifier: string; kind: string; plan_maturity: string | null });
+    const detachedFrom = parent !== null && parent.kind !== IDEA_KIND && parent.plan_maturity === null ? parent.identifier : null;
+    const converted: Array<{ from: string; to: string; title: string }> = [];
+    this.store.journaled(() => {
+      // Top down, so each child's parent is an idea before the child becomes one.
+      for (const row of subtree) {
+        const issue = this.store.convertToIdea(row.id, this.nextRecordRank(), actor);
+        converted.push({ from: row.identifier, to: issue.identifier, title: row.title });
+      }
+      this.settleMembership(actor);
+    });
+    return { idea: this.ideaView(root.id), converted, detachedFrom };
+  }
+
+  /** A record and everything under it, parents before their children. */
+  private subtreeRows(id: string): PlanRow[] {
+    const rows: PlanRow[] = [];
+    const children = this.db.prepare(`SELECT ${PLAN_COLUMNS} FROM issues WHERE parent_id = ? ORDER BY created_at, id`);
+    const queue = [this.db.prepare(`SELECT ${PLAN_COLUMNS} FROM issues WHERE id = ?`).get(id) as unknown as PlanRow];
+    while (queue.length > 0) {
+      const row = queue.shift()!;
+      rows.push(row);
+      queue.push(...(children.all(row.id) as unknown as PlanRow[]));
+    }
+    return rows;
+  }
+
+  /** Why one record of a conversion cannot become an idea, each as a clause; empty when it can. */
+  private conversionProblems(row: PlanRow, isRoot: boolean): string[] {
+    const problems: string[] = [];
+    const full = this.db.prepare("SELECT status, started_at, checkout_agent, branch, gate_state FROM issues WHERE id = ?").get(row.id) as {
+      status: string;
+      started_at: string | null;
+      checkout_agent: string | null;
+      branch: string | null;
+      gate_state: string | null;
+    };
+    if (row.kind === MILESTONE_KIND) problems.push("is a milestone");
+    else if (!isRoot && (row.kind === IDEA_KIND || row.plan_maturity !== null)) problems.push("is already part of the plan");
+    if (row.identifier.includes("+")) problems.push(`holds a stand-in number until sync settles it; sync first`);
+    const category = this.store.categoryOf(full.status);
+    if (category === "done" || category === "cancelled") problems.push(`is ${full.status}`);
+    // A review gate parks a parent until a person answers it; that is not work started.
+    else if (full.gate_state === "pending") problems.push("is parked behind a review gate (approve it or request changes first)");
+    else if (category !== "unstarted" && category !== "ready") problems.push(`was started (it is ${full.status})`);
+    else if (full.started_at !== null) problems.push(`was started on ${full.started_at.slice(0, 10)}`);
+    if (full.checkout_agent !== null) problems.push(`is checked out by ${full.checkout_agent}`);
+    else if (readLocalLease(this.db, row.id) !== null) problems.push("is leased by this device");
+    if (full.branch !== null) problems.push(`has work on branch ${full.branch}`);
+    const named = (sql: string): string[] => (this.db.prepare(sql).all(row.id) as Array<{ identifier: string }>).map((other) => other.identifier);
+    const blocks = named("SELECT i.identifier FROM relations r JOIN issues i ON i.id = r.blocked_id WHERE r.blocker_id = ? AND r.type = 'blocks' ORDER BY i.identifier");
+    const waits = named("SELECT i.identifier FROM relations r JOIN issues i ON i.id = r.blocker_id WHERE r.blocked_id = ? AND r.type = 'blocks' ORDER BY i.identifier");
+    if (blocks.length > 0) problems.push(`blocks ${blocks.join(", ")} (an idea neither blocks nor waits; remove the dependency first)`);
+    if (waits.length > 0) problems.push(`waits on ${waits.join(", ")} (an idea neither blocks nor waits; remove the dependency first)`);
+    if (this.db.prepare("SELECT 1 AS hit FROM queue_entries WHERE issue_id = ?").get(row.id)) problems.push("is in the pickup queue (dequeue it first)");
+    const milestones = named("SELECT i.identifier FROM milestone_members m JOIN issues i ON i.id = m.milestone_id WHERE m.issue_id = ?");
+    if (milestones.length > 0) problems.push(`is a member of milestone ${milestones.join(", ")} (remove it first)`);
+    const ideas = this.db
+      .prepare("SELECT i.identifier, i.plan_idea_number, i.title FROM plan_links l JOIN issues i ON i.id = l.idea_id WHERE l.issue_id = ? ORDER BY i.created_at")
+      .all(row.id) as Array<{ identifier: string; plan_idea_number: string | null; title: string }>;
+    if (ideas.length > 0) problems.push(`is linked to ${ideas.map((idea) => displayRef(idea)).join(", ")} (unlink it first)`);
+    return problems;
   }
 
   // ---------- import: a plan file becomes an idea ----------

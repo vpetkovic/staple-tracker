@@ -341,7 +341,7 @@ export interface SetEstimateResult {
  */
 const TEXT_MATCH_SQL = `(
     issues.title LIKE ? ESCAPE '\\' OR issues.identifier LIKE ? ESCAPE '\\' OR issues.plan_idea_number LIKE ? ESCAPE '\\'
-    OR issues.description LIKE ? ESCAPE '\\' OR issues.assignee LIKE ? ESCAPE '\\'
+    OR issues.plan_ticket_number LIKE ? ESCAPE '\\' OR issues.description LIKE ? ESCAPE '\\' OR issues.assignee LIKE ? ESCAPE '\\'
     OR (json_valid(issues.labels) AND EXISTS (SELECT 1 FROM json_each(issues.labels) l WHERE l.value LIKE ? ESCAPE '\\'))
     OR (json_valid(issues.acceptance_criteria)
         AND EXISTS (SELECT 1 FROM json_each(issues.acceptance_criteria) ac WHERE ac.value LIKE ? ESCAPE '\\'))
@@ -444,6 +444,8 @@ interface IssueRow {
   derived_status?: string | null;
   /** The number a promoted idea keeps (migration 026); absent on a database from before it. */
   plan_idea_number?: string | null;
+  /** The ticket number a ticket converted into an idea keeps (migration 028); absent on a database from before it. */
+  plan_ticket_number?: string | null;
 }
 
 /** An issue's stored criteria as a list: none stored reads as an empty one. */
@@ -491,6 +493,7 @@ function rowToIssue(row: IssueRow): Issue {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     ...ideaNumberOf(row),
+    ...(row.plan_ticket_number ? { ticketNumber: row.plan_ticket_number } : {}),
   };
 }
 
@@ -2701,6 +2704,17 @@ export class WorkspaceStore {
       if (kept) return kept;
     }
     /**
+     * And the ticket number a ticket converted into an idea kept (migration 028): the idea answers
+     * to it on every device, the one that converted it and one that received the conversion by
+     * sync or hydrated after it, while no live issue holds the number.
+     */
+    if (parsed !== null && this.getSetting("features.planning") === true) {
+      const kept = this.db.prepare("SELECT * FROM issues WHERE plan_ticket_number = ? ORDER BY created_at, id LIMIT 1").get(`${parsed.prefix}-${parsed.number}`) as unknown as
+        | IssueRow
+        | undefined;
+      if (kept) return kept;
+    }
+    /**
      * An identifier this issue used to carry, before sync or a conflict resolution moved
      * it — only when no issue carries it now (`identifier-moves.ts`). Without this, the
      * `TST-2+1` somebody copied into a handoff stopped naming anything the moment the
@@ -2713,7 +2727,14 @@ export class WorkspaceStore {
       (canonical && (ideaAliases || canonical !== ideaRef) ? aliasedIssueId(this.db, canonical) : null) ??
       (ideaRef && ideaAliases ? aliasedIssueId(this.db, ideaRef) : null);
     if (aliased) {
-      return this.db.prepare("SELECT * FROM issues WHERE id = ?").get(aliased) as unknown as IssueRow | undefined;
+      const row = this.db.prepare("SELECT * FROM issues WHERE id = ?").get(aliased) as unknown as IssueRow | undefined;
+      /**
+       * A ticket number an idea left (a ticket converted into one, migration 028) is planning's
+       * too: with planning off it names nothing here, as on a device that hydrated after the
+       * conversion and holds no alias, only the column, which is not read while planning is off.
+       */
+      if (row !== undefined && row.kind === IDEA_KIND && this.getSetting("features.planning") !== true) return undefined;
+      return row;
     }
     return undefined;
   }
@@ -8611,9 +8632,9 @@ export class WorkspaceStore {
       // `%`, `_` and `\` in the text are literal: a search for `100%` is not a wildcard.
       const like = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
       const match = Array<string>(TEXT_MATCH_PARAMS).fill(like);
-      // The kept idea number (`TEXT_MATCH_SQL`'s third), and one a record moved off, are planning's: with planning off they match nothing.
+      // The kept idea and ticket numbers (`TEXT_MATCH_SQL`'s third and fourth), and one a record moved off, are planning's: with planning off they match nothing.
       const planning = this.getSetting("features.planning") === true;
-      if (!planning) match[2] = "";
+      if (!planning) match[2] = match[3] = "";
       params.push(...match, planning || canonicalIdeaRef(q, this.prefix) === null ? formerHolderOf(this.db, q.toUpperCase()) : null);
     }
     /**
@@ -9006,6 +9027,45 @@ export class WorkspaceStore {
     });
   }
 
+  /**
+   * Convert a ticket into an idea in place (design/plan.md, "Converting a ticket into an idea"):
+   * promotion run backwards. The same row takes the next idea number, the kind `idea` and the
+   * plan columns a capture gives it (raw, at the end of the plan); everything that hangs on the row
+   * (comments, documents, files, events, external links) stays. Its ticket number stays on the row
+   * in `plan_ticket_number`, written with the move in one journaled update, so every device that
+   * receives the conversion, or hydrates after it, resolves the old number; the alias below is
+   * this device's only. A parent that is ordinary tracker work is left first, by the tracker's own
+   * move, since an idea's parent must be an idea. Only the plan layer calls this, after its own
+   * rules (open, unclaimed, nothing started, nothing depending on it).
+   */
+  convertToIdea(issueId: string, rank: number, actor: string | null): Issue {
+    this.assertConfiguredKind(IDEA_KIND);
+    return this.journaled(() => {
+      let row = this.requireRow(issueId);
+      const parent = row.parent_id === null ? null : this.requireRow(row.parent_id);
+      if (parent !== null && !isPlanKind(parent.kind) && parent.plan_maturity === null) {
+        this.updateIssueResult(row.id, { parent: null }, actor, undefined, { plan: true });
+        row = this.requireRow(row.id);
+      }
+      const now = this.journal.mutationAt();
+      const identifier = nextIdeaNumber(this.db, this.prefix);
+      const kept = row.identifier;
+      this.db
+        .prepare("UPDATE issues SET identifier = ?, kind = ?, plan_maturity = 'raw', plan_rank = ?, plan_ticket_number = ?, updated_at = ? WHERE id = ?")
+        .run(identifier, IDEA_KIND, rank, kept, now, row.id);
+      recordIdentifierMove(this.db, { issueId: row.id, from: kept, to: identifier, at: now });
+      this.journal.record({
+        entity: "issue",
+        entityId: row.id,
+        verb: "update",
+        payload: { identifier, kind: IDEA_KIND, planMaturity: "raw", planRank: rank, planTicketNumber: kept, updatedAt: now },
+        actor: actor ?? null,
+      });
+      this.emitEvent({ kind: "ticket_converted", issueId: row.id, actor, payload: { from: kept, identifier, kind: row.kind } });
+      return this.toIssue(this.requireRow(row.id));
+    });
+  }
+
   /** A horizon: a milestone the plan ranks as a column. Its name, date, order and removal are the person's. */
   isHorizon(issueId: string): boolean {
     // Migration fixtures may predate the plan columns. Without a rank a row cannot be
@@ -9040,7 +9100,10 @@ export class WorkspaceStore {
    */
   private readonly toIssue = (row: IssueRow): Issue => {
     const issue = rowToIssue(row);
-    if (issue.ideaNumber !== undefined && this.getSetting("features.planning") !== true) delete issue.ideaNumber;
+    if ((issue.ideaNumber !== undefined || issue.ticketNumber !== undefined) && this.getSetting("features.planning") !== true) {
+      delete issue.ideaNumber;
+      delete issue.ticketNumber;
+    }
     return issue;
   };
 

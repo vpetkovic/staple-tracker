@@ -192,11 +192,11 @@ The draft rules still hold for a record still under a draft: in JSON it goes out
 `identifier: null, draft: true` (`hideDraftIdentifiers`), a draft in text as the idea's id
 (`draftsAsIds`).
 
-## Storage: ten columns on `issues`, three tables, no new entity
+## Storage: eleven columns on `issues`, three tables, no new entity
 
-What an issue cannot already say lives in ten nullable `issues` columns, eight added by workspace
-migration **020** (`020-plan-fields.ts`), one by **021** (`021-plan-delivered.ts`) and one by
-**026** (`026-idea-numbers.ts`), NULL on every row outside the plan, and three tables:
+What an issue cannot already say lives in eleven nullable `issues` columns, eight added by workspace
+migration **020** (`020-plan-fields.ts`), one by **021** (`021-plan-delivered.ts`), one by
+**026** (`026-idea-numbers.ts`) and one by **028** (`028-plan-ticket-number.ts`), NULL on every row outside the plan, and three tables:
 `plan_links` and `plan_rows` (synchronized, one field per link and per breakdown row) and
 `plan_members` (derived on each device, never sent).
 
@@ -436,6 +436,54 @@ promoted is its child from the start.
 **Adopt** links an existing issue to a record, promoted or not; **Unlink** removes one link.
 Exploring offers it as well as shaped: tickets that already exist can belong to an idea whose
 scope is still open. Raw never does.
+
+### Converting a ticket into an idea
+
+**Convert** (`PlanStore.convertTicket`, `WorkspaceStore.convertToIdea`) is promotion run
+backwards, for a ticket that should have been an idea: a brainstorm filed as work, or an unplanned
+capability found during ticket work. The same row takes the next idea number, the kind `idea`, and
+what a capture gives a record (maturity raw, rank at the end of the plan); its id, comments,
+documents, files, events, external links, title, description, labels and status stay. Its history
+shows it (`ticket_converted`). A person or an agent may convert, as either may capture a raw idea.
+
+*Its ticket number stays a name for it.* The identifier, the kind, the plan columns and
+**`plan_ticket_number`** (migration 028) change in one journaled `update`, and
+`recordIdentifierMove` keeps the old number as this device's alias. A device that receives the
+update records the same move; one that hydrates later has no alias, so `lookupRow` reads the column
+after a live identifier and a kept idea number, and before an alias. A live identifier still wins:
+a number another issue holds names that issue. The applier keeps the ticket counter past a kept
+number (`advanceIssueNumber`, as the record arrives), so a device that only hydrated never mints
+it again, and a text search that includes plan records (`kind idea`, `includePlan`) matches it;
+task lists, `ls -q` and the toolbar search leave ideas out, as they always do. With planning off neither the column nor an alias that leads to an idea
+resolves, on any device.
+
+*What converts.* The ticket and everything under it, parents first: each child becomes a sub-idea
+of the record above it, keeping its own history and number. A parent that is ordinary tracker work
+is left first, by the tracker's own move (`parent_changed`, the old parent re-derives), because an
+idea's parent is an idea; a parent in the plan (a promoted record) stays. Refused, naming every
+reason for every record, unless each record is open, in the unstarted or ready band, never started
+(`started_at`), not checked out or leased here, has no recorded branch, no blocking edge either way
+(a plan neither blocks nor waits), no place in the pickup queue or a milestone, no link to an idea,
+no pending review gate, and no stand-in number (sync settles a stand-in by renumbering it from the ticket counter, which
+would overwrite the idea number). A milestone or a plan record is never converted.
+
+*Across devices.* A conversion's idea number is the record's first claim on one, as a capture's is:
+an update that carries `planTicketNumber` and loses its number to an earlier claim takes the
+stand-in a create would (`displaceIdentifierHolder`), on the record until the converting device
+settles it. So two devices that convert one ticket and its subtree offline, each minting its own
+numbers, end on the log's numbers on every device with nothing open; dropped instead, the losing
+writes left each device on its own set. Both wrote the same kept numbers. Neither the kept number nor a conversion's rank is a field contest
+(`conflicts.ts`): staple assigned both. A ticket number written onto a record that is an idea once
+the write lands (a renumber from before a conversion) is not "promotion over an idea number"
+(`displaceIdentifierHolder`): a promotion carries its kind, and without one the log orders the
+two writes like any other. An edit another device made before it heard of the conversion is
+applied as written, and every device reads the same record: a checkout leaves an idea that is
+checked out and in progress, a queue entry stays (the effective queue skips a plan record), and a
+move under tracker work or a child filed under the ticket leaves an idea under that work, or work
+under the idea. Nothing reconciles these; the person releases, dequeues or moves them. A ticket
+converted before its create reached the log keeps the number it had here; if an earlier claim in
+the log gave that number to another ticket, the live identifier names that ticket and the kept
+number only says what the idea was called on this device.
 
 **Import** (`staple idea import <plan.md>`, `PlanStore.importPlan`) reads a plan file into one
 idea, in one transaction: the first heading outside a code fence is the title, the text before the
@@ -1237,7 +1285,7 @@ What converges, under both folds, on a tail device and a freshly hydrated one:
 
 ## Surfaces
 
-- **CLI** `staple plan enable|show`, `staple idea ls|new|show|set|plan|task|promote|scaffold|import|adopt|unlink|ask|resolve|defer|decide|reset-baseline`,
+- **CLI** `staple plan enable|show`, `staple idea ls|new|show|set|plan|task|promote|scaffold|import|convert|adopt|unlink|ask|resolve|defer|decide|reset-baseline`,
   `staple horizon ls|new|set|mv|rm`, with `--person` for steering. An idea's ref is its id.
   `staple idea set <ref> --delivered YYYY-MM-DD [--note T] --person` marks it delivered outside
   the tracker and `--undelivered` clears the mark.
@@ -1246,7 +1294,8 @@ What converges, under both folds, on a tail device and a freshly hydrated one:
   `undelivered` only to refuse them), `start_idea` (promote in place, or with
   `adopt` link an existing issue; answers the promoted `{ id, identifier, kind }` or `null`),
   `unlink_idea`, `scaffold_idea` (preview without `confirm`; with it and the preview's
-  `fingerprint`, create); `reset_idea_baseline` (a view button).
+  `fingerprint`, create); `convert_to_idea` (a ticket into a raw idea; answers the idea, each
+  `{ from, to, title }` converted and the parent it left); `reset_idea_baseline` (a view button).
 - **HTTP** `GET /api/plan` (each record with `state`, `actions`, `completeness`, `dependsOn`,
   `units` and `unsized`, each horizon with `shippedCount`, `units`, `unsizedCount`, `records`,
   `progress`, `runMode`, `goal` and `awaitingApproval`),
