@@ -19,6 +19,7 @@ import { resolveWorkspace } from "../core/workspace.js";
 import { StapleError } from "../core/types.js";
 import { aKind } from "../core/plan.js";
 import { percentText } from "../core/plan-accounting.js";
+import { sparkedIdeaWords } from "../core/plan-provenance-words.js";
 
 const COMMON = {
   db: { type: "string" },
@@ -111,6 +112,8 @@ function printDetail(detail: IdeaDetail): void {
   } else if (idea.notStarted) {
     console.log("not started: its planned start has passed and nothing is linked");
   }
+  if (detail.sparkedBy) console.log(`sparked by ${detail.sparkedBy.identifier}(${detail.sparkedBy.status}) ${detail.sparkedBy.title}`);
+  for (const sparked of detail.sparked) console.log(`  sparked ${sparkedIdeaWords(sparked)} ${sparked.title}`);
   if (detail.brief) console.log(`brief    ${detail.brief.split("\n")[0]}`);
   detail.questions.forEach((q, i) => console.log(`  ${q.resolved ? "[x]" : q.deferred ? "[~]" : "[ ]"} ${i + 1}. ${q.text}${q.deferred ? " (deferred)" : ""}`));
   for (const decision of detail.decisions) console.log(`  decided ${decision}`);
@@ -168,6 +171,7 @@ export function runIdeaCommand(rest: string[]): void {
       brief: { type: "string" },
       title: { type: "string" },
       parent: { type: "string" },
+      "sparked-by": { type: "string" },
       maturity: { type: "string" },
       horizon: { type: "string" },
       start: { type: "string" },
@@ -198,6 +202,9 @@ export function runIdeaCommand(rest: string[]): void {
     if (!value) throw new StapleError("validation", `staple idea ${sub} needs ${what}`);
     return value;
   };
+  if (values["sparked-by"] !== undefined && sub !== "new") {
+    throw new StapleError("validation", "--sparked-by goes with staple idea new: an idea names the ticket that sparked it when it is captured.");
+  }
   const plan = planFor(values);
   const { actor, options } = writer(values.person);
   const show = (ref: string) => {
@@ -226,6 +233,7 @@ export function runIdeaCommand(rest: string[]): void {
           horizon: values.horizon ?? null,
           plannedStart: values.start ?? null,
           plannedTarget: values.target ?? null,
+          sparkedBy: values["sparked-by"] ?? null,
         },
         actor,
         options,

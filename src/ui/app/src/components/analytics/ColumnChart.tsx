@@ -96,7 +96,11 @@ export function ColumnChart({
             tabIndex={0}
             className="focus-ring-inset relative rounded-sm"
             style={{ height }}
-            onPointerLeave={() => setActive(null)}
+            // A finger lifted from a tapped slot also "leaves" the plot; only a mouse or pen
+            // leaving clears it. A tap elsewhere clears it through blur.
+            onPointerLeave={(event) => {
+              if (event.pointerType !== "touch") setActive(null);
+            }}
             onBlur={() => setActive(null)}
             onKeyDown={(event) => {
               const next = stepSlot(active, event.key, points.length);

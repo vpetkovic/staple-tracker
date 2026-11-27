@@ -813,6 +813,27 @@ export interface FindingRef extends IssueRef {
   disposition: "blocker" | "follow-up";
 }
 
+/** The idea and breakdown row Scaffold made a ticket from (core/plan-provenance.ts). */
+export interface ScaffoldedFromRef {
+  ideaId: string;
+  ideaNumber: string | null;
+  /** The idea's ticket number since it became the epic; null while it is an idea. */
+  identifier: string | null;
+  title: string;
+  rowId: string;
+  /** The row's key as the breakdown holds it now; null once the row was removed. */
+  rowKey: string | null;
+}
+
+/** An idea a ticket's work sparked. */
+export interface SparkedIdeaRef {
+  id: string;
+  ideaNumber: string | null;
+  identifier: string | null;
+  title: string;
+  maturity: string | null;
+}
+
 /** A blocker living in another workspace file, resolved through the hub. */
 export interface CrossBlocker {
   identifier: string;
@@ -1149,6 +1170,12 @@ export interface IssueDetail {
   foundIn?: FindingRef | null;
   /** Tickets filed for findings in this one, oldest first. Absent from an older server. */
   findings?: FindingRef[];
+  /** The idea and row Scaffold made this ticket from; null otherwise and while planning is off. Absent from an older server. */
+  scaffoldedFrom?: ScaffoldedFromRef | null;
+  /** The ticket whose work sparked this idea (or the epic it became). Absent from an older server. */
+  sparkedBy?: IssueRef | null;
+  /** The ideas this ticket's work sparked, oldest first. Absent from an older server. */
+  sparked?: SparkedIdeaRef[];
   comments: IssueComment[];
   documents: IssueDocumentMeta[];
   /** File metadata. Empty when the ticket has no files. The bytes are a separate request. */
