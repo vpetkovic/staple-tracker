@@ -652,7 +652,7 @@ For an idea that is not promoted (a promoted one is an ordinary epic):
 | no re-kind across the idea boundary, in either direction, except by promotion | `assertPlanRekind` in `updateIssue` | same |
 | never a milestone member, by hand or derived | `MilestoneStore.addMember`, `derivePlanMembers` | same, and *membership…* |
 | never gated | `gateIssue` | *refuses a gate on an idea* |
-| never a blocker and never blocked | `assertNoPlanDependency` in `setBlockedBy` and `createIssue` | *refuses an idea as a blocker…* |
+| never a blocker of tracker work and never blocked by it; ideas wait on ideas only through their own edges ([Sub-ideas and blockers](#derived-never-stored)) | `assertNoPlanDependency` in `setBlockedBy` and `createIssue`; `PlanStore.block` takes plan records only | *refuses an idea as a blocker…*; `test/plan-idea-blockers.test.ts` |
 | the kind goes only when nothing uses it | `removeKind` | *keeps tracker work and plans apart…* |
 | no ticket number, never shown | `createIssue`, `displayRef`, `IdeaView.identifier`; on every surface `hideDraftIdentifiers` and `draftsAsIds` | *identity…*; on the surfaces `test/plan-surfaces.test.ts`, *no surface shows…* |
 
@@ -788,6 +788,36 @@ its sub-ideas', so either wait would be a cycle. So a parent's own row keys in i
 Dependencies name its own rows, and a sub-idea naming a key only its ancestors' rows hold waits on
 nothing. The timeline draws no arrow between a record and its ancestor.
 
+**Sub-ideas and blockers.** A record can also be blocked by another plan record with a structured
+edge (`plan-blockers.ts`, migration 029): `staple idea block|unblock`, `update_idea`'s
+`add_blockers` and `remove_blockers`, the Plan tab's *Blocked by*, `/api/plan/blocker`. An edge is
+an edit (the state must offer one); it is refused for the record itself, an ancestor or descendant
+(the same cycle as above), a record outside the plan, and an edge that closes a loop over the
+edges. On the wire each edge is one field of the blocked record's `milestone` entity,
+`planBlocker.<blocker id>`, whose value is the constant `true` and whose null removes it: two
+devices adding different edges keep both, two adding the same edge agree, and adding on one while
+removing on the other is a field conflict. Seed, apply, conflict screening, restore and
+quarantine treat it as they treat a link field. `blockedBy` lists a record's edges; `dependsOn`
+is those, then the text references above, so the Timeline and plan steps read both, and text
+references keep working as they did. Only edges hold Scaffold back.
+
+A record is **held** (`heldBy: { parents, blockers }`, null when nothing holds it) while an idea
+above it is neither shaped nor shipped (a dropped one included), nearest first, or while it or an
+idea above it is blocked by a record that has neither shipped nor been dropped (a blocker this
+device does not hold, or one above or beneath it, holds nothing). A held record's Scaffold and
+Promote are offered with a `disabledReason` and refused (`cannot be scaffolded yet: it is shaped ·
+waiting on parent, parent "SSO" (exploring)`), and its scaffold preview lists the hold as a
+problem. Scheduling it, on any horizon, stays open: a shaped sub-idea can be parked on a later
+horizon while its parent is still exploring on an earlier one. A parent's Scaffold leaves a held
+sub-idea, and everything beneath it, for its own turn. A shipped or dropped record is never held.
+On a record already promoted, `heldBy.parents` is the flag that an idea above it went back to
+exploring or was dropped after it was scaffolded; its open tickets read the same flag as
+`scaffoldedFrom.parentUnsettled` on `get_task`, `staple show` and `/api/issue`. Nothing is
+cancelled. All of it is derived on the read from facts every device holds (the edges in one
+statement with the rest of the plan's facts; a ticket's flag from a walk up its idea's tree,
+consulting the derivation only when that walk finds an ancestor not shaped), so a device that
+receives the change by sync reads the same and nothing derived is written that could conflict.
+
 **The baseline.** The first planned window a record has once it is started itself is kept as its
 baseline (`plan_baseline_*`). It is written when a record becomes started with a window (promoted,
 or linked to work), or when a started record gets its first window; a sub-idea's start starts no
@@ -828,7 +858,7 @@ its nearest scheduled ancestor's; [Accounting](#accounting)) that is not shipped
 | exploring, no open question, the shaped gate not met | `write_plan` | agent | write what the gate names, then tell the person. Lists `missing` |
 | exploring, the gate met | `mark_shaped` | person | tell the person it is ready to be marked shaped |
 | shaped, its plan edited since so the gate fails (`planIncomplete`) | `fix_plan` | agent | fix what the gate names. Lists `missing` |
-| shaped, no own work, waiting | `wait` | nobody | nothing to do yet; never scaffold it. Carries `waitingOn` |
+| shaped, no own work, waiting | `wait` | nobody | nothing to do yet; never scaffold it. Carries `waitingOn` (`parents` while an idea above it is not shaped) |
 | shaped, no own work, its turn has come | `scaffold` | agent | re-check the breakdown against what has landed since it was written and bring the person any change; then preview and confirm Scaffold, or Adopt existing tickets where its decisions say they come from elsewhere |
 
 A shaped record with its own work (promoted, or linking tickets) needs nothing: its work is
@@ -838,13 +868,14 @@ tickets. An exploring record that adopted work (it reads `started`) still yields
 
 **Waiting.** Shaped with no tickets is a normal resting state, not a to-do: scaffolding waits until
 an idea's turn comes. A shaped record with no own work **waits** while its planned start is later
-than today, or while a record it depends on (`dependsOn`, explicit references only) is neither
-shipped nor dropped; a dropped dependency holds nothing. A record with no planned start of its own
+than today, while a record it depends on (`dependsOn`: what it or an idea above it is blocked by,
+then explicit references) is neither shipped nor dropped, or while an idea above it is not shaped
+(`waitingOn.parents`, the `heldBy` parents); a dropped dependency holds nothing. A record with no planned start of its own
 waits on its nearest ancestor's, so a parent whose start lies ahead keeps its sub-ideas waiting
 with it; a dropped or shipped ancestor is skipped on that walk, since its dates hold nothing. A record whose Scaffold would also build a sub-idea that waits (Scaffold builds every
 shaped sub-idea beneath it) waits too, `waitingOn.records` naming those sub-ideas: scaffolding the
 parent would scaffold them early. Its sub-ideas whose turn has come keep their own `scaffold`
-steps and are scaffolded one by one. `waitingOn` is `{ start?, records?: [{ id, title, state }] }`. The person releases an idea
+steps and are scaffolded one by one; a held sub-idea is not built by its parent's Scaffold, so it holds the parent back no more. `waitingOn` is `{ start?, records?: [{ id, title, state }], parents?: [{ id, title, maturity }] }`. The person releases an idea
 early by moving its planned start (or its parent's), which is already theirs; nothing new is
 stored. A `fix_plan` step comes before waiting: a plan that fails the gate is worth fixing whenever.
 
@@ -1332,6 +1363,7 @@ What converges, under both folds, on a tail device and a freshly hydrated one:
 | `test/plan-lifecycle.test.ts` | the table itself, pinned: every state's actions, who takes each, the promoted record's epic edits, Mark shaped on a record started while exploring, adopt from exploring on and never raw, back to raw offered nowhere, how a maturity change is named, the delivered mark in exploring and shaped and the marked record's edits and clear |
 | `test/plan-lifecycle-surfaces.test.ts` | every idea (state, write) cell and every horizon (state, action) cell agrees with the table on HTTP, MCP and the CLI with and without `--person`; every payload carries exactly the table's row; a record started while exploring carries the started row and Mark shaped, and only the person shapes it; a record delivered outside the tracker carries the shipped row with its edits and the clear, the mark and the clear are the person's on every surface, and a mark without a day is refused before anything is written; every document and file write in every state |
 | `test/plan-own-state.test.ts` | with hand-written expectations: a parent's own state against its rollup; a sub-idea promoted on its own and re-parented by its parent's promotion; a promoted record edited as an epic once shipped; an exploring idea that adopts work reads started, keeps its maturity, offers Mark shaped, joins its horizon, keeps its baseline and stays out of the tracker; every document key, restore and file on a shipped, dropped or raw idea |
+| `test/plan-idea-blockers.test.ts`, `test/plan-idea-blockers-surfaces.test.ts`, `test/cloud-plan-blockers-sync.test.ts` | edges written, read and refused (itself, above or beneath, a loop, outside the plan) on every surface; text dependencies beside them; a shaped sub-idea scheduled on any horizon, held from Scaffold and Promote until every idea above is shaped and its blockers shipped, reading shaped · waiting on parent; plan steps waiting on parents and blockers, a parent's Scaffold leaving a held sub-idea; a parent gone back or dropped flagging the scaffolded tickets, nothing cancelled; under both folds edges added on two devices kept, the same edge agreed, add against remove a conflict, seeded and restored edges, and the flag read the same on every device with no conflict |
 | `test/plan-lenses.test.ts`, `test/plan-lenses-review.test.ts` | what the lenses read: dependencies only from explicit references, a sub-idea's title key over its ancestor's row key, never a wait between a record and its ancestor or descendant; completeness and `dependsOn` on the payload; a horizon's shipped count, progress and server counts; Queue and the run setting offered and held back; each issue's horizon; the run setting is the person's on every path, reaches every ticket as the `horizon-run` instruction, and allows a goal run only when set to `goal` |
 | `test/plan-accounting.test.ts`, `test/plan-accounting-surfaces.test.ts` | a horizon's done, open and planned units and its percentage, the same on the plan, the milestone view and every CLI, MCP and HTTP surface; unsized ideas never zero work; leaf ideas counted with the parent apart; a parent's rollup counting its sub-ideas' rows once; plain milestones and planning off unchanged; a horizon held open by a scheduled idea when its last ticket closes, in both flag states, released when the idea is dropped or moved (closing whether or not derivation wrote its status before), reopened when one is scheduled onto it, with or without members; a scheduled parent carrying its sub-ideas scheduled on no horizon, a sub-idea scheduled elsewhere counted there alone; `complete` and the page's fold false while every counted unit landed but an idea holds it; one whole percent rounded down from the counts; the hold reading the record's own stage, missing links included; with planning off, the hold named in the refusal and on the milestone view |
 | `test/plan-steps.test.ts` | one test per row of the step table with hand-written expectations (need, who, the questions, the gate's missing sections, `waitingOn`), deferred questions left out, a dropped dependency holding nothing; the person releasing a waiting idea by moving its planned start, a sub-idea waiting on its parent's, and a parent waiting while its Scaffold would build a waiting sub-idea; an exploring idea that adopted work asking its questions and then needing nothing; shaped with work, shipped, dropped and unscheduled records needing nothing; plan order, a parent before a sub-idea that ranks earlier |

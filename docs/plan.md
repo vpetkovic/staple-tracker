@@ -211,6 +211,37 @@ under Context because it did not fit the section it was in. An imported idea has
 yet, so importing straight into shaped needs breakdown rows; import a parent as exploring, add
 its sub-ideas, then mark it shaped.
 
+### Sub-ideas and blockers
+
+An idea can wait on another one. Under **Blocked by** on its Plan tab, add the idea it waits on by
+its number (`I-12`); the list also shows the ideas that wait on this one. From an agent or the
+terminal:
+
+```bash
+staple idea block I-STA-7 I-STA-3      # I-STA-7 waits on I-STA-3
+staple idea unblock I-STA-7 I-STA-3
+```
+
+MCP `update_idea` takes the same edges as `add_blockers` and `remove_blockers`. An idea cannot wait
+on itself, on an idea above or beneath it (a parent's work already holds its sub-ideas'), or on one
+that already waits on it. Lines in the **Dependencies** section that name another record (`C2`,
+its ticket number) still count, as they always did: the plan step waits on them and the Timeline
+draws them. Only a **Blocked by** edge holds Scaffold back.
+
+A sub-idea and its parent can be at different stages and on different horizons. A shaped sub-idea
+can be scheduled on any horizon while its parent is still being explored (SSO on Now still being
+worked out, its passkeys sub-idea shaped and parked on Next). It is not built yet, though: until
+**every idea above it is shaped** and **every idea it waits on has shipped** (or been dropped), it
+reads **shaped · waiting on parent** (or **waiting on blockers**), and Scaffold and Promote are
+held back with the reason. An idea above it that is dropped holds it too, until the sub-idea is
+moved out or the parent restored. A sub-idea also waits on what its parent waits on. A parent's own
+Scaffold leaves a held sub-idea for its own turn.
+
+If a parent goes back to exploring, or is dropped, after its sub-ideas were scaffolded, nothing is
+cancelled. Their epics read **parent not shaped**, and each of their open tickets is flagged in its
+detail and in `staple show`: "its parent idea "SSO" went back to exploring since this was scaffolded".
+The flag goes away when the parent is shaped again.
+
 ## 5. Schedule it on a horizon
 
 The **Horizons** lens is an outline: **Not scheduled**, the shaped, started and shipped ideas
@@ -490,13 +521,13 @@ and stop for you on the rest.
 | Exploring, the plan not written enough to shape | Write the plan sections the gate names | Agent |
 | Exploring, ready to shape | Mark it shaped | You |
 | Shaped, but edited since so it fails the gate | Fix the plan | Agent |
-| Shaped, no tickets, its planned start ahead or an idea it depends on not shipped | Wait | Nobody yet |
+| Shaped, no tickets, its planned start ahead, an idea it depends on not shipped, or an idea above it not shaped | Wait | Nobody yet |
 | Shaped, no tickets, its turn has come | Re-check the breakdown, then Scaffold (or Adopt) | Agent |
 | Raw, or exploring but not scheduled itself, under a scheduled idea | Brainstorm it | Agent |
 
 A shaped idea with no tickets is not a to-do: it **waits** until its planned start (or its
-parent's, when it has none) or until the ideas it depends on ship, and agents never scaffold it
-before then. A parent whose sub-ideas are not all due waits too, since scaffolding it would build
+parent's, when it has none), until the ideas it depends on ship, and until every idea above it is
+shaped, and agents never scaffold it before then. A parent whose sub-ideas are not all due waits too, since scaffolding it would build
 them; agents scaffold its due sub-ideas one by one instead. To release one early, move its planned
 start. When a horizon has no ticket left and
 still lists steps, a run over it stops with `planning_needed`, lists the steps (the agent takes
@@ -527,7 +558,8 @@ come back as they were.
 > **Agents capture and write. The person steers.**
 >
 > Agents can capture raw ideas, edit titles and briefs, write plan sections and breakdown rows,
-> add, answer and defer questions, record decisions, adopt or unlink work, link research and POCs, and scaffold or
+> add, answer and defer questions, record decisions, adopt or unlink work, link research and POCs,
+> say which ideas an idea waits on (Blocked by), and scaffold or
 > promote an idea **you** marked shaped (preview first, then confirm).
 >
 > Agents cannot move maturity, schedule ideas on horizons, set dates or order, re-parent ideas,
