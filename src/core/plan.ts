@@ -360,7 +360,8 @@ export type SteeringWrite =
   | "baseline"
   | "horizons"
   | "promote"
-  | "delivery";
+  | "delivery"
+  | "proposal";
 
 /** `subject` is how the message names the record (`displayRef`), never a draft identifier. */
 export function steeringRefusal(what: SteeringWrite, subject: string | null): StapleError {
@@ -373,6 +374,8 @@ export function steeringRefusal(what: SteeringWrite, subject: string | null): St
         ? `Marking ${name} delivered outside the tracker, or clearing that mark, is the person's call, not an agent's. ` +
           "To record work that landed in the tracker, adopt its ticket onto the idea (start_idea with adopt, or staple idea adopt); " +
           "otherwise tell the person the idea looks delivered, and they mark it in the Plan view (or the CLI with --person)."
+      : what === "proposal"
+        ? `Dismissing the shaped proposal of ${name} is the person's call, not an agent's: they accept it (Mark shaped) or dismiss it in the Plan view (or the CLI with --person). An agent may propose it again, or write what the plan still lacks.`
       : what === "maturity"
         ? `Changing the maturity of ${name} is the person's call, not an agent's. ` +
           "Writing its plan sections, task rows, questions, decisions or linked research moves a raw idea to exploring on its own; " +

@@ -83,6 +83,18 @@ describe("a raw idea", () => {
     expect(planActionItems("", offered).find((item) => item.id === "explore")?.call).toMatchObject({ verb: "update", body: { ref: "r", maturity: "exploring" } });
   });
 
+  it("gives a raw idea an agent proposed shaped Accept shaped in place of Explore, held back with the gate's reason", () => {
+    const proposal = { by: "agent-7", at: "2026-11-27T10:00:00.000Z", note: null };
+    const ready = idea("ready", { shapeProposal: proposal, actions: [{ id: "explore", label: "Start exploring", who: "person" }, { id: "shape", label: "Mark shaped", who: "person" }] });
+    const held = idea("held", { shapeProposal: proposal, actions: [{ id: "explore", label: "Start exploring", who: "person" }, { id: "shape", label: "Mark shaped", who: "person", disabledReason: "It needs a goal before it is shaped." }] });
+    const html = board([ready, held]);
+    expect(card(html, "ready")).toContain('data-plan-action="shape"');
+    expect(card(html, "ready")).not.toContain('data-plan-action="explore"');
+    expect(text(card(html, "ready"))).toContain("Accept shaped");
+    expect(card(html, "held")).toMatch(/data-plan-action="shape"[^>]*>|disabled=""[^>]*data-plan-action="shape"/);
+    expect(card(html, "held")).toContain('title="It needs a goal"');
+  });
+
   it("lists the newest capture first", () => {
     const html = board([idea("old", { createdAt: "2026-11-01T00:00:00.000Z" }), idea("new", { createdAt: "2026-11-24T00:00:00.000Z" })]);
     expect(html.indexOf('data-plan-card="new"')).toBeLessThan(html.indexOf('data-plan-card="old"'));

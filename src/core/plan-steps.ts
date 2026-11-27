@@ -96,7 +96,8 @@ export function planStepOf(input: PlanStepInput): PlanStep | null {
       `Develop "${input.title}" and capture the result on the idea: its brief, questions (staple idea ask ${ref}), decisions and plan sections (staple idea plan ${ref}). Writing any of these moves a raw idea to exploring; scheduling it and marking it shaped stay the person's (propose it shaped with staple idea propose ${ref} once it passes the gate).`,
     );
   // A standing proposal is the person's to accept, once nothing holds it back: its questions first.
-  if (input.proposed && (input.maturity === "raw" || input.maturity === "exploring") && !input.ownWork) {
+  // A record that started while exploring takes one too: shaping it is still the person's.
+  if (input.proposed && (input.maturity === "raw" || input.maturity === "exploring")) {
     if (input.openQuestions.length > 0) {
       return step(
         "answer_questions",

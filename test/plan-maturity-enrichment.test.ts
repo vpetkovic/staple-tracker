@@ -144,6 +144,10 @@ describe("enrichment on one device", () => {
     // Restored to raw while it holds a horizon: it was explored, so it lands exploring, which holds one.
     plan.update(idea, { maturity: "raw" }, "vp", PERSON);
     expect(plan.ideaView(idea)).toMatchObject({ maturity: "exploring", horizonId: now });
+    // And a restore into raw that schedules it in the same write is held to exploring, which offers it.
+    plan.update(idea, { maturity: "dropped" }, "vp", PERSON);
+    const next = plan.view().horizons[1]!.id;
+    expect(plan.update(idea, { maturity: "raw", horizon: next }, "vp", PERSON)).toMatchObject({ maturity: "exploring", horizonId: next });
   });
 
   it("refuses an agent moving maturity by hand, and says enrichment and a proposal are its way", () => {
@@ -220,6 +224,31 @@ describe("enrichment on one device", () => {
       expect(dismissed.actions.map((a) => a.id)).not.toContain("dismiss_proposal");
       plan.update(idea, { maturity: "shaped" }, "vp", PERSON);
       expect(refused(() => plan.update(idea, { proposeShaped: {} }, "agent")).message).toMatch(/is shaped; it cannot be proposed for shaped/);
+    });
+
+    it("on a record that started while exploring, is the person's step and counts under the horizon's Needs you", () => {
+      const now = plan.view().horizons[0]!.id;
+      const idea = plan.capture({ title: "Started exploring", maturity: "exploring", horizon: now, plan: READY_PLAN }, "vp", PERSON).id;
+      plan.adopt(idea, store.createIssue({ title: "Existing work" }).identifier, "agent");
+      expect(plan.ideaView(idea)).toMatchObject({ state: "started", maturity: "exploring", nextStep: null });
+      plan.update(idea, { proposeShaped: {} }, "agent");
+      expect(plan.ideaView(idea).nextStep).toMatchObject({ need: "mark_shaped", who: "person" });
+      expect(plan.view().horizons.find((h) => h.id === now)!.needsYou).toBe(1);
+    });
+
+    it("is settled by the delivered mark, so clearing the mark does not bring it back", () => {
+      const idea = raw();
+      plan.update(idea, { plan: READY_PLAN, proposeShaped: { note: "old" } }, "agent");
+      plan.update(idea, { delivered: { on: "2026-11-01" } }, "vp", PERSON);
+      plan.update(idea, { delivered: null }, "vp", PERSON);
+      expect(plan.ideaView(idea)).toMatchObject({ maturity: "exploring", shapeProposal: null });
+    });
+
+    it("refuses proposing and dismissing in one write, and tells an agent that dismissing is the person's", () => {
+      const idea = raw();
+      plan.update(idea, { plan: READY_PLAN, proposeShaped: {} }, "agent");
+      expect(refused(() => plan.update(idea, { proposeShaped: {}, dismissProposal: true }, "vp", PERSON)).message).toMatch(/not both/);
+      expect(refused(() => plan.update(idea, { dismissProposal: true }, "agent")).message).toMatch(/Dismissing the shaped proposal of .* is the person's call/);
     });
 
     it("cannot be written as a raw document", () => {

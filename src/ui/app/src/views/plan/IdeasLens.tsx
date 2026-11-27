@@ -228,6 +228,8 @@ function runItem(item: PlanItem, write: Write) {
 /** A raw idea: its title, how long ago it was captured, and Explore when its state offers it. */
 function RawRow({ plan, idea, column, columns, write, onOpen, selected, onDrag }: LensItem & { idea: IdeaData }) {
   const explore = exploreItem(idea);
+  // An agent proposed it shaped: its one button accepts the proposal, never an Explore that would set it aside.
+  const accept = idea.shapeProposal ? (shaping(idea) ?? null) : null;
   const parent = idea.parentId === null ? null : plan.ideas.find((candidate) => candidate.id === idea.parentId);
   return (
     <div
@@ -264,7 +266,20 @@ function RawRow({ plan, idea, column, columns, write, onOpen, selected, onDrag }
           <RiskFlags idea={idea} />
         </div>
       </div>
-      {explore ? (
+      {accept ? (
+        <Button
+          size="sm"
+          className="h-7 px-2.5 text-label @max-[760px]/plan:h-8"
+          aria-label={`Accept ${idea.title} shaped`}
+          disabled={!accept.ready}
+          title={accept.ready ? undefined : `It needs ${accept.need}`}
+          onClick={accept.ready ? runItem(accept.item, write) : undefined}
+          onKeyDown={(event) => event.stopPropagation()}
+          data-plan-action="shape"
+        >
+          Accept shaped
+        </Button>
+      ) : explore ? (
         <Button
           variant="outline"
           size="sm"

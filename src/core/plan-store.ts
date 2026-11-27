@@ -666,7 +666,7 @@ function ideaNumberOf(row: { identifier: string; plan_idea_number?: string | nul
 const STEERED_AS: Partial<Record<IdeaAction, SteeringWrite>> = {
   explore: "maturity",
   shape: "maturity",
-  dismiss_proposal: "maturity",
+  dismiss_proposal: "proposal",
   unshape: "maturity",
   drop: "maturity",
   restore: "maturity",
@@ -1947,7 +1947,8 @@ export class PlanStore {
       if (action === "restore" && maturity === "raw" && row.plan_explored === null) assertRestorableToRaw(row, this.listedHorizon(row.plan_horizon_id), planLinksOf(this.db, row.id, "exploration").length > 0);
       // The rest of one write is held to the state its maturity change leads to: shaping a raw idea
       // and scheduling it is one decision. A started or shipped record keeps its state.
-      if (before !== "started" && before !== "shipped") state = maturity;
+      // Restored into raw, a record made more complete reads exploring, and is held to that.
+      if (before !== "started" && before !== "shipped") state = maturity === "raw" && row.plan_explored !== null ? "exploring" : maturity;
     }
     if (patch.horizon !== undefined) allow("schedule");
     if (patch.parent !== undefined) allow("reparent");
@@ -1966,6 +1967,7 @@ export class PlanStore {
       }
     }
     const proposed = this.proposalOf(row.id) !== null;
+    if (patch.dismissProposal && patch.proposeShaped !== undefined) throw new StapleError("validation", "One write proposes an idea shaped or dismisses the proposal, not both.");
     if (patch.dismissProposal) {
       allow("dismiss_proposal");
       if (!proposed) throw new StapleError("validation", `Nothing is proposed for ${displayRef(row)}; there is no proposal to dismiss.`);
@@ -1995,8 +1997,8 @@ export class PlanStore {
       }
       this.write(row.id, columns, actor, "idea_updated", { fields: Object.keys(columns) });
       if (enriched) this.explore(row.id, actor, "plan");
-      // The person moved its maturity, or set the proposal aside: a proposal no longer stands.
-      if (proposed && (moves || patch.dismissProposal)) this.store.putDocument(row.id, SHAPE_PROPOSAL_KEY, "", { author: actor, changeSummary: moves ? "proposal settled" : "proposal dismissed" }, { plan: true });
+      // The person moved its maturity, marked it delivered (or cleared that), or set the proposal aside: a proposal no longer stands.
+      if (proposed && (moves || delivery !== undefined || patch.dismissProposal)) this.store.putDocument(row.id, SHAPE_PROPOSAL_KEY, "", { author: actor, changeSummary: moves ? "proposal settled" : "proposal dismissed" }, { plan: true });
       if (patch.proposeShaped !== undefined) {
         const note = typeof patch.proposeShaped.note === "string" && patch.proposeShaped.note.trim() !== "" ? patch.proposeShaped.note.trim() : PROPOSAL_DEFAULT_NOTE;
         this.store.putDocument(row.id, SHAPE_PROPOSAL_KEY, note, { author: actor, changeSummary: "proposed shaped" }, { plan: true });

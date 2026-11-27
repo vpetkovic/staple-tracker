@@ -150,8 +150,9 @@ idea's card and its panel then say **proposed shaped**, it shows under **Needs y
 panel says who proposed it, when and why. **Accept shaped** marks it shaped in one action (held to
 the gate, so it waits if the plan was emptied since); **Dismiss** sets the proposal aside. At the
 terminal: `staple idea set <ref> --maturity shaped --person` accepts it and
-`staple idea set <ref> --dismiss-proposal --person` dismisses it. Any maturity move you make
-settles the proposal.
+`staple idea set <ref> --dismiss-proposal --person` dismisses it. Any maturity move you make, and
+marking it delivered outside the tracker, settles the proposal. A raw card that was proposed shows
+**Accept shaped** in place of **Explore**.
 
 ## 4. Shape it
 

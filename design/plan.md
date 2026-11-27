@@ -632,8 +632,10 @@ card and status line say *proposed shaped*, and the drawer's Where it stands nam
 why with **Accept shaped** (the offered `shape`, held back with the gate's reason) and **Dismiss**
 (`dismiss_proposal`, the person's, offered only while a proposal stands). A carried record whose
 proposal passes the gate has the person's `mark_shaped` step whatever its maturity, after any open
-questions. Any maturity move the person makes, and a dismissal, empty the document, so a proposal
-never outlives the answer; documents converge by revision, so two proposals (or a proposal and an
+questions, a record started while exploring included. Any maturity move the person makes, the
+delivered mark (set or cleared) and a dismissal empty the document, so a proposal never outlives
+the answer; proposing and dismissing in one write is refused; a raw card that was proposed offers
+Accept shaped in place of Explore, since exploring it would settle the proposal; documents converge by revision, so two proposals (or a proposal and an
 answer) written offline settle to the one the log holds last, with no conflict. Surfaces:
 `staple idea propose <ref> [--note T]`, `update_idea` `propose_shaped`, and to answer it
 `staple idea set --maturity shaped|--dismiss-proposal --person` or the drawer.
