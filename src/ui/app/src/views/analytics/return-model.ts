@@ -197,8 +197,17 @@ export function returnView(roi: RoiResponse, model: CostModelValue = roi.model.m
 /** "Copilot $19 × 4 a month", "API bill $230 a month". */
 export const planWords = (line: AiLine, sign: string): string => `${line.label} ${sign}${formatNumber(line.perMonth)}${line.kind === "subscription" ? ` × ${line.quantity ?? 1}` : ""} a month`;
 
+/** "34%", "0.5%", "under 0.1%": a share said so a small one never reads as nothing. */
+export function sharePercent(share: number): string {
+  if (share > 0 && share < 0.0005) return "under 0.1%";
+  return formatPercent(share, share < 0.1 ? 1 : 0);
+}
+
 /** " × 34% of agent time", the share in the arithmetic of one workspace. */
-export const shareWords = (share: number, whose: string): string => ` × ${formatPercent(share)} of ${whose}`;
+export const shareWords = (share: number, whose: string): string => ` × ${sharePercent(share)} of ${whose}`;
+
+/** A count of full-time people: "2.7", and "under 0.1" where rounding would say nobody. */
+export const peopleWords = (people: number): string => (people > 0 && people < 0.05 ? "under 0.1" : formatNumber(people, 1));
 
 /** The AI lines of a role or the shared row, each with its arithmetic: price × how many a month, × the share on one workspace (null on the hub). */
 export function aiDetail(lines: readonly AiLine[], sign: string, share: number | null, whose: string): string {

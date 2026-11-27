@@ -28,7 +28,7 @@ import { CostSetupDialog, SCENARIOS } from "./CostSetupDialog";
 import { costEdits } from "./cost-edits";
 import { AssumedTag, Segmented, type CostApi } from "./return-parts";
 import { RolePage } from "./RolePage";
-import { ATTEMPT_CAP_HOURS, aiDetail, assumedFigures, assumedWords, isAssumed, returnView, scenarioWords, shareWords, type ReturnView, type RoleView } from "./return-model";
+import { ATTEMPT_CAP_HOURS, aiDetail, assumedFigures, assumedWords, isAssumed, peopleWords, returnView, scenarioWords, shareWords, type ReturnView, type RoleView } from "./return-model";
 
 export function ReturnPage({ roi, cost, error, onRetry, query, onAuthError, onOpenTicket }: {
   roi: RoiResponse | undefined;
@@ -221,7 +221,7 @@ function Figures({ view }: { view: ReturnView }) {
         sentence={solo ? "Hours of work delivered for every hour you spent directing." : "One employee with AI, against the same employee alone."}
         emptyText="No directing time counted"
       />
-      <StatTile label="Team to match it" value={range(formatNumber(low.fte, 1), high ? formatNumber(high.fte, 1) : null)} unit="people" sentence={`Full-time for these ${weeks} weeks, to put in the same hours.`} />
+      <StatTile label="Team to match it" value={range(peopleWords(low.fte), high ? peopleWords(high.fte) : null)} unit="people" sentence={`Full-time for these ${weeks} weeks, to put in the same hours.`} />
     </div>
   );
 }

@@ -14,7 +14,7 @@
  */
 import { ArrowLeft, Search, Settings2 } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
-import { formatEffortHours, formatMoney, formatNumber, formatPercent } from "@/components/analytics/format";
+import { formatEffortHours, formatMoney, formatNumber } from "@/components/analytics/format";
 import { StatTile } from "@/components/analytics/StatTile";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { AgentTypeId, AnalyticsQuery, CostModelValue, CostTypeRule, RoiTicket, RoiTicketsResponse } from "@/lib/analytics-api";
@@ -24,7 +24,7 @@ import type { Resource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
 import { agentWords, costEdits, isChip } from "./cost-edits";
 import { AssumedTag, Chip, ChipField, type CostApi } from "./return-parts";
-import { AGENT_TYPES, ATTEMPT_CAP_HOURS, catchAllRole, isAssumed, matchersOf, planWords, type ReturnView, type RoleView, type RuleField } from "./return-model";
+import { AGENT_TYPES, ATTEMPT_CAP_HOURS, catchAllRole, isAssumed, matchersOf, planWords, shareWords, type ReturnView, type RoleView, type RuleField } from "./return-model";
 
 /** The one-field rules a role page edits, in the approved order. */
 export const MATCH_FIELDS: readonly { key: RuleField; label: string; lead: string; placeholder: string }[] = [
@@ -102,7 +102,7 @@ export function RolePageView({ role, view, cost, tickets, onBack, onSetup, onOpe
   const recognized = recognitionOf(model, role.roleId);
   const rate = `${view.sign}${formatNumber(role.rate)}`;
   const other = tickets.data?.otherAgentHours ?? 0;
-  const lineSum = (line: RoleView["aiLines"][number]) => `${planWords(line, view.sign)}, for ${view.period.days} days${!view.hub && role.share < 1 ? ` × ${formatPercent(role.share)} of this role's agent time` : ""}: ${money(line.cost)}`;
+  const lineSum = (line: RoleView["aiLines"][number]) => `${planWords(line, view.sign)}, for ${view.period.days} days${!view.hub && role.share < 1 ? shareWords(role.share, "this role's agent time") : ""}: ${money(line.cost)}`;
   return (
     <div className="flex flex-col gap-4" data-role-page={role.roleId}>
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -207,7 +207,7 @@ function Recognition({ roleId, cost, recognized }: { roleId: string; cost: CostA
                 const type = event.target.value as AgentTypeId;
                 if (type) cost.apply(costEdits.typeTo(model, type, roleId));
               }}
-              className="h-[22px] min-h-0 min-w-[5rem] flex-1 bg-transparent px-1 text-label text-text-tertiary outline-none"
+              className="h-[22px] min-h-0 min-w-[9.5rem] flex-1 bg-transparent px-1 text-label text-text-tertiary outline-none"
               data-type-add
             >
               <option value="">Add a kind of work</option>

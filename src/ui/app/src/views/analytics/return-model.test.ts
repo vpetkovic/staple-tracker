@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import type { CostModelValue, RoiLens, RoiResponse, RoiRoleValue } from "@/lib/analytics-api";
 import { readCostModel } from "../../../../../core/analytics/home.ts";
-import { aiDetail, assumedFigures, assumedWords, currencySymbol, entryDates, returnView } from "./return-model";
+import { aiDetail, assumedFigures, assumedWords, currencySymbol, entryDates, peopleWords, returnView, sharePercent, shareWords } from "./return-model";
 
 const MODEL = readCostModel([], null, "/nonexistent-staple-home");
 
@@ -174,5 +174,21 @@ describe("the words around the figures", () => {
     expect(currencySymbol("USD")).toBe("$");
     expect(currencySymbol("EUR")).toBe("€");
     expect(currencySymbol("XQZ")).toBe("XQZ");
+  });
+});
+
+describe("small figures are not said as nothing", () => {
+  it("a share under 10% keeps a decimal, and a trace is said as under 0.1%", () => {
+    expect(sharePercent(0.34)).toBe("34%");
+    expect(sharePercent(0.0054)).toBe("0.5%");
+    expect(sharePercent(0.0001)).toBe("under 0.1%");
+    expect(sharePercent(0)).toBe("0%");
+    expect(shareWords(0.0054, "agent time")).toBe(" × 0.5% of agent time");
+  });
+
+  it("a team smaller than a twentieth of a person is said as under 0.1, never as 0", () => {
+    expect(peopleWords(2.74)).toBe("2.7");
+    expect(peopleWords(0.026)).toBe("under 0.1");
+    expect(peopleWords(0)).toBe("0");
   });
 });
