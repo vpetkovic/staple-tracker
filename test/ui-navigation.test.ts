@@ -333,7 +333,7 @@ describe("the rail while the server does not answer", () => {
   }, 40_000);
 });
 
-describe("an address naming a workspace the hub does not have", () => {
+describe("a workspace the hub does not have", () => {
   /**
    * Tasks filters remembered for each workspace ("" = All workspaces), searching `remembered-<ws or all>`.
    * The stored shape is lib/view-prefs.ts's (`encodeViewPrefs`, scope `sortScopeKey`), which this
@@ -347,10 +347,13 @@ describe("an address naming a workspace the hub does not have", () => {
       ),
     }),
   });
+  const storedScopes = (page: Page) =>
+    page.evaluate(() => Object.keys((JSON.parse(localStorage.getItem("staple:view:v1") ?? "{}") as { filters?: object }).filters ?? {}).sort());
   const address = (page: Page) => {
     const params = new URL(page.url()).searchParams;
     return { ws: params.get("ws"), view: params.get("view"), project: params.getAll("project"), q: params.get("q") };
   };
+  const param = (page: Page, name: string) => new URL(page.url()).searchParams.get(name);
   const hub = (search: string, stored: Record<string, string>) => ({
     server: hubUi,
     search,
@@ -369,6 +372,8 @@ describe("an address naming a workspace the hub does not have", () => {
         expect(address(page)).toEqual({ ws: null, view: "tasks", project: [], q });
         // ...and the page shows it: the remembered project and search would hide this task.
         await page.getByText("A task to list").first().waitFor({ timeout: 5000 });
+        // Moved, not copied: the workspace that is not there keeps no filters of its own.
+        await expect.poll(() => storedScopes(page)).toEqual(["*::tree"]);
       },
       hub(`&view=tasks&ws=nowhere${filters}`, remembered("")),
     );
@@ -406,15 +411,91 @@ describe("an address naming a workspace the hub does not have", () => {
     );
   });
 
-  it("restores what was remembered when the address names no view (a ticket link)", async () => {
+  it("keeps the filters on screen when the workspace chosen in the rail leaves the hub", async () => {
+    await withPage(
+      DESK,
+      async (page) => {
+        await page.locator('[data-workspace-switcher="head"]').click();
+        await page.locator('[data-workspace-option="navfocus"]').click();
+        await expect.poll(() => address(page)).toEqual({ ws: "navfocus", view: "tasks", project: [projectId], q: "remembered-navfocus" });
+        // navfocus is unregistered: the next bootstrap no longer lists it, and the poll says
+        // something changed (after one real answer, the page's baseline) so the page asks for one.
+        await page.waitForResponse((response) => response.url().includes("/api/poll"));
+        await page.route("**/api/bootstrap*", async (route) => {
+          const response = await route.fetch();
+          const body = (await response.json()) as { workspaces: { slug: string }[] };
+          await route.fulfill({ response, json: { ...body, workspaces: body.workspaces.filter((workspace) => workspace.slug !== "navfocus") } });
+        });
+        await page.route("**/api/poll*", (route) => route.fulfill({ json: { fingerprint: "navfocus unregistered" } }));
+        await expect.poll(() => address(page).ws, { timeout: 10_000 }).toBeNull();
+        expect(address(page)).toEqual({ ws: null, view: "tasks", project: [projectId], q: "remembered-navfocus" });
+      },
+      hub("&view=tasks", remembered("", "navfocus")),
+    );
+  }, 30_000);
+
+  it("drops a milestone focus and a run of the workspace that is not there", async () => {
+    await withPage(
+      DESK,
+      async (page) => {
+        await expect.poll(() => param(page, "ws")).toBeNull();
+        expect([param(page, "view"), param(page, "focus")]).toEqual(["milestones", null]);
+      },
+      hub("&view=milestones&ws=nowhere&focus=NOPE-M1", {}),
+    );
+    await withPage(
+      DESK,
+      async (page) => {
+        await expect.poll(() => param(page, "ws")).toBeNull();
+        expect([param(page, "view"), param(page, "run")]).toEqual(["autopilot", null]);
+      },
+      hub("&view=autopilot&ws=nowhere&run=0123456789abcdef", {}),
+    );
+  });
+
+  it.each([
+    ["nothing stored for it: All workspaces' remembered filters", [""], "remembered-all"],
+    ["filters stored for it: those, which were on screen", ["", "nowhere"], "remembered-nowhere"],
+  ])("lands a ticket link (no view) with %s", async (_, workspaces, q) => {
     await withPage(
       DESK,
       async (page) => {
         await expect.poll(() => address(page).ws).toBeNull();
-        await expect.poll(() => address(page)).toEqual({ ws: null, view: "tasks", project: [projectId], q: "remembered-all" });
+        await expect.poll(() => address(page)).toEqual({ ws: null, view: "tasks", project: [projectId], q });
       },
-      // `nowhere` remembered filters before it was unregistered; they are not All workspaces'.
-      hub("&ws=nowhere&issue=NOPE-1", remembered("", "nowhere")),
+      hub("&ws=nowhere&issue=NOPE-1", remembered(...workspaces)),
     );
+  });
+
+  describe("on a single workspace's page, which names none", () => {
+    it("keeps the address's filters when it names another workspace, and drops that one's focus", async () => {
+      await withPage(
+        DESK,
+        async (page) => {
+          await expect.poll(() => address(page).ws).toBeNull();
+          expect(address(page)).toEqual({ ws: null, view: "tasks", project: [], q: "task" });
+        },
+        { search: "&view=tasks&ws=nowhere&q=task", stored: remembered("") },
+      );
+      await withPage(
+        DESK,
+        async (page) => {
+          await expect.poll(() => param(page, "ws")).toBeNull();
+          expect(param(page, "focus")).toBeNull();
+        },
+        { search: "&view=milestones&ws=nowhere&focus=NAV-M1", ready: (page) => page.locator("[data-nav-rail]").waitFor() },
+      );
+    });
+
+    it("keeps the focus when the address names this workspace", async () => {
+      await withPage(
+        DESK,
+        async (page) => {
+          await expect.poll(() => param(page, "ws")).toBeNull();
+          expect([param(page, "view"), param(page, "focus")]).toEqual(["milestones", "NAV-M1"]);
+        },
+        { search: "&view=milestones&ws=navfocus&focus=NAV-M1", ready: (page) => page.locator("[data-nav-rail]").waitFor() },
+      );
+    });
   });
 });

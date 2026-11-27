@@ -606,8 +606,6 @@ export function App() {
    * onto the same page.
    */
   const correcting = useRef(false);
-  /** The workspace an address naming a view named (first load, Back, Forward), until a correction uses it. */
-  const addressWorkspace = useRef<string | null>(initialUrl?.ws ?? null);
   const shellState = useMemo<ShellUrlState>(
     () => ({ ws, view, filters, focus: milestoneFocus, run }),
     [ws, view, filters, milestoneFocus, run],
@@ -666,7 +664,6 @@ export function App() {
       const next = readShellUrl(window.location.search);
       if (!next) return;
       lastSynced.current = next;
-      addressWorkspace.current = next.ws;
       setWsState(next.ws);
       setView(next.view);
       setMilestoneFocus(next.focus);
@@ -678,27 +675,30 @@ export function App() {
   }, [planningResolved, planningEnabled]);
 
   /**
-   * An address naming a workspace this hub does not have (a link from another machine, a
-   * workspace unregistered since) lands on All workspaces rather than on an error.
-   * An address that names a view says what the filters are, and they were seeded under the
-   * unknown workspace: they move with the page, or All workspaces' remembered filters would
-   * replace them. A ticket link names no view and no filters, so the remembered ones answer.
+   * A workspace this hub does not have (named by a link from another machine, or unregistered
+   * while the page was on it) gives way to All workspaces rather than to an error; a single
+   * workspace's page names none. Only the workspace changes. The filters on screen, stored
+   * under the workspace being left (an address that names a view seeds them there), move with
+   * the page, or All workspaces' remembered filters would replace them; with none stored, the
+   * remembered ones answer. A milestone focus or a run of a workspace that is gone goes, as on
+   * a switch (`afterWorkspaceSwitch`).
    */
   const knownWorkspaces = bootstrap.data?.workspaces;
   const hubMode = bootstrap.data?.mode === "hub";
   useEffect(() => {
     if (!knownWorkspaces || ws === "") return;
-    if (!hubMode || !knownWorkspaces.some((workspace) => workspace.slug === ws)) {
-      correcting.current = true;
-      if (addressWorkspace.current === ws) {
-        addressWorkspace.current = null;
-        setFilterPrefs((current) => {
-          const { [sortScopeKey(ws, view)]: seeded, ...rest } = current;
-          return seeded ? withFiltersForScope(rest, sortScopeKey("", view), seeded) : current;
-        });
-      }
-      setWsState("");
+    const known = knownWorkspaces.some((workspace) => workspace.slug === ws);
+    if (hubMode && known) return;
+    correcting.current = true;
+    setFilterPrefs((current) => {
+      const { [sortScopeKey(ws, view)]: shown, ...rest } = current;
+      return shown ? withFiltersForScope(rest, sortScopeKey("", view), shown) : current;
+    });
+    if (!known) {
+      setMilestoneFocus(null);
+      setRun(null);
     }
+    setWsState("");
   }, [knownWorkspaces, hubMode, ws, view]);
 
   const open = useCallback((workspace: string, ref: string) => setSelection({ workspace, ref }), []);
