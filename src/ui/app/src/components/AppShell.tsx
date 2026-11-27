@@ -148,7 +148,8 @@ export function TopBar({
             aria-keyshortcuts="["
             data-nav-toggle
             onClick={onToggleRail}
-            className="relative -ml-2 shrink-0 rounded-lg text-text-tertiary hover:text-foreground pointer-coarse:before:absolute pointer-coarse:before:-inset-1.5 pointer-coarse:before:content-['']"
+            // 32px under a finger too: its 44px is an invisible area round it, inside the 52px bar.
+            className="relative -ml-2 shrink-0 rounded-lg text-text-tertiary hover:text-foreground pointer-coarse:size-8 pointer-coarse:min-h-0 pointer-coarse:before:absolute pointer-coarse:before:-inset-1.5 pointer-coarse:before:content-['']"
           >
             <PanelLeft className="size-4" />
           </Button>

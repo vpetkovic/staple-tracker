@@ -215,7 +215,7 @@ export function WorkspaceSwitcher({ variant, compact = false }: { variant: "head
         title={compact ? undefined : label}
         data-workspace-switcher="head"
         className={cn(
-          "flex h-9 items-center rounded-lg text-left transition-colors duration-(--motion-duration-fast) hover:bg-surface-hover focus-ring-inset data-[state=open]:bg-surface-selected",
+          "flex h-9 items-center rounded-lg text-left transition-colors duration-(--motion-duration-fast) hover:bg-surface-hover focus-ring-inset data-[state=open]:bg-surface-hover",
           // The tile's centre sits on the row icons' centre line below it (see NavRail).
           compact ? "relative w-9 shrink-0 justify-center pointer-coarse:min-h-0 pointer-coarse:before:absolute pointer-coarse:before:-inset-1 pointer-coarse:before:content-['']" : "w-full min-w-0 gap-2 px-1.5",
         )}

@@ -52,7 +52,7 @@
  */
 import { Cog, FolderKanban, Moon, Plus, Plug, Settings, Sun } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import type { ReactNode } from "react";
+import { useLayoutEffect, useRef, type ReactNode } from "react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useInboxBadge, type InboxBadge } from "@/lib/attention";
 import { usePendingJoinRequests } from "@/lib/pending-requests";
@@ -72,7 +72,9 @@ import {
   AccentDot,
   AttentionMark,
   ConnectionDot,
+  FORCED_CURRENT_CLASS,
   STALE_MARKS_CLASS,
+  railFocusSelector,
   countBadgeClass,
   MARK_CLASS,
   PendingMark,
@@ -106,6 +108,7 @@ export const RAIL_ROW_CLASS = cn(
   "text-sidebar-foreground/85 transition-colors duration-(--motion-duration-fast) hover:bg-surface-hover hover:text-foreground",
   "aria-[current]:font-medium aria-[current]:text-foreground [&[aria-current]:not([data-child-current])]:bg-surface-selected",
   "[&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-text-tertiary hover:[&_svg]:text-foreground aria-[current]:[&_svg]:text-foreground",
+  FORCED_CURRENT_CLASS,
 );
 
 /** A sub-row under a full-rail row: a live run or a project. 28px, 6px corners. */
@@ -114,6 +117,7 @@ const SUBROW_CLASS = cn(
   "text-sidebar-foreground/85 transition-colors duration-(--motion-duration-fast) hover:bg-surface-hover hover:text-foreground",
   "aria-[current]:bg-surface-selected aria-[current]:text-foreground",
   "[&_svg]:text-text-tertiary hover:[&_svg]:text-foreground aria-[current]:[&_svg]:text-foreground",
+  FORCED_CURRENT_CLASS,
 );
 
 /** The list a parent's sub-rows hang in: a hairline spine dropping from the parent icon's centre. */
@@ -151,6 +155,7 @@ const ICON_BUTTON_CLASS = cn(
   "text-text-tertiary transition-colors duration-(--motion-duration-fast) hover:bg-surface-hover hover:text-foreground",
   "aria-[current]:bg-surface-selected aria-[current]:text-foreground",
   "[&_svg]:size-[18px] [&_svg]:shrink-0",
+  FORCED_CURRENT_CLASS,
 );
 
 /** A run's state as a dot: its tone's colour, breathing only while it works, never under reduced motion. */
@@ -160,7 +165,7 @@ function RunDot({ tone }: { tone: ReturnType<typeof liveStateText>["tone"] }) {
       aria-hidden
       data-run-dot={tone}
       className={cn(
-        "size-2 shrink-0 rounded-full",
+        "size-2 shrink-0 rounded-full forced-color-adjust-none",
         tone === "ok" && "motion-safe:animate-[staple-breathe_var(--motion-working-pulse)_var(--motion-ease-standard)_infinite]",
       )}
       style={{ backgroundColor: `var(--plain-${tone}-fg)` }}
@@ -169,19 +174,20 @@ function RunDot({ tone }: { tone: ReturnType<typeof liveStateText>["tone"] }) {
 }
 
 /**
- * RECONNECTING, said once, quietly: a row-shaped status at the bottom of the rail's body, just
- * above the foot, while the server is not answering the page's polls. Not a control. The live
+ * RECONNECTING, said once, quietly: a row-shaped status in its own slot between the rail's
+ * scrolling body and the foot, so however long the rail it is never scrolled out of sight,
+ * while the server is not answering the page's polls. Not a control. The live
  * region is always there and empty while the page is live, so a screen reader hears the change
  * when it comes. The full rail says the word; the narrow rail shows the dot, named and with a
  * tooltip.
  */
 function ConnectionStatus({ connection, narrow }: { connection: Connection; narrow: boolean }) {
   return (
-    <div role="status" aria-live="polite" className="mt-auto">
+    <div role="status" aria-live="polite" className={cn("shrink-0", narrow ? "flex justify-center" : "px-3")}>
       {connection !== "reconnecting" ? null : narrow ? (
         <Tooltip>
           <TooltipTrigger asChild>
-            <div data-nav-connection="reconnecting" aria-label="Reconnecting" className="mt-3 flex size-9 items-center justify-center">
+            <div data-nav-connection="reconnecting" aria-label="Reconnecting" className="mb-1 flex size-9 items-center justify-center">
               <ConnectionDot />
               <span className="sr-only">Reconnecting</span>
             </div>
@@ -191,7 +197,7 @@ function ConnectionStatus({ connection, narrow }: { connection: Connection; narr
       ) : (
         // The 14px slot starts 9px in, so the dot's centre is on the row icons' centre line,
         // and the word starts where the row labels do.
-        <div data-nav-connection="reconnecting" className="mt-3 flex h-7 items-center gap-[11px] pl-[9px] text-label text-text-tertiary">
+        <div data-nav-connection="reconnecting" className="mb-1 flex h-7 items-center gap-[11px] pl-[9px] text-label text-text-tertiary">
           <span className="flex size-3.5 shrink-0 items-center justify-center">
             <ConnectionDot />
           </span>
@@ -232,8 +238,31 @@ function zoneItems(id: "views" | "machine", planningEnabled: boolean | undefined
 export function NavRail({ mode }: { mode: RailMode }) {
   const reads = useRailReads();
   const width = mode === "full" ? "w-rail" : "w-rail-narrow";
+  /**
+   * The two widths are different elements, so switching (`[` pressed with the focus in the rail)
+   * would drop the focus to the page. While the other shape renders, the old one is still on
+   * screen: note where the focus was in it, then move it to the same place in the new one (a
+   * sub-row's parent row), or to the top bar's toggle. Focus outside the rail is left alone.
+   */
+  const nav = useRef<HTMLElement>(null);
+  const shown = useRef(mode);
+  const carried = useRef<string | null>(null);
+  if (shown.current !== mode) {
+    const active = typeof document === "undefined" ? null : document.activeElement;
+    carried.current = active && nav.current?.contains(active) ? railFocusSelector(active) : null;
+    shown.current = mode;
+  }
+  useLayoutEffect(() => {
+    const selector = carried.current;
+    carried.current = null;
+    if (selector === null) return;
+    // A button only: a single workspace's head is words, not a control, and cannot take the focus.
+    const target = (selector && nav.current?.querySelector<HTMLElement>(`button${selector}`)) || document.querySelector<HTMLElement>("[data-nav-toggle]");
+    target?.focus();
+  }, [mode]);
   return (
     <nav
+      ref={nav}
       aria-label="Primary"
       data-nav-rail
       data-rail-mode={mode}
@@ -273,8 +302,8 @@ function FullRail({ reads }: { reads: RailReads }) {
             <NavItemRow key={entry.id} entry={entry} projects={reads.projects} />
           ))}
         </ul>
-        <ConnectionStatus connection={reads.connection} narrow={false} />
       </div>
+      <ConnectionStatus connection={reads.connection} narrow={false} />
 
       {/* ── the foot: this computer ── */}
       <div className="shrink-0 border-t border-sidebar-border/70 px-3 py-2">
@@ -285,7 +314,8 @@ function FullRail({ reads }: { reads: RailReads }) {
           <li>
             <IntegrationsRailRow connections={reads.connections} onClick={() => openSettings({ section: "integrations" })} />
           </li>
-          <li className="flex items-center gap-1">
+          {/* Under a finger the theme's hit area reaches 6px past its box: 8px apart, it never covers Settings. */}
+          <li className="flex items-center gap-1 pointer-coarse:gap-2">
             <button
               type="button"
               aria-label="Settings"
@@ -338,15 +368,16 @@ function ProjectSubItems({ projects }: { projects: ScopeProjects }) {
               <LeadSlot>
                 <FolderKanban aria-hidden className="size-3.5" />
               </LeadSlot>
-              <span className="truncate">{project.name}</span>
-              {caption ? <span className="ml-auto shrink-0 text-caption text-text-tertiary">{caption}</span> : null}
+              {/* The name keeps priority: a caption takes at most 40% and truncates (the title has both). */}
+              <span className="min-w-0 flex-1 truncate">{project.name}</span>
+              {caption ? <span className="max-w-[40%] min-w-0 truncate text-caption text-text-tertiary">{caption}</span> : null}
               <span
                 data-nav-project-count
                 data-nav-mark
                 aria-label={`${open} open`}
                 className={cn(
                   MARK_CLASS,
-                  caption && "ml-0",
+                  "ml-0",
                   "transition-opacity group-hover/row:opacity-0 group-focus-within/row:opacity-0 [@media(hover:none)]:opacity-100",
                 )}
               >
@@ -615,7 +646,7 @@ function CornerDot({ color, ...rest }: { color: string } & Record<`data-${string
     <span
       aria-hidden
       data-nav-mark
-      className="absolute -top-0.5 -right-0.5 size-2 rounded-full ring-2 ring-sidebar"
+      className="absolute -top-0.5 -right-0.5 size-2 rounded-full ring-2 ring-sidebar forced-color-adjust-none"
       style={{ backgroundColor: color }}
       {...rest}
     />
@@ -716,8 +747,8 @@ function NarrowRail({ reads }: { reads: RailReads }) {
         <ul role="list" data-nav-group="views" aria-label="Records" className="mt-3 flex flex-col items-center gap-1 pointer-coarse:gap-2">
           {zoneItems("views", session.planningEnabled).map(viewRow)}
         </ul>
-        <ConnectionStatus connection={reads.connection} narrow />
       </div>
+      <ConnectionStatus connection={reads.connection} narrow />
 
       <div className="flex shrink-0 justify-center border-t border-sidebar-border/70 py-2">
         <ul role="list" data-nav-group="machine" aria-label="This computer" className="flex flex-col items-center gap-1 pointer-coarse:gap-2">

@@ -129,10 +129,12 @@ describe("the full rail while reconnecting", () => {
     expect(status).not.toMatch(/<(button|a) /);
     // A row's shape in the label register, the dot in the waiting tone, breathing only with motion.
     expect(tag(status, "data-nav-connection")).toMatch(/class="[^"]*h-7[^"]*text-label text-text-tertiary/);
-    expect(status).toMatch(/bg-\[var\(--plain-tight-fg\)\] motion-safe:animate-\[staple-breathe/);
-    // At the bottom of the scrolling body, before the foot's hairline.
+    expect(status).toMatch(/bg-\[var\(--plain-tight-fg\)\][^"]*motion-safe:animate-\[staple-breathe/);
+    expect(status).toMatch(/bg-\[var\(--plain-tight-fg\)\][^"]*forced-color-adjust-none/);
+    // In its own slot after the scrolling body, before the foot's hairline: never scrolled out of sight.
     expect(markup.indexOf("data-nav-connection")).toBeGreaterThan(markup.indexOf('data-nav-group="views"'));
     expect(markup.indexOf("data-nav-connection")).toBeLessThan(markup.indexOf('data-nav-group="machine"'));
+    expect(markup).toMatch(/<\/ul><\/div><div role="status" aria-live="polite" class="shrink-0 px-3">/);
   });
 
   it("marks the rail stale, and so dims every mark through the one rule, never a row", () => {
@@ -141,7 +143,8 @@ describe("the full rail while reconnecting", () => {
     const nav = tag(markup, 'aria-label="Primary"');
     expect(nav).toContain('data-stale=""');
     expect(nav).toContain(STALE_MARKS_CLASS.replaceAll("&", "&amp;"));
-    expect(STALE_MARKS_CLASS).toBe("[&[data-stale]_[data-nav-mark]]:[filter:opacity(0.5)]");
+    // 80%: the dimmed marks keep at least 3:1 against the rail in both themes (nav-shared.tsx).
+    expect(STALE_MARKS_CLASS).toBe("[&[data-stale]_[data-nav-mark]]:[filter:opacity(0.8)]");
     // The marks: the Inbox count, "n live", the run's dot and aside, the project's count.
     const all = marks(markup);
     expect(all.some((m) => m.includes("tabular-nums") && !m.includes("data-nav-autopilot-live") && !m.includes("data-nav-project-count"))).toBe(true);
@@ -162,6 +165,7 @@ describe("the narrow rail while reconnecting", () => {
     expect(slot).toMatch(/^<div /);
     expect(slot).toContain('aria-label="Reconnecting"');
     expect(slot).toContain("size-9");
+    expect(markup).toMatch(/<\/ul><\/div><div role="status" aria-live="polite" class="shrink-0 flex justify-center">/);
     // The word is the slot's name for a screen reader, never drawn.
     expect(markup.match(/>Reconnecting</g)).toHaveLength(1);
     expect(markup).toContain('<span class="sr-only">Reconnecting</span>');

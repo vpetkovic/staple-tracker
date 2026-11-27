@@ -105,6 +105,14 @@ describe("the rail's top rows", () => {
     expect(six).toMatch(/data-nav-run-more="true"[^>]*>[\s\S]*?>2 more</);
   });
 
+  it("keep every state dot in its own colour under forced colours", () => {
+    const markup = rows({ live: [run("a"), run("b", { state: "paused" })] });
+    const dots = [...markup.matchAll(/<span[^>]*data-run-dot="[^"]*"[^>]*>/g)].map((match) => match[0]);
+    // Two run lines and the "n live" mark.
+    expect(dots).toHaveLength(3);
+    for (const dot of dots) expect(dot).toContain("forced-color-adjust-none");
+  });
+
   it("make each run a real link to its own address, titled with the run's line", () => {
     const markup = rows({ live: [run("a")] });
     const link = tag(markup, 'data-nav-run="a"');
@@ -156,6 +164,15 @@ describe("the phone's tab bar", () => {
     expect([...tabs().matchAll(/data-view-tab="([^"]+)"/g)].map((match) => match[1])).toEqual(["attention", "autopilot", "queue", "tree", "more"]);
   });
 
+  it("outlines the current tab in Highlight under forced colours, and keeps its marks coloured", () => {
+    const markup = tabs({ view: "queue", waiting: 3, live: 1, liveTone: "ok" });
+    const pill = /<button[^>]*data-view-tab="queue"[^>]*><span[^>]*>/.exec(markup)?.[0] ?? "";
+    expect(pill).toContain("forced-colors:outline-[Highlight]");
+    expect(/<button[^>]*data-view-tab="tree"[^>]*><span[^>]*>/.exec(markup)?.[0]).not.toContain("forced-colors:outline");
+    expect(tag(markup, "data-view-tab-live")).toContain("forced-color-adjust-none");
+    expect(tag(markup, "data-view-tab-badge")).toContain("forced-color-adjust-none");
+  });
+
   it("draws the Inbox badge quiet, and in the accent only while something waiting is new", () => {
     const quiet = tag(tabs({ waiting: 28 }), "data-view-tab-badge");
     expect(quiet).toContain("from-surface-selected");
@@ -202,7 +219,7 @@ describe("the More sheet's views", () => {
     expect([...markup.matchAll(/data-more-view="([^"]+)"/g)].map((match) => match[1])).toEqual(["graph", "milestones", "plan", "calibration"]);
     expect(markup).not.toContain("<h3");
     expect(markup).toMatch(/data-more-view="milestones" aria-current="page"/);
-    expect(markup.match(/aria-current/g)).toHaveLength(1);
+    expect(markup.match(/ aria-current="/g)).toHaveLength(1);
   });
 
   it("hides Plan while planning is off", () => {

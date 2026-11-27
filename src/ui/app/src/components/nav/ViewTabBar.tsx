@@ -23,7 +23,7 @@
  * below `<main>`, not an overlay, so every view's own scroll container ends above it.
  */
 import { Cog, FolderKanban, Moon, MoreHorizontal, Plug, Plus, Settings, Sun } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useRef, useState } from "react";
 import { useInboxBadge } from "@/lib/attention";
 import { useBackToClose } from "@/lib/back-to-close";
 import { usePendingJoinRequests } from "@/lib/pending-requests";
@@ -35,7 +35,7 @@ import { openProjectDialog, openSettings } from "@/lib/shell-events";
 import { cn } from "@/lib/utils";
 import { BottomSheet } from "./BottomSheet";
 import { projectCaption, viewIcon } from "./nav-model";
-import { AttentionMark, countBadgeClass, MARK_CLASS, STALE_MARKS_CLASS, PendingMark, useFocusOnClose, useIntegrationsAttention, useScopeProjects } from "./nav-shared";
+import { AttentionMark, countBadgeClass, FORCED_CURRENT_CLASS, MARK_CLASS, STALE_MARKS_CLASS, PendingMark, useFocusOnClose, useIntegrationsAttention, useScopeProjects } from "./nav-shared";
 import { autopilotTabLabel, inboxTabLabel, liveDotTone, moreIsCurrent, moreSheetViews, tabBadgeText } from "./top-nav-model";
 
 const TAB_CLASS = cn(
@@ -77,7 +77,11 @@ function Tab({
     >
       <span
         aria-hidden
-        className={cn("relative flex h-7 w-12 items-center justify-center rounded-full transition-colors", current && "bg-surface-selected")}
+        className={cn(
+          "relative flex h-7 w-12 items-center justify-center rounded-full transition-colors",
+          // Forced colours replace the fill: the current tab's pill is outlined in Highlight instead.
+          current && "bg-surface-selected forced-colors:outline-2 forced-colors:outline-[Highlight] forced-colors:-outline-offset-2",
+        )}
       >
         {icon}
         {mark}
@@ -145,7 +149,7 @@ export function ViewTabs({
             <span
               data-view-tab-live={liveTone}
               data-nav-mark
-              className="absolute top-0.5 left-[1.875rem] size-2 rounded-full ring-2 ring-card"
+              className="absolute top-0.5 left-[1.875rem] size-2 rounded-full ring-2 ring-card forced-color-adjust-none"
               style={{ backgroundColor: `var(--plain-${liveTone}-fg)` }}
             />
           ) : null;
@@ -181,6 +185,7 @@ const SHEET_ROW_CLASS = cn(
   "flex h-12 w-full min-w-0 items-center gap-3 rounded-lg px-3 text-left text-[15px] text-foreground focus-ring-inset",
   "hover:bg-surface-hover active:bg-surface-hover aria-[current]:bg-surface-selected aria-[current]:font-medium",
   "[&_svg]:size-5 [&_svg]:shrink-0 [&_svg]:text-text-tertiary aria-[current]:[&_svg]:text-foreground",
+  FORCED_CURRENT_CLASS,
 );
 
 /** A labelled group of the sheet. */
@@ -236,7 +241,7 @@ export function MoreSheetRows({
 }
 
 /** The scope's projects: tap one to narrow Tasks to it, its gear for its settings, then New project. */
-function MoreSheetProjects({ onClose }: { onClose: () => void }) {
+function MoreSheetProjects({ onClose, onCloseThen }: { onClose: () => void; onCloseThen: (open: () => void) => void }) {
   const session = useSession();
   const projects = useScopeProjects();
   return (
@@ -251,6 +256,7 @@ function MoreSheetProjects({ onClose }: { onClose: () => void }) {
               type="button"
               data-more-project={project.id}
               aria-current={projects.activeId === project.id ? "true" : undefined}
+              title={caption ? `${project.name} · ${row.workspace}` : project.name}
               onClick={() => {
                 onClose();
                 session.focusProject(project.id);
@@ -270,10 +276,7 @@ function MoreSheetProjects({ onClose }: { onClose: () => void }) {
               type="button"
               aria-label={`Project settings: ${project.name}`}
               data-more-project-settings={project.id}
-              onClick={() => {
-                onClose();
-                openProjectDialog({ mode: "edit", row });
-              }}
+              onClick={() => onCloseThen(() => openProjectDialog({ mode: "edit", row }))}
               className="flex size-11 shrink-0 items-center justify-center rounded-lg text-text-tertiary hover:bg-surface-hover hover:text-foreground focus-ring-inset"
             >
               <Cog aria-hidden className="size-5" />
@@ -285,10 +288,7 @@ function MoreSheetProjects({ onClose }: { onClose: () => void }) {
         <button
           type="button"
           data-more-new-project
-          onClick={() => {
-            onClose();
-            openProjectDialog({ mode: "create", workspace: session.ws || undefined });
-          }}
+          onClick={() => onCloseThen(() => openProjectDialog({ mode: "create", workspace: session.ws || undefined }))}
           className={SHEET_ROW_CLASS}
         >
           <Plus aria-hidden />
@@ -304,12 +304,12 @@ function MoreSheetMachine({
   machine,
   view,
   onChoose,
-  onClose,
+  onCloseThen,
 }: {
   machine: readonly ViewName[];
   view: ViewName;
   onChoose: (view: ViewName) => void;
-  onClose: () => void;
+  onCloseThen: (open: () => void) => void;
 }) {
   const attention = useIntegrationsAttention();
   const pending = usePendingJoinRequests();
@@ -324,10 +324,7 @@ function MoreSheetMachine({
         <button
           type="button"
           data-more-integrations
-          onClick={() => {
-            onClose();
-            openSettings({ section: "integrations" });
-          }}
+          onClick={() => onCloseThen(() => openSettings({ section: "integrations" }))}
           className={SHEET_ROW_CLASS}
         >
           <Plug aria-hidden />
@@ -339,10 +336,7 @@ function MoreSheetMachine({
         <button
           type="button"
           data-more-settings
-          onClick={() => {
-            onClose();
-            openSettings();
-          }}
+          onClick={() => onCloseThen(() => openSettings())}
           className={SHEET_ROW_CLASS}
         >
           <Settings aria-hidden />
@@ -376,14 +370,26 @@ function MoreSheetMachine({
   );
 }
 
-/** The sheet's three sections, from the page's session: other views, Projects, This computer. */
-export function MoreSheetBody({ onChoose, onClose }: { onChoose: (view: ViewName) => void; onClose: () => void }) {
+/**
+ * The sheet's three sections, from the page's session: other views, Projects, This computer.
+ * `onCloseThen` closes the sheet and opens a dialog once the More tab has the focus back, so the
+ * dialog returns the focus there when it closes.
+ */
+export function MoreSheetBody({
+  onChoose,
+  onClose,
+  onCloseThen,
+}: {
+  onChoose: (view: ViewName) => void;
+  onClose: () => void;
+  onCloseThen: (open: () => void) => void;
+}) {
   const session = useSession();
   return (
     <>
       <MoreSheetRows view={session.view} planningEnabled={session.planningEnabled} onChoose={onChoose} />
-      <MoreSheetProjects onClose={onClose} />
-      <MoreSheetMachine machine={moreSheetViews(session.planningEnabled).machine} view={session.view} onChoose={onChoose} onClose={onClose} />
+      <MoreSheetProjects onClose={onClose} onCloseThen={onCloseThen} />
+      <MoreSheetMachine machine={moreSheetViews(session.planningEnabled).machine} view={session.view} onChoose={onChoose} onCloseThen={onCloseThen} />
     </>
   );
 }
@@ -395,10 +401,16 @@ export function ViewTabBar() {
   const { live } = useRuns();
   const [moreOpen, setMoreOpen] = useState(false);
   const closeMore = () => setMoreOpen(false);
+  // A dialog the sheet opens waits for the sheet to go and the More tab to take the focus.
+  const afterClose = useRef<(() => void) | null>(null);
+  const closeMoreThen = (open: () => void) => {
+    afterClose.current = open;
+    closeMore();
+  };
   // Phone Back closes the sheet rather than leaving the page.
   useBackToClose(moreOpen, closeMore);
   // When the sheet closes, the More tab takes the focus back.
-  useFocusOnClose(moreOpen, () => document.querySelector<HTMLElement>('[data-view-tab="more"]'));
+  useFocusOnClose(moreOpen, () => document.querySelector<HTMLElement>('[data-view-tab="more"]'), true, afterClose);
   const choose = (view: ViewName) => {
     closeMore();
     navigateTo(session, view);
@@ -417,7 +429,7 @@ export function ViewTabBar() {
         onMore={() => setMoreOpen(true)}
       />
       <BottomSheet open={moreOpen} onOpenChange={setMoreOpen} title="More" name="more-views">
-        <MoreSheetBody onChoose={choose} onClose={closeMore} />
+        <MoreSheetBody onChoose={choose} onClose={closeMore} onCloseThen={closeMoreThen} />
       </BottomSheet>
     </>
   );

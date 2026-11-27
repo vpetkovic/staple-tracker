@@ -7,7 +7,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { AttentionMark, MARK_CLASS, PendingMark, countBadgeClass, pendingWords } from "./nav-shared";
+import { AttentionMark, MARK_CLASS, PendingMark, countBadgeClass, pendingWords, railFocusSelector } from "./nav-shared";
 
 describe("the corner badge", () => {
   it("is quiet by default: the selected tint laid on the surface it sits on, foreground text", () => {
@@ -48,6 +48,35 @@ describe("the marks' register", () => {
   it("marks Settings' count and the Integrations dot as marks, so they dim with the rest while reconnecting", () => {
     expect(renderToStaticMarkup(<PendingMark pending={2} />)).toMatch(/^<span[^>]* data-nav-mark="true"/);
     expect(renderToStaticMarkup(<AttentionMark />)).toMatch(/^<span[^>]* data-nav-mark="true"/);
+  });
+});
+
+describe("where the focus goes when the rail changes width", () => {
+  /** An element whose `closest` answers from the attributes it and its ancestors carry. */
+  const at = (attributes: Record<string, string>) => ({
+    closest: (selector: string) => {
+      const names = [...selector.matchAll(/\[([a-z-]+)/g)].map((match) => match[1]!);
+      const hit = names.find((name) => name in attributes);
+      return hit ? ({ getAttribute: (name: string) => attributes[name] ?? null } as unknown as Element) : null;
+    },
+  });
+
+  it("goes to the same row, the head, Settings, Integrations or the theme in the other shape", () => {
+    expect(railFocusSelector(at({ "data-nav-item": "view:graph" }))).toBe('[data-nav-item="view:graph"]');
+    expect(railFocusSelector(at({ "data-workspace-switcher": "head" }))).toBe('[data-workspace-switcher="head"]');
+    expect(railFocusSelector(at({ "data-nav-settings": "true" }))).toBe("[data-nav-settings]");
+    expect(railFocusSelector(at({ "data-nav-integrations": "true" }))).toBe("[data-nav-integrations]");
+    expect(railFocusSelector(at({ "data-nav-theme": "" }))).toBe("[data-nav-theme]");
+  });
+
+  it("takes a sub-row or a row's action to its parent row, and anything else to the fallback", () => {
+    for (const hook of ["data-nav-project", "data-nav-project-settings", "data-nav-action"]) {
+      expect(railFocusSelector(at({ [hook]: "p-1" }))).toBe('[data-nav-item="view:tree"]');
+    }
+    for (const hook of ["data-nav-run", "data-nav-run-more"]) {
+      expect(railFocusSelector(at({ [hook]: "r-1" }))).toBe('[data-nav-item="view:autopilot"]');
+    }
+    expect(railFocusSelector(at({}))).toBe("");
   });
 });
 

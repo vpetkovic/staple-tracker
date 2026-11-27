@@ -219,6 +219,13 @@ describe("the top bar", () => {
     return markup.slice(markup.indexOf("data-top-bar"), markup.indexOf("data-top-search"));
   };
 
+  it("keeps the toggle 32px under a finger, its 44px an invisible area inside the bar", () => {
+    const toggle = tag(bar("full"), "data-nav-toggle");
+    expect(toggle).toContain("pointer-coarse:size-8");
+    expect(toggle).toContain("pointer-coarse:min-h-0");
+    expect(toggle).toContain("pointer-coarse:before:-inset-1.5");
+  });
+
   it("leads with the rail's toggle, named for what it does and saying whether the rail is open", () => {
     const full = tag(bar("full"), "data-nav-toggle");
     expect(full).toContain('aria-label="Collapse navigation"');
@@ -336,11 +343,20 @@ describe("the rail", () => {
     expect(RAIL_ROW_CLASS).toContain("focus-ring-inset");
   });
 
+  it("marks the place for forced colours with a Highlight outline, and keeps its dots and badges coloured", () => {
+    const outline = "forced-colors:[&[aria-current]:not([data-child-current])]:outline-[Highlight]";
+    expect(RAIL_ROW_CLASS).toContain(outline);
+    const narrow = inSession(<NavRail mode="narrow" />);
+    expect(tag(narrow, 'data-nav-item="view:tree"').replaceAll("&amp;", "&")).toContain(outline);
+  });
+
   it("offers Settings as a row and the theme as a switch at the foot", () => {
     const markup = rail();
     expect(markup).toMatch(/<button[^>]*aria-label="Settings"[^>]*>[\s\S]*?Settings<\/button>/);
     // On a desk the theme is an icon switch beside Settings, named for what it does.
     expect(markup).toMatch(/<button[^>]*role="switch"[^>]*aria-checked="false"[^>]*aria-label="Dark mode"[^>]*data-nav-theme/);
+    // Under a finger the switch's 6px hit area must not reach Settings: they stand 8px apart there.
+    expect(markup).toMatch(/<li class="flex items-center gap-1 pointer-coarse:gap-2"><button[^>]*data-nav-settings/);
   });
 
   it("draws every item in the model as a button, wearing its label", () => {
@@ -382,6 +398,14 @@ describe("the head", () => {
     expect(markup).toContain("lucide-chevrons-up-down");
     // The rail's head is the switcher.
     expect(rail(HUB)).toContain('<button type="button" aria-label="Workspace: All workspaces. Switch workspace"');
+  });
+
+  it("shows the list open with the hover fill, so the selected fill only ever means the place", () => {
+    for (const markup of [head(HUB), inSession(<WorkspaceSwitcher variant="head" compact />, HUB)]) {
+      const cls = /class="([^"]*)"/.exec(tag(markup, 'data-workspace-switcher="head"'))?.[1] ?? "";
+      expect(cls).toContain("data-[state=open]:bg-surface-hover");
+      expect(cls).not.toContain("bg-surface-selected");
+    }
   });
 
   it("is the workspace's name as words with one workspace: nothing to open, no chevrons", () => {
@@ -500,6 +524,21 @@ describe("projects under Tasks", () => {
     }
   });
 
+  it("keeps the highlight on Tasks when the project it is narrowed to is not a row on screen", () => {
+    // Loading, a failed read, or a project of another workspace named in the address.
+    const elsewhere = { ...emptyFilters(), dims: { project: ["p-elsewhere"] } };
+    for (const over of [
+      { ...withProjects, filters: elsewhere },
+      { projects: { data: undefined, error: undefined, loading: true, reload: noop }, filters: { ...emptyFilters(), dims: { project: ["p-site"] } } },
+    ] as Partial<StapleSession>[]) {
+      const markup = rail(over);
+      const tasks = tag(markup, 'data-nav-item="view:tree"');
+      expect(tasks).toContain('aria-current="page"');
+      expect(tasks).not.toContain('data-child-current=""');
+      expect(markup).not.toContain('aria-current="true"');
+    }
+  });
+
   it("shows only the chosen workspace's projects when one is chosen, and every workspace's on all", () => {
     const many: ProjectRow[] = [
       ...rows,
@@ -519,6 +558,22 @@ describe("projects under Tasks", () => {
     const all = rail({ ...hub, ws: "" });
     expect(all).toContain('data-nav-project="p-pine"');
     expect(all).toContain('data-nav-project="p-docs"');
+  });
+
+  it("never lets a long workspace caption take the project's name: the caption gives way at 40%", () => {
+    const long: ProjectRow[] = [{ workspace: "an-unusually-long-workspace-name-to-test", project: project({ id: "p-x", slug: "x", name: "Docs" }) }, ...rows];
+    const markup = rail({
+      mode: "hub",
+      workspaces: [
+        { slug: "staple", prefix: "STA" },
+        { slug: "an-unusually-long-workspace-name-to-test", prefix: "ANU" },
+      ],
+      projects: { data: long, error: undefined, loading: false, reload: noop },
+    });
+    const row = /<button[^>]*data-nav-project="p-x"[^>]*>[\s\S]*?<\/button>/.exec(markup)?.[0] ?? "";
+    expect(tag(row, 'data-nav-project="p-x"')).toContain('title="Docs · an-unusually-long-workspace-name-to-test"');
+    expect(row).toMatch(/<span class="min-w-0 flex-1 truncate">Docs<\/span>/);
+    expect(row).toMatch(/<span class="max-w-\[40%\] min-w-0 truncate[^"]*">an-unusually-long-workspace-name-to-test<\/span>/);
   });
 
   it("captions a project with its workspace only when the rows span several", () => {

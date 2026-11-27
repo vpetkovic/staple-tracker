@@ -57,10 +57,19 @@ export function useIntegrationsAttention(): boolean {
 
 /**
  * A phone sheet has no trigger of its own to hand the focus back to: when it closes (`open`
- * turns false while `enabled`), `target` takes the focus, unless what the sheet opened (a
- * dialog) has taken it already. `target` is read when the frame runs, after the sheet is gone.
+ * turns false while `enabled`), `target` takes the focus, unless something else has taken it
+ * already. `target` is read when the frame runs, after the sheet is gone.
+ *
+ * `then`, when it holds something, runs right after: how a sheet opens a dialog. The dialog
+ * opens with the focus already on `target`, so that is where it hands the focus back when it
+ * closes; opened while the sheet was still there, it would hand it back to a row that is gone.
  */
-export function useFocusOnClose(open: boolean, target: () => HTMLElement | null | undefined, enabled = true): void {
+export function useFocusOnClose(
+  open: boolean,
+  target: () => HTMLElement | null | undefined,
+  enabled = true,
+  then?: { current: (() => void) | null },
+): void {
   const wasOpen = useRef(false);
   useEffect(() => {
     const closed = wasOpen.current && !open;
@@ -69,6 +78,9 @@ export function useFocusOnClose(open: boolean, target: () => HTMLElement | null 
     const frame = requestAnimationFrame(() => {
       const active = document.activeElement;
       if (!active || active === document.body) target()?.focus();
+      const next = then?.current;
+      if (then) then.current = null;
+      next?.();
     });
     return () => cancelAnimationFrame(frame);
     // `target` is a lookup, read once the frame runs; only a close starts one.
@@ -83,7 +95,7 @@ export interface ScopeProjects {
   workspaces: ReadonlySet<string>;
   /** Each project's OPEN issues, from the rows the page already holds (no second fetch). */
   openCounts: ReadonlyMap<string, number>;
-  /** The project Tasks is filtered to, when it is on screen filtered to exactly one. */
+  /** The project Tasks is filtered to, when it is on screen filtered to exactly one of these rows. */
   activeId: string | null;
 }
 
@@ -105,8 +117,40 @@ export function useScopeProjects(): ScopeProjects {
     return counts;
   }, [session.issues.data]);
   const selected = session.filters.dims.project ?? [];
-  const activeId = session.view === "tree" && selected.length === 1 ? (selected[0] ?? null) : null;
+  // The place moves to a project row only when that row is on screen: a filter naming a project
+  // the list does not show (still loading, a failed read, another workspace's) leaves Tasks it.
+  const only = session.view === "tree" && selected.length === 1 ? selected[0] : undefined;
+  const activeId = only !== undefined && rows.some((row) => row.project.id === only) ? only : null;
   return { rows, workspaces, openCounts, activeId };
+}
+
+// ---------------------------------------------------------------- forced colours
+
+/**
+ * Under forced colours (Windows High Contrast and the like) backgrounds are replaced, so a
+ * filled row says nothing. The row that is the place says it with an inset outline in the
+ * system's `Highlight` instead. A parent whose child is the place has none, as it has no fill.
+ */
+export const FORCED_CURRENT_CLASS =
+  "forced-colors:[&[aria-current]:not([data-child-current])]:outline-2 forced-colors:[&[aria-current]:not([data-child-current])]:outline-[Highlight] forced-colors:[&[aria-current]:not([data-child-current])]:-outline-offset-2";
+
+// ---------------------------------------------------------------- focus across the two widths
+
+/**
+ * Where the focus goes in the other shape of the rail when it switches width (`[` pressed in
+ * it): the same destination by its hook, a sub-row's parent row for a project or a run, and
+ * "" for anything else (the caller then falls back to the top bar's toggle).
+ */
+export function railFocusSelector(element: Pick<Element, "closest">): string {
+  const item = element.closest("[data-nav-item]")?.getAttribute("data-nav-item");
+  if (item) return `[data-nav-item="${item}"]`;
+  if (element.closest("[data-nav-project], [data-nav-project-settings], [data-nav-action]")) return '[data-nav-item="view:tree"]';
+  if (element.closest("[data-nav-run], [data-nav-run-more]")) return '[data-nav-item="view:autopilot"]';
+  if (element.closest("[data-workspace-switcher]")) return '[data-workspace-switcher="head"]';
+  for (const hook of ["data-nav-settings", "data-nav-integrations", "data-nav-theme"]) {
+    if (element.closest(`[${hook}]`)) return `[${hook}]`;
+  }
+  return "";
 }
 
 // ---------------------------------------------------------------- marks
@@ -114,18 +158,22 @@ export function useScopeProjects(): ScopeProjects {
 /**
  * WHILE THE PAGE CANNOT REACH THE SERVER (`useConnection`, lib/useStaple.ts), every count and
  * dot on screen is the last one heard and may be stale. The container that holds marks says so
- * with `data-stale`, and this one rule dims every mark inside it (`data-nav-mark`) to half.
- * Rows stay as they are: they still work. It is a filter, not `opacity`, so it multiplies with
- * a mark's own fading (a project count giving way to its gear) instead of fighting it.
+ * with `data-stale`, and this one rule dims every mark inside it (`data-nav-mark`). Rows stay
+ * as they are: they still work. It is a filter, not `opacity`, so it multiplies with a mark's
+ * own fading (a project count giving way to its gear) instead of fighting it.
+ *
+ * 80%, not half: dimmed marks must stay readable. Measured against the rail, a tertiary count
+ * keeps 3.25:1 (light) and 3.72:1 (dark), a run's state dot 3.22:1 and 5.47:1, and the "new"
+ * dot 3.03:1 and 3.95:1; at half they fell to about 2:1.
  */
-export const STALE_MARKS_CLASS = "[&[data-stale]_[data-nav-mark]]:[filter:opacity(0.5)]";
+export const STALE_MARKS_CLASS = "[&[data-stale]_[data-nav-mark]]:[filter:opacity(0.8)]";
 
 /** The reconnecting dot: the waiting tone, breathing as a working run's dot does, never under reduced motion. */
 export function ConnectionDot() {
   return (
     <span
       aria-hidden
-      className="size-2 shrink-0 rounded-full bg-[var(--plain-tight-fg)] motion-safe:animate-[staple-breathe_var(--motion-working-pulse)_var(--motion-ease-standard)_infinite]"
+      className="size-2 shrink-0 rounded-full bg-[var(--plain-tight-fg)] forced-color-adjust-none motion-safe:animate-[staple-breathe_var(--motion-working-pulse)_var(--motion-ease-standard)_infinite]"
     />
   );
 }
@@ -139,7 +187,7 @@ export const MARK_CLASS = "ml-auto flex shrink-0 items-center gap-1.5 text-label
 
 /** The 6px accent dot that says "new" or "waiting on you". */
 export function AccentDot({ className, ...rest }: { className?: string } & Record<`data-${string}`, string | boolean>) {
-  return <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full bg-[var(--status-task-in_progress)]", className)} {...rest} />;
+  return <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full bg-[var(--status-task-in_progress)] forced-color-adjust-none", className)} {...rest} />;
 }
 
 /** How many join requests are waiting, as the dot and the number. Nothing when none. */
@@ -162,7 +210,7 @@ export function PendingMark({ pending, className }: { pending: number; className
 export function AttentionMark({ className }: { className?: string }) {
   return (
     <>
-      <span aria-hidden data-integrations-attention data-nav-mark className={cn("ml-auto size-1.5 shrink-0 rounded-full bg-[var(--status-task-todo)]", className)} />
+      <span aria-hidden data-integrations-attention data-nav-mark className={cn("ml-auto size-1.5 shrink-0 rounded-full bg-[var(--status-task-todo)] forced-color-adjust-none", className)} />
       <span className="sr-only">, needs attention</span>
     </>
   );
@@ -176,7 +224,8 @@ export function AttentionMark({ className }: { className?: string }) {
  */
 export function countBadgeClass(fresh: boolean, on: "sidebar" | "card"): string {
   return cn(
-    "flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] leading-none font-semibold tabular-nums ring-2",
+    // Forced colours would strip a badge's fill and ring: it keeps its own colours there.
+    "flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] leading-none font-semibold tabular-nums ring-2 forced-color-adjust-none",
     on === "sidebar" ? "bg-sidebar ring-sidebar" : "bg-card ring-card",
     fresh
       ? "bg-[var(--badge-fresh)] text-background"

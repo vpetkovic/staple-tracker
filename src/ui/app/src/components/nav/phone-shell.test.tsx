@@ -165,7 +165,7 @@ describe("the More sheet", () => {
     { workspace: "aardvark", project: project({ id: "p-docs", slug: "docs", name: "Docs" }) },
     { workspace: "staple", project: project({ id: "p-site", slug: "site", name: "Site" }) },
   ];
-  const sheet = (over: Partial<StapleSession> = {}) => at(390, <MoreSheetBody onChoose={noop} onClose={noop} />, over);
+  const sheet = (over: Partial<StapleSession> = {}) => at(390, <MoreSheetBody onChoose={noop} onClose={noop} onCloseThen={noop} />, over);
   const section = (markup: string, id: string) => new RegExp(`<section[^>]*data-more-section="${id}"[\\s\\S]*?</section>`).exec(markup)?.[0] ?? "";
 
   it("is the rest of the rail, in its order: the other views, then Projects, then This computer", () => {
@@ -201,6 +201,8 @@ describe("the More sheet", () => {
     });
     expect(narrowed).toMatch(/data-more-project="p-site" aria-current="true"/);
     expect(narrowed).not.toMatch(/data-more-project="p-docs" aria-current/);
+    // Each row's title has the name and, when captioned, the workspace.
+    expect(all).toMatch(/data-more-project="p-docs"[^>]*title="Docs · aardvark"/);
   });
 
   it("offers only New project under Projects while the scope has none", () => {
@@ -214,21 +216,28 @@ describe("the More sheet", () => {
     const order = ['data-more-view="budget"', "data-more-integrations", "data-more-settings", "data-more-theme"].map((hook) => markup.indexOf(hook));
     expect(order.every((position, i) => position > -1 && (i === 0 || position > order[i - 1]!))).toBe(true);
     expect(markup).toMatch(/data-more-view="budget" aria-current="page"/);
+    // Under forced colours the current row is outlined in Highlight: its fill would be replaced.
+    expect(/<button[^>]*data-more-view="budget"[^>]*>/.exec(markup)?.[0].replaceAll("&amp;", "&")).toContain(
+      "forced-colors:[&[aria-current]:not([data-child-current])]:outline-[Highlight]",
+    );
     expect(markup).toMatch(/<button[^>]*role="switch"[^>]*aria-checked="false"[^>]*data-more-theme/);
     expect(markup).toContain(">Dark mode</span>");
   });
 
-  it("closes itself before it opens any dialog", () => {
+  it("closes itself, gives the More tab the focus, and only then opens a dialog", () => {
     /*
-     * A dialog stacked on the open sheet would make Escape ambiguous. The click handlers cannot
-     * run without a DOM, so what is pinned is the source: every call in the sheet that opens a
-     * dialog is immediately preceded by the sheet's own close.
+     * A dialog stacked on the open sheet would make Escape ambiguous, and one opened while the
+     * sheet was still there would hand the focus back, on closing, to a row that is gone. The
+     * click handlers cannot run without a DOM, so what is pinned is the source: every call in
+     * the sheet that opens a dialog is handed to the sheet's close-then, which runs it once the
+     * sheet has gone and the More tab has the focus (useFocusOnClose's `then`).
      */
     const text = readFileSync(fileURLToPath(new URL("./ViewTabBar.tsx", import.meta.url)), "utf8").replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g, "");
     const opens = text.match(/(openProjectDialog|openSettings)\(/g) ?? [];
     // A project's settings, New project, Integrations and Settings.
     expect(opens.length).toBe(4);
-    expect((text.match(/onClose\(\);\s*(openProjectDialog|openSettings)\(/g) ?? []).length).toBe(opens.length);
+    expect((text.match(/onCloseThen\(\(\) => (openProjectDialog|openSettings)\(/g) ?? []).length).toBe(opens.length);
+    expect(text).toContain('useFocusOnClose(moreOpen, () => document.querySelector<HTMLElement>(\'[data-view-tab="more"]\'), true, afterClose)');
   });
 });
 
