@@ -487,14 +487,14 @@ row in the list wears the same tint.
 **The order.** The plan's entries in plan order. An entry's gutter is its plan position,
 which is also its drag handle. Each row has a state column with one vocabulary, a mark
 and words, never colour alone: *Ready*; *Working · holder* (with *quiet 8d* once idle for
-over an hour); *Waiting on STA-467, STA-470* (each a link to that row); *Blocked on a
-person*; *Needs your approval*; *In review*; *Another member's*; *Done*; or the store's
-own sentence. A queued epic or milestone rolls up as a meter and *10 tasks · 2 ready · 4
+30 minutes or more, the app's stale-claim rule); *Waiting on APP-3, APP-4* (each a link
+to that row); *Blocked on a person*; *Needs your approval*; *In review*; *Another
+member's*; *Done*; or the store's own sentence. A queued epic or milestone rolls up as a meter and *10 tasks · 2 ready · 4
 being worked on*, and opens to its tasks in the order an agent meets them, each with its
 pickup number (`#5`, dimmed while claimed), under a caption for each epic between the
-entry and the task; five first, then *103 more in EXE-234 · Show all 108*. An entry the
+entry and the task; five first, then *103 more in APP-10 · Show all 108*. An entry the
 order already reached through an earlier one says *Already in the order at #76, inside
-EXE-234*. An entry's note is a line under it.
+APP-10*. An entry's note is a line under it.
 
 **After the plan.** Every other open task follows in one folded line, *After the plan ·
 61 open tasks · agents take these in list order once the plan runs out*; open, the same
@@ -505,7 +505,7 @@ a workspace page, under a *No plan yet* block with Add to queue.
 events, so a mouse and a finger are one path), Alt-↑ / Alt-↓ and Alt-Home / Alt-End on a
 focused entry, or the row menu's moves. Every path ends in one `POST /api/queue/reorder`
 carrying the plan's `revision` as `baseRevision`, and the new place is announced
-(*STA-465 is now 1 of 3*). While a section's write is out its handles are inert and the
+(*APP-12 is now 1 of 3*). While a section's write is out its handles are inert and the
 entry being written is dimmed. Alt and an arrow on a task under an entry does nothing.
 
 **The keyboard.** The rows of every open section are one tab stop: ↑ / ↓ (and k / j),
