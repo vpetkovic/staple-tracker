@@ -124,6 +124,57 @@ describe("on one machine", () => {
     for (const key of ["analytics.roles", "analytics.scenario", "analytics.aiSpend"]) expect(candidates[0]!.store.settingValue(key).source).toBe("default");
   });
 
+  it("resets to the defaults, not to an older save another workspace still holds, and clears that save", () => {
+    writeCostModel(candidates, { home: "alpha", roles: ROLES }, { scopeSlug: null, actor: "ui", now: at(5), home });
+    // An older save arrives by sync in another workspace: alpha stays the home.
+    candidates[1]!.store.setSetting("analytics.aiSpend", { entries: [{ id: "old", label: "Old", monthlyAmount: 9999, from: "2026-01", to: null }], savedAt: at(0) }, "sync");
+    expect(readCostModel(candidates, null, home).home).toMatchObject({ slug: "alpha", others: [{ slug: "beta" }] });
+    const { response, written } = writeCostModel(candidates, { reset: ["roles"] }, { scopeSlug: null, actor: "ui", now: at(6), home });
+    expect(written).toEqual(["alpha", "beta"]);
+    expect(response.source).toEqual({ roles: "default", roleMapping: "default", scenario: "default", aiSpend: "default" });
+    expect(response.model.aiSpend.entries[0]!.monthlyAmount).toBe(200);
+    expect(candidates[1]!.store.settingValue("analytics.aiSpend").source).toBe("default");
+  });
+
+  it("moves into a workspace with an older save without reviving its values", () => {
+    writeCostModel(candidates, { home: "alpha", roles: ROLES }, { scopeSlug: null, actor: "ui", now: at(5), home });
+    candidates[1]!.store.setSetting("analytics.scenario", { ...SCENARIO, director: { ...SCENARIO.director, hourlyRate: 999 }, savedAt: at(0) }, "sync");
+    const { response } = writeCostModel(candidates, { home: "beta" }, { scopeSlug: null, actor: "ui", now: at(6), home });
+    expect(response.home).toMatchObject({ slug: "beta", others: [] });
+    expect(response.model.scenario.director.hourlyRate).toBe(100);
+    expect(response.source).toEqual({ roles: "saved", roleMapping: "default", scenario: "default", aiSpend: "default" });
+  });
+
+  it("ranks saves by the instant they name, and keeps a save with no stamp as the oldest home", () => {
+    // 10:00+05:00 is 05:00Z, older than 07:00Z.
+    candidates[0]!.store.setSetting("analytics.roles", { ...ROLES, savedAt: "2026-11-27T10:00:00+05:00" }, "cli");
+    candidates[1]!.store.setSetting("analytics.roles", { ...ROLES, savedAt: "2026-11-27T07:00:00.000Z" }, "cli");
+    expect(readCostModel(candidates, null, home).home.slug).toBe("beta");
+    candidates[1]!.store.resetSetting("analytics.roles");
+    candidates[1]!.store.setSetting("analytics.roles", { ...ROLES, savedAt: null }, "cli");
+    candidates[0]!.store.resetSetting("analytics.roles");
+    expect(readCostModel(candidates, null, home).home).toMatchObject({ slug: "beta", others: [] });
+  });
+
+  it("refuses a malformed write by name rather than failing on it", () => {
+    for (const body of [null, [], { reset: 5 }, { reset: "roles" }, { reset: [{}] }, { home: 7 }]) {
+      expect(refusal(() => writeCostModel(candidates, body as never, { scopeSlug: null, actor: "ui", now: at(0), home })).code, JSON.stringify(body)).toBe("validation");
+    }
+  });
+
+  it("keeps the workspace working when a synced part cannot be read, refusing only that part", () => {
+    // A newer build's value: a field this build does not know.
+    candidates[0]!.store.db
+      .prepare("INSERT INTO meta (key, value) VALUES ('setting:analytics.roles', ?)")
+      .run(JSON.stringify({ v: 1, value: { roles: [{ id: "a", title: "A", hourlyRate: 1, currency: "EUR" }], savedAt: at(0) } }));
+    candidates[0]!.store.db.prepare("UPDATE meta SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) WHERE key = 'settings_revision'").run();
+    const store = candidates[0]!.store;
+    expect(store.getSetting("queue.policy")).toBe("advisory");
+    expect(store.createIssue({ title: "Still works" }).title).toBe("Still works");
+    expect(refusal(() => store.settingValue("analytics.roles")).message).toMatch(/unknown field "currency"/);
+    expect(refusal(() => readCostModel(candidates, null, home)).code).toBe("validation");
+  });
+
   it("keeps the cost model out of the Settings screen's registry, but in the workspace's settings", () => {
     const view = settingRegistryView();
     expect(view.categories.map((category) => category.id)).not.toContain("analytics");
@@ -217,6 +268,29 @@ describe("across devices", () => {
       machine.use();
       expect(readCostModel(only(machine), null, machine.home).model.roles.roles[0]!.hourlyRate, machine.label).toBe(60);
     }
+  });
+
+  it("refuses to move the model away from a home with an open conflict", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const a = fleet.machine("a");
+    const b = fleet.machine("b");
+    save(a, { roles: ROLES }, "2026-11-27T09:00:00.000Z");
+    await a.sync();
+    await b.sync();
+    save(a, { roles: { roles: [{ id: "engineer", title: "Engineer", hourlyRate: 120 }] } }, "2026-11-27T09:05:00.000Z");
+    save(b, { roles: { roles: [{ id: "engineer", title: "Engineer", hourlyRate: 60 }] } }, "2026-11-27T09:06:00.000Z");
+    await a.sync();
+    await b.sync();
+    await a.sync();
+    a.use();
+    expect(listConflicts(a.db).filter((conflict) => conflict.entityId === "analytics.roles")).toHaveLength(1);
+    const db = openDb(":memory:");
+    migrateWorkspace(db);
+    const local: HomeCandidate = { slug: "local", prefix: "LOC", store: new WorkspaceStore(db, "local", "LOC") };
+    const error = refusal(() => writeCostModel([...only(a), local], { home: "local" }, { scopeSlug: null, actor: "ui", now: "2026-11-27T09:10:00.000Z", home: a.home }));
+    expect(error.code).toBe("conflict");
+    expect(local.store.settingValue("analytics.roles").source).toBe("default");
+    expect(a.store.settingValue("analytics.roles").source).toBe("workspace");
   });
 
   it("carries a reset to the other device, and a later save after it", async () => {

@@ -4,6 +4,7 @@
  * them could not be opened) and call one function here, so the HTTP layer stays a thin parse.
  */
 import type { DatabaseSync } from "node:sqlite";
+import { StapleError } from "../types.js";
 import type { AgentTypeRule } from "./agent-type.js";
 import type { AnalyticsReport, AnalyticsWorkspaceRef, Caveat, CostModelResponse, RoiResponse, RoiTicketsResponse } from "./contract.js";
 import { COST_MODEL_PARTS, aiSpendFor, resolveRoles, roi, type CostModel } from "./cost-model.js";
@@ -115,7 +116,10 @@ export function readRoiTickets(input: {
   // Price unknown role ids the way the ROI does, so the list behind a row is the row's.
   const priced = (id: string): string => roles.role(id).id;
   const tallies = roleTallies(rows, resolved, costModel.roleMapping.rules, (type: AgentType) => costModel.roleMapping.types[type]);
-  const limit = Math.max(1, Math.min(input.limit ?? 200, 200));
+  if (input.limit !== undefined && (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 200)) {
+    throw new StapleError("validation", `limit takes a whole number from 1 to 200; got ${JSON.stringify(input.limit)}.`);
+  }
+  const limit = input.limit ?? 200;
   const tickets = [...tallies.tickets.entries()]
     .filter(([id]) => priced(id) === input.roleId)
     .flatMap(([, list]) => list)

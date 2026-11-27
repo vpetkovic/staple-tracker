@@ -54,6 +54,7 @@ import type {
   SprintRow,
   WorkspaceRow,
 } from "./contract.js";
+import { addDays } from "../plan.js";
 import { lowerQuantile } from "../telemetry/calibration.js";
 import { daysInclusive, eachDate, isDateKey, nextDate, Zone } from "./local-time.js";
 import type { AnalyticsAttempt, AnalyticsIssue, RecordRows, WorkspaceRows } from "./rows.js";
@@ -450,6 +451,11 @@ function computeWindow(scope: Scope, window: Window, zone: Zone): WindowFigures 
   let cursor = 0;
   for (const [index, day] of daily.entries()) {
     const end = window.edges[index + 1]!;
+    // An attempt that ended at this day's first instant did not run on it: settle ends first.
+    while (cursor < events.length && events[cursor]![0] <= window.edges[index]! && events[cursor]![1] < 0) {
+      current += events[cursor]![1];
+      cursor += 1;
+    }
     day.peak = current;
     while (cursor < events.length && events[cursor]![0] < end) {
       current += events[cursor]![1];
@@ -905,8 +911,12 @@ export function resolvePeriod(workspaces: readonly WorkspaceRows[], query: Analy
   );
   const today = zone.dateOf(query.now);
   const explicit = query.from !== undefined && query.from !== "";
-  const from = explicit ? requireDay(query.from!, "from") : (span.first ?? today);
-  const to = query.to !== undefined && query.to !== "" ? requireDay(query.to, "to") : today < from ? from : today;
+  const to = query.to !== undefined && query.to !== "" ? requireDay(query.to, "to") : today;
+  // "All time" is clamped to the longest period one read covers; `firstActivity` before
+  // `from` tells the page the history goes further back than the read.
+  const earliest = addDays(to, -(MAX_PERIOD_DAYS - 1));
+  const first = span.first ?? to;
+  const from = explicit ? requireDay(query.from!, "from") : first < earliest ? earliest : first > to ? to : first;
   if (to < from) throw new StapleError("validation", `to (${to}) is before from (${from}).`);
   const days = daysInclusive(from, to);
   if (days > MAX_PERIOD_DAYS) throw new StapleError("validation", `A period covers at most ${MAX_PERIOD_DAYS} days; ${from} to ${to} is ${days}.`);

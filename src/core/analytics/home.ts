@@ -32,7 +32,7 @@ import type { WorkspaceStore } from "../store.js";
 import { StapleError } from "../types.js";
 import type { CostModelHome, CostModelResponse, CostModelValue, CostModelWrite } from "./contract.js";
 import { AGENT_TYPES } from "./agent-type.js";
-import { COST_MODEL_KEYS, COST_MODEL_PARTS, DEFAULT_COST_MODEL, costModelSavedAt, type CostModel, type CostModelPart } from "./cost-model.js";
+import { COST_MODEL_KEYS, COST_MODEL_PARTS, DEFAULT_COST_MODEL, type CostModel, type CostModelPart } from "./cost-model.js";
 
 /** A registered workspace that could hold the model. */
 export interface HomeCandidate {
@@ -44,6 +44,14 @@ export interface HomeCandidate {
 interface HeldModel {
   readonly model: CostModel;
   readonly source: Record<CostModelPart, "saved" | "default">;
+  /** True when any part is saved here. */
+  readonly saved: boolean;
+  /**
+   * When the newest saved part here was saved, as an instant: compared numerically, so an
+   * offset stamp (`…+05:00`) ranks by the moment it names. A saved part without a usable
+   * stamp (written by hand with `staple settings set`) ranks as the oldest save, not as none.
+   */
+  readonly savedAtMs: number;
   readonly savedAt: string | null;
 }
 
@@ -59,7 +67,9 @@ function readHeldModel(store: WorkspaceStore): HeldModel {
     parts[part] = { ...value, assumed: value.assumed ?? [] };
   }
   const model = parts as unknown as CostModel;
-  return { model, source, savedAt: costModelSavedAt(model) };
+  const stamps = COST_MODEL_PARTS.filter((part) => source[part] === "saved").map((part) => Date.parse(model[part].savedAt ?? ""));
+  const savedAtMs = stamps.length === 0 ? Number.NEGATIVE_INFINITY : Math.max(0, ...stamps.filter((at) => Number.isFinite(at)));
+  return { model, source, saved: stamps.length > 0, savedAtMs, savedAt: stamps.length === 0 ? null : new Date(savedAtMs).toISOString() };
 }
 
 /** True when this machine holds a live cloud connection for the workspace: its saves reach other devices. */
@@ -72,6 +82,8 @@ function isSynced(store: WorkspaceStore, home: string): boolean {
 
 interface Resolved {
   readonly home: (HomeCandidate & HeldModel) | null;
+  /** Every candidate with what it holds. */
+  readonly held: readonly (HomeCandidate & HeldModel)[];
   readonly view: CostModelHome;
 }
 
@@ -81,14 +93,13 @@ interface Resolved {
  */
 function resolveHome(candidates: readonly HomeCandidate[], scopeSlug: string | null, home: string): Resolved {
   const held = candidates.map((candidate) => ({ ...candidate, ...readHeldModel(candidate.store) }));
-  const saved = held
-    .filter((candidate) => candidate.savedAt !== null)
-    .sort((a, b) => (a.savedAt! < b.savedAt! ? 1 : a.savedAt! > b.savedAt! ? -1 : a.slug.localeCompare(b.slug)));
+  const saved = held.filter((candidate) => candidate.saved).sort((a, b) => b.savedAtMs - a.savedAtMs || a.slug.localeCompare(b.slug));
   const chosen = saved[0] ?? null;
   const inScope = scopeSlug === null ? undefined : candidates.find((candidate) => candidate.slug === scopeSlug);
   const suggested = chosen?.slug ?? inScope?.slug ?? candidates.find((candidate) => isSynced(candidate.store, home))?.slug ?? candidates[0]?.slug ?? null;
   return {
     home: chosen,
+    held,
     view: {
       slug: chosen?.slug ?? null,
       prefix: chosen?.prefix ?? null,
@@ -141,47 +152,64 @@ function assertNoConflict(store: WorkspaceStore, parts: readonly CostModelPart[]
 /**
  * `POST /api/analytics/cost-model`: save, reset or move. Answers the model as it now stands
  * and the slugs written, so the caller can trigger their sync.
+ *
+ * Every write leaves exactly one workspace holding the model. The target (the named home, else
+ * the current one) is written to hold the effective model with this write on top: a part this
+ * write sets, a part the current home holds, or the default, in that order. Any other workspace
+ * still holding a saved part (the old home after a move, or an older save that arrived by sync)
+ * has it reset, so a later reset or move can never bring a superseded value back. No workspace
+ * is touched while any part it would change has an open cloud conflict.
  */
 export function writeCostModel(
   candidates: readonly HomeCandidate[],
   write: CostModelWrite,
   options: { readonly scopeSlug: string | null; readonly actor: string | null; readonly now: string; readonly home?: string },
 ): { response: CostModelResponse; written: string[] } {
+  if (write === null || typeof write !== "object" || Array.isArray(write)) throw new StapleError("validation", "The cost model write must be an object.");
+  if (write.reset !== undefined && !Array.isArray(write.reset)) throw new StapleError("validation", `reset must be a list of parts (${COST_MODEL_PARTS.join(", ")}).`);
+  if (write.home !== undefined && typeof write.home !== "string") throw new StapleError("validation", "home must name a workspace slug.");
   const stapleHomeDir = options.home ?? stapleHome();
   const before = resolveHome(candidates, options.scopeSlug, stapleHomeDir);
   const reset = [...new Set(write.reset ?? [])];
   for (const part of reset) {
-    if (!(COST_MODEL_PARTS as readonly string[]).includes(part)) throw new StapleError("validation", `reset names "${part}", which is not a part (${COST_MODEL_PARTS.join(", ")}).`);
+    if (!(COST_MODEL_PARTS as readonly unknown[]).includes(part)) throw new StapleError("validation", `reset names ${JSON.stringify(part)}, which is not a part (${COST_MODEL_PARTS.join(", ")}).`);
   }
   const parts = partsOf(write, options.now);
   const named = write.home === undefined ? null : candidates.find((candidate) => candidate.slug === write.home);
   if (write.home !== undefined && !named) throw new StapleError("not_found", `No registered workspace "${write.home}" to save the cost model in.`);
-  const target = named ?? before.home;
-  if (target === null) {
+  const targetSlug = named?.slug ?? before.home?.slug ?? null;
+  if (targetSlug === null) {
     throw new StapleError("validation", `Nothing is saved yet: name the workspace to save the cost model in (home). Suggested: ${before.view.suggested ?? "none"}.`);
   }
-  const moving = before.home !== null && before.home.slug !== target.slug;
+  const target = before.held.find((candidate) => candidate.slug === targetSlug)!;
+  const basis = before.home;
 
-  const ops: Array<{ op: "set"; key: string; value: unknown } | { op: "reset"; key: string }> = [];
-  const touched: CostModelPart[] = [];
+  type Op = { op: "set"; key: string; value: unknown } | { op: "reset"; key: string };
+  const plan: Array<{ candidate: HomeCandidate & HeldModel; ops: Op[]; parts: CostModelPart[] }> = [];
+  const targetOps: Op[] = [];
+  const targetParts: CostModelPart[] = [];
   for (const part of COST_MODEL_PARTS) {
     const key = COST_MODEL_KEYS[part];
-    if (reset.includes(part)) ops.push({ op: "reset", key });
-    else if (parts[part] !== undefined) ops.push({ op: "set", key, value: parts[part] });
-    // Moving carries the old home's value over; a default stays a default (nothing to write).
-    else if (moving && before.home!.source[part] === "saved") ops.push({ op: "set", key, value: before.home!.model[part] });
+    const carried = basis !== null && basis.slug !== target.slug && basis.source[part] === "saved" ? basis.model[part] : undefined;
+    const value = reset.includes(part) ? undefined : (parts[part] ?? carried);
+    if (value !== undefined) targetOps.push({ op: "set", key, value });
+    // A part the effective model holds at its default must not survive as an older save here.
+    else if (target.source[part] === "saved" && (reset.includes(part) || basis === null || basis.slug !== target.slug)) targetOps.push({ op: "reset", key });
     else continue;
-    touched.push(part);
+    targetParts.push(part);
   }
-  assertNoConflict(target.store, touched);
-  if (ops.length > 0) target.store.applySettingOps(ops, options.actor);
-  const written = [target.slug];
-  if (moving) {
-    const old = before.home!;
-    const held = COST_MODEL_PARTS.filter((part) => old.source[part] === "saved");
-    if (held.length > 0) old.store.applySettingOps(held.map((part) => ({ op: "reset" as const, key: COST_MODEL_KEYS[part] })), options.actor);
-    written.push(old.slug);
+  plan.push({ candidate: target, ops: targetOps, parts: targetParts });
+  for (const other of before.held) {
+    if (other.slug === target.slug || !other.saved) continue;
+    const held = COST_MODEL_PARTS.filter((part) => other.source[part] === "saved");
+    plan.push({ candidate: other, ops: held.map((part) => ({ op: "reset" as const, key: COST_MODEL_KEYS[part] })), parts: held });
+  }
+  for (const step of plan) assertNoConflict(step.candidate.store, step.parts);
+  const written: string[] = [];
+  for (const step of plan) {
+    if (step.ops.length === 0 && step.candidate.slug !== target.slug) continue;
+    if (step.ops.length > 0) step.candidate.store.applySettingOps(step.ops, options.actor);
+    written.push(step.candidate.slug);
   }
   return { response: readCostModel(candidates, options.scopeSlug, stapleHomeDir), written };
 }
-

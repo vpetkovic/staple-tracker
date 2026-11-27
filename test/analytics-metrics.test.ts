@@ -166,6 +166,16 @@ describe("attempt edge cases", () => {
     expect(caveat(report, "capped_attempts")).toEqual({ code: "capped_attempts", count: 1, of: 1 });
   });
 
+  it("does not count an attempt that ended at midnight as running on the next day", () => {
+    const t = issue({ id: "t", completedAt: "2026-09-02T00:00:00.000Z" });
+    const report = read([ws("w", [t], [attempt("t", { startedAt: "2026-09-01T23:00:00.000Z", endAt: "2026-09-02T00:00:00.000Z" })])], { from: "2026-09-01", to: "2026-09-02" });
+    expect(report.series.map((p) => [p.agentHours, p.peakConcurrency])).toEqual([
+      [1, 1],
+      [0, 0],
+    ]);
+    expect(report.capacity.activeDays).toBe(1);
+  });
+
   it("spreads an attempt's hours over the days it ran and clips it to the period", () => {
     const t = issue({ id: "t", completedAt: "2026-09-02T04:00:00.000Z" });
     // 22:00 to 04:00 UTC: 2 h on Sep 1, 4 h on Sep 2.
@@ -349,6 +359,13 @@ describe("hours and tickets by the role they are priced at", () => {
 });
 
 describe("the period", () => {
+  it("clamps all time to the longest period instead of refusing old history", () => {
+    const old = issue({ createdAt: "2012-03-01T10:00:00.000Z", startedAt: null, completedAt: null, status: "backlog", category: "unstarted" });
+    const report = read([ws("w", [old])], { now: "2026-09-30T12:00:00.000Z" });
+    expect(report.period).toMatchObject({ to: "2026-09-30", days: 3660, explicit: false, firstActivity: "2012-03-01" });
+    expect(report.period.from > "2012-03-01").toBe(true);
+  });
+
   it("refuses an inverted period, a bad day and an unknown bucket", () => {
     const rows = [ws("w", [])];
     expect(() => read(rows, { from: "2026-09-05", to: "2026-09-01" })).toThrow(/before/);

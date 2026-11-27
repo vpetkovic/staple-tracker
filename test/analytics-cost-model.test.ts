@@ -87,6 +87,15 @@ describe("agent type derivation", () => {
     expect(globMatches("a.b", "a.b")).toBe(true);
   });
 
+  it("matches a pathological glob in linear time", () => {
+    const started = performance.now();
+    expect(globMatches("*a*a*a*a*a*a*a*a*a*a*a*a*b", "a".repeat(40))).toBe(false);
+    expect(globMatches("*a*a*a*a*a*a*a*a*a*a*a*a*b", `${"a".repeat(40)}b`)).toBe(true);
+    expect(performance.now() - started).toBeLessThan(200);
+    expect(globMatches("*", "")).toBe(true);
+    expect(globMatches("a*", "")).toBe(false);
+  });
+
   it("is deterministic: the same attempt types the same way every time", () => {
     const one = input({ agent: "claude-relay-builder", title: "A visual pass over the relay" });
     expect(deriveAgentType(one)).toEqual(deriveAgentType({ ...one }));

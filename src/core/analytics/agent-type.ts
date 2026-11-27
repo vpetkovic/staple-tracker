@@ -98,15 +98,39 @@ function wordType(tokens: readonly string[]): { type: AgentType; word: string } 
   return null;
 }
 
-/** A `*` glob as a whole-string, case-insensitive match. */
+/**
+ * A `*` glob as a whole-string, case-insensitive match.
+ *
+ * Matched by the two-pointer wildcard walk, never a regular expression: rules are typed by a
+ * person and synced to every device, and `*a*a*a…b` compiled to `.*a.*a…b` backtracks
+ * exponentially, which froze the server for minutes on one Analytics read. This walk is
+ * O(glob × value) whatever the pattern.
+ */
 export function globMatches(glob: string, value: string): boolean {
-  const source = glob
-    .trim()
-    .toLowerCase()
-    .split("*")
-    .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
-    .join(".*");
-  return new RegExp(`^${source}$`).test(value.toLowerCase());
+  const pattern = glob.trim().toLowerCase();
+  const text = value.toLowerCase();
+  let p = 0;
+  let t = 0;
+  let star = -1;
+  let resume = 0;
+  while (t < text.length) {
+    if (p < pattern.length && pattern[p] === "*") {
+      star = p;
+      p += 1;
+      resume = t;
+    } else if (p < pattern.length && pattern[p] === text[t]) {
+      p += 1;
+      t += 1;
+    } else if (star >= 0) {
+      p = star + 1;
+      resume += 1;
+      t = resume;
+    } else {
+      return false;
+    }
+  }
+  while (p < pattern.length && pattern[p] === "*") p += 1;
+  return p === pattern.length;
 }
 
 /** True when `phrase`'s words appear in `tokens` consecutively. */

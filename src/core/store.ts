@@ -542,6 +542,13 @@ interface SettingsSnapshot {
    * boundary — so a setting the registry does not know can never reach a caller.
    */
   values: Map<string, { value: unknown; version: number }>;
+  /**
+   * Registered keys whose stored row could not be read (malformed, or written by a newer
+   * build), each with its refusal. Kept apart from `values` so one unreadable row refuses
+   * only the reads of ITS key: a cost-model part synced from a newer device must not stop
+   * this one from listing issues. The row is preserved, never rewritten.
+   */
+  unreadable: Map<string, StapleError>;
   /** `setting:*` meta rows nobody in this binary has a definition for. Preserved, never read. */
   unknownSettingKeys: string[];
 }
@@ -1409,11 +1416,13 @@ export class WorkspaceStore {
       categories.flatMap((category) => byCategory.get(category) ?? []);
 
     /**
-     * Registered values, decoded through the registry so an unreadable row is
-     * refused HERE with its key in the sentence rather than wherever the value
-     * is first used. Rows for keys with no definition are counted, not parsed.
+     * Registered values, decoded through the registry. An unreadable row is held
+     * with its refusal, which names the key, and every read of THAT key throws it;
+     * reads of other keys and everything else the snapshot serves go on working.
+     * Rows for keys with no definition are counted, not parsed.
      */
     const values = new Map<string, { value: unknown; version: number }>();
+    const unreadable = new Map<string, StapleError>();
     const unknownSettingKeys: string[] = [];
     const stored = new Map(
       (
@@ -1426,8 +1435,13 @@ export class WorkspaceStore {
     for (const definition of settingDefinitionsFor("workspace")) {
       const text = stored.get(definition.key);
       if (text === undefined) continue;
-      const decoded = readStoredSetting(definition, text, where);
-      values.set(definition.key, { value: decoded.value, version: decoded.version });
+      try {
+        const decoded = readStoredSetting(definition, text, where);
+        values.set(definition.key, { value: decoded.value, version: decoded.version });
+      } catch (error) {
+        if (!(error instanceof StapleError)) throw error;
+        unreadable.set(definition.key, error);
+      }
       stored.delete(definition.key);
     }
     // The repository's prefix rides a setting key so older builds preserve it unread
@@ -1440,6 +1454,7 @@ export class WorkspaceStore {
       statuses,
       kinds,
       values,
+      unreadable,
       unknownSettingKeys,
       byId,
       byCategory,
@@ -2260,7 +2275,7 @@ export class WorkspaceStore {
    */
   getSetting(key: string): unknown {
     const definition = requireSettingDefinition(key, "workspace");
-    return this.settings().values.get(key)?.value ?? definition.default;
+    return this.storedSetting(key)?.value ?? definition.default;
   }
 
   /**
@@ -2270,17 +2285,24 @@ export class WorkspaceStore {
    */
   settingValue(key: string): SettingValueView {
     const definition = requireSettingDefinition(key, "workspace");
-    const stored = this.settings().values.get(key);
+    const stored = this.storedSetting(key);
     return stored
       ? settingValueView(definition, stored.value, "workspace")
       : settingValueView(definition, definition.default, "default");
   }
 
+  /** The decoded stored value of a registered key, or undefined; throws that key's refusal when its row is unreadable. */
+  private storedSetting(key: string): { value: unknown; version: number } | undefined {
+    const snapshot = this.settings();
+    const refusal = snapshot.unreadable.get(key);
+    if (refusal) throw refusal;
+    return snapshot.values.get(key);
+  }
+
   /** Every registered workspace setting with its provenance, in registry order. */
   settingValues(): SettingValueView[] {
-    const values = this.settings().values;
     return settingDefinitionsFor("workspace").map((definition) => {
-      const stored = values.get(definition.key);
+      const stored = this.storedSetting(definition.key);
       return stored
         ? settingValueView(definition, stored.value, "workspace")
         : settingValueView(definition, definition.default, "default");
@@ -2343,7 +2365,7 @@ export class WorkspaceStore {
     if (key === "features.planning" && !person) throw new StapleError("validation", "Only a person can change features.planning, in Settings → Experimental or with `staple settings set features.planning false --person`. The UI is the person and its token is the person's; agents are trusted not to impersonate the person through that token or --person.");
     const definition = requireSettingDefinition(key, "workspace");
     return this.atomically(() => {
-      const stored = this.settings().values.get(key);
+      const stored = this.storedSetting(key);
       if (stored) {
         this.db.prepare("DELETE FROM meta WHERE key = ?").run(settingMetaKey(key));
         this.bumpSettingsRevision();

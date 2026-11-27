@@ -157,6 +157,7 @@ describe("the cost model over HTTP", () => {
     expect(saved.body.source).toEqual({ roles: "saved", roleMapping: "saved", scenario: "saved", aiSpend: "saved" });
     expect((await http(`/api/analytics/cost-model?scope=alpha`)).body.home.slug).toBe("beta");
 
+    expect((await http(`/api/analytics/cost-model`, { reset: 5 })).status).toBe(409);
     const bad = await http(`/api/analytics/cost-model`, { roles: { roles: [] } });
     expect(bad.status).toBe(409);
     expect(bad.body).toMatchObject({ code: "validation", message: expect.stringMatching(/1 to 30/) });
@@ -189,6 +190,8 @@ describe("the cost model over HTTP", () => {
       ["Build 1", "rule"],
     ]);
     expect((await http(`/api/analytics/roi/tickets?scope=alpha&${QUERY}`)).status).toBe(409);
+    expect((await http(`/api/analytics/roi/tickets?scope=alpha&roleId=writer&limit=abc&${QUERY}`)).status).toBe(409);
+    expect((await http(`/api/analytics/roi/tickets?scope=alpha&roleId=writer&limit=1&${QUERY}`)).body.tickets).toHaveLength(1);
 
     const metrics = await http(`/api/analytics?scope=alpha&${QUERY}`);
     expect(metrics.body.agents[0].reason).toEqual({ code: "rule", detail: "0" });
