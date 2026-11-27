@@ -221,7 +221,7 @@ const featureInstructions = (() => {
   catch { return "Resolve the workspace and read get_setting features.planning first."; }
 })();
 const server = new McpServer({ name: "staple", version: STAPLE_VERSION }, {
-  instructions: `${featureInstructions} Planning is experimental, defaults off, and only a person changes it in Settings → Experimental or with staple settings set features.planning true --person. Read get_setting or show_about for the current workspace state; explicit ws may differ from this handshake. When off, use ordinary tasks and milestones; plan tools refuse. Ideas remain drafts and are never pickup work.`,
+  instructions: `${featureInstructions} Planning is experimental, defaults off, and only a person changes it in Settings → Experimental or with staple settings set features.planning true --person. Read get_setting or show_about for the current workspace state; explicit ws may differ from this handshake. When off, use ordinary tasks and milestones; plan tools refuse. Ideas have their own numbers, I-<PREFIX>-<n>, and are never pickup work.`,
 });
 const PLANNING_TOOLS = new Set(["list_ideas", "get_idea", "list_horizons", "capture_idea", "update_idea", "scaffold_idea", "start_idea", "unlink_idea", "reset_idea_baseline"]);
 
@@ -326,7 +326,7 @@ const MACHINE_LOCAL_WRITES = new Set(["configure_integration","record_budget_sam
 
   /**
    * Every answer, as a tool sends it: no unpromoted idea's draft identifier leaves in a text block
-   * or the structured result (design/plan.md, "Ticket numbers"; `publicOutput`, `publicValue`).
+   * or the structured result (design/plan.md, "Idea numbers"; `publicOutput`, `publicValue`).
    */
   const published =
     (cb: ToolCallback): ToolCallback =>
@@ -522,7 +522,7 @@ const kindSchema = z
 const priorityEnum = z.enum(ISSUE_PRIORITIES);
 const refSchema = z
   .string()
-  .describe("Issue reference: identifier like GAR-12, bare number, or uuid");
+  .describe("Issue reference: identifier like GAR-12, bare number, an idea number like I-GAR-3, or uuid");
 /** Shared by every workspace-scoped tool; the hub-wide tools deliberately omit it. */
 const wsSchema = z
   .string()
@@ -622,9 +622,9 @@ const actorSchema = z
     "Who is performing this write (your agent name). Falls back to the server's STAPLE_AGENT; if neither is set the call is refused rather than attributed to a placeholder.",
   );
 
-/** An issue's ticket number; null for an unpromoted idea, which has none yet (design/plan.md). */
+/** An issue's ticket number, or an unpromoted idea's idea number; null only for an earlier build's unnumbered draft (design/plan.md). */
 const issueIdentifierSchema = z.string().nullable();
-const draftSchema = z.boolean().optional().describe("True for an unpromoted idea, which has no ticket number yet");
+const draftSchema = z.boolean().optional().describe("True for an unpromoted idea an earlier build left without a number");
 
 /**
  * Output schema for tools returning an Issue. The SDK validates structuredContent
@@ -3471,14 +3471,14 @@ server.registerTool(
  * the baseline are the person's: these tools carry no person, so the store refuses those
  * fields with `validation` saying so. The one person path here is the app-only baseline reset.
  */
-const ideaRefSchema = refSchema.describe("An idea: its identifier or id");
+const ideaRefSchema = refSchema.describe("An idea: its idea number (I-STA-12, or I-12 in its own workspace), its ticket number once promoted, or its id");
 const planDateSchema = z.string().nullable().optional().describe("A UTC calendar day, YYYY-MM-DD; null clears it");
 
 server.registerTool(
   "list_ideas",
   {
     description:
-      "The plan: every horizon in order (a horizon is a milestone shown as a column: name, date, status, shipped, units, progress, percent, complete, unsizedCount and records as list_horizons gives them, member count, idea count, late and not-started counts) and every plan record with its maturity, briefLine (its brief's first written line, null for none; get_idea has the whole brief), derived stage (raw, exploring, shaped, scheduled, started, shipped, dropped), horizon, parent, planned window, baseline, linked issues, units (its rollup's work items: done and open ticket leaves of its and its sub-ideas' work, and planned breakdown rows of itself and every non-dropped sub-idea with no work yet), unsized (its own size is unknown: no work, no rows, no sub-ideas), own (its own work items without its sub-ideas': its tickets' leaves done and open, else its breakdown rows planned; none for an umbrella), umbrella (no own work, over sub-ideas that are not dropped, which carry its size), carriedBy (the horizon that carries it: the one it is scheduled on, else its nearest scheduled parent's; null for none), progress (done over those units; null before any of its work is started), percent (progress as a whole percent, rounded down), actual dates, the late / notStarted flags, and its lifecycle state with the actions that state offers (state, actions: id, label, who: anyone or person, disabledReason), and nextStep: what it needs next from planning while a horizon carries it (the step list_horizons lists), else null. A write the state does not offer is refused with validation naming the state and what it offers. An unpromoted idea has identifier null (it holds no ticket number; refer to it by id) and never appears in list_tasks, the queue or next_task; a promoted one is an ordinary epic with its number. Filter with maturity or horizon (an identifier or name; the records it carries, as its column shows them: scheduled on it or following a parent that is, and the dropped ones scheduled on it; a name that matches no horizon, or several, is refused). A workspace with planning off refuses with validation.",
+      "The plan: every horizon in order (a horizon is a milestone shown as a column: name, date, status, shipped, units, progress, percent, complete, unsizedCount and records as list_horizons gives them, member count, idea count, late and not-started counts) and every plan record with its maturity, briefLine (its brief's first written line, null for none; get_idea has the whole brief), derived stage (raw, exploring, shaped, scheduled, started, shipped, dropped), horizon, parent, planned window, baseline, linked issues, units (its rollup's work items: done and open ticket leaves of its and its sub-ideas' work, and planned breakdown rows of itself and every non-dropped sub-idea with no work yet), unsized (its own size is unknown: no work, no rows, no sub-ideas), own (its own work items without its sub-ideas': its tickets' leaves done and open, else its breakdown rows planned; none for an umbrella), umbrella (no own work, over sub-ideas that are not dropped, which carry its size), carriedBy (the horizon that carries it: the one it is scheduled on, else its nearest scheduled parent's; null for none), progress (done over those units; null before any of its work is started), percent (progress as a whole percent, rounded down), actual dates, the late / notStarted flags, and its lifecycle state with the actions that state offers (state, actions: id, label, who: anyone or person, disabledReason), and nextStep: what it needs next from planning while a horizon carries it (the step list_horizons lists), else null. A write the state does not offer is refused with validation naming the state and what it offers. Every record has number, its permanent idea number I-<PREFIX>-<n> (I-STA-12), kept once it is promoted. An unpromoted idea has identifier null (it holds no ticket number; refer to it by its number, I-12 in its own workspace, or its id) and never appears in list_tasks, the queue or next_task; a promoted one is an ordinary epic with its ticket number, and its idea number still resolves. Filter with maturity or horizon (an identifier or name; the records it carries, as its column shows them: scheduled on it or following a parent that is, and the dropped ones scheduled on it; a name that matches no horizon, or several, is refused). A workspace with planning off refuses with validation.",
     inputSchema: {
       maturity: z.enum(["raw", "exploring", "shaped", "dropped"]).optional(),
       horizon: z.string().optional().describe("A horizon's identifier or name"),
@@ -3519,7 +3519,7 @@ server.registerTool(
   "capture_idea",
   {
     description:
-      "Capture a raw idea: a title, optionally a brief and a parent idea. It stays out of the task list and the queue. Maturity, horizon and dates are the person's to set in the Plan view; this tool always captures raw.",
+      "Capture a raw idea: a title, optionally a brief and a parent idea. It takes the next idea number, I-<PREFIX>-<n>, and stays out of the task list and the queue. Maturity, horizon and dates are the person's to set in the Plan view; this tool always captures raw.",
     inputSchema: {
       title: z.string(),
       brief: z.string().optional().describe("What it is, who it is for, what done looks like"),

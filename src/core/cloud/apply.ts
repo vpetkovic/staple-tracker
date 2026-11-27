@@ -1328,7 +1328,7 @@ function displaceIdentifierHolder(
 
   /**
    * The record's own number, written on two devices: one idea promoted on both before either
-   * heard of the other (design/plan.md, "Ticket numbers"). Its identifier is one field, and the
+   * heard of the other (design/plan.md, "Idea numbers"). Its identifier is one field, and the
    * last write of it in the log is the value, as the service's fold keeps it. So a write this
    * device made later than the incoming one stands, and the incoming one names nothing: it
    * displaces no holder here, because on every device its number is about to be given up.

@@ -203,11 +203,11 @@ need `--person`, which records the change under `humanName`.
 |---|---|
 | `staple plan enable --person` | Set `features.planning` true, initializing the `idea` and `milestone` kinds and the default horizons Now and Next. The same experimental switch is in Settings. |
 | `staple plan show` / `staple horizon ls` | Horizons in order, with their late and not-started counts and their run setting. |
-| `staple idea ls` | Ideas with stage, horizon and progress. `--maturity M`, `--horizon H` filter. An idea has no ticket number until it is promoted; its `<ref>` is the id this prints. |
+| `staple idea ls` | Ideas with their idea number, stage, horizon and progress. `--maturity M`, `--horizon H` filter. An idea has no ticket number until it is promoted; it has an idea number, `I-<PREFIX>-<n>`, from capture on, kept once promoted. Every `<ref>` takes it (`I-STA-12`, any case, or `I-12` in its own workspace), the ticket number once promoted, or the id. |
 | `staple idea new <title>` | Capture a raw idea. `--brief T`, `--parent REF`. |
 | `staple idea show <ref>` | Stage, planned and actual windows, baseline, brief, questions, decisions and links. |
 | `staple idea set <ref>` | `--title`, `--brief`; with `--person` also `--maturity`, `--horizon H\|none`, `--parent REF\|none`, `--start D\|none`, `--target D\|none`, `--before REF\|end`, and `--delivered D [--note T]` (delivered outside the tracker on day D: it reads shipped with no ticket) or `--undelivered`. |
-| `staple idea promote <ref>` | The idea becomes an epic on the same record and takes its ticket number. An agent may promote only a shaped idea. |
+| `staple idea promote <ref>` | The idea becomes an epic on the same record and takes its ticket number; its idea number stays with it and still resolves. An agent may promote only a shaped idea. |
 | `staple idea scaffold <ref> [--confirm FP]` | Without `--confirm`, the preview: the epic and every task it would make from the breakdown (estimate, blockers, acceptance, a context page each), what holds it back, and its fingerprint. `--confirm FP` makes exactly that preview, and is refused when the plan changed since. A retry makes only what is missing. |
 | `staple idea plan <ref>` | Write plan sections: `--goal`, `--context`, `--acceptance`…, `--dependency`…, `--out-of-scope`, `--risks`, `--source`…. |
 | `staple idea task <ref> add\|set\|rm <key>` | One breakdown row: title, `--estimate`, `--depends`, `--acceptance`, `--owner`, `--notes`. |

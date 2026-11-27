@@ -188,7 +188,7 @@ third device minted meanwhile; that is a fresh claim, settled the same way.
   unresolved conflict" about an issue every device agrees on); its first sync on this
   build closes every identifier record whose issue has moved off its stand-in since.
 - **One record's own number, written on two devices, is the last write in the log.** An
-  idea promoted on two devices offline takes a number on each ([plan](plan.md#ticket-numbers-none-until-promotion)):
+  idea promoted on two devices offline takes a number on each ([plan](plan.md#idea-numbers-their-own-counter-and-no-ticket-number-until-promotion)):
   two `update`s of one field of one issue. The service's fold keeps the later, so every device
   does too: a device whose own write of that identifier sits later in the log than the arriving
   one keeps its value and lets the arriving one name nothing (it displaces no holder), and

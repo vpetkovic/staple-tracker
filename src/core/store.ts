@@ -8956,7 +8956,7 @@ export class WorkspaceStore {
   }
 
   /**
-   * Promote an idea in place (design/plan.md, "Ticket numbers"): the same row takes the next ticket
+   * Promote an idea in place (design/plan.md, "Idea numbers"): the same row takes the next ticket
    * number and the given kind. Everything that hangs on the row (documents, comments, files,
    * events, links, its plan fields) stays. The number travels as an `identifier` write on the
    * issue, which is a claim like a create's: two devices that promote offline settle by the log,

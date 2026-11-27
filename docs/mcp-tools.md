@@ -62,6 +62,12 @@ The idea and horizon tools (`list_ideas` through `unlink_idea`) belong to
 [experimental planning](plan.md). They refuse until a person turns on `features.planning`,
 which an agent reads with `get_setting` and cannot change.
 
+Every idea has a permanent idea number, `I-<PREFIX>-<n>` (`I-STA-12`), from capture on: an issue
+answer carries it as `identifier` while it is an idea and as `ideaNumber` always, and an idea answer
+as `number` (its `identifier` is the ticket number, null until promoted). Every `ref` argument
+takes it, in any case or as `I-12` in its own workspace, and still takes it once the idea is an
+epic.
+
 | Tool | What it does | CLI | Writes |
 |---|---|---|---|
 | `set_blocked_by` | Replace a ticket's blockers | `staple blocked-by` | yes |
@@ -85,7 +91,7 @@ which an agent reads with `get_setting` and cannot change.
 | `move_milestone_member` | Move a member, or into another milestone | `staple milestone mv` | yes |
 | `reorder_milestone_members` | Set the members' order | `staple milestone reorder` | yes |
 | `list_ideas` | The plan: horizons and ideas with stage, late and not started | `staple idea ls` | no |
-| `get_idea` | One idea: brief, questions, decisions, links | `staple idea show` | no |
+| `get_idea` | One idea, by idea number, ticket number or id: brief, questions, decisions, links | `staple idea show` | no |
 | `list_horizons` | Horizons in order | `staple horizon ls` | no |
 | `capture_idea` | Capture a raw idea | `staple idea new` | yes |
 | `update_idea` | Edit title, brief, plan sections, questions (answer or defer) and decisions; steering fields, the delivered-outside-the-tracker mark included, are refused as the person's | `staple idea set`, `ask`, `resolve`, `decide` | yes |

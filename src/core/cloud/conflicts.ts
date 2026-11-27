@@ -798,7 +798,7 @@ function contest(
     if (!named || named.bookkeeping || named.derivedFrom) continue;
     /**
      * An issue's identifier carried by an `update` is a promotion's claim on a number
-     * (design/plan.md, "Ticket numbers"), never an edit somebody chose: the log decides it
+     * (design/plan.md, "Idea numbers"), never an edit somebody chose: the log decides it
      * (`displaceIdentifierHolder`, `apply.ts`), and screened as an edit, two devices promoting
      * one idea each kept their own number behind a record nothing would close.
      */

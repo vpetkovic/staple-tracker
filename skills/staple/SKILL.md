@@ -150,7 +150,7 @@ provider, and a link never changes the ticket's status.
   blocker done or rewrite the queue just to make a checkout pass.
 - Planning is experimental and off by default. Read `get_setting` for
   `features.planning` before using idea or horizon tools. Only a person enables it.
-  Ideas are drafts, not claimable tickets. If pickup returns `planSteps`, take only
+  Ideas are plans, not claimable tickets; name one by its number (`I-STA-12`). If pickup returns `planSteps`, take only
   steps whose `who` is `agent`; surface person-owned decisions and questions.
 - For an authorized autopilot run, call `continue_run` after each ticket and obey
   `take`, `wait` or `stop`. Do not turn ordinary ticket work into an unrequested run.
