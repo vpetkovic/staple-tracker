@@ -12,7 +12,8 @@
  *   onOpen     makes the whole tile a button (the Return tile opens the Return lens)
  *
  * States: `loading` draws the tile's own skeleton; `value: null` is "nothing to measure yet"
- * and says so in words instead of showing 0.
+ * and says so in words instead of showing 0. The delta is toned good or risk by `goodWhen`, not at
+ * all for `neutral`; a change under half a percent says "No change".
  */
 import { ArrowDownRight, ArrowRight, ArrowUpRight, CircleDashed } from "lucide-react";
 import type { ReactNode } from "react";
@@ -62,14 +63,14 @@ export function StatTile({
     <>
       <div className="flex items-start justify-between gap-2">
         <span className="text-label font-medium text-muted-foreground">{label}</span>
-        {onOpen ? <ArrowRight aria-hidden className="mt-0.5 size-3.5 shrink-0 text-text-tertiary transition-transform group-hover/tile:translate-x-0.5" /> : null}
+        {onOpen ? <ArrowRight aria-hidden className="mt-0.5 size-3.5 shrink-0 text-text-tertiary motion-safe:transition-transform motion-safe:group-hover/tile:translate-x-0.5" /> : null}
       </div>
       {loading ? (
         <div role="status" className="space-y-2 pt-1">
           <span className="sr-only">Loading {label}</span>
-          <Skeleton className="h-7 w-20 rounded-md" />
-          <Skeleton className="h-3 w-4/5 rounded-full" />
-          <Skeleton className="h-3 w-3/5 rounded-full" />
+          <Skeleton className="h-7 w-20 rounded-md motion-reduce:animate-none" />
+          <Skeleton className="h-3 w-4/5 rounded-full motion-reduce:animate-none" />
+          <Skeleton className="h-3 w-3/5 rounded-full motion-reduce:animate-none" />
         </div>
       ) : value === null ? (
         <p className="pt-1 text-body text-muted-foreground italic">{emptyText}</p>
@@ -140,6 +141,7 @@ export function Sparkline({ values, className }: { values: readonly number[]; cl
       {values.map((value, index) => (
         <span
           key={index}
+          data-mark
           className="min-w-0 flex-1 rounded-t-[1.5px]"
           style={{
             height: max > 0 ? `${Math.max((value / max) * 100, value > 0 ? 8 : 3)}%` : "3%",

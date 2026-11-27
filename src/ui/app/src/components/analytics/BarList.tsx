@@ -5,7 +5,8 @@
  * Data contract: `items` in the order to draw (the caller ranks), each with a `label`, a `value`
  * and the `text` that says the value; `detail` is a quiet second figure on the right. `max`
  * defaults to the largest value. `color` paints a row's bar (a workspace keeps its series colour);
- * without it the bar is the accent.
+ * without it the bar is the accent; a `muted` row is the neutral. A bar above zero is at least 1.5%
+ * wide so it shows; zero draws nothing.
  */
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
@@ -29,8 +30,9 @@ export function BarList({ items, max, labelWidth = "9rem", className, ariaLabel 
       {items.map((item) => (
         <li key={item.id} className="grid items-center gap-x-3 gap-y-1 @max-[340px]/bars:grid-cols-[1fr_auto] @min-[340px]/bars:grid-cols-[var(--label)_1fr_auto]" style={{ ["--label" as string]: labelWidth }}>
           <span className={cn("min-w-0 truncate text-body", item.muted && "text-muted-foreground italic")}>{item.label}</span>
-          <span className="h-2 min-w-0 overflow-hidden rounded-full bg-[var(--viz-track)] @max-[340px]/bars:order-last @max-[340px]/bars:col-span-2">
+          <span data-track className="h-2 min-w-0 overflow-hidden rounded-full bg-[var(--viz-track)] @max-[340px]/bars:order-last @max-[340px]/bars:col-span-2">
             <span
+              data-mark
               className="block h-full rounded-full"
               style={{ width: top > 0 ? `${Math.max((item.value / top) * 100, item.value > 0 ? 1.5 : 0)}%` : 0, background: item.muted ? "var(--viz-series-other)" : (item.color ?? "var(--viz-accent)") }}
             />

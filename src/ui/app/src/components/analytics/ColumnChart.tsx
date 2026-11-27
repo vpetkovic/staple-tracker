@@ -11,8 +11,13 @@
  * gap between stacked segments, hairline gridlines, clean y ticks. Hover or arrow keys move a
  * crosshair slot by slot and one tooltip lists every series there with the total. The table twin
  * comes from `columnChartTable`, so no value lives only in the tooltip.
+ *
+ * Keyboard and screen reader: the plot is one tab stop. Left and Right move the active slot, Home
+ * and End jump to the ends, Escape clears it. The readout is said once, through one polite live
+ * region beside the plot; the visible tooltip is hidden from assistive technology so it is not
+ * read a second time.
  */
-import { useState } from "react";
+import { useId, useState } from "react";
 import { cn } from "@/lib/utils";
 import { ChartLegend, ChartTooltip, tooltipAnchor, type ChartSeries } from "./chart-parts";
 import { formatNumber, niceTicks } from "./format";
@@ -48,13 +53,26 @@ export function ColumnChart({
   className?: string;
 }) {
   const [active, setActive] = useState<number | null>(null);
+  const hintId = useId();
   const totals = points.map((point) => series.reduce((sum, item) => sum + (point.values[item.id] ?? 0), 0));
   const ticks = niceTicks(Math.max(...totals, 0));
   const top = ticks[ticks.length - 1] ?? 1;
   const current = active !== null ? points[active] : undefined;
   const tickOrder = new Map(points.flatMap((point, index) => (point.tick ? [index] : [])).map((index, order) => [index, order]));
   const crowded = tickOrder.size > 6;
-  const move = (step: number) => setActive((index) => Math.min(points.length - 1, Math.max(0, (index ?? (step > 0 ? -1 : points.length)) + step)));
+  const readout =
+    current && active !== null
+      ? {
+          title: current.label,
+          rows: (series.length > 1 ? series.filter((item) => (current.values[item.id] ?? 0) > 0) : series).map((item) => ({
+            key: item.id,
+            label: item.label,
+            value: format(current.values[item.id] ?? 0),
+            color: series.length > 1 ? item.color : undefined,
+          })),
+          total: series.length > 1 ? { label: totalLabel, value: format(totals[active] ?? 0) } : undefined,
+        }
+      : null;
   return (
     <div className={cn("@container/chart flex min-w-0 flex-col gap-2", className)} data-chart="columns">
       {legend ? <ChartLegend series={series} /> : null}
@@ -70,19 +88,21 @@ export function ColumnChart({
           <div
             role="img"
             aria-label={ariaLabel}
+            aria-describedby={hintId}
             tabIndex={0}
             className="focus-ring-inset relative rounded-sm"
             style={{ height }}
             onPointerLeave={() => setActive(null)}
             onBlur={() => setActive(null)}
             onKeyDown={(event) => {
-              if (event.key === "ArrowRight") { event.preventDefault(); move(1); }
-              else if (event.key === "ArrowLeft") { event.preventDefault(); move(-1); }
-              else if (event.key === "Escape") setActive(null);
+              const next = stepSlot(active, event.key, points.length);
+              if (next === undefined) return;
+              event.preventDefault();
+              setActive(next);
             }}
           >
             {ticks.map((tick) => (
-              <span key={tick} aria-hidden className="absolute inset-x-0 h-px" style={{ bottom: `${(tick / top) * 100}%`, background: tick === 0 ? "var(--viz-baseline)" : "var(--viz-grid)" }} />
+              <span key={tick} aria-hidden data-gridline className="absolute inset-x-0 h-px" style={{ bottom: `${(tick / top) * 100}%`, background: tick === 0 ? "var(--viz-baseline)" : "var(--viz-grid)" }} />
             ))}
             <div className="absolute inset-0 flex items-end">
               {points.map((point, index) => (
@@ -92,6 +112,7 @@ export function ColumnChart({
                   onPointerEnter={() => setActive(index)}
                   onPointerDown={() => setActive(index)}
                   data-slot-index={index}
+                  data-active={active === index ? "" : undefined}
                 >
                   <div className="flex w-[70%] max-w-6 min-w-[3px] flex-col-reverse gap-[2px]" style={{ height: `${((totals[index] ?? 0) / top) * 100}%` }}>
                     {series
@@ -99,6 +120,7 @@ export function ColumnChart({
                       .map((item, order, drawn) => (
                         <span
                           key={item.id}
+                          data-mark
                           className={cn("min-h-[2px] w-full", order === drawn.length - 1 && "rounded-t-[4px]")}
                           style={{ flexGrow: point.values[item.id], flexBasis: 0, background: item.color }}
                         />
@@ -107,21 +129,12 @@ export function ColumnChart({
                 </div>
               ))}
             </div>
-            {current && active !== null ? (
-              <ChartTooltip
-                title={current.label}
-                className="top-1"
-                style={tooltipAnchor(active, points.length)}
-                rows={(series.length > 1 ? series.filter((item) => (current.values[item.id] ?? 0) > 0) : series).map((item) => ({
-                  key: item.id,
-                  label: item.label,
-                  value: format(current.values[item.id] ?? 0),
-                  color: series.length > 1 ? item.color : undefined,
-                }))}
-                total={series.length > 1 ? { label: totalLabel, value: format(totals[active] ?? 0) } : undefined}
-              />
-            ) : null}
+            {readout && active !== null ? <ChartTooltip {...readout} className="top-1" style={tooltipAnchor(active, points.length)} /> : null}
           </div>
+          <p id={hintId} className="sr-only">Use the left and right arrow keys to read each column.</p>
+          <p aria-live="polite" className="sr-only" data-chart-readout>
+            {readout ? slotReadout(readout) : ""}
+          </p>
           <div aria-hidden className="relative mt-1.5 h-3.5 text-caption text-text-tertiary">
             {points.map((point, index) =>
               point.tick ? (
@@ -136,6 +149,27 @@ export function ColumnChart({
       </div>
     </div>
   );
+}
+
+/**
+ * Where a key moves the active slot of `count`: the slot to show, `null` to clear, `undefined`
+ * when the key is not the chart's (it then does nothing and is not swallowed). Escape with nothing
+ * active is left alone, so it still closes whatever the chart sits in.
+ */
+export function stepSlot(active: number | null, key: string, count: number): number | null | undefined {
+  if (key === "Escape") return active === null ? undefined : null;
+  if (count === 0) return undefined;
+  if (key === "ArrowRight") return active === null ? 0 : Math.min(count - 1, active + 1);
+  if (key === "ArrowLeft") return active === null ? count - 1 : Math.max(0, active - 1);
+  if (key === "Home") return 0;
+  if (key === "End") return count - 1;
+  return undefined;
+}
+
+/** The readout in one sentence for the live region: "Nov 4: 12 h Staple, 3 h Docs; 15 h Total". */
+export function slotReadout({ title, rows, total }: { title: string; rows: readonly { label: string; value: string }[]; total?: { label: string; value: string } }): string {
+  const parts = rows.length === 1 && !total ? rows[0]!.value : rows.map((row) => `${row.value} ${row.label}`).join(", ");
+  return `${title}: ${parts}${total ? `; ${total.value} ${total.label}` : ""}`;
 }
 
 /** The chart as rows, for the widget's Table switch. */

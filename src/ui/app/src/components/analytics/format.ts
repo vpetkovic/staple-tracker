@@ -20,7 +20,9 @@ export function formatNumber(value: number, digits?: number): string {
 /** Hours as a person says them: "22 min", "1.1 h", "633 h", "2.5 days" past three days. */
 export function formatHours(hours: number): string {
   if (hours < 1 / 60) return "under a minute";
-  if (hours < 1) return `${Math.round(hours * 60)} min`;
+  // 59.5 minutes and up rounds to the hour, so it is said as one: "1 h", never "60 min".
+  const minutes = Math.round(hours * 60);
+  if (minutes < 60) return `${minutes} min`;
   if (hours < 72) return `${formatNumber(hours)} h`;
   return `${formatNumber(hours / 24)} days`;
 }

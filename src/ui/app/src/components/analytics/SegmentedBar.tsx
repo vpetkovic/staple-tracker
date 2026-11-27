@@ -6,7 +6,9 @@
  * Data contract: `parts` in the order to draw, each `{ id, label, value }` with an optional colour;
  * parts at zero draw nothing. Colours default to the categorical slots in order, so use it for at
  * most six parts and fold a tail into "Other" before passing it in. `tone="ordinal"` draws one hue
- * from dark to light for ordered parts (priority).
+ * from dark to light for ordered parts (priority). A share is printed on its block from 9%; every
+ * part's name, amount and share stay in the bar's accessible name, so nothing needs hover. With
+ * every part at zero the name says "nothing to show".
  */
 import { cn } from "@/lib/utils";
 import { seriesColor } from "./chart-parts";
@@ -32,9 +34,10 @@ export function SegmentedBar({ parts, tone = "categorical", format = (value) => 
   const total = drawn.reduce((sum, part) => sum + part.value, 0);
   const colorOf = (part: SegmentPart, index: number) => part.color ?? (tone === "ordinal" ? (ORDINAL[Math.min(index, ORDINAL.length - 1)] as string) : seriesColor(index + 1));
   const summary = drawn.map((part) => `${part.label} ${format(part.value)} (${formatPercent(part.value / total)})`).join(", ");
+  const name = summary ? `${ariaLabel}: ${summary}` : `${ariaLabel}: nothing to show`;
   return (
     <div className={cn("flex min-w-0 flex-col gap-2", className)} data-chart="segments">
-      <div role="img" aria-label={`${ariaLabel}: ${summary}`} className="flex h-7 w-full gap-[2px]">
+      <div role="img" aria-label={name} className="flex h-7 w-full gap-[2px]">
         {drawn.map((part, index) => {
           const share = part.value / total;
           // Ordinal steps 3 and 4 are light: their label is ink, not white.
@@ -42,6 +45,7 @@ export function SegmentedBar({ parts, tone = "categorical", format = (value) => 
           return (
             <span
               key={part.id}
+              data-mark
               title={`${part.label}: ${format(part.value)} (${formatPercent(share)})`}
               className={cn("flex min-w-[3px] items-center overflow-hidden rounded-[4px] px-1.5 text-caption font-semibold", lightBlock ? "text-foreground" : "text-white")}
               style={{ flexGrow: part.value, flexBasis: 0, background: colorOf(part, index) }}
@@ -54,7 +58,7 @@ export function SegmentedBar({ parts, tone = "categorical", format = (value) => 
       <ul className="flex flex-wrap gap-x-4 gap-y-1 text-label text-muted-foreground">
         {drawn.map((part, index) => (
           <li key={part.id} className="inline-flex items-center gap-1.5">
-            <span aria-hidden className="size-2.5 shrink-0 rounded-[3px]" style={{ background: colorOf(part, index) }} />
+            <span aria-hidden data-mark className="size-2.5 shrink-0 rounded-[3px]" style={{ background: colorOf(part, index) }} />
             {part.label}
             <span className="font-medium text-foreground tabular-nums">{format(part.value)}</span>
           </li>

@@ -25,7 +25,7 @@ export function ChartLegend({ series, shape = "rect", className }: { series: rea
     <ul className={cn("flex flex-wrap gap-x-4 gap-y-1 text-label text-muted-foreground", className)} data-chart-legend>
       {series.map((item) => (
         <li key={item.id} className="inline-flex min-w-0 items-center gap-1.5">
-          <span aria-hidden className={cn("shrink-0", shape === "rect" ? "size-2.5 rounded-[3px]" : "h-0.5 w-3 rounded-full")} style={{ background: item.color }} />
+          <span aria-hidden data-mark className={cn("shrink-0", shape === "rect" ? "size-2.5 rounded-[3px]" : "h-0.5 w-3 rounded-full")} style={{ background: item.color }} />
           <span className="truncate">{item.label}</span>
         </li>
       ))}
@@ -33,7 +33,11 @@ export function ChartLegend({ series, shape = "rect", className }: { series: rea
   );
 }
 
-/** The hover and focus readout: a title, then value-first rows. Positioned by the chart. */
+/**
+ * The hover and focus readout: a title, then value-first rows. Positioned by the chart. It is
+ * hidden from assistive technology: the chart says the same readout once through its own live
+ * region, so a screen reader does not hear it twice.
+ */
 export function ChartTooltip({ title, rows, total, className, style }: {
   title: ReactNode;
   rows: readonly { key: string; label: string; value: string; color?: string }[];
@@ -43,7 +47,7 @@ export function ChartTooltip({ title, rows, total, className, style }: {
 }) {
   return (
     <div
-      role="status"
+      aria-hidden
       className={cn("pointer-events-none absolute z-10 min-w-36 rounded-md border bg-popover px-2.5 py-2 text-label text-popover-foreground shadow-md", className)}
       style={style}
       data-chart-tooltip
@@ -52,7 +56,7 @@ export function ChartTooltip({ title, rows, total, className, style }: {
       <ul className="space-y-0.5">
         {rows.map((row) => (
           <li key={row.key} className="flex items-center gap-2 whitespace-nowrap">
-            {row.color ? <span aria-hidden className="h-0.5 w-2.5 shrink-0 rounded-full" style={{ background: row.color }} /> : null}
+            {row.color ? <span aria-hidden data-mark className="h-0.5 w-2.5 shrink-0 rounded-full" style={{ background: row.color }} /> : null}
             <span className="font-semibold tabular-nums">{row.value}</span>
             <span className="text-muted-foreground">{row.label}</span>
           </li>
