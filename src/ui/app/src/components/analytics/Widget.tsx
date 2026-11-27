@@ -8,7 +8,9 @@
  *                                   on the widget whose figure it limits, never in a footnote
  *   help                            "What does this mean?" (the method, in two or three sentences)
  *
- * States replace the body and keep the frame, so a page never jumps when data arrives.
+ * States replace the body and keep the frame, so a page never jumps when data arrives. Loading
+ * is a polite status, empty says its own words, error is an alert with "Try again" when it has an
+ * `onRetry`. Only a ready widget shows the sentence, the Table switch, coverage and help.
  */
 import { CircleDashed, Table2, TriangleAlert } from "lucide-react";
 import { useState, type ReactNode } from "react";

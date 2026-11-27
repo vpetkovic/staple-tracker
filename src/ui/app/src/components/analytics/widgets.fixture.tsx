@@ -5,6 +5,7 @@
  */
 import { createRoot } from "react-dom/client";
 import { BarList } from "./BarList";
+import { BurstCards } from "./BurstCards";
 import { ColumnChart, columnChartTable, type ColumnPoint } from "./ColumnChart";
 import { FeatureTable, type FeatureRow } from "./FeatureTable";
 import { Heatmap } from "./Heatmap";
@@ -32,7 +33,7 @@ const hours = (value: number) => `${value} h`;
 
 function Fixture() {
   return (
-    <main style={{ display: "flex", flexDirection: "column", gap: 16, padding: 16, width: 900 }}>
+    <main style={{ display: "flex", flexDirection: "column", gap: 16, padding: 16, maxWidth: 900 }}>
       <Widget title="Hours per day" sentence="Agents worked 14 hours." table={columnChartTable("Day", series, points)} help="How it is counted." coverage={{ covered: 3, total: 4, noun: "tickets", have: "have an estimate" }}>
         <ColumnChart series={series} points={points} format={hours} ariaLabel="Hours per day: 14 h in total." />
       </Widget>
@@ -46,11 +47,16 @@ function Fixture() {
       <Widget title="What got built">
         <FeatureTable rows={features} onOpen={(ref) => events.push(`open:${ref}`)} />
       </Widget>
+      <Widget title="Waiting" state={{ kind: "loading" }} />
       <Widget title="Broken" state={{ kind: "error", message: "The server said 500.", onRetry: log("retry") }} />
       <Widget title="Marks">
         <SegmentedBar ariaLabel="Attempts" parts={[{ id: "a", label: "Done", value: 7 }, { id: "b", label: "Failed", value: 3 }]} />
         <BarList ariaLabel="By workspace" items={[{ id: "a", label: "Staple", value: 4, text: "4 h" }]} />
         <ReturnRange low={{ value: 0.8, label: "low" }} high={{ value: 3.4, label: "high" }} />
+        <ReturnRange low={{ value: 2.1, label: "low" }} high={{ value: 2.4, label: "high" }} compact />
+      </Widget>
+      <Widget title="Bursts">
+        <BurstCards bursts={[{ from: "2026-11-02", to: "2026-11-06", days: 5, ticketsDone: 84, agentHours: 96, bestDay: { day: "2026-11-04", count: 41 }, features: [{ title: "Analytics page", closed: 6, children: 8 }] }]} />
       </Widget>
     </main>
   );

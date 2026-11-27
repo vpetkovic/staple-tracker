@@ -352,6 +352,7 @@ describe.skipIf(Boolean(reason))("forced colours", () => {
         band: style('[data-chart="return-range"] [data-mark]').backgroundColor,
         trackOutline: style('[data-chart="bars"] [data-track]').outlineStyle,
         gridline: style("[data-gridline]").backgroundColor,
+        canvas: getComputedStyle(document.body).backgroundColor,
         // A fill that is not a mark: the UA repaints it, which is what the marks are kept from.
         sunken: style('[data-slot="skeleton"]').backgroundColor,
       };
@@ -374,7 +375,8 @@ describe.skipIf(Boolean(reason))("forced colours", () => {
       expect(forced.band).toBe(normal?.band);
       expect(normal?.trackOutline).toBe("none");
       expect(forced.trackOutline).toBe("solid");
-      expect(forced.gridline).not.toBe(normal?.gridline);
+      // Repainted as Canvas a gridline would vanish into the page; it is drawn in GrayText.
+      expect(forced.gridline).not.toBe(forced.canvas);
       expect(forced.gridline).not.toBe("rgba(0, 0, 0, 0)");
     });
   });
@@ -403,7 +405,8 @@ describe.skipIf(Boolean(reason))("reduced motion", () => {
   it("stops the skeleton pulse and the tile arrow's nudge, which play otherwise", async () => {
     await withPage(DESK, async (page) => {
       const moving = await motion(page);
-      expect(moving.skeletons.length).toBeGreaterThan(0);
+      // Three in the loading tile, two in the loading widget.
+      expect(moving.skeletons).toHaveLength(5);
       expect(moving.skeletons.every((name) => name !== "none")).toBe(true);
       expect(moving.arrowTransition).not.toBe("0s");
     });

@@ -7,6 +7,7 @@
  * `shipped` in the period, `agentHours` and `spanDays` (null when nothing closed). `onOpen(ref)`
  * makes the title a button. `limit` rows show first; the rest sit behind "Show all".
  * `hideTitles` replaces every title with its reference, for a screen you are about to share.
+ * `spanDays` reads "—", "1 day" or "N days".
  */
 import { CircleCheck } from "lucide-react";
 import { useState } from "react";

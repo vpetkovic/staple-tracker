@@ -9,7 +9,7 @@ import { Heatmap, heatmapTable, stepCell } from "./Heatmap";
 
 const cells = [
   [0, 1, 5],
-  [10, 3, 0],
+  [20, 3, 0],
 ];
 const render = (grid: number[][] = cells) =>
   renderToStaticMarkup(<Heatmap cells={grid} rows={["Mon", "Tue"]} columns={["12a", "", "2a"]} columnNames={["12 am", "1 am", "2 am"]} format={(value) => `${value} tickets`} ariaLabel="Tickets closed by weekday and hour" />);
@@ -17,8 +17,8 @@ const levels = (html: string) => [...html.matchAll(/data-mark="true" class="h-4 
 
 describe("Heatmap", () => {
   it("colours each cell in five steps of the busiest, with zero as the empty step", () => {
-    // 1/10 → 1, 5/10 → 3, 10/10 → 5, 3/10 → 2 (ceil of value / max × 5).
-    expect(levels(render())).toEqual([0, 1, 3, 5, 2, 0]);
+    // Up to the next step, so any count above zero shows: 1/20 → 1, 5/20 → 2, 20/20 → 5, 3/20 → 1.
+    expect(levels(render())).toEqual([0, 1, 2, 5, 1, 0]);
   });
 
   it("draws every cell empty when nothing happened", () => {
@@ -43,7 +43,7 @@ describe("Heatmap", () => {
     const hint = /aria-describedby="([^"]+)"/.exec(grid)?.[1];
     expect(html).toContain(`id="${hint}" class="sr-only">Use the arrow keys to read each hour.`);
     expect(html.match(/tabindex=/g)).toHaveLength(1);
-    expect(html).toContain('<span aria-live="polite" class="tabular-nums">Busiest hour: 10 tickets</span>');
+    expect(html).toContain('<span aria-live="polite" class="tabular-nums">Busiest hour: 20 tickets</span>');
     expect(html).not.toContain("data-active");
   });
 
@@ -52,7 +52,7 @@ describe("Heatmap", () => {
       columns: ["", "12 am", "1 am", "2 am"],
       rows: [
         ["Mon", 0, 1, 5],
-        ["Tue", 10, 3, 0],
+        ["Tue", 20, 3, 0],
       ],
     });
   });

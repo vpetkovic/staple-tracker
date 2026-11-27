@@ -6,7 +6,9 @@
  * Data contract: `parts` in the order to draw, each `{ id, label, value }` with an optional colour;
  * parts at zero draw nothing. Colours default to the categorical slots in order, so use it for at
  * most six parts and fold a tail into "Other" before passing it in. `tone="ordinal"` draws one hue
- * from dark to light for ordered parts (priority).
+ * from dark to light for ordered parts (priority). A share is printed on its block from 9%; every
+ * part's name, amount and share stay in the bar's accessible name, so nothing needs hover. With
+ * every part at zero the name says "nothing to show".
  */
 import { cn } from "@/lib/utils";
 import { seriesColor } from "./chart-parts";

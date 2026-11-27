@@ -12,7 +12,8 @@
  *   onOpen     makes the whole tile a button (the Return tile opens the Return lens)
  *
  * States: `loading` draws the tile's own skeleton; `value: null` is "nothing to measure yet"
- * and says so in words instead of showing 0.
+ * and says so in words instead of showing 0. The delta is toned good or risk by `goodWhen`, not at
+ * all for `neutral`; a change under half a percent says "No change".
  */
 import { ArrowDownRight, ArrowRight, ArrowUpRight, CircleDashed } from "lucide-react";
 import type { ReactNode } from "react";

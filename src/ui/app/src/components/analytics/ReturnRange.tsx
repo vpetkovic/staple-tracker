@@ -8,7 +8,8 @@
  * bar alone, for a stat tile.
  *
  * Data contract: `low` and `high` as `{ value, label }` multiples (either may be null; one end
- * then draws alone) and the `breakEven` multiple (1 by default). It computes nothing.
+ * then draws alone; both null draw nothing) and the `breakEven` multiple (1 by default). Two ends
+ * closer than 14% of the scale are printed once, as a range over their midpoint. It computes nothing.
  */
 import { cn } from "@/lib/utils";
 import { formatMultiple } from "./format";

@@ -5,7 +5,8 @@
  * Data contract: `items` in the order to draw (the caller ranks), each with a `label`, a `value`
  * and the `text` that says the value; `detail` is a quiet second figure on the right. `max`
  * defaults to the largest value. `color` paints a row's bar (a workspace keeps its series colour);
- * without it the bar is the accent.
+ * without it the bar is the accent; a `muted` row is the neutral. A bar above zero is at least 1.5%
+ * wide so it shows; zero draws nothing.
  */
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";

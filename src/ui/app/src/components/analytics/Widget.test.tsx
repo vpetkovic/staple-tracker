@@ -35,8 +35,10 @@ describe("each state draws its own body inside the same frame", () => {
     expect(html).toContain('data-state="loading"');
     expect(html).toContain('role="status"');
     expect(html).toContain("Loading Agent time");
-    expect(html).toContain("min-height:150px");
-    expect(html).toContain("motion-reduce:animate-none");
+    // Held twice: on the body, and on the state's own box so its full-height layout resolves.
+    expect(html.match(/min-height:150px/g)).toHaveLength(2);
+    expect(html.match(/data-slot="skeleton"/g)).toHaveLength(2);
+    expect(html.match(/motion-reduce:animate-none/g)).toHaveLength(2);
     expect(html).not.toContain("data-body");
   });
 
@@ -45,7 +47,7 @@ describe("each state draws its own body inside the same frame", () => {
     expect(html).toContain('data-state="empty"');
     expect(html).toContain("No finished tickets yet");
     expect(html).toContain("Close a ticket to see it here.");
-    expect(html).toContain("min-height:150px");
+    expect(html.match(/min-height:150px/g)).toHaveLength(2);
     expect(html).not.toContain("data-body");
   });
 
@@ -56,6 +58,7 @@ describe("each state draws its own body inside the same frame", () => {
     expect(withRetry).toContain("This could not be loaded");
     expect(withRetry).toContain("The server said 500.");
     expect(withRetry).toContain("Try again");
+    expect(withRetry.match(/min-height:150px/g)).toHaveLength(2);
     expect(withRetry).not.toContain("data-body");
     expect(render({ kind: "error", message: "The server said 500." })).not.toContain("Try again");
   });

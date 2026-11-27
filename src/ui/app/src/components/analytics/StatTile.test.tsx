@@ -16,7 +16,8 @@ describe("the tile's states", () => {
     const html = renderToStaticMarkup(<StatTile label="Agent time" value="633 h" loading />);
     expect(html).toContain('role="status"');
     expect(html).toContain("Loading Agent time");
-    expect(html).toContain("motion-reduce:animate-none");
+    expect(html.match(/data-slot="skeleton"/g)).toHaveLength(3);
+    expect(html.match(/motion-reduce:animate-none/g)).toHaveLength(3);
     expect(html).not.toContain("data-figure");
     expect(html).not.toContain("633 h");
   });
