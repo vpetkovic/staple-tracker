@@ -200,3 +200,28 @@ it("lands a link to a horizon on its section: unfolded for the visit, marked, an
     await close();
   }
 }, 30_000);
+
+it("keeps a landing's unfold per section: another section's fold leaves it, and the control reads the sections as drawn", async () => {
+  const { page, close } = await onHorizons(1600);
+  try {
+    await toolbarControl(page).click();
+    await expect.poll(() => rows(page)).toEqual([]);
+    await page.goto(route(`&ws=larkspur&plan-lens=horizons&focus=${now.identifier}`));
+    await page.locator(`[data-plan-horizon="${now.identifier}"]`).waitFor();
+    await expect.poll(() => rows(page)).toEqual([onNow]);
+    // The landed section is drawn open, so the one control collapses.
+    expect(await toolbarControl(page).innerText()).toBe("Collapse all");
+    // Unfolding and folding another section leaves the landed one open.
+    await page.locator(`[data-plan-horizon-fold="${next.identifier}"]`).click();
+    await expect.poll(() => rows(page)).toEqual([onNow, onNext]);
+    await page.locator(`[data-plan-horizon-fold="${next.identifier}"]`).click();
+    await expect.poll(() => rows(page)).toEqual([onNow]);
+    expect(await page.locator(`[data-plan-horizon-fold="${now.identifier}"]`).getAttribute("aria-expanded")).toBe("true");
+    // Collapse all ends every visit's unfold.
+    await toolbarControl(page).click();
+    await expect.poll(() => rows(page)).toEqual([]);
+    expect(await toolbarControl(page).innerText()).toBe("Expand all");
+  } finally {
+    await close();
+  }
+}, 30_000);

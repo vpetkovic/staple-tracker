@@ -71,6 +71,8 @@ function WorkspacePlan({ workspace, onAuthError }: { workspace: string; onAuthEr
   const [focus, setFocus] = useState<PlanFocus>("all");
   const memory = useRef(loadPlanMemory(workspace));
   const [folded, setFolded] = useState(() => memory.current.folded);
+  // The Horizons sections a link unfolded for this visit, by horizon id; not remembered.
+  const [visit, setVisit] = useState<ReadonlySet<string>>(() => new Set());
   const [lens, setLens] = useState<Lens>(() => {
     const params = new URLSearchParams(window.location.search);
     const sameWorkspace = !params.get("ws") || params.get("ws") === workspace;
@@ -165,8 +167,10 @@ function WorkspacePlan({ workspace, onAuthError }: { workspace: string; onAuthEr
   const selected = session.selection && session.selection.workspace === workspace ? (plan.ideas.find((idea) => idea.id === session.selection!.ref || idea.identifier === session.selection!.ref)?.id ?? null) : null;
   const text = session.filters.text;
   const setText = (next: string) => session.setFilters({ ...session.filters, text: next });
-  // A fold is remembered with the rest; a horizon that is gone takes its fold with it.
+  // A fold is remembered with the rest; a horizon that is gone takes its fold with it. It ends the
+  // visit's unfold of each section it names: one section's own fold, or all of them.
   const fold = (changes: Record<string, boolean>) => {
+    setVisit((current) => new Set([...current].filter((id) => !(id in changes))));
     memory.current.folded = keepFolds(memory.current.folded, changes, [NONE, ...plan.horizons.map((horizon) => horizon.id)]);
     savePlanMemory(workspace, memory.current);
     setFolded(memory.current.folded);
@@ -188,7 +192,7 @@ function WorkspacePlan({ workspace, onAuthError }: { workspace: string; onAuthEr
         tools={
           lens === "horizons" ? (
             <>
-              <FoldAll plan={plan} folded={folded} onFold={fold} filtering={focusing(focus, text)} />
+              <FoldAll plan={plan} folded={folded} visit={visit} onFold={fold} filtering={focusing(focus, text)} />
               <AddHorizon write={write} />
             </>
           ) : null
@@ -213,6 +217,8 @@ function WorkspacePlan({ workspace, onAuthError }: { workspace: string; onAuthEr
           folded={folded}
           onFold={fold}
           landing={session.milestoneFocus}
+          visit={visit}
+          onLand={(id) => setVisit((current) => (current.has(id) ? current : new Set(current).add(id)))}
         />
       </TabsContent>
       </Tabs>

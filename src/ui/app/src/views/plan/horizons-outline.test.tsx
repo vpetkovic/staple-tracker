@@ -333,7 +333,7 @@ describe("dragging to schedule", () => {
 
   it("gives a section that would refuse the drop no highlight", () => {
     const ready = (dragging: IdeaData) => {
-      const lens = { ...lensFor(dragging), onOpen: noop, selected: null, filtering: false, folded: {}, onFold: noop, visit: null, landed: null };
+      const lens = { ...lensFor(dragging), onOpen: noop, selected: null, filtering: false, folded: {}, onFold: noop, visit: new Set<string>(), landed: null };
       return renderToStaticMarkup(<ReadySection lens={lens} column={lens.columns[0]!} />);
     };
     expect(ready(movable)).toMatch(/data-plan-drop="allowed" class="[^"]*shadow-\[inset_0_0_0_2px_var\(--color-ring\)\]/);

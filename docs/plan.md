@@ -201,6 +201,8 @@ the button is held; your folds come back when you clear them.
 
 A task's horizon chip in **Tasks** opens this lens on that horizon: the page scrolls to its
 section, opens it for that visit and outlines it for a moment. Your remembered folds do not change.
+Folding that section closes it again; folding another section leaves it open. **Collapse all**
+counts it as open, and pressing **Collapse all** or **Expand all** applies to every section.
 
 ### How a horizon reads
 

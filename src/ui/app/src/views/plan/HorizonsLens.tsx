@@ -35,8 +35,8 @@ interface LensContext {
   /** The folds the person chose, by horizon id and `NONE`; how one is chosen. */
   folded: Record<string, boolean>;
   onFold: (changes: Record<string, boolean>) => void;
-  /** The horizon a link landed on: unfolded for this visit (`visit`) and marked for a moment (`landed`). */
-  visit: string | null;
+  /** The horizons links landed on, unfolded for this visit (`visit`), and the one marked for a moment (`landed`). */
+  visit: ReadonlySet<string>;
   landed: string | null;
 }
 
@@ -58,11 +58,12 @@ export const NONE = "none";
 const isFolded = (folded: Record<string, boolean>, key: string, done: boolean) => folded[key] ?? done;
 
 /**
- * What Collapse all / Expand all does: collapse while any section that folds is unfolded, else
- * expand, writing the choice for every horizon and Not scheduled. Null when nothing folds.
+ * What Collapse all / Expand all does: collapse while any section that folds is drawn unfolded
+ * (a landing's unfold for the visit counts), else expand, writing the choice for every horizon and
+ * Not scheduled. Null when nothing folds.
  */
-export function foldAll(plan: PlanData, folded: Record<string, boolean>): { collapse: boolean; changes: Record<string, boolean> } | null {
-  const open = plan.horizons.map((horizon) => !isFolded(folded, horizon.id, horizonDone(horizon)));
+export function foldAll(plan: PlanData, folded: Record<string, boolean>, visit: ReadonlySet<string> = new Set()): { collapse: boolean; changes: Record<string, boolean> } | null {
+  const open = plan.horizons.map((horizon) => visit.has(horizon.id) || !isFolded(folded, horizon.id, horizonDone(horizon)));
   // Not scheduled folds only when it has rows; its one quiet line does not.
   if (planTree({ horizonId: null, ideas: plan.ideas, horizons: plan.horizons }).length > 0) open.push(!isFolded(folded, NONE, false));
   if (open.length === 0) return null;
@@ -75,8 +76,22 @@ export function foldAll(plan: PlanData, folded: Record<string, boolean>): { coll
  * its form at the right end of the outline's first line, for the widths where the toolbar has no
  * room: the same words as a small text button, 28px high with a 32px tap.
  */
-export function FoldAll({ plan, folded, onFold, filtering, quiet = false }: { plan: PlanData; folded: Record<string, boolean>; onFold: (changes: Record<string, boolean>) => void; filtering: boolean; quiet?: boolean }) {
-  const choice = foldAll(plan, folded);
+export function FoldAll({
+  plan,
+  folded,
+  visit,
+  onFold,
+  filtering,
+  quiet = false,
+}: {
+  plan: PlanData;
+  folded: Record<string, boolean>;
+  visit?: ReadonlySet<string>;
+  onFold: (changes: Record<string, boolean>) => void;
+  filtering: boolean;
+  quiet?: boolean;
+}) {
+  const choice = foldAll(plan, folded, visit);
   const collapse = choice?.collapse ?? false;
   const Icon = collapse ? ChevronsDownUp : ChevronsUpDown;
   const why = filtering ? "Clear the focus and filter to fold sections" : undefined;
@@ -99,18 +114,20 @@ export function FoldAll({ plan, folded, onFold, filtering, quiet = false }: { pl
   );
 }
 
-export function HorizonsBoard({ plan, write, onOpen, selected, filtering = false, folded = {}, onFold = () => {}, landing = null }: BoardProps) {
+const NO_VISIT: ReadonlySet<string> = new Set();
+
+export function HorizonsBoard({ plan, write, onOpen, selected, filtering = false, folded = {}, onFold = () => {}, landing = null, visit = NO_VISIT, onLand = () => {} }: BoardProps) {
   const columns = lensColumns(plan);
   const [dragging, setDragging] = useState<IdeaData | null>(null);
   // A link to a horizon lands on its section: scrolled to the top, unfolded for the visit without
-  // changing what is remembered, and marked for a moment. A fold the person makes ends the visit's.
+  // changing what is remembered (`visit`, kept by the page with the folds), and marked for a
+  // moment. A fold of a section ends that section's visit unfold; Collapse all / Expand all ends all.
   const target = landing === null ? null : (plan.horizons.find((horizon) => horizon.identifier === landing || horizon.id === landing)?.id ?? null);
-  const [visit, setVisit] = useState<string | null>(null);
   const [landed, setLanded] = useState<string | null>(null);
   const board = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (target === null) return;
-    setVisit(target);
+    onLand(target);
     setLanded(target);
     // After the page has put back the scroll position it remembers for this lens.
     const scroll = window.setTimeout(() => board.current?.querySelector(`[data-plan-column="h:${CSS.escape(target)}"]`)?.scrollIntoView({ block: "start" }), 80);
@@ -119,12 +136,10 @@ export function HorizonsBoard({ plan, write, onOpen, selected, filtering = false
       window.clearTimeout(scroll);
       window.clearTimeout(mark);
     };
+    // Once per landing: `onLand` is a fresh function on every render of the page.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [target]);
-  const fold = (changes: Record<string, boolean>) => {
-    setVisit(null);
-    onFold(changes);
-  };
-  const lens: LensContext = { plan, columns, write, onOpen, selected, filtering, dragging, onDrag: setDragging, folded, onFold: fold, visit, landed };
+  const lens: LensContext = { plan, columns, write, onOpen, selected, filtering, dragging, onDrag: setDragging, folded, onFold, visit, landed };
   return (
     <div className="relative flex h-full min-h-0 flex-col">
       {dragging ? <DropRail lens={lens} /> : null}
@@ -218,7 +233,7 @@ export function ReadySection({ lens, column }: { lens: LensContext; column: Boar
         {/* One line on a phone: the sentence that explains it from 760px, two words under that. */}
         <span className="text-label text-text-tertiary @max-[760px]/plan:hidden">Nothing here. A shaped idea lands here until you give it a horizon.</span>
         <span className="hidden text-label text-text-tertiary @max-[760px]/plan:inline">nothing here</span>
-        <FoldAll plan={lens.plan} folded={lens.folded} onFold={lens.onFold} filtering={lens.filtering} quiet />
+        <FoldAll plan={lens.plan} folded={lens.folded} visit={lens.visit} onFold={lens.onFold} filtering={lens.filtering} quiet />
       </section>
     );
   }
@@ -240,7 +255,7 @@ export function ReadySection({ lens, column }: { lens: LensContext; column: Boar
         <span className="text-label text-text-secondary">
           {waiting} idea{waiting === 1 ? "" : "s"} with no horizon
         </span>
-        <FoldAll plan={lens.plan} folded={lens.folded} onFold={lens.onFold} filtering={lens.filtering} quiet />
+        <FoldAll plan={lens.plan} folded={lens.folded} visit={lens.visit} onFold={lens.onFold} filtering={lens.filtering} quiet />
       </header>
       {folded ? null : <SectionTree lens={lens} column={column} rows={rows} label={title} />}
     </section>
@@ -253,7 +268,7 @@ function HorizonSection({ lens, column }: { lens: LensContext; column: BoardColu
   const rows = planTree({ horizonId: horizon.id, ideas: lens.plan.ideas, horizons: lens.plan.horizons });
   const done = horizonDone(horizon);
   // Never folded while a filter is on, so every match shows; nothing is applied or chosen then.
-  const folded = !lens.filtering && lens.visit !== horizon.id && isFolded(lens.folded, horizon.id, done);
+  const folded = !lens.filtering && !lens.visit.has(horizon.id) && isFolded(lens.folded, horizon.id, done);
   const fold = () => lens.onFold({ [horizon.id]: !folded });
   const { mark, handlers, state } = useDropTarget(lens, column);
   const marked = lens.landed === horizon.id;

@@ -823,8 +823,10 @@ that horizon and `HorizonsBoard` takes it as `landing` (matched against the hori
 id). The lens scrolls that section to the top after the page has restored its remembered scroll
 position, unfolds it for the visit without writing `PlanMemory.folded`, and marks it with a ring
 that fades after 1.6s (no ring with reduced motion): the Milestones outline's landing, so a link to
-a milestone and a link to a horizon behave alike. A fold the person makes ends the visit's unfold.
-Pinned in `test/ui-plan-folds.test.ts`.
+a milestone and a link to a horizon behave alike. The visit's unfolds are per section (`PlanView`
+keeps them beside the folds): folding a section ends only that section's visit unfold, and
+Collapse all / Expand all ends all of them. The control reads the sections as drawn, so a section
+a link unfolded counts as open. Pinned in `test/ui-plan-folds.test.ts`.
 
 **The toolbar** (`PlanBar`) holds the lens tabs with their counts (Ideas: the records the lens
 holds; Horizons: `horizons.length`; Timeline: none), the **Show only** pills, the lens's tools
