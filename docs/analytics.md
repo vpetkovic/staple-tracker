@@ -50,7 +50,7 @@ Under them, four topics. The topic tabs stay at the top while you scroll.
   and planned effort against agent time.
 - **Speed:** how long a ticket takes, the typical time by kind, and the hours of
   the week work lands in.
-- **Reliability:** how attempts ended, and which model family did the work.
+- **Reliability:** how attempts ended, and which model did the work.
 
 Every chart has a table behind the small table button in its corner, and says so
 in words when a figure rests on part of the data (*Partial: 248 of 346 finished
@@ -146,9 +146,10 @@ because estimating habits differ between projects. The same report is
 - **Your time is your figure.** staple does not record a person's hours: directing
   time is the days agents ran, times the hours a day you enter.
 - **AI spend is what you enter.** staple reads no invoices and prices no tokens.
-- **The model is often not logged.** Where an agent's harness did not report its
-  model, the family is read from the agent's name, and the rest is shown as *No
-  model logged*.
+- **The model is often not logged.** Work is grouped by the model each session
+  reported. A session that reported only its tool is shown under the tool
+  (*Claude, model not logged*), and one that reported neither as *No model
+  logged*. Nothing is guessed from the agent's name.
 
 ## Next
 
