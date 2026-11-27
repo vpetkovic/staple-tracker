@@ -11,7 +11,8 @@ import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { reorderQueue } from "@/lib/api";
-import type { QueueView as QueueViewData } from "@/lib/types";
+import type { IssueRow, QueueView as QueueViewData } from "@/lib/types";
+import { row } from "@/components/task-list/fixtures";
 import { describeRefusal } from "@/lib/refusal";
 import { effective, entry, queue, workedExample } from "./fixtures";
 import { planRows, nextEligible, skippedBefore } from "./queue-model";
@@ -31,10 +32,15 @@ function nextOf(view: QueueViewData): NextState {
   return next ? { kind: "pick", row: next, why: whyNext(next, skippedBefore(view.effective, next), view.entries.length > 0) } : { kind: "empty" };
 }
 
-function renderSection(view: QueueViewData = workedExample(), over: Partial<SectionBodyProps> = {}, folds: SectionFolds = NO_FOLDS): string {
+function renderSection(
+  view: QueueViewData = workedExample(),
+  over: Partial<SectionBodyProps> = {},
+  folds: SectionFolds = NO_FOLDS,
+  known: ReadonlyMap<string, IssueRow> = new Map(),
+): string {
   const rows = planRows(view, [], "staple");
   const next = nextEligible(view.effective);
-  const layout = sectionLayout({ workspace: "staple", view, rows, unqueued: view.effective.filter((row) => row.unqueued), next, known: new Map() }, folds);
+  const layout = sectionLayout({ workspace: "staple", view, rows, unqueued: view.effective.filter((row) => row.unqueued), next, known }, folds);
   return renderToStaticMarkup(
     <SectionBody
       workspace="staple"
@@ -95,8 +101,9 @@ describe("a plan entry", () => {
   });
 
   it("rolls a container up into a meter and counts, with a fold arrow that says it is open", () => {
-    expect(html).toMatch(/<div[^>]*aria-expanded="true"[^>]*data-queue-entry="STA-66"/);
-    expect(html).toContain('aria-label="Fold STA-66"');
+    expect(html).toMatch(/aria-label="Fold STA-66" aria-expanded="true"/);
+    // The fold arrow says it, not the list item: a listitem takes no aria-expanded.
+    expect(html).not.toMatch(/role="listitem"[^>]*aria-expanded/);
     expect(html).toContain("3 tasks</span><span> · <b>1</b> ready");
     expect(html).toMatch(/class="q-meter q-meter-sm" role="img" aria-label="1 ready, 2 waiting"/);
   });
@@ -121,6 +128,142 @@ describe("a plan entry", () => {
 
   it("makes the handles inert while a write is in flight", () => {
     expect(renderSection(workedExample(), { busy: true })).toMatch(/aria-disabled="true"[^>]*data-queue-handle="STA-146"/);
+  });
+});
+
+/** Element nodes of static markup: enough of a parser for what react-dom/server writes. */
+interface Node {
+  tag: string;
+  attrs: string;
+  children: Array<Node | string>;
+}
+
+function parse(html: string): Node {
+  const root: Node = { tag: "#root", attrs: "", children: [] };
+  const stack = [root];
+  const VOID = new Set(["input", "br", "img", "hr", "meta", "link"]);
+  for (const token of html.split(/(<[^>]+>)/)) {
+    if (token === "") continue;
+    const top = stack.at(-1)!;
+    const tag = /^<(\/?)([a-zA-Z][\w-]*)([^>]*)>$/.exec(token);
+    if (!tag) {
+      top.children.push(token);
+      continue;
+    }
+    if (tag[1]) {
+      stack.pop();
+      continue;
+    }
+    const node: Node = { tag: tag[2]!, attrs: tag[3]!, children: [] };
+    top.children.push(node);
+    if (!VOID.has(node.tag) && !tag[3]!.endsWith("/")) stack.push(node);
+  }
+  return root;
+}
+
+const attr = (node: Node, name: string) => new RegExp(`\\s${name}="([^"]*)"`).exec(node.attrs)?.[1];
+
+/** Every role="list" in the markup, and what it holds that is not a list item. */
+function strayListChildren(html: string): string[] {
+  const stray: string[] = [];
+  const check = (child: Node | string, list: Node) => {
+    if (typeof child === "string") {
+      if (child.trim()) stray.push(`text "${child.trim()}" in ${attr(list, "aria-label")}`);
+      return;
+    }
+    if (attr(child, "aria-hidden") === "true" || attr(child, "role") === "listitem") return;
+    if (["none", "presentation"].includes(attr(child, "role") ?? "")) {
+      for (const inner of child.children) check(inner, list);
+      return;
+    }
+    stray.push(`<${child.tag}${child.attrs}>`);
+  };
+  const walk = (node: Node) => {
+    if (attr(node, "role") === "list") for (const child of node.children) check(child, node);
+    for (const child of node.children) if (typeof child !== "string") walk(child);
+  };
+  walk(parse(html));
+  return stray;
+}
+
+describe("the list's structure", () => {
+  it("holds only list items, with the wrappers and the drop line out of the way", () => {
+    const view = workedExample();
+    view.entries[1] = { ...view.entries[1]!, note: "do this before the release" };
+    const many = queue({
+      entries: [entry({ identifier: "EXE-234", kind: "milestone", note: "the release" })],
+      effective: Array.from({ length: 8 }, (_, i) => effective({ identifier: `EXE-${300 + i}`, position: i + 1, via: "EXE-234", milestonePath: ["EXE-234"], epicPath: ["EXE-299"] })),
+    });
+    const drag = { from: 0, lineTop: 40, handleProps: () => ({ onPointerDown: noop, onPointerMove: noop, onPointerUp: noop, onPointerCancel: noop }) };
+    const caption = new Map([["EXE-299", row({ identifier: "EXE-299", title: "Payments", kind: "epic" })]]);
+    for (const html of [renderSection(view, { drag }), renderSection(many, { drag }, NO_FOLDS, caption)]) {
+      expect(html).toContain("q-dropline");
+      expect(strayListChildren(html)).toEqual([]);
+    }
+    const band = queue({ entries: [], effective: Array.from({ length: 12 }, (_, i) => effective({ identifier: `STA-${50 + i}`, position: 1 + i, unqueued: true })) });
+    expect(strayListChildren(renderSection(band, {}, { ...NO_FOLDS, bandOpen: true }))).toEqual([]);
+    expect(renderSection(many)).toMatch(/role="listitem"[^>]*class="q-moreline"|class="q-moreline"[^>]*role="listitem"/);
+  });
+});
+
+describe("what a screen reader hears for a row", () => {
+  const html = renderSection();
+  const label = (marker: string, id: string) => new RegExp(`aria-label="([^"]*)"[^>]*${marker}="${id}"`).exec(html)?.[1]?.replace(/&#x27;/g, "'");
+
+  it("says a plan entry's state after its number, reference and title", () => {
+    expect(label("data-queue-entry", "STA-31")).toBe("1. STA-31 A1: characterize current product contracts, Done");
+    expect(label("data-queue-entry", "STA-146")).toBe("3. STA-146 Flaky under full-suite load, Ready");
+  });
+
+  it("gives a container its roll-up", () => {
+    expect(label("data-queue-entry", "STA-66")).toBe("2. STA-66 S: opt-in cloud continuity, 3 tasks, 1 ready");
+  });
+
+  it("says what a task under an entry waits on, and which row is the next pick", () => {
+    expect(label("data-queue-tree-row", "STA-68")).toBe("#3 STA-68 S2: add clone-safe repository identity, Waiting on STA-35, STA-67");
+    expect(label("data-queue-tree-row", "STA-67")).toBe("#2 STA-67 S1: specify the local-first sync, Ready, next pick");
+  });
+
+  it("says who works a claimed task", () => {
+    const held = queue({
+      entries: [entry({ identifier: "STA-1", kind: "epic" })],
+      effective: [effective({ identifier: "STA-2", via: "STA-1", status: "in_progress", eligibility: "claimed", detail: { heldBy: "codex-1", idleSeconds: 240 } })],
+    });
+    expect(renderSection(held)).toContain('aria-label="#1 STA-2 STA-2 title, Working, codex-1"');
+  });
+
+  it("calls a plan entry that is the next pick by that name", () => {
+    const one = queue({ entries: [entry({ identifier: "STA-5" })], effective: [effective({ identifier: "STA-5" })] });
+    expect(renderSection(one)).toContain('aria-label="1. STA-5 STA-5 title, Ready, next pick"');
+  });
+
+  it("says where the order already reached an entry", () => {
+    const view = queue({
+      entries: [entry({ identifier: "EXE-234", kind: "milestone", planPosition: 1 }), entry({ identifier: "EXE-96", planPosition: 2 })],
+      effective: [effective({ identifier: "EXE-96", position: 76, via: "EXE-234", milestonePath: ["EXE-234"] })],
+    });
+    expect(renderSection(view, {}, { ...NO_FOLDS, containersOpen: false })).toContain('aria-label="2. EXE-96 EXE-96 title, Already in the order at #76, inside EXE-234"');
+  });
+});
+
+describe("the links in the state column", () => {
+  it("are in the tab order on the row that holds the tab stop, and out of it elsewhere", () => {
+    const idle = renderSection();
+    expect(idle).toMatch(/tabindex="-1" data-queue-jump="STA-35"/);
+    expect(idle).not.toMatch(/tabindex="0" data-queue-jump=/);
+    const active = renderSection(workedExample(), { activeKey: "staple|nested|STA-68" });
+    expect(active).toMatch(/tabindex="0" data-queue-jump="STA-35"/);
+    expect(active).toMatch(/tabindex="0" data-queue-jump="STA-67"/);
+  });
+
+  it("follow the tab stop to an entry the order already reached", () => {
+    const view = queue({
+      entries: [entry({ identifier: "EXE-234", kind: "milestone", planPosition: 1 }), entry({ identifier: "EXE-96", planPosition: 2 })],
+      effective: [effective({ identifier: "EXE-96", position: 76, via: "EXE-234", milestonePath: ["EXE-234"] })],
+    });
+    const folds = { ...NO_FOLDS, containersOpen: false };
+    expect(renderSection(view, {}, folds)).toMatch(/tabindex="-1"[^>]*data-queue-jump="EXE-96"/);
+    expect(renderSection(view, { activeKey: "staple|entry|EXE-96" }, folds)).toMatch(/tabindex="0"[^>]*data-queue-jump="EXE-96"/);
   });
 });
 

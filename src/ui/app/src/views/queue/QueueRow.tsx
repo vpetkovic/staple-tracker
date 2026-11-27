@@ -14,6 +14,7 @@ import { StatusIcon } from "@/components/task-list/StatusIcon";
 import type { EffectiveQueueRow, IssueKind } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import type { CaptionLine, EntryBlock, TaskLine } from "./queue-lines";
+import type { PlanRow } from "./queue-model";
 import { PROGRESS_COLOR } from "@/views/progress-palette";
 import { countParts, countsOf, coveredWords, rollUp, rowState, type Counts, type RowState } from "./queue-words";
 import type { EntryDrag } from "./queue-drag";
@@ -59,12 +60,15 @@ export function Meter({ counts, small = false }: { counts: Counts; small?: boole
   );
 }
 
-/** A reference that jumps to its row when the row is on the page, and opens the task otherwise. */
-function JumpLink({ identifier, onJump }: { identifier: string; onJump: (identifier: string) => void }) {
+/**
+ * A reference that jumps to its row when the row is on the page, and opens the task otherwise.
+ * In the tab order only on the row that holds the list's tab stop, like the row's ⋯.
+ */
+function JumpLink({ identifier, tabIndex, onJump }: { identifier: string; tabIndex: number; onJump: (identifier: string) => void }) {
   return (
     <button
       type="button"
-      tabIndex={-1}
+      tabIndex={tabIndex}
       data-queue-jump={identifier}
       className="q-link"
       onClick={(event) => {
@@ -82,11 +86,14 @@ export function StateCell({
   state,
   identifier,
   eligibility,
+  tabIndex,
   onJump,
 }: {
   state: RowState;
   identifier: string;
   eligibility: EffectiveQueueRow["eligibility"];
+  /** The row's own tab index, for the links in the words. */
+  tabIndex: number;
   onJump: (identifier: string) => void;
 }) {
   return (
@@ -105,7 +112,7 @@ export function StateCell({
             {state.blockers.map((blocker, i) => (
               <span key={blocker}>
                 {i > 0 ? ", " : null}
-                <JumpLink identifier={blocker} onJump={onJump} />
+                <JumpLink identifier={blocker} tabIndex={tabIndex} onJump={onJump} />
               </span>
             ))}
           </>
@@ -145,8 +152,28 @@ function RollUpWords({ text }: { text: string }) {
   );
 }
 
+/** A leaf entry's own state: its row's, or Done or Nothing open inside when the order holds no row for it. */
+function leafState(plan: PlanRow): { state: RowState; eligibility: EffectiveQueueRow["eligibility"] } {
+  if (plan.effective) return { state: rowState(plan.effective), eligibility: plan.effective.eligibility };
+  return plan.entry.resolved
+    ? { state: { tone: "done", words: "Done" }, eligibility: "resolved" }
+    : { state: { tone: "waiting", words: "Nothing open inside" }, eligibility: "unavailable" };
+}
+
+/** What a row's state column says, as one spoken phrase: "Working · fable" → "Working, fable". */
+function spoken(words: string): string {
+  return words.split(" · ").join(", ");
+}
+
+/** The words of an entry's state column, whichever shape it takes. */
+function entryWords(block: EntryBlock): string {
+  if (block.container) return rollUp(block.plan.expansion);
+  if (block.covered) return coveredWords(block.covered);
+  return leafState(block.plan).state.words;
+}
+
 /** A plan entry's state: a container's roll-up, an entry the order already reached, or its own row's state. */
-function EntryState({ block, onJump }: { block: EntryBlock; onJump: (identifier: string) => void }) {
+function EntryState({ block, tabIndex, onJump }: { block: EntryBlock; tabIndex: number; onJump: (identifier: string) => void }) {
   const { plan } = block;
   const identifier = plan.entry.identifier;
   if (block.container) {
@@ -173,7 +200,7 @@ function EntryState({ block, onJump }: { block: EntryBlock; onJump: (identifier:
           Already in the order at #{block.covered.position}, inside{" "}
           <button
             type="button"
-            tabIndex={-1}
+            tabIndex={tabIndex}
             className="q-link"
             data-queue-jump={block.covered.identifier}
             onClick={(event) => {
@@ -187,11 +214,8 @@ function EntryState({ block, onJump }: { block: EntryBlock; onJump: (identifier:
       </span>
     );
   }
-  if (plan.effective) {
-    return <StateCell state={rowState(plan.effective)} identifier={identifier} eligibility={plan.effective.eligibility} onJump={onJump} />;
-  }
-  const state: RowState = plan.entry.resolved ? { tone: "done", words: "Done" } : { tone: "waiting", words: "Nothing open inside" };
-  return <StateCell state={state} identifier={identifier} eligibility={plan.entry.resolved ? "resolved" : "unavailable"} onJump={onJump} />;
+  const { state, eligibility } = leafState(plan);
+  return <StateCell state={state} identifier={identifier} eligibility={eligibility} tabIndex={tabIndex} onJump={onJump} />;
 }
 
 /**
@@ -265,8 +289,7 @@ export function EntryRow({
       ref={wiring.rowRef}
       tabIndex={tabIndex}
       aria-busy={pending || undefined}
-      aria-expanded={block.container ? block.open : undefined}
-      aria-label={`${entry.planPosition}. ${identifier} ${entry.title}`}
+      aria-label={`${entry.planPosition}. ${identifier} ${entry.title}, ${spoken(entryWords(block))}${block.isNext ? ", next pick" : ""}`}
       data-queue-entry={identifier}
       data-queue-row={block.key}
       data-identifier={identifier}
@@ -322,16 +345,16 @@ export function EntryRow({
           {entry.title}
         </span>
       </span>
-      <EntryState block={block} onJump={wiring.onJump} />
+      <EntryState block={block} tabIndex={tabIndex} onJump={wiring.onJump} />
       <span className="q-actions">{wiring.menu(identifier, menuTrigger(identifier, tabIndex))}</span>
     </div>
   );
 }
 
-/** An entry's note: a 12px line under its row. */
+/** An entry's note: a 12px line under its row, an item of the list in its own right. */
 export function EntryNote({ note }: { note: string }) {
   return (
-    <div data-queue-note className="q-note">
+    <div role="listitem" data-queue-note className="q-note">
       {note}
     </div>
   );
@@ -356,12 +379,13 @@ export function TaskRow({
   const claimed = row.eligibility === "claimed";
   const resolved = row.eligibility === "resolved";
   const ordinal = place === "nested" && !resolved && !row.unqueued ? `#${row.position}` : null;
+  const state = rowState(row);
   return (
     <div
       role="listitem"
       ref={wiring.rowRef}
       tabIndex={tabIndex}
-      aria-label={`${ordinal ? `${ordinal} ` : ""}${identifier} ${row.title}`}
+      aria-label={`${ordinal ? `${ordinal} ` : ""}${identifier} ${row.title}, ${spoken(state.words)}${line.isNext ? ", next pick" : ""}`}
       data-queue-tree-row={identifier}
       data-queue-row={line.key}
       data-identifier={identifier}
@@ -385,7 +409,7 @@ export function TaskRow({
           {row.title}
         </span>
       </span>
-      <StateCell state={rowState(row)} identifier={identifier} eligibility={row.eligibility} onJump={wiring.onJump} />
+      <StateCell state={state} identifier={identifier} eligibility={row.eligibility} tabIndex={tabIndex} onJump={wiring.onJump} />
       <span className="q-actions">
         {onAdd ? (
           <button
@@ -413,7 +437,13 @@ export function TaskRow({
 /** An epic between a plan entry and its tasks: context, not a row to act on. */
 export function CaptionRow({ line }: { line: CaptionLine }) {
   return (
-    <div className="q-row q-caption" data-child="" data-queue-caption={line.identifier} aria-hidden={line.title ? undefined : true}>
+    <div
+      role={line.title ? "listitem" : undefined}
+      className="q-row q-caption"
+      data-child=""
+      data-queue-caption={line.identifier}
+      aria-hidden={line.title ? undefined : true}
+    >
       <span />
       <span className="q-main">
         <span className="q-lead" />
@@ -435,6 +465,7 @@ export function MoreRow({
   page,
   whole,
   inside,
+  item = false,
   onToggle,
   marker,
 }: {
@@ -442,11 +473,17 @@ export function MoreRow({
   page: number;
   whole: boolean;
   inside?: string;
+  /** It sits in a list, as one of its items. */
+  item?: boolean;
   onToggle: () => void;
   marker: Record<string, string>;
 }) {
   return (
-    <div className="q-moreline" {...marker}>
+    <div
+      role={item ? "listitem" : undefined}
+      className="q-moreline"
+      {...marker}
+    >
       {whole ? null : <span>{inside ? `${total - page} more in ${inside}` : `${total - page} more`}</span>}
       <button type="button" className="q-textbtn" onClick={onToggle}>
         {whole ? `Show the first ${page} only` : `Show all ${total}`}

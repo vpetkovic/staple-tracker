@@ -76,7 +76,7 @@ export function SectionBody(props: SectionBodyProps) {
       ) : (
         <div role="list" aria-label={`${workspace}'s plan`} ref={props.listRef} className="q-list" data-queue-list={workspace}>
           {layout.entries.map((block) => (
-            <div key={block.key} data-queue-entry-block={block.plan.entry.identifier}>
+            <div key={block.key} role="none" data-queue-entry-block={block.plan.entry.identifier}>
               <EntryRow
                 block={block}
                 wiring={wiring(block.key, "entry")}
@@ -89,7 +89,7 @@ export function SectionBody(props: SectionBodyProps) {
               />
               {block.plan.entry.note ? <EntryNote note={block.plan.entry.note} /> : null}
               {block.open ? (
-                <div data-queue-expansion={block.plan.entry.identifier}>
+                <div role="none" data-queue-expansion={block.plan.entry.identifier}>
                   {block.children.map((line) =>
                     line.kind === "caption" ? (
                       <CaptionRow key={line.key} line={line} />
@@ -101,6 +101,7 @@ export function SectionBody(props: SectionBodyProps) {
                     <MoreRow
                       {...block.more}
                       inside={block.plan.entry.identifier}
+                      item
                       onToggle={() => props.onWhole(block.plan.entry.identifier)}
                       marker={{ "data-queue-expansion-more": block.plan.entry.identifier }}
                     />
@@ -109,7 +110,7 @@ export function SectionBody(props: SectionBodyProps) {
               ) : null}
             </div>
           ))}
-          {props.drag?.lineTop != null ? <div className="q-dropline" style={{ top: props.drag.lineTop }} aria-hidden /> : null}
+          {props.drag?.lineTop != null ? <div role="presentation" className="q-dropline" style={{ top: props.drag.lineTop }} aria-hidden /> : null}
         </div>
       )}
       {layout.band ? (
