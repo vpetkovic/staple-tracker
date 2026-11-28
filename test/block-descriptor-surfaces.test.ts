@@ -42,6 +42,7 @@ describe("update_task and the unblock descriptor", () => {
     ["an owner without an action", { status: "blocked", unblock_owner: "ops" }, ["unblockAction"]],
     ["a blank owner", { unblock_owner: " ", unblock_action: "decide" }, ["unblockOwner"]],
     ["one half cleared", { unblock_action: null }, ["unblockOwner", "unblockAction"]],
+    ["both halves cleared while still blocked", { unblock_owner: null, unblock_action: null }, ["unblockOwner", "unblockAction"]],
   ])("refuses %s as validation and keeps the descriptor", async (label, patch, fields) => {
     const t = await mcpCall("create_task", { title: `Waits on a person: ${label}` });
     await mcpCall("update_task", { ref: t.identifier, status: "blocked", unblock_owner: "vp", unblock_action: "approve" });
@@ -52,11 +53,12 @@ describe("update_task and the unblock descriptor", () => {
     expect(shown.issue).toMatchObject({ status: "blocked", unblockOwner: "vp", unblockAction: "approve" });
   });
 
-  it("sets both together and clears both together", async () => {
+  it("replaces both together, and the descriptor clears when the ticket leaves blocked", async () => {
     const t = await mcpCall("create_task", { title: "Changes hands" });
-    const set = await mcpCall("update_task", { ref: t.identifier, status: "blocked", unblock_owner: "ops", unblock_action: "grant access" });
-    expect(set).toMatchObject({ unblockOwner: "ops", unblockAction: "grant access" });
-    const cleared = await mcpCall("update_task", { ref: t.identifier, unblock_owner: null, unblock_action: null });
-    expect(cleared).toMatchObject({ status: "blocked", unblockOwner: null, unblockAction: null });
+    await mcpCall("update_task", { ref: t.identifier, status: "blocked", unblock_owner: "vp", unblock_action: "approve" });
+    const set = await mcpCall("update_task", { ref: t.identifier, unblock_owner: "ops", unblock_action: "grant access" });
+    expect(set).toMatchObject({ status: "blocked", unblockOwner: "ops", unblockAction: "grant access" });
+    const left = await mcpCall("update_task", { ref: t.identifier, status: "todo" });
+    expect(left).toMatchObject({ unblockOwner: null, unblockAction: null });
   });
 });

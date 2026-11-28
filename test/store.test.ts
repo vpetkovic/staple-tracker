@@ -196,17 +196,17 @@ describe("status guards", () => {
       ).toThrowError(/unblockOwner/);
     });
 
-    it("replaces both halves together, trimmed, and clears both together", () => {
+    it("replaces both halves together, trimmed, and clears them only by leaving blocked", () => {
       const issue = blockedWithDescriptor();
       expect(store.updateIssue(issue.id, { unblockOwner: " ops ", unblockAction: " grant access " })).toMatchObject({
         unblockOwner: "ops",
         unblockAction: "grant access",
       });
-      expect(store.updateIssue(issue.id, { unblockOwner: null, unblockAction: null })).toMatchObject({
-        status: "blocked",
-        unblockOwner: null,
-        unblockAction: null,
-      });
+      expect(() => store.updateIssue(issue.id, { unblockOwner: null, unblockAction: null })).toThrowError(
+        /unblockOwner and unblockAction/,
+      );
+      expect(store.getIssue(issue.id)).toMatchObject({ unblockOwner: "ops", unblockAction: "grant access" });
+      expect(store.updateIssue(issue.id, { status: "todo" })).toMatchObject({ unblockOwner: null, unblockAction: null });
     });
   });
 

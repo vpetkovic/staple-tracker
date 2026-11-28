@@ -980,19 +980,18 @@ function assertIdleThreshold(value: number | undefined, name: string): number | 
 
 /**
  * The unblock descriptor says who must act and what they must do, so it is written whole or
- * not at all. A write that names either half names both, non-blank (stored trimmed), or on an
- * update clears both with null. Half of one used to land as `? must act`, and a blank owner
- * over a full descriptor kept the old action under nobody.
+ * not at all: a write that names either half names both, non-blank (stored trimmed). Null is
+ * as missing as blank; the descriptor clears when the ticket leaves the blocked category.
+ * Half of one used to land as `? must act`, and a blank owner over a full descriptor kept the
+ * old action under nobody.
  *
  * Undefined when the write leaves the descriptor alone.
  */
 function wholeUnblockDescriptor(
   owner: string | null | undefined,
   action: string | null | undefined,
-  write: "create" | "update",
-): { owner: string | null; action: string | null } | undefined {
+): { owner: string; action: string } | undefined {
   if (owner === undefined && action === undefined) return undefined;
-  if (write === "update" && owner === null && action === null) return { owner: null, action: null };
   const missing = [
     typeof owner === "string" && owner.trim() !== "" ? null : "unblockOwner",
     typeof action === "string" && action.trim() !== "" ? null : "unblockAction",
@@ -1000,7 +999,7 @@ function wholeUnblockDescriptor(
   if (missing.length > 0) {
     throw new StapleError(
       "validation",
-      `an unblock descriptor needs a non-blank ${missing.join(" and ")}: give unblockOwner and unblockAction together${write === "update" ? ", or clear both with null" : ""}`,
+      `an unblock descriptor needs a non-blank ${missing.join(" and ")}: give unblockOwner and unblockAction together`,
       { fields: missing },
     );
   }
@@ -2956,10 +2955,10 @@ export class WorkspaceStore {
     if ((input.unblockOwner || input.unblockAction) && statusCategory !== "blocked") {
       throw new StapleError("validation", "unblockOwner/unblockAction require a status in the \"blocked\" category");
     }
-    // On a create, null is as good as absent: there is no descriptor yet to clear.
+    // On a create, null is as good as absent: there is no descriptor yet to replace.
     const descriptor =
       statusCategory === "blocked"
-        ? wholeUnblockDescriptor(input.unblockOwner ?? undefined, input.unblockAction ?? undefined, "create")
+        ? wholeUnblockDescriptor(input.unblockOwner ?? undefined, input.unblockAction ?? undefined)
         : undefined;
 
     return this.journaled(() => {
@@ -5375,7 +5374,7 @@ export class WorkspaceStore {
           "unblockOwner/unblockAction require a status in the \"blocked\" category",
         );
       }
-      const descriptor = wholeUnblockDescriptor(patch.unblockOwner, patch.unblockAction, "update");
+      const descriptor = wholeUnblockDescriptor(patch.unblockOwner, patch.unblockAction);
 
       if (statusChanging) {
         /**
