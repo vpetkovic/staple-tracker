@@ -390,7 +390,7 @@ describe("STA-98 rungs are reports too — a derived epic still has no stopwatch
     // them the epic's own work.
     const epic = store.createIssue({ title: "Epic" });
     const child = store.createChild(epic.id, { title: "Child" });
-    store.updateIssue(child.id, { status: "blocked", unblockOwner: "VP" }, "agent-a");
+    store.updateIssue(child.id, { status: "blocked", unblockOwner: "VP", unblockAction: "decide" }, "agent-a");
     expect(store.getIssue(epic.id).status).toBe("blocked");
     store.updateIssue(child.id, { status: "todo" }, "agent-a");
     expect(store.getIssue(epic.id).status).toBe("backlog");

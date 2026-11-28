@@ -978,6 +978,35 @@ function assertIdleThreshold(value: number | undefined, name: string): number | 
   return value;
 }
 
+/**
+ * The unblock descriptor says who must act and what they must do, so it is written whole or
+ * not at all. A write that names either half names both, non-blank (stored trimmed), or on an
+ * update clears both with null. Half of one used to land as `? must act`, and a blank owner
+ * over a full descriptor kept the old action under nobody.
+ *
+ * Undefined when the write leaves the descriptor alone.
+ */
+function wholeUnblockDescriptor(
+  owner: string | null | undefined,
+  action: string | null | undefined,
+  write: "create" | "update",
+): { owner: string | null; action: string | null } | undefined {
+  if (owner === undefined && action === undefined) return undefined;
+  if (write === "update" && owner === null && action === null) return { owner: null, action: null };
+  const missing = [
+    typeof owner === "string" && owner.trim() !== "" ? null : "unblockOwner",
+    typeof action === "string" && action.trim() !== "" ? null : "unblockAction",
+  ].filter((name) => name !== null);
+  if (missing.length > 0) {
+    throw new StapleError(
+      "validation",
+      `an unblock descriptor needs a non-blank ${missing.join(" and ")}: give unblockOwner and unblockAction together${write === "update" ? ", or clear both with null" : ""}`,
+      { fields: missing },
+    );
+  }
+  return { owner: owner!.trim(), action: action!.trim() };
+}
+
 /** The filters of {@link WorkspaceStore.calibration}. */
 export interface CalibrationQuery extends PageRequest {
   readonly kind?: readonly string[];
@@ -2910,6 +2939,11 @@ export class WorkspaceStore {
     if ((input.unblockOwner || input.unblockAction) && statusCategory !== "blocked") {
       throw new StapleError("validation", "unblockOwner/unblockAction require a status in the \"blocked\" category");
     }
+    // On a create, null is as good as absent: there is no descriptor yet to clear.
+    const descriptor =
+      statusCategory === "blocked"
+        ? wholeUnblockDescriptor(input.unblockOwner ?? undefined, input.unblockAction ?? undefined, "create")
+        : undefined;
 
     return this.journaled(() => {
       // The project is resolved INSIDE the transaction, first, so the lookup and the
@@ -2996,8 +3030,8 @@ export class WorkspaceStore {
           JSON.stringify(input.labels ?? []),
           input.acceptanceCriteria ? JSON.stringify(input.acceptanceCriteria) : null,
           input.blockParentUntilDone ? 1 : 0,
-          statusCategory === "blocked" ? (input.unblockOwner ?? null) : null,
-          statusCategory === "blocked" ? (input.unblockAction ?? null) : null,
+          descriptor?.owner ?? null,
+          descriptor?.action ?? null,
           originKind,
           originId,
           input.idempotencyKey ?? null,
@@ -5327,6 +5361,7 @@ export class WorkspaceStore {
           "unblockOwner/unblockAction require a status in the \"blocked\" category",
         );
       }
+      const descriptor = wholeUnblockDescriptor(patch.unblockOwner, patch.unblockAction, "update");
 
       if (statusChanging) {
         /**
@@ -5384,8 +5419,10 @@ export class WorkspaceStore {
         if (categoryAfter === "cancelled") next.cancelled_at = now;
         if (categoryAfter === "blocked") {
           next.blocked_transition_at = now;
-          if (patch.unblockOwner !== undefined) next.unblock_owner = patch.unblockOwner;
-          if (patch.unblockAction !== undefined) next.unblock_action = patch.unblockAction;
+          if (descriptor) {
+            next.unblock_owner = descriptor.owner;
+            next.unblock_action = descriptor.action;
+          }
         }
         if (categoryBefore === "blocked" && categoryAfter !== "blocked") {
           next.unblock_owner = null;
@@ -5398,9 +5435,9 @@ export class WorkspaceStore {
         }
         next.status = patch.status;
         next.status_version = row.status_version + 1;
-      } else if (categoryAfter === "blocked") {
-        if (patch.unblockOwner !== undefined) next.unblock_owner = patch.unblockOwner;
-        if (patch.unblockAction !== undefined) next.unblock_action = patch.unblockAction;
+      } else if (categoryAfter === "blocked" && descriptor) {
+        next.unblock_owner = descriptor.owner;
+        next.unblock_action = descriptor.action;
       }
 
       const columns = Object.keys(next);

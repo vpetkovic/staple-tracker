@@ -1199,7 +1199,8 @@ Execution attempts (one agent's tenure on one issue; opened and ended by the ver
   --ack-renumber  on any write: a number sync renumbered on this device is refused
               while the issue that left it is checked out, leased here, or moved
               under a day ago — this writes to whatever holds it now. Or use the id
-  block <ref> --owner O --action TEXT   mark blocked with an unblock descriptor
+  block <ref> --owner O --action TEXT   mark blocked with an unblock descriptor; both
+              are required and non-blank (exit 2 otherwise), and a re-run replaces both
   blocked-by <ref> R1,R2 | --none       replace the dependency set; only --none clears
               it, and a missing or empty list is refused (exit 2)
   criteria <ref> [--set "a;b" | --clear | --rm 2,3 --add "c"] [--agent A]
@@ -2279,6 +2280,18 @@ function main() {
         options: { ...common, owner: { type: "string" }, action: { type: "string" } },
       });
       const ref = requireRef(positionals[0], "block");
+      // Both halves, every time: a block says who must act and what they must do, and a
+      // re-run replaces the whole descriptor. Refused before anything is read or written.
+      const missing = [
+        values.owner?.trim() ? null : "--owner",
+        values.action?.trim() ? null : "--action",
+      ].filter((flag) => flag !== null);
+      if (missing.length > 0) {
+        throw new StapleError(
+          "validation",
+          `staple block needs a non-blank ${missing.join(" and ")}: staple block <ref> --owner O --action TEXT.`,
+        );
+      }
       const { store } = getStore(values);
       assertHandoffStatus(store, ref, "blocked", agentName());
       const issue = store.updateIssue(
@@ -2290,7 +2303,7 @@ function main() {
         outJson(issue);
         break;
       }
-      console.log(line(issue, values.owner ? `  [unblock: ${values.owner} → ${values.action ?? "?"}]` : ""));
+      console.log(line(issue, `  [unblock: ${issue.unblockOwner} → ${issue.unblockAction}]`));
       break;
     }
 

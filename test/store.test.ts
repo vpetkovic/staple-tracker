@@ -122,6 +122,52 @@ describe("status guards", () => {
     expect(back.blockedTransitionAt).toBeNull();
   });
 
+  describe("the unblock descriptor is written whole or not at all", () => {
+    const blockedWithDescriptor = () =>
+      store.updateIssue(store.createIssue({ title: "B" }).id, {
+        status: "blocked",
+        unblockOwner: "vlad",
+        unblockAction: "answer the question",
+      });
+
+    it.each([
+      ["a blank owner", { unblockOwner: "  " }, "unblockOwner"],
+      ["an empty action", { unblockAction: "" }, "unblockAction"],
+      ["an owner without an action", { unblockOwner: "ops" }, "unblockAction"],
+      ["an action without an owner", { unblockAction: "decide" }, "unblockOwner"],
+      ["one half cleared", { unblockOwner: null }, "unblockOwner"],
+      ["a new owner with a blank action", { unblockOwner: "ops", unblockAction: " " }, "unblockAction"],
+    ])("refuses %s and leaves the descriptor as it was", (_label, patch, field) => {
+      const issue = blockedWithDescriptor();
+      expect(() => store.updateIssue(issue.id, patch)).toThrowError(
+        expect.objectContaining({ code: "validation", message: expect.stringContaining(field) }),
+      );
+      expect(store.getIssue(issue.id)).toMatchObject({ unblockOwner: "vlad", unblockAction: "answer the question" });
+    });
+
+    it("refuses the same on the write that blocks, so nothing is blocked half-described", () => {
+      const issue = store.createIssue({ title: "Fresh" });
+      expect(() => store.updateIssue(issue.id, { status: "blocked", unblockOwner: "ops" })).toThrowError(/unblockAction/);
+      expect(store.getIssue(issue.id)).toMatchObject({ status: "backlog", unblockOwner: null, unblockAction: null });
+      expect(() =>
+        store.createIssue({ title: "X", status: "blocked", unblockOwner: "", unblockAction: "approve" }),
+      ).toThrowError(/unblockOwner/);
+    });
+
+    it("replaces both halves together, trimmed, and clears both together", () => {
+      const issue = blockedWithDescriptor();
+      expect(store.updateIssue(issue.id, { unblockOwner: " ops ", unblockAction: " grant access " })).toMatchObject({
+        unblockOwner: "ops",
+        unblockAction: "grant access",
+      });
+      expect(store.updateIssue(issue.id, { unblockOwner: null, unblockAction: null })).toMatchObject({
+        status: "blocked",
+        unblockOwner: null,
+        unblockAction: null,
+      });
+    });
+  });
+
   it("enforces expectedStatusVersion optimistic concurrency", () => {
     const issue = store.createIssue({ title: "V" });
     store.updateIssue(issue.id, { status: "todo" });
