@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { LinearApiAdapter, type LinearApiConnection } from "../src/core/integrations/linear-api.js";
+import { discoverLinear, LinearApiAdapter, type LinearApiConnection } from "../src/core/integrations/linear-api.js";
 import { IntegrationReader } from "../src/core/integrations/provider.js";
 const account = "11111111-1111-4111-8111-111111111111";
 const org = "22222222-2222-4222-8222-222222222222";
@@ -46,6 +46,29 @@ describe("read-only Linear API adapter",()=>{
       expect((await setup(()=>({issue:{...issue,state:{id:other,name:"S",type}}})).adapter.readIssue(ref)).status).toEqual({id:other,name:"S",category:type});
     for(const state of [{id:other,name:"Odd",type:"paused"},{id:other,name:"Odd"},{id:other,name:"Odd",type:null},{id:other,name:"Odd",type:7},{id:other,name:"Odd",type:"x".repeat(100)}])
       expect((await setup(()=>({issue:{...issue,state}})).adapter.readIssue(ref)).status).toEqual({id:other,name:"Odd"});
+  });
+  it("discovers whose key it is with one identity-only query, and fails the way every live read does",async()=>{
+    const fetch=vi.fn(async(_url:unknown,_request:RequestInit|undefined)=>Response.json({data:{viewer:{id:account.toUpperCase(),name:"Ada Lovelace"},organization:{id:org,urlKey:"acme",name:"Acme"}}}));
+    expect(await discoverLinear("STAPLE_LINEAR_API_KEY",{fetch:fetch as typeof globalThis.fetch,credential:()=>"fixture-key"}))
+      .toEqual({account,scopeId:org,login:"Ada Lovelace",organization:"Acme"});
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const [url,request]=fetch.mock.calls[0]!;
+    expect(url).toBe("https://api.linear.app/graphql");
+    expect(request).toMatchObject({method:"POST",redirect:"error",headers:{authorization:"fixture-key"}});
+    expect(JSON.parse(request!.body as string).query.replace(/\s+/g," ")).toBe("query StapleRead { viewer { id name } organization { id urlKey name } }");
+    const nameless=vi.fn(async()=>Response.json({data:{viewer:{id:account},organization:{id:org,urlKey:"acme"}}}));
+    expect(await discoverLinear("STAPLE_LINEAR_API_KEY",{fetch:nameless,credential:()=>"fixture-key"})).toEqual({account,scopeId:org,login:null,organization:null});
+    // The same refusals a bound adapter's read gives, so configure and health agree.
+    const unset=vi.fn();
+    await expect(discoverLinear("STAPLE_LINEAR_API_KEY",{fetch:unset,credential:()=>undefined})).rejects.toMatchObject({code:"auth",message:"STAPLE_LINEAR_API_KEY isn't set where Staple runs."});
+    expect(unset).not.toHaveBeenCalled();
+    const rejected=async()=>new Response("never exposed",{status:401});
+    await expect(discoverLinear("STAPLE_LINEAR_API_KEY",{fetch:rejected,credential:()=>"bad-key"})).rejects.toMatchObject({code:"auth",message:"Linear rejected the API key in STAPLE_LINEAR_API_KEY."});
+    const graphql=async()=>Response.json({errors:[{extensions:{code:"UNAUTHENTICATED"},message:"never exposed"}]});
+    await expect(discoverLinear("STAPLE_LINEAR_API_KEY",{fetch:graphql,credential:()=>"bad-key"})).rejects.toMatchObject({code:"auth",message:"Linear rejected the API key in STAPLE_LINEAR_API_KEY."});
+    // A variable name the connection could never be saved with is refused before any read.
+    await expect(discoverLinear("lower_case",{fetch:unset,credential:()=>"fixture-key"})).rejects.toMatchObject({code:"validation"});
+    expect(unset).not.toHaveBeenCalled();
   });
   it("normalizes equivalent uppercase configured and returned UUIDs",async()=>{
     const account="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",scopeId="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
