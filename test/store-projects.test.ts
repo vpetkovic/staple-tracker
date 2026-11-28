@@ -251,6 +251,22 @@ describe("deleting", () => {
     expect(events("issue_project_changed").some((e) => e.issueId === loose.id)).toBe(false);
   });
 
+  it("still replays an idempotent create after the project it was filed in is deleted", () => {
+    projects.create({ name: "Docs" }, "vp");
+    const original = store.createIssueResult({ title: "Filed", project: "docs", idempotencyKey: "retry-1" });
+    projects.remove("docs", "vp");
+
+    // The retry sends exactly what the committed create sent, project and all.
+    const replay = store.createIssueResult({ title: "Filed", project: "docs", idempotencyKey: "retry-1" });
+    expect(replay.replayed).toBe(true);
+    expect(replay.issue).toEqual(store.getIssue(original.issue.identifier));
+    expect(replay.issue.projectId).toBeNull();
+    expect(store.listIssues({ includeResolved: true })).toHaveLength(1);
+    // A fresh key still refuses the missing project before spending an issue number.
+    refused(() => store.createIssue({ title: "New", project: "docs", idempotencyKey: "retry-2" }), "not_found");
+    expect(store.createIssue({ title: "Next" }).identifier).toBe("TST-2");
+  });
+
   it("is not_found for a project that is not there, and writes nothing", () => {
     refused(() => projects.remove("nope", "vp"), "not_found");
     expect(events("project_deleted")).toEqual([]);
