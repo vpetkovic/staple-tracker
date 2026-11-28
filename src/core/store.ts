@@ -2909,8 +2909,25 @@ export class WorkspaceStore {
     return this.createIssueResult(input, internal).issue;
   }
 
+  /** The issue an idempotency key already created, as a replay; null for no key or a new one. */
+  private replayedCreate(key: string | null | undefined): CreateIssueResult | null {
+    if (!key) return null;
+    const existing = this.db
+      .prepare("SELECT * FROM issues WHERE idempotency_key = ?")
+      .get(key) as unknown as IssueRow | undefined;
+    return existing ? { issue: this.toIssue(existing), replayed: true } : null;
+  }
+
   /** createIssue, plus whether an idempotency key replayed an earlier create. */
   createIssueResult(input: CreateIssueInput, internal: PlanInternal = {}): CreateIssueResult {
+    /**
+     * Idempotency replay comes before anything about the input is judged: the same key
+     * always returns the original issue, whatever has happened since to what it was
+     * created with. A retry of a committed create whose project was deleted, or whose
+     * kind or status has left the vocabulary, gets its issue back, not a refusal.
+     */
+    const earlier = this.replayedCreate(input.idempotencyKey);
+    if (earlier) return earlier;
     const title = input.title?.trim();
     if (!title) throw new StapleError("validation", "Title is required");
     if (input.priority) assertPriority(input.priority);
@@ -2946,19 +2963,16 @@ export class WorkspaceStore {
         : undefined;
 
     return this.journaled(() => {
-      // The project is resolved INSIDE the transaction, first, so the lookup and the
-      // insert cannot straddle a delete: a project removed between the two would leave
-      // a pointer at nothing. Still before the issue number is spent, so an unknown
+      // Asked again inside the transaction, first: another writer may have committed
+      // this key since the check above, and its issue is the answer, not a second one.
+      const committed = this.replayedCreate(input.idempotencyKey);
+      if (committed) return committed;
+
+      // The project is resolved INSIDE the transaction, before the insert, so the lookup
+      // and the insert cannot straddle a delete: a project removed between the two would
+      // leave a pointer at nothing. Still before the issue number is spent, so an unknown
       // project is `not_found` in the project store's own words and consumes nothing.
       const project = input.project ? this.projects().get(input.project) : null;
-
-      // Idempotency replay: the same key always returns the original issue.
-      if (input.idempotencyKey) {
-        const existing = this.db
-          .prepare("SELECT * FROM issues WHERE idempotency_key = ?")
-          .get(input.idempotencyKey) as unknown as IssueRow | undefined;
-        if (existing) return { issue: this.toIssue(existing), replayed: true };
-      }
 
       let parent: IssueRow | null = null;
       if (input.parent) {

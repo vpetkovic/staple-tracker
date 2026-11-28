@@ -54,6 +54,48 @@ describe("creation", () => {
     expect(store.createIssueResult({ title: "Different" }).replayed).toBe(false);
   });
 
+  it("replays a key whose kind and status have since left the vocabulary", () => {
+    store.addStatus({ id: "triage", category: "unstarted" });
+    const original = store.createIssue({ title: "Spike it", kind: "spike", status: "triage", idempotencyKey: "k1" });
+    store.removeKind("spike", { migrateTo: "task" });
+    store.removeStatus("triage", { migrateTo: "backlog" });
+
+    // The retry sends what the committed create sent; the original answers it.
+    const replay = store.createIssueResult({ title: "Spike it", kind: "spike", status: "triage", idempotencyKey: "k1" });
+    expect(replay.replayed).toBe(true);
+    expect(replay.issue.id).toBe(original.id);
+    expect([replay.issue.kind, replay.issue.status]).toEqual(["task", "backlog"]);
+    // A new key with the same input is judged, and refused.
+    expect(() => store.createIssue({ title: "Spike again", kind: "spike", idempotencyKey: "k2" })).toThrowError(/Unknown kind "spike"/);
+  });
+
+  it("replays a key another writer commits between the first check and the transaction", () => {
+    const dir = mkdtempSync(join(tmpdir(), "staple-replay-race-"));
+    try {
+      const file = join(dir, "staple.db");
+      const first = openDb(file);
+      migrateWorkspace(first);
+      const a = new WorkspaceStore(first, "test", "TST");
+      const b = new WorkspaceStore(openDb(file), "test", "TST");
+      let other: string | null = null;
+      // The title is read after A's first replay check and before its transaction
+      // opens: B commits the same key in exactly that gap.
+      const input = {
+        get title() {
+          other ??= b.createIssue({ title: "From B", idempotencyKey: "k1" }).id;
+          return "From A";
+        },
+        idempotencyKey: "k1",
+      };
+      const result = a.createIssueResult(input);
+      expect(result.replayed).toBe(true);
+      expect(result.issue.id).toBe(other);
+      expect(a.listIssues({ includeResolved: true })).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects duplicate open titles among siblings unless allowed", () => {
     store.createIssue({ title: "Fix  the   build" });
     expect(() => store.createIssue({ title: "fix the build" })).toThrowError(/already exists/);
