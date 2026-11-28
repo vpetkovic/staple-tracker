@@ -322,7 +322,7 @@ const definitions: SettingDefinition[] = [
     ui: {
       label: "Require an estimate to queue",
       description:
-        "When on, adding work to the queue is refused while it has no estimate: a task by its own, an epic or milestone by its open tasks. The refusal names them. A person can queue it anyway with an override and a reason, which is recorded.",
+        "When on, adding work to the queue is refused while it has no estimate: a task by its own, an epic or milestone by its open tasks. The refusal names them. Entries already queued stay. A person can queue it anyway from the CLI or MCP with an override and a reason, which is recorded.",
       control: "toggle",
       order: 30,
     },

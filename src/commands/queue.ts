@@ -95,7 +95,8 @@ ESTIMATES. With queue.requireEstimate on (off by default), "queue add" refuses
 work that has no estimate, with validation (exit 2): a task by its own
 estimate, an epic, a milestone or any parent by the open tasks queueing it
 would hand to agents. The refusal names every unestimated ticket (in --json,
-detail.unestimated). A replay or a move of a queued entry is never judged. A
+detail.unestimated). The check runs when work is added: a replay or a move of a
+queued entry, and work added later under a queued container, are not judged. A
 person queues it anyway with "queue add <ref> --override -m <why>": the reason
 becomes the entry's note and a queue_estimate_overridden event records who and
 why. An empty reason is refused.

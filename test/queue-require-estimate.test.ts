@@ -5,6 +5,7 @@ import type { QueueStore } from "../src/core/queue-store.js";
 import { WorkspaceStore } from "../src/core/store.js";
 import { MILESTONE_KIND } from "../src/core/milestones.js";
 import { StapleError } from "../src/core/types.js";
+import { READY_PLAN } from "./fixtures/plan-ready.js";
 
 /**
  * `queue.requireEstimate`: an opt-in rule that queue add refuses work with no estimate.
@@ -145,10 +146,48 @@ describe("queue.requireEstimate on", () => {
     expect(planned()).toEqual([milestone]);
   });
 
+  it("queues finished work with no estimate: a done ticket, and a milestone whose only unsized member is done", () => {
+    const done = issue("Done, never sized");
+    land(done);
+    queue.enqueue(done, {}, "agent-1");
+    store.addKind({ id: MILESTONE_KIND, label: "Milestone" }, "vp");
+    const milestone = issue("October", { kind: MILESTONE_KIND });
+    const finishedMember = issue("Finished member");
+    land(finishedMember);
+    store.milestones().addMember(milestone, finishedMember, {}, "vp");
+    store.milestones().addMember(milestone, issue("Sized member", { estimatedSeconds: HOUR }), {}, "vp");
+    queue.enqueue(milestone, {}, "agent-1");
+    expect(planned()).toEqual([done, milestone]);
+  });
+
   it("judges an epic with no open children by its own estimate, as the resolver hands it out", () => {
     const empty = issue("Empty epic", { kind: "epic" });
     const error = refused(() => queue.enqueue(empty, {}, "agent-1"));
     expect(error.detail).toMatchObject({ unestimated: [empty] });
+  });
+
+  it("judges exactly what queueing hands out: an open leaf under a finished parent is not", () => {
+    const epic = issue("Epic", { kind: "epic" });
+    const finishedParent = issue("Finished parent", { parent: epic, estimatedSeconds: HOUR });
+    const orphan = issue("Open under finished", { parent: finishedParent });
+    issue("Other", { parent: epic, estimatedSeconds: HOUR });
+    store.updateIssue(finishedParent, { assignee: "x" }, "x");
+    store.updateIssue(finishedParent, { status: "done" }, "x");
+    queue.enqueue(epic, {}, "agent-1");
+    // The resolver does not reach it through the epic: it stays in the unqueued band.
+    const row = queue.effectiveQueue({ crossBlockers: new Map() }).rows.find((r) => r.identifier === orphan)!;
+    expect(row).toMatchObject({ via: null, unqueued: true });
+    expect(planned()).toEqual([epic]);
+  });
+
+  it("judges a promoted epic whose only children are ideas by its own estimate", () => {
+    const person = { via: "plan_view" } as const;
+    store.plan().enable("vp", { person });
+    const idea = store.plan().capture({ title: "Parent idea", maturity: "shaped", plan: READY_PLAN }, "vp", { person }).id;
+    const promoted = store.plan().promote(idea, "vp", { person }).identifier as string;
+    store.plan().capture({ title: "Sub idea", parent: promoted }, "vp", { person });
+    const error = refused(() => queue.enqueue(promoted, {}, "agent-1"));
+    expect(error.detail).toMatchObject({ unestimated: [promoted] });
   });
 
   it("leaves a replay and a move of a queued entry alone", () => {

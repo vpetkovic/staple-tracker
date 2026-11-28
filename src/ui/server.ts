@@ -298,6 +298,17 @@ const QUEUE_VERBS: Record<string, QueueVerb> = {
 };
 const QUEUE_WRITE_PATHS = new Set(Object.keys(QUEUE_VERBS));
 
+/**
+ * A queue write's `overrideReason`: absent or null is no override, a string is one (the
+ * store refuses an empty one), and anything else is refused rather than coerced, so a
+ * stray `null` or number can never pass as a reason.
+ */
+function optionalOverrideReason(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string") throw new StapleError("validation", "overrideReason must be a string: why a person is queueing this anyway.");
+  return value;
+}
+
 /** How many ended runs per workspace `/api/runs` answers besides the live ones, unless `limit` says. */
 const RUN_HISTORY_LIMIT = 50;
 
@@ -5839,7 +5850,7 @@ export function startUiServer(options: UiOptions): UiHandle {
               at: body.at as number | undefined,
               baseRevision: body.baseRevision as number | undefined,
               note: (body.note as string | undefined) ?? null,
-              overrideReason: body.overrideReason === undefined ? undefined : String(body.overrideReason),
+              overrideReason: optionalOverrideReason(body.overrideReason),
               all: body.all === true,
               // The answer is drawn by the page that sent the write, so it is read the way
               // that page reads (`pickup=1` on its GET): with the member rung when asked.

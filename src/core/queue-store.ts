@@ -454,6 +454,7 @@ export class QueueStore {
     options: QueuePosition & { baseRevision?: number; note?: string | null; overrideReason?: string } = {},
     actor: string | null = null,
   ): QueuePlan & { replayed: boolean } {
+    const issue = this.requireIssue(ref);
     const overrideReason = options.overrideReason === undefined ? undefined : options.overrideReason.trim();
     if (overrideReason !== undefined && overrideReason.length === 0) {
       throw new StapleError(
@@ -461,7 +462,6 @@ export class QueueStore {
         "An override needs a reason. Pass a non-empty reason (CLI `queue add --override -m \"<why>\"`, MCP `override_reason`, HTTP `overrideReason`).",
       );
     }
-    const issue = this.requireIssue(ref);
     // Ideas and horizons are plans above the tracker; nothing queues them (design/plan.md).
     if (this.store.isPlanIssue(issue.kind)) throw planKindRefusal(issue, "queued");
     // A horizon is queued while it holds work; before that there is nothing to queue, and after it shipped nothing is left.
@@ -483,8 +483,8 @@ export class QueueStore {
         throw new StapleError(
           "validation",
           unestimated.length === 1 && unestimated[0] === issue.identifier
-            ? `${issue.identifier} has no estimate, and queue.requireEstimate is on. Estimate it first (staple estimate ${issue.identifier} <duration>), or ask a person to queue it anyway with --override -m "<why>".`
-            : `${issue.identifier} has open work with no estimate: ${unestimated.join(", ")}. queue.requireEstimate is on; estimate them first, or ask a person to queue it anyway with --override -m "<why>".`,
+            ? `${issue.identifier} has no estimate, and queue.requireEstimate is on. Estimate it first (staple estimate, MCP set_estimate), or ask a person to queue it anyway with an override and a reason.`
+            : `${issue.identifier} has open work with no estimate: ${unestimated.join(", ")}. queue.requireEstimate is on; estimate them first (staple estimate, MCP set_estimate), or ask a person to queue it anyway with an override and a reason.`,
           { identifier: issue.identifier, unestimated },
         );
       }
@@ -518,31 +518,47 @@ export class QueueStore {
   }
 
   /**
-   * The open leaves `issueId` stands for that have no estimate, as identifiers, for
-   * `queue.requireEstimate`. "Leaf" is the resolver's word, so the rule judges exactly the
-   * rows queueing the issue would hand to agents: a leaf (no open child, not a milestone)
-   * is itself, and a container is every open row its scoped answer holds. A resolved leaf
-   * has nothing left to estimate.
+   * The open leaves `issueId` stands for that have no estimate, as identifiers in walk
+   * order, for `queue.requireEstimate`. It walks exactly what STEP 1 of `effectiveQueue`
+   * expands a queued row to, over the same `nodes()` (no plan records): a leaf (not a
+   * milestone, no open child) is itself, a milestone its members then its open children,
+   * any other container its open children, depth-first. So the rule judges the rows
+   * queueing the issue hands to agents and nothing else; a resolved leaf has nothing left
+   * to estimate, and a container's own estimate is not what counts.
    */
   private unestimatedLeaves(issueId: string): string[] {
-    const node = this.store.getIssue(issueId);
-    const openChild = this.db
-      .prepare("SELECT status FROM issues WHERE parent_id = ?")
-      .all(issueId) as Array<{ status: string }>;
-    const container = node.kind === MILESTONE_KIND || openChild.some((row) => !this.store.isResolvedStatus(row.status));
-    const leaves = container
-      ? this.effectiveQueue({ scope: node.identifier, crossBlockers: new Map() })
-          .rows.filter((row) => !this.store.isResolvedStatus(row.status))
-          .map((row) => row.issueId)
-      : this.store.isResolvedStatus(node.status)
-        ? []
-        : [node.id];
-    if (leaves.length === 0) return [];
-    const estimate = this.db.prepare("SELECT identifier, estimated_seconds FROM issues WHERE id = ?");
-    return leaves
-      .map((id) => estimate.get(id) as { identifier: string; estimated_seconds: number | null })
-      .filter((row) => row.estimated_seconds === null)
-      .map((row) => row.identifier);
+    const nodes = this.nodes();
+    const estimates = new Map(
+      (this.db.prepare("SELECT id, estimated_seconds FROM issues").all() as Array<{ id: string; estimated_seconds: number | null }>).map(
+        (row) => [row.id, row.estimated_seconds],
+      ),
+    );
+    const openChildren = new Map<string, IssueNode[]>();
+    for (const node of nodes.values()) {
+      if (node.parent_id === null || this.store.isResolvedStatus(node.status)) continue;
+      openChildren.set(node.parent_id, [...(openChildren.get(node.parent_id) ?? []), node]);
+    }
+    const membersOf = this.store.milestones().queueSeam().membersOf;
+    const seen = new Set<string>();
+    const unestimated: string[] = [];
+    const walk = (node: IssueNode, depth: number): void => {
+      if (seen.has(node.id) || depth > MAX_TREE_DEPTH) return;
+      seen.add(node.id);
+      const children = openChildren.get(node.id) ?? [];
+      if (node.kind === MILESTONE_KIND || children.length > 0) {
+        const members = node.kind === MILESTONE_KIND ? (membersOf.get(node.id) ?? []) : [];
+        for (const memberId of members) {
+          const member = nodes.get(memberId);
+          if (member) walk(member, depth + 1);
+        }
+        for (const child of children) walk(child, depth + 1);
+        return;
+      }
+      if (!this.store.isResolvedStatus(node.status) && (estimates.get(node.id) ?? null) === null) unestimated.push(node.identifier);
+    };
+    const root = nodes.get(issueId);
+    if (root) walk(root, 0);
+    return unestimated;
   }
 
   /** Take an issue out of the plan; the others keep their ranks (sparse, so no renumber). */

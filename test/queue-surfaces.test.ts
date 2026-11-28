@@ -493,6 +493,12 @@ describe("queue.requireEstimate refuses and overrides the same way on every surf
     const { status, body } = await http("/api/queue/enqueue", { ref });
     expect(status).toBe(httpStatusFor("validation"));
     expect(tripleOf(body)).toEqual(expected);
+    // A null reason is no override, and a non-string one is never coerced into a reason.
+    const nullReason = await http("/api/queue/enqueue", { ref, overrideReason: null });
+    expect(tripleOf(nullReason.body)).toEqual(expected);
+    const numberReason = await http("/api/queue/enqueue", { ref, overrideReason: 42 });
+    expect(numberReason.status).toBe(httpStatusFor("validation"));
+    expect(String(numberReason.body.message)).toContain("overrideReason must be a string");
     expect((await everySurface())[0]!.entries).not.toContain(ref);
   });
 
