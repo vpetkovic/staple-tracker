@@ -120,6 +120,44 @@ describe("a verb missing its issue reference", () => {
   });
 });
 
+describe("staple block without a whole unblock descriptor", () => {
+  const lastJson = (stderr: string) => JSON.parse(stderr.trim().split("\n").at(-1)!);
+  const shown = () =>
+    JSON.parse(staple("show", "VOC-1", "--json").stdout).issue as { status: string; unblockOwner: string | null; unblockAction: string | null };
+
+  it.each([
+    ["neither flag", [], "--owner and --action"],
+    ["no action", ["--owner", "ops"], "--action"],
+    ["no owner", ["--action", "grant access"], "--owner"],
+    ["a blank owner", ["--owner", " ", "--action", "grant access"], "--owner"],
+    ["an empty action", ["--owner", "ops", "--action", ""], "--action"],
+  ])("refuses %s and does not block the ticket", (_label, flags, named) => {
+    const result = staple("block", "VOC-1", ...flags, "--json");
+    expect(result.status).toBe(2);
+    expect(lastJson(result.stderr)).toMatchObject({
+      code: "validation",
+      message: `staple block needs a non-blank ${named}: staple block <ref> --owner O --action TEXT.`,
+    });
+    expect(shown()).toMatchObject({ status: "backlog", unblockOwner: null, unblockAction: null });
+  });
+
+  it("refuses a blank owner on a blocked ticket and keeps its whole descriptor", () => {
+    expect(staple("block", "VOC-1", "--owner", "vp", "--action", "decide").status).toBe(0);
+    const result = staple("block", "VOC-1", "--owner", "", "--json");
+    expect(result.status).toBe(2);
+    expect(lastJson(result.stderr)).toMatchObject({ code: "validation", message: expect.stringContaining("--owner and --action") });
+    expect(shown()).toMatchObject({ status: "blocked", unblockOwner: "vp", unblockAction: "decide" });
+  });
+
+  it("re-running block with both replaces the descriptor", () => {
+    expect(staple("block", "VOC-1", "--owner", "vp", "--action", "decide").status).toBe(0);
+    const result = staple("block", "VOC-1", "--owner", "ops", "--action", "grant access");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("[unblock: ops → grant access]");
+    expect(shown()).toMatchObject({ status: "blocked", unblockOwner: "ops", unblockAction: "grant access" });
+  });
+});
+
 describe("staple blocked-by without a blocker list", () => {
   const lastJson = (stderr: string) => JSON.parse(stderr.trim().split("\n").at(-1)!);
   const blockers = () =>

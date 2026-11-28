@@ -772,7 +772,7 @@ describe("stop rules over a real store", () => {
     const { epic, a } = epicWithTwo();
     const run = runs.start({ actor: BOT, scope: epic });
     runs.recordTicketTaken(run.id, a);
-    store.updateIssue(a, { status: "blocked", unblockOwner: "VP" }, BOT);
+    store.updateIssue(a, { status: "blocked", unblockOwner: "VP", unblockAction: "decide" }, BOT);
     expect(runs.status(run.id).facts!.workable).toHaveLength(1);
     expect(decisionOf(run.id)).toMatchObject({ stop: true, reason: "vp_blocked", detail: { blocks: [expect.objectContaining({ identifier: a })] } });
   });
@@ -780,7 +780,7 @@ describe("stop rules over a real store", () => {
   it("a person-owned block elsewhere does not stop a run with work left, and a dependency block is not person-owned", () => {
     const { epic, a, b } = epicWithTwo();
     const run = runs.start({ actor: BOT, scope: epic });
-    store.updateIssue(a, { status: "blocked", unblockOwner: "VP" }, "vp");
+    store.updateIssue(a, { status: "blocked", unblockOwner: "VP", unblockAction: "decide" }, "vp");
     expect(decisionOf(run.id)).toEqual({ stop: false });
     const blocker = issue("Outside blocker");
     store.setBlockedBy(b, [blocker], "vp");
