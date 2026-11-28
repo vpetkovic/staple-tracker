@@ -39,10 +39,11 @@ import { ChevronDown, ChevronUp, GripVertical } from "lucide-react";
  * THE WIDTH OF THE HANDLE COLUMN, so `renderBelow` can line up with `renderItem`.
  *
  * `p-1` (4px each side) around a `size-3.5` (14px) grip is 22px, and the row's `gap-2` adds
- * 8. Anything rendered BELOW a row means below its CONTENT — a caller drawing a nested list
- * under an entry expects it to hang off that entry, not off the drag handle to its left.
- * Without this the queue's expansion sat 30px left of the row it belonged to, which put every
- * child's elbow 30px left of the parent chevron it is supposed to hang from.
+ * 8. Anything rendered BELOW a row means below its CONTENT: an inline error, a glyph picker or
+ * a remove confirmation belongs under the entry's fields, not under the drag handle to their
+ * left. So it is indented by exactly this much, and ONLY where the handle is drawn: a card has
+ * no handle, its content starts at the card's own edge, and indenting below-content there would
+ * shift it right of the entry it belongs to.
  *
  * It is a constant rather than a class because the two numbers it adds up are in the handle's
  * own className, and a second literal `pl-[30px]` somewhere else is how they drift apart.
