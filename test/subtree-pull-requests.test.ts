@@ -35,7 +35,7 @@ function setup() {
   process.env.STAPLE_HOME = home;
   const { store } = initWorkspace({ global: true, slug: "subtree-prs" });
   // Each ticket is made a second after the last, so "children by creation" is a real order and
-  // not the tie two tickets made in one millisecond would leave to their ids.
+  // not the tie two tickets made in one millisecond leave to their numbers.
   vi.useFakeTimers({ toFake: ["Date"] });
   let clock = Date.parse("2026-11-27T00:00:00.000Z");
   const createIssue = store.createIssue.bind(store);
@@ -119,18 +119,24 @@ describe("a parent's subtree pull requests", () => {
     store.db.close();
   });
 
-  it("breaks a tie between children made in the same millisecond by id, the same on every device", () => {
+  it("orders children made in the same millisecond by their number, not their random id", () => {
     const { store, link } = setup();
     const epic = store.createIssue({ title: "Epic" });
-    // Made first but with the larger id: a local-insertion tie-break (rowid) would put it first.
+    // Burn numbers so the children are SUB-9 and SUB-10: a text sort of identifiers would swap them.
+    for (let n = 0; n < 7; n++) store.createIssue({ title: `Filler ${n}` });
+    // Made first but with the larger id: a tie-break on id would put it last.
     const first = store.createIssue({ title: "First", parent: epic.id }, { id: "ffffffff-0000-4000-8000-000000000000" });
     const second = store.createIssue({ title: "Second", parent: epic.id }, { id: "00000000-0000-4000-8000-000000000000" });
-    store.db.prepare("UPDATE issues SET created_at = ? WHERE parent_id = ?").run("2026-11-27T12:00:00.000Z", epic.id);
-    link(first.identifier, 60);
+    const grandchild = store.createIssue({ title: "Grandchild", parent: second.id }, { id: "11111111-0000-4000-8000-000000000000" });
+    expect([first.identifier, second.identifier]).toEqual(["SUB-9", "SUB-10"]);
+    store.db.prepare("UPDATE issues SET created_at = ? WHERE id IN (?, ?, ?)").run("2026-11-27T12:00:00.000Z", first.id, second.id, grandchild.id);
     link(second.identifier, 61);
+    link(grandchild.identifier, 62);
+    link(first.identifier, 60);
     expect(keysOf(subtreePullRequests(store, epic.id))).toEqual([
-      ["team/repo#61", false, [second.identifier]],
       ["team/repo#60", false, [first.identifier]],
+      ["team/repo#61", false, [second.identifier]],
+      ["team/repo#62", false, [grandchild.identifier]],
     ]);
     store.db.close();
   });

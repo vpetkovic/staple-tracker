@@ -5,9 +5,9 @@
  * Read from the same links a ticket's own pull requests are (`ExternalLinkStore.pullRequests`),
  * one per pull request: the same one linked on two tickets of the subtree is listed once and
  * names both. The parent's own come first, then its descendants' in tree order (children by
- * creation, depth first), each listing the tickets it is recorded on in that order. Done and
- * cancelled descendants count: a merged pull request on a finished child is part of the
- * feature's history. A hidden idea (planning off) and everything under it does not.
+ * creation, then by number, depth first), each listing the tickets it is recorded on in that
+ * order. Done and cancelled descendants count: a merged pull request on a finished child is part
+ * of the feature's history. A hidden idea (planning off) and everything under it does not.
  *
  * Only a parent has a subtree set: a ticket with no visible child gets none, and its own pull
  * requests stay where they always were. Two queries for any number of parents, never one per child.
@@ -61,6 +61,8 @@ export function subtreePullRequestsFor(
   if (rootIds.length === 0) return result;
   const hideIdeas = store.planningOn() ? 0 : 1;
   // Pre-order by the path of creation times from the root; the depth cap stops a corrupt cycle.
+  // Siblings made in the same millisecond follow their number (zero-padded, so 9 before 10), and
+  // their id only past that, so the order is creation order and not a random UUID's.
   const rows = store.db
     .prepare(
       `WITH RECURSIVE sub(root, top, id, identifier, title, path, depth) AS (
@@ -68,7 +70,10 @@ export function subtreePullRequestsFor(
           WHERE i.id IN (SELECT value FROM json_each(?))
             AND EXISTS (SELECT 1 FROM issues c WHERE c.parent_id = i.id AND (? = 0 OR c.kind <> '${IDEA_KIND}'))
          UNION ALL
-         SELECT sub.root, COALESCE(sub.top, c.id), c.id, c.identifier, c.title, sub.path || '/' || c.created_at || c.id, sub.depth + 1
+         SELECT sub.root, COALESCE(sub.top, c.id), c.id, c.identifier, c.title, sub.path || '/' || c.created_at
+                || printf('%020d', CAST(substr(c.identifier, length(rtrim(c.identifier, '0123456789')) + 1) AS INTEGER))
+                || c.id,
+                sub.depth + 1
            FROM sub JOIN issues c ON c.parent_id = sub.id
           WHERE sub.depth < ${MAX_TREE_DEPTH} AND (? = 0 OR c.kind <> '${IDEA_KIND}')
        )
