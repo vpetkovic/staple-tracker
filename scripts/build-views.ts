@@ -116,13 +116,22 @@ async function buildView(name: string, outDir: string, packages: Set<string>): P
     const html = readFileSync(join(scratch, "index.html"), "utf8");
     verifySelfContained(name, html);
     const file = join(outDir, `${name}.html`);
-    // Written beside the target and renamed over it, so a reader never sees half a file.
-    writeFileSync(`${file}.tmp`, html);
-    renameSync(`${file}.tmp`, file);
+    writeReplacing(file, html);
     return file;
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
+}
+
+/**
+ * Written beside the target and renamed over it, so a reader never sees half a file. The
+ * suite reruns this build while other workers read the output. The temporary name carries
+ * the pid, so two builds running at once do not write into the same temporary file.
+ */
+function writeReplacing(file: string, text: string): void {
+  const temporary = `${file}.${process.pid}.tmp`;
+  writeFileSync(temporary, text);
+  renameSync(temporary, file);
 }
 
 /** Beside the views: the npm packages compiled into them, for the package's notices. */
@@ -139,7 +148,7 @@ export async function buildViews(options: { outDir?: string } = {}): Promise<{ f
   const packages = new Set<string>();
   for (const view of VIEWS) files.push(await buildView(view.name, outDir, packages));
   const sorted = [...packages].sort();
-  writeFileSync(join(outDir, VIEW_PACKAGES_FILE), `${JSON.stringify(sorted, null, 2)}\n`);
+  writeReplacing(join(outDir, VIEW_PACKAGES_FILE), `${JSON.stringify(sorted, null, 2)}\n`);
   return { files, packages: sorted };
 }
 

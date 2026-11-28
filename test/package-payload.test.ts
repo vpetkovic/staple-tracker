@@ -89,4 +89,35 @@ describe("the suite's packaged payload (STA-250)", () => {
       .map((file) => relative(REPO_ROOT, file));
     expect(offenders).toEqual([]);
   });
+
+  it("is the only payload built while the suite runs: no other test file starts a package or views build", () => {
+    // The test above covers reads. This one covers writes. The package suites used to
+    // fail on a shifting subset of cases because one test file rebuilt the shared
+    // `dist-package/` while another read it from a parallel worker. Every package suite
+    // still reads one directory, the payload this run's globalSetup built. A package
+    // or views build started from a test file, landing there or anywhere else a test
+    // reads, would bring the race back.
+    //
+    // Three files start such a build on purpose:
+    //   - the globalSetup itself;
+    //   - the builder's own tests, each building into a scratch directory nothing else reads;
+    //   - this file, which runs the globalSetup again above. That builds a payload of
+    //     its own and rebuilds the views in place, which is safe only because the views
+    //     build replaces each file by rename, so a reader never sees half a file.
+    // A new builder has to be added here on purpose. This is a source scan: it sees
+    // the builders' names and the module paths that reach them, not every way a test
+    // could write into a directory.
+    const builds =
+      /\bbuild(?:Package|Views)\b|scripts\/build-(?:package|views)\b|["']build-(?:package|views)(?:\.[cm]?[jt]s)?["']|["']build:(?:package|views)["']|setup\/package-payload(?:\.[cm]?[jt]s)?["']/;
+    const allowed = ["test/build-package.test.ts", "test/package-payload.test.ts", "test/setup/package-payload.ts"];
+    const testFiles = [
+      ...sourceFiles(join(REPO_ROOT, "test")),
+      ...sourceFiles(join(REPO_ROOT, "src")).filter((file) => /\.test\.tsx?$/.test(file)),
+    ];
+    const builders = testFiles
+      .filter((file) => builds.test(readCode(file)))
+      .map((file) => relative(REPO_ROOT, file))
+      .filter((file) => !allowed.includes(file));
+    expect(builders, "these test files name a package or views builder; see the comment above").toEqual([]);
+  });
 });
