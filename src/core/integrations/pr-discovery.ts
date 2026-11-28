@@ -191,6 +191,10 @@ export async function discoverPullRequests(deps: DiscoveryDependencies, refs?: r
     }
   }
 
+  // What the branch lookup itself hit, before reading other pull requests adds its own failures:
+  // only these say why a branch has none (`branchDiscoveryNotice`).
+  lookupFailures.set(report, report.failures.map((failure) => ({ ...failure, targetKeys: [...failure.targetKeys] })));
+
   // Every open ticket's other linked pull requests that can still change: stacked ones on another
   // branch, ones linked by hand, ones on a ticket with no branch, ones on a finished descendant
   // of an open parent. Only in mapped repositories, each once, oldest saved copy first, so a
@@ -215,6 +219,50 @@ export async function discoverPullRequests(deps: DiscoveryDependencies, refs?: r
     }
   }
   return finish();
+}
+
+/**
+ * The failures a run's branch lookup hit, kept beside the report rather than on it so the
+ * discover answer keeps its shape. Reading another ticket's linked pull request again can fail
+ * too (a deleted pull request, say), and that says nothing about this branch.
+ */
+const lookupFailures = new WeakMap<DiscoveryReport, DiscoveryFailure[]>();
+
+/** Why a ticket's branch has no pull request, from a discovery run: its note and the branch lookup's failures. */
+export interface BranchDiscoveryNotice {
+  note: string | null;
+  failures: Array<Pick<DiscoveryFailure, "message" | "action">>;
+}
+
+/**
+ * What `report` says about a ticket's branch that has no pull request linked: its note and the
+ * branch lookup's failures, or neither when the branch was read and none was found. Null when there is
+ * nothing to explain: no report yet, no branch, a pull request linked, or a branch the run did
+ * not look for (recorded or renamed since).
+ */
+export function branchDiscoveryNotice(
+  report: DiscoveryReport | undefined,
+  ref: string,
+  branch: TicketBranch | null,
+  linkedPullRequests: number,
+): BranchDiscoveryNotice | null {
+  if (!report || !branch || linkedPullRequests > 0) return null;
+  const looked = report.tickets.find((ticket) => ticket.ref === ref && ticket.branch.name === branch.name);
+  if (!looked || looked.pullRequests.length > 0) return null;
+  return { note: report.note, failures: (lookupFailures.get(report) ?? []).map(({ message, action }) => ({ message, action })) };
+}
+
+/**
+ * What a run can explain, as a string that changes only when that does: which tickets came back
+ * with no pull request on which branch, the note and the branch lookup's failures. The web UI
+ * moves its poll fingerprint on a change, so an open detail refetches without refetching for nothing.
+ */
+export function discoveryOutcome(report: DiscoveryReport): string {
+  return JSON.stringify([
+    report.tickets.filter((ticket) => ticket.pullRequests.length === 0).map((ticket) => [ticket.ref, ticket.branch.name]),
+    report.note,
+    (lookupFailures.get(report) ?? []).map((failure) => [failure.message, failure.action]),
+  ]);
 }
 
 /**

@@ -1,7 +1,7 @@
 import { attentionList, dismissAttention } from "../core/attention.js";
 import { runReferences } from "../core/run-references.js";
 import { IntegrationOperations, INTEGRATION_READ_ACTIONS, INTEGRATION_WRITE_ACTIONS, INTEGRATION_CONFIG_ACTIONS, type AdapterFactory } from "../core/integrations/operations.js";
-import { DISCOVERY_ACTOR, discoveryRuns, rowPullRequests } from "../core/integrations/pr-discovery.js";
+import { branchDiscoveryNotice, DISCOVERY_ACTOR, type DiscoveryReport, discoveryOutcome, discoveryRuns, rowPullRequests } from "../core/integrations/pr-discovery.js";
 import { subtreePullRequestsField, subtreePullRequestsFor } from "../core/subtree-pull-requests.js";
 import { ticketBranch } from "../core/ticket-branch.js";
 /**
@@ -199,7 +199,7 @@ interface UiOptions {
    * (`integrations discover`, at most every two minutes per workspace). On unless false.
    */
   discoverPullRequests?: boolean;
-  /** Tests only: the provider adapters discovery reads through. Production uses the installed gh. */
+  /** Tests only: the provider adapters discovery and the integration routes read through. Production uses the installed gh. */
   discoveryFactories?: ReadonlyMap<string, AdapterFactory>;
 }
 
@@ -1058,19 +1058,41 @@ export function startUiServer(options: UiOptions): UiHandle {
    * runs: in the background, never awaited, at most once per poll interval per workspace and
    * never twice at once (`discoveryRuns`). What it links changes the database, so the next
    * fingerprint differs and the page refetches. A failure is the connection's health, which
-   * Settings shows; nothing here can fail the poll.
+   * Settings shows, and the run's report is kept so the ticket detail can say why its branch has
+   * no pull request (`lastDiscovery`); nothing here can fail the poll.
    */
   function schedulePullRequestDiscovery(h: StoreHandle): void {
     discoveryRuns
       .check(h.dbPath, async () => {
         try {
-          await new IntegrationOperations(h.store, { workspaces: integrationWorkspaces, factories: options.discoveryFactories }).discover({ actor: DISCOVERY_ACTOR });
+          const report = await new IntegrationOperations(h.store, { workspaces: integrationWorkspaces, factories: options.discoveryFactories }).discover({ actor: DISCOVERY_ACTOR });
+          rememberDiscovery(h.dbPath, report);
         } catch {
-          // A closed store or an unexpected read: the next interval tries again.
+          // A closed store or an unexpected read: the next interval tries again, and the last
+          // run's reason is no longer known to hold.
+          forgetDiscovery(h.dbPath);
         }
         return Date.now();
       })
       .catch(() => {});
+  }
+
+  /**
+   * Each workspace's last background discovery report, keyed by its database, with a revision
+   * that moves only when what it can explain changes: which tickets came back with no pull
+   * request, the note and the failures. The reason lives here, not in the database, so the
+   * fingerprint carries the revision and an open detail refetches when the reason appears.
+   */
+  const lastDiscovery = new Map<string, { report: DiscoveryReport | undefined; outcome: string; revision: number }>();
+  // Before any run, nothing is explained: a first run that explains nothing leaves the fingerprint alone.
+  const NOTHING_EXPLAINED = discoveryOutcome({ tickets: [], linked: [], refreshed: 0, failures: [], note: null });
+  function rememberDiscovery(dbPath: string, report: DiscoveryReport | undefined): void {
+    const outcome = report ? discoveryOutcome(report) : NOTHING_EXPLAINED;
+    const previous = lastDiscovery.get(dbPath) ?? { outcome: NOTHING_EXPLAINED, revision: 0 };
+    lastDiscovery.set(dbPath, { report, outcome, revision: previous.outcome === outcome ? previous.revision : previous.revision + 1 });
+  }
+  function forgetDiscovery(dbPath: string): void {
+    if (lastDiscovery.get(dbPath)?.report) rememberDiscovery(dbPath, undefined);
   }
 
   function fingerprint(): string {
@@ -1087,7 +1109,7 @@ export function startUiServer(options: UiOptions): UiHandle {
         // data_version observes other connections; total_changes observes this server handle.
         const dataVersion = (h.store.db.prepare("PRAGMA data_version").get() as {data_version:number}).data_version;
         const changes = (h.store.db.prepare("SELECT total_changes() AS n").get() as {n:number}).n;
-        return `${h.slug}:db${dataVersion}:${changes}:${events.s}:${issues.c}:${issues.u}:${comments.c}:s${settings?.value ?? "0"}${driverFingerprint(h)}${clockFingerprint(h)}${membersFingerprint(h)}`;
+        return `${h.slug}:db${dataVersion}:${changes}:${events.s}:${issues.c}:${issues.u}:${comments.c}:s${settings?.value ?? "0"}${driverFingerprint(h)}${clockFingerprint(h)}${membersFingerprint(h)}:d${lastDiscovery.get(h.dbPath)?.revision ?? 0}`;
       })
       .join("|");
   }
@@ -1225,14 +1247,26 @@ export function startUiServer(options: UiOptions): UiHandle {
         return null;
       }
     };
+    const externalLinks = handle.store.externalLinks().list(context.issue.id);
+    const branch = ticketBranch(handle.store, context.issue.id);
+    // Why the branch has no pull request, from the poll's last discovery run; absent when there is
+    // nothing to explain. Discovery reads open tickets only, so a finished one is never explained.
+    const finished = context.issue.completedAt !== null || context.issue.cancelledAt !== null;
+    const pullRequestDiscovery = finished ? null : branchDiscoveryNotice(
+      lastDiscovery.get(handle.dbPath)?.report,
+      context.issue.identifier,
+      branch,
+      externalLinks.filter((link) => link.resource.ref.kind === "pull_request").length,
+    );
     return {
       workspace: handle.slug,
       ...context,
       crossBlockers,
       claim: handle.store.claimActivity(context.issue.id),
-      externalLinks: handle.store.externalLinks().list(context.issue.id),
+      externalLinks,
       // The branch the work lives on (`staple branch`), or the newest branch-pointer comment.
-      branch: ticketBranch(handle.store, context.issue.id),
+      branch,
+      ...(pullRequestDiscovery ? { pullRequestDiscovery } : {}),
       gate: handle.store.gate(context.issue.id),
       queuedBy: handle.store.queuedBy(context.issue.id),
       childrenQueued,
@@ -4110,7 +4144,10 @@ export function startUiServer(options: UiOptions): UiHandle {
           : url.pathname==="/api/integrations/configure" ? INTEGRATION_CONFIG_ACTIONS : INTEGRATION_WRITE_ACTIONS;
         if(typeof command.action!=="string" || !allowed.includes(command.action)) throw new StapleError("validation","This operation belongs on a different integration route");
         const handle=handleFor(typeof ws==="string" ? ws:url.searchParams.get("ws") ?? undefined);
-        json(res,200,await new IntegrationOperations(handle.store,{workspaces:integrationWorkspaces}).execute({...command,actor:command.actor ?? "user"}));
+        json(res,200,await new IntegrationOperations(handle.store,{workspaces:integrationWorkspaces,factories:options.discoveryFactories}).execute({...command,actor:command.actor ?? "user"}));
+        // A connection or mapping just changed, or was checked again on request: what the last
+        // discovery said about it may no longer hold, so the next poll looks again.
+        if (["configure","remove","map","unmap"].includes(command.action) || (command.action==="health" && command.force===true)) discoveryRuns.expire(handle.dbPath);
         return;
       }
 
