@@ -451,10 +451,17 @@ export class QueueStore {
    */
   enqueue(
     ref: string,
-    options: QueuePosition & { baseRevision?: number; note?: string | null } = {},
+    options: QueuePosition & { baseRevision?: number; note?: string | null; overrideReason?: string } = {},
     actor: string | null = null,
   ): QueuePlan & { replayed: boolean } {
     const issue = this.requireIssue(ref);
+    const overrideReason = options.overrideReason === undefined ? undefined : options.overrideReason.trim();
+    if (overrideReason !== undefined && overrideReason.length === 0) {
+      throw new StapleError(
+        "validation",
+        "An override needs a reason. Pass a non-empty reason (CLI `queue add --override -m \"<why>\"`, MCP `override_reason`, HTTP `overrideReason`).",
+      );
+    }
     // Ideas and horizons are plans above the tracker; nothing queues them (design/plan.md).
     if (this.store.isPlanIssue(issue.kind)) throw planKindRefusal(issue, "queued");
     // A horizon is queued while it holds work; before that there is nothing to queue, and after it shipped nothing is left.
@@ -469,11 +476,24 @@ export class QueueStore {
         this.moveEntry(issue, current, options, actor);
         return { ...this.plan(), replayed: false };
       }
+      // Only a NEW entry is judged: a replay or a move of a queued row adds no work to the plan.
+      const unestimated = this.store.getSetting("queue.requireEstimate") === true ? this.unestimatedLeaves(issue.id) : [];
+      const steppedOver = unestimated.length > 0;
+      if (steppedOver && overrideReason === undefined) {
+        throw new StapleError(
+          "validation",
+          unestimated.length === 1 && unestimated[0] === issue.identifier
+            ? `${issue.identifier} has no estimate, and queue.requireEstimate is on. Estimate it first (staple estimate, MCP set_estimate), or ask a person to queue it anyway with an override and a reason.`
+            : `${issue.identifier} has open work with no estimate: ${unestimated.join(", ")}. queue.requireEstimate is on; estimate them first (staple estimate, MCP set_estimate), or ask a person to queue it anyway with an override and a reason.`,
+          { identifier: issue.identifier, unestimated },
+        );
+      }
       const rank = this.rankFor(options);
       this.insert(issue.id, rank, {
         addedBy: actor ?? "user",
         addedAt: nowIso(),
-        note: options.note ?? null,
+        // The reason is the entry's note when none was given, so the plan listing shows why it is there.
+        note: options.note ?? (steppedOver ? overrideReason! : null),
       });
       const revision = this.bumpRevision();
       this.emit("queue_enqueued", issue.id, actor, {
@@ -482,11 +502,63 @@ export class QueueStore {
         position: this.positionOf(issue.id),
         revision,
       });
+      // The audit trail of the override, written only when it stepped over something.
+      if (steppedOver) {
+        this.emit("queue_estimate_overridden", issue.id, actor, {
+          identifier: issue.identifier,
+          reason: overrideReason!,
+          unestimated,
+        });
+      }
       // After the replay guard, so re-enqueueing a queued issue with no position
       // returns `replayed: true` above and mints no second operation.
       this.recordPlan(actor ?? null);
       return { ...this.plan(), replayed: false };
     });
+  }
+
+  /**
+   * The open leaves `issueId` stands for that have no estimate, as identifiers in walk
+   * order, for `queue.requireEstimate`. It walks exactly what STEP 1 of `effectiveQueue`
+   * expands a queued row to, over the same `nodes()` (no plan records): a leaf (not a
+   * milestone, no open child) is itself, a milestone its members then its open children,
+   * any other container its open children, depth-first. So the rule judges the rows
+   * queueing the issue hands to agents and nothing else; a resolved leaf has nothing left
+   * to estimate, and a container's own estimate is not what counts.
+   */
+  private unestimatedLeaves(issueId: string): string[] {
+    const nodes = this.nodes();
+    const estimates = new Map(
+      (this.db.prepare("SELECT id, estimated_seconds FROM issues").all() as Array<{ id: string; estimated_seconds: number | null }>).map(
+        (row) => [row.id, row.estimated_seconds],
+      ),
+    );
+    const openChildren = new Map<string, IssueNode[]>();
+    for (const node of nodes.values()) {
+      if (node.parent_id === null || this.store.isResolvedStatus(node.status)) continue;
+      openChildren.set(node.parent_id, [...(openChildren.get(node.parent_id) ?? []), node]);
+    }
+    const membersOf = this.store.milestones().queueSeam().membersOf;
+    const seen = new Set<string>();
+    const unestimated: string[] = [];
+    const walk = (node: IssueNode, depth: number): void => {
+      if (seen.has(node.id) || depth > MAX_TREE_DEPTH) return;
+      seen.add(node.id);
+      const children = openChildren.get(node.id) ?? [];
+      if (node.kind === MILESTONE_KIND || children.length > 0) {
+        const members = node.kind === MILESTONE_KIND ? (membersOf.get(node.id) ?? []) : [];
+        for (const memberId of members) {
+          const member = nodes.get(memberId);
+          if (member) walk(member, depth + 1);
+        }
+        for (const child of children) walk(child, depth + 1);
+        return;
+      }
+      if (!this.store.isResolvedStatus(node.status) && (estimates.get(node.id) ?? null) === null) unestimated.push(node.identifier);
+    };
+    const root = nodes.get(issueId);
+    if (root) walk(root, 0);
+    return unestimated;
   }
 
   /** Take an issue out of the plan; the others keep their ranks (sparse, so no renumber). */
@@ -1111,7 +1183,7 @@ export class QueueStore {
     let replayed = false;
     switch (verb) {
       case "add":
-        replayed = this.enqueue(ref(), { ...position, baseRevision, note: input.note }, actor).replayed;
+        replayed = this.enqueue(ref(), { ...position, baseRevision, note: input.note, overrideReason: input.overrideReason }, actor).replayed;
         break;
       case "rm":
         this.dequeue(ref(), { baseRevision }, actor);
@@ -1256,6 +1328,11 @@ export interface QueueMutationInput extends QueuePosition {
   order?: readonly string[];
   baseRevision?: number;
   note?: string | null;
+  /**
+   * `add` only: a person queues work `queue.requireEstimate` would refuse, for this reason.
+   * Recorded as `queue_estimate_overridden`; an empty reason is refused.
+   */
+  overrideReason?: string;
   /** Passed through to the view: show resolved entries too. */
   all?: boolean;
   /** Passed through to the view: the member rung, as a pickup answer applies it. */

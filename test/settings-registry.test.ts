@@ -74,6 +74,7 @@ describe("the registered set", () => {
       "kinds.appearance",
       "queue.policy",
       "queue.silentClaimMinutes",
+      "queue.requireEstimate",
       "features.planning",
       // The Analytics cost model (STA-575): five parts, edited on the ROI page.
       "analytics.roles",
@@ -316,6 +317,7 @@ describe("wire views", () => {
       "machine.port",
       "queue.silentClaimMinutes",
       "machine.setupComplete",
+      "queue.requireEstimate",
       "machine.humanName",
     ]);
   });

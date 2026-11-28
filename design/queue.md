@@ -324,6 +324,30 @@ too, where nothing was refused"*, *"an override does not reorder the plan"*;
 `queue-surfaces.test.ts` — *"--override without -m is refused"*, *"an override
 with a reason succeeds on every surface and is recorded"*.)
 
+### Queueing work with no estimate
+
+`queue.requireEstimate` (off by default, so a queue behaves as it always has) makes
+`queue add` refuse a new entry that has no estimate, with `validation` naming every
+unestimated ticket (`detail.unestimated`). "Leaf" is the resolver's word: a ticket
+with no open child is judged by its own estimate, and a container (a milestone, or
+any issue with an open child) by the leaves STEP 1 of the resolver expands it to, over
+the same tree (no plan records, open children only), which are what queueing it hands
+to agents. A container's own estimate does not count, a resolved leaf has nothing left
+to estimate, and an open leaf under a resolved parent is not reached. A replay or a
+move of a queued entry adds no work and is never judged, so turning the setting on
+leaves the plan as it is. The rule judges the moment of adding: work later parented
+under a queued container, or an estimate cleared afterwards, is not re-judged.
+
+A person queues it anyway with `staple queue add <ref> --override -m "<reason>"`
+(MCP `enqueue_task {override_reason}`, HTTP `/api/queue/enqueue` with
+`overrideReason`). The reason is mandatory, becomes the entry's note when none is
+given, and **`queue_estimate_overridden`** records `actor`, `reason` and the
+`unestimated` tickets. It is written only when the override stepped over something.
+The web UI offers no override, here as for checkout; it shows the refusal. A null
+`overrideReason` on HTTP is no override, and a non-string one is refused. (Pinned by
+`queue-require-estimate.test.ts`, and `queue-surfaces.test.ts` — *"an override
+queues it on every surface and records who and why"*.)
+
 ## Lifecycle of an entry
 
 **Resolved entries are kept, hidden and skipped.** When a queued issue — or a
@@ -461,7 +485,7 @@ mutation carries the actor and the resulting revision"*.)
 |---|---|---|
 | `staple queue [ls] [--all] [--effective] [--actor A]` | `list_queue` | `GET /api/queue` |
 | `staple queue next [--actor A] [--scope <ref>]` | `next_task {scope}` | `GET /api/queue/next?scope=` |
-| `staple queue add <ref> [--before R \| --after R \| --at N] [--base N] [-m note]` | `enqueue_task` | `POST /api/queue/enqueue` |
+| `staple queue add <ref> [--before R \| --after R \| --at N] [--base N] [-m note] [--override -m why]` | `enqueue_task {override_reason}` | `POST /api/queue/enqueue` (`overrideReason`) |
 | `staple queue rm <ref> [--base N]` | `dequeue_task` | `POST /api/queue/remove` |
 | `staple queue mv <ref> (--before R \| --after R \| --at N) [--base N]` | `move_queue_entry` | `POST /api/queue/move` |
 | `staple queue reorder <r1,r2,…> [--base N]` | `reorder_queue` | `POST /api/queue/reorder` |

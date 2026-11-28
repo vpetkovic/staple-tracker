@@ -77,6 +77,7 @@ syncs it sees the same value.
 |---|---|---|---|
 | `queue.policy` | `advisory`, `strict` | `advisory` | Whether the [pickup queue](queue.md) only orders work, or refuses an agent that takes a ticket out of turn |
 | `queue.silentClaimMinutes` | 1 to 10080 | `30` | How long a claim's holder may write nothing and send no attempt heartbeat before `staple attention` lists the claim. It never releases or takes over the claim |
+| `queue.requireEstimate` | `true`, `false` | `false` | When on, `staple queue add` refuses work with no estimate and names it: a ticket by its own estimate, an epic or milestone by the open tickets it would hand to agents. A person queues it anyway with `--override -m "<why>"` (MCP `override_reason`), which is recorded. The check runs when work is added: entries already queued, and work added later under a queued epic, are not checked |
 | `kinds.default` | a kind from `staple kinds ls` | `task` | The kind a new ticket gets when none is given |
 | `kinds.appearance` | an icon per kind | built-in icons | The icon each kind shows; set it in the web UI under **Settings → Task types** |
 | `features.planning` | `true`, `false` | `false`; `staple init` stores `true` in a new workspace | Turns on [planning](plan.md): ideas, horizons and the Plan view. A workspace made by an older build, or never given a value, reads the default. Only a person changes it, under **Settings → Features** or with `--person`; turning it off keeps the data |

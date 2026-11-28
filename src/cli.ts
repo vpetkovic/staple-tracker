@@ -1378,9 +1378,11 @@ The pickup queue
               the one row an agent should take, and every row it stepped over
               with why (resolved, gated, blocked, claimed); --scope limits both to
               the work inside an epic, a milestone or any parent, queued or not
-  queue add <ref> [--before R|--after R|--at N] [--base N] [-m note]
+  queue add <ref> [--before R|--after R|--at N] [--base N] [-m note] [--override -m why]
               queue a task, an epic or a milestone; a container is never picked up
-              itself, it expands to its open leaf work
+              itself, it expands to its open leaf work. With queue.requireEstimate
+              on, work with no estimate is refused, naming it; a person queues it
+              anyway with --override -m <why>, which is recorded
   queue rm <ref> [--base N]
   queue mv <ref> (--before R|--after R|--at N) [--base N]
   queue reorder <r1,r2,...> [--base N]  every entry, once, in the new order, atomically

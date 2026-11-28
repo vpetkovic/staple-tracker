@@ -312,6 +312,22 @@ const definitions: SettingDefinition[] = [
     },
   },
   {
+    key: "queue.requireEstimate",
+    category: "queue",
+    scope: "workspace",
+    schema: { type: "boolean" },
+    default: false,
+    version: 1,
+    sensitivity: "normal",
+    ui: {
+      label: "Require an estimate to queue",
+      description:
+        "When on, adding work to the queue is refused while it has no estimate: a task by its own, an epic or milestone by its open tasks. The refusal names them. Entries already queued stay. A person can queue it anyway from the CLI or MCP with an override and a reason, which is recorded.",
+      control: "toggle",
+      order: 30,
+    },
+  },
+  {
     key: "features.planning", category: "features", scope: "workspace",
     schema: { type: "boolean" }, default: false, version: 1, sensitivity: "normal",
     ui: { label: "Planning", description: "Ideas, horizons and the Plan view. On for a new workspace. Only a person can change this; turning it off keeps all planning data.", control: "toggle", order: 10, resettable: false },
