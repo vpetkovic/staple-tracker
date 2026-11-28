@@ -30,7 +30,7 @@ const PAGE_SIZE = 50;
 const MAX_BYTES = 2_000_000;
 const TIMEOUT_MS = 15_000;
 
-/** Whose key a variable holds, for configure to bind. One identity-only query; the key never leaves this process. */
+/** Whose key a variable holds, for configure to bind. One identity-only query; the key goes only to Linear. */
 export async function discoverLinear(credentialEnv: string, dependencies: Transport = {}): Promise<LinearIdentity> {
   if (!linearConnectionSchema.shape.credentialEnv.safeParse(credentialEnv).success) throw new StapleError("validation", "Name the Linear API key variable in capitals, like STAPLE_LINEAR_API_KEY");
   const { viewer, organization: org } = await linearQuery(credentialEnv, dependencies, "", {}, z.object({}));

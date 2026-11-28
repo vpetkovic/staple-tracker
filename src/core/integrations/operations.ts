@@ -75,13 +75,22 @@ export class IntegrationOperations {
    */
   private async configureLinear(c:IntegrationCommand):Promise<ProviderConnection> {
     const credentialEnv=need(c.credentialEnv,"credential environment variable name");
-    const expected={account:linearUuid(c.account,"Linear user id"),scopeId:linearUuid(c.scopeId,"Linear organization id")};
+    if (c.connectionId!==undefined && !/^[A-Za-z0-9_-]{1,80}$/.test(c.connectionId)) throw new StapleError("validation","Use a connection id of letters, digits, - and _");
+    const typed={account:linearUuid(c.account,"Linear user id"),scopeId:linearUuid(c.scopeId,"Linear organization id")};
+    // Editing a connection checks the key against the user and organization it was made with; new ids rebind it.
+    const edited=c.connectionId===undefined ? undefined : this.connections.resolve(c.connectionId);
+    const expected=edited?.providerId==="linear" && !typed.account && !typed.scopeId ? {account:edited.account,scopeId:edited.scopeId} : typed;
     if (this.options.liveReadsAvailable===false) throw new StapleError("unavailable","Cached-only session. Connect Linear on the machine running Staple.");
-    const candidate={id:c.connectionId ?? "linear",providerId:"linear" as const,mode:"api" as const,host:"linear.app" as const,account:expected.account ?? "",scopeId:expected.scopeId ?? "",credentialEnv};
+    const candidate={id:edited?.id ?? c.connectionId ?? "linear",providerId:"linear" as const,mode:"api" as const,host:"linear.app" as const,account:expected.account ?? "",scopeId:expected.scopeId ?? "",credentialEnv};
     try {
       const found=await (this.options.discoverLinear ?? discoverLinear)(credentialEnv);
       checkLinearIdentity({viewer:{id:found.account,...(found.login ? {name:found.login} : {})},organization:{id:found.scopeId}},expected,credentialEnv);
-      return this.connections.save({...candidate,id:c.connectionId,account:found.account,scopeId:found.scopeId});
+      // Without an id, the same user, organization and variable update the binding they already have.
+      const same=c.connectionId===undefined ? this.connections.list().find(x=>x.providerId==="linear" && x.account===found.account && x.scopeId===found.scopeId && x.credentialEnv===credentialEnv) : undefined;
+      const saved=this.connections.save({...candidate,id:edited?.id ?? c.connectionId ?? same?.id,account:found.account,scopeId:found.scopeId});
+      // The key just answered: a failure health remembered for this binding is out of date.
+      this.caches.health.expire(this.healthKey(saved));
+      return saved;
     } catch (error) {
       if (!(error instanceof StapleError) || error.code==="validation") throw error;
       const refused=snapshot(candidate,healthFromError(error),new Date());

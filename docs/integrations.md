@@ -154,8 +154,10 @@ process. For a background service, configure its environment privately. Never pa
 CLI argument or paste it into a connection form.
 
 From the CLI or an agent, name only the variable: Staple reads the key's user and organization once
-with Linear's `viewer` and `organization` query and saves their ids. The key never leaves the
-process running Staple. You can still pass `--account USER_UUID` and `--scope ORGANIZATION_UUID`
+with Linear's `viewer` and `organization` query and saves their ids. The key is sent only to
+Linear's API; it is never saved, returned or logged. Editing a connection without ids checks the
+key against the user and organization it was made with, and configuring the same user,
+organization and variable again updates that connection instead of adding another. You can still pass `--account USER_UUID` and `--scope ORGANIZATION_UUID`
 (MCP `account` and `scopeId`); they are checked against the key, and a key that answers for a
 different user or organization is refused. A missing or rejected key is refused with the same
 message and action that connection health would show, in the error's `detail.state` and

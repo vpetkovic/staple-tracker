@@ -101,6 +101,36 @@ describe("configuring Linear from its API key", () => {
     expect(await service.execute({ action: "connections" })).toMatchObject({ connections: [] });
   });
 
+  it("keeps an edited connection's user and organization unless new ids are given, and reuses a binding instead of copying it", async () => {
+    const { service, state, api } = setup();
+    await service.execute({ action: "configure", providerId: "linear", connectionId: "linear", credentialEnv: ENV });
+    state.viewer = OTHER; state.org = OTHER;
+    // The variable now holds someone else's key: an edit without ids is a check, not a rebind.
+    const moved = await refusal(service.execute({ action: "configure", providerId: "linear", connectionId: "linear", credentialEnv: ENV }));
+    expect(moved).toMatchObject({ code: "auth", detail: { state: "account_mismatch", login: "Grace Hopper" } });
+    expect(await service.execute({ action: "connections" })).toMatchObject({ connections: [{ id: "linear", account: ACCOUNT, scopeId: ORG }] });
+    // Naming the new user and organization rebinds it deliberately.
+    expect(await service.execute({ action: "configure", providerId: "linear", connectionId: "linear", account: OTHER, scopeId: OTHER, credentialEnv: ENV })).toMatchObject({ id: "linear", account: OTHER, scopeId: OTHER });
+    // Without a connection id, the same user, organization and variable update the one binding.
+    expect(await service.execute({ action: "configure", providerId: "linear", credentialEnv: ENV })).toMatchObject({ id: "linear", account: OTHER, scopeId: OTHER });
+    expect(await service.execute({ action: "configure", providerId: "linear", credentialEnv: ENV })).toMatchObject({ id: "linear" });
+    expect((await service.execute({ action: "connections" }) as { connections: unknown[] }).connections).toHaveLength(1);
+    // An id the connection could never be saved under is refused before the key is read.
+    const calls = api.mock.calls.length;
+    await expect(service.execute({ action: "configure", providerId: "linear", connectionId: "bad id!", credentialEnv: ENV })).rejects.toMatchObject({ code: "validation" });
+    expect(api.mock.calls.length).toBe(calls);
+  });
+
+  it("forgets a stale health result once configure has read the key successfully", async () => {
+    const { service, state } = setup();
+    await service.execute({ action: "configure", providerId: "linear", connectionId: "linear", credentialEnv: ENV });
+    state.key = undefined;
+    expect(await service.execute({ action: "health", connectionId: "linear", force: true })).toMatchObject({ health: [{ state: "unauthenticated" }] });
+    state.key = KEY;
+    await service.execute({ action: "configure", providerId: "linear", connectionId: "linear", credentialEnv: ENV });
+    expect(await service.execute({ action: "health", connectionId: "linear" })).toMatchObject({ health: [{ state: "ready" }] });
+  });
+
   it("needs a live session to read the key, even with both UUIDs given", async () => {
     const { service, api } = setup({ liveReadsAvailable: false });
     await expect(service.execute({ action: "configure", providerId: "linear", account: ACCOUNT, scopeId: ORG, credentialEnv: ENV })).rejects.toMatchObject({ code: "unavailable" });
