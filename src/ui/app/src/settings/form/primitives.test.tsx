@@ -256,6 +256,16 @@ describe("ReorderList content below a row lines up with the row", () => {
     expect(offsetPx(belowWrapper(html))).toBe(30);
   });
 
+  it("the 30 is the handle column it clears: a p-1 button around a size-3.5 grip (22px), plus the row's gap-2 (8px)", () => {
+    const html = render(false);
+    const handle = buttonTag(html, 'aria-label="Drag Alpha to reorder"');
+    expect(handle).toMatch(/class="[^"]*(?<![\w-])p-1(?![\w.-])/);
+    const grip = html.slice(html.indexOf(handle) + handle.length).match(/<svg[^>]*>/)![0];
+    expect(grip).toMatch(/class="[^"]*(?<![\w-])size-3\.5(?![\w.-])/);
+    const line = html.slice(html.lastIndexOf("<div", html.indexOf(handle)), html.indexOf(handle));
+    expect(line).toMatch(/class="[^"]*(?<![\w-])gap-2(?![\w.-])/);
+  });
+
   it("as cards, where there is no drag handle, does not indent it at all", () => {
     const html = render(true);
     expect(html).not.toContain("to reorder");
