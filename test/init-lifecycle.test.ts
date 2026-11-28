@@ -334,26 +334,36 @@ describe("`staple init` leaves nothing behind when it refuses", () => {
     expect(refused.status).not.toBe(0);
     expect(refused.stderr).toContain("is registered with prefix RAC");
 
-    // THE ASSERTION: the database it created carries no stamp, so it is not wedged.
-    const dbPath = join(second, ".staple", "staple.db");
-    expect(existsSync(dbPath)).toBe(true);
-    const db = new DatabaseSync(dbPath);
-    try {
-      const rows = db
-        .prepare("SELECT key FROM meta WHERE key IN ('slug', 'prefix') ORDER BY key")
-        .all() as Array<{ key: string }>;
-      expect(rows).toEqual([]);
-    } finally {
-      db.close();
-    }
+    // THE ASSERTION: the refusal wrote nothing, so the directory is not wedged.
+    expect(existsSync(join(second, ".staple"))).toBe(false);
 
     // And the escape actually works, which is the property a person cares about.
     const retry = cli(second, ["init", "--slug", "race-two"]);
     expect(retry.status).toBe(0);
+    expect(retry.stdout).toContain('Created workspace "race-two"');
     const listed = JSON.parse(cli(second, ["hub", "ls", "--json"]).stdout) as Array<{
       slug: string;
     }>;
     expect(listed.map((r) => r.slug).sort()).toContain("race-two");
+  }, 90_000);
+
+  it("a directory named like a registered workspace refuses without a database, and the retry creates", () => {
+    // The getting-started repro: two repositories whose directories are both called `app`.
+    const first = join(repo("named-a"), "app");
+    mkdirSync(first);
+    expect(cli(first, ["init", "--yes"]).status).toBe(0);
+
+    const second = join(repo("named-b"), "app");
+    mkdirSync(second);
+    const refused = cli(second, ["init", "--yes"]);
+    expect(refused.status).toBe(4);
+    expect(refused.stderr).toContain('Workspace "app" is registered with prefix APP');
+    expect(diskTree(second)).toEqual([]);
+
+    const retry = cli(second, ["init", "--yes", "--slug", "app2", "--json"]);
+    expect(retry.status).toBe(0);
+    const report = JSON.parse(retry.stdout) as { created: boolean; slug: string; planning: boolean };
+    expect(report).toMatchObject({ created: true, slug: "app2", planning: true });
   }, 90_000);
 
   it("does not disturb a database that already carried a stamp", () => {
