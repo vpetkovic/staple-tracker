@@ -61,8 +61,9 @@ export function subtreePullRequestsFor(
   if (rootIds.length === 0) return result;
   const hideIdeas = store.planningOn() ? 0 : 1;
   // Pre-order by the path of creation times from the root; the depth cap stops a corrupt cycle.
-  // Siblings made in the same millisecond follow their number (zero-padded, so 9 before 10), and
-  // their id only past that, so the order is creation order and not a random UUID's.
+  // Siblings made in the same millisecond follow their number (zero-padded, so 9 before 10; a sync
+  // stand-in `STA-5+1` by its 5), and their id only past that: the same order on every device, and
+  // not a random UUID's.
   const rows = store.db
     .prepare(
       `WITH RECURSIVE sub(root, top, id, identifier, title, path, depth) AS (
@@ -71,7 +72,8 @@ export function subtreePullRequestsFor(
             AND EXISTS (SELECT 1 FROM issues c WHERE c.parent_id = i.id AND (? = 0 OR c.kind <> '${IDEA_KIND}'))
          UNION ALL
          SELECT sub.root, COALESCE(sub.top, c.id), c.id, c.identifier, c.title, sub.path || '/' || c.created_at
-                || printf('%020d', CAST(substr(c.identifier, length(rtrim(c.identifier, '0123456789')) + 1) AS INTEGER))
+                || printf('%020d', (SELECT CAST(substr(n, length(rtrim(n, '0123456789')) + 1) AS INTEGER)
+                                   FROM (SELECT substr(c.identifier, 1, instr(c.identifier || '+', '+') - 1) AS n)))
                 || c.id,
                 sub.depth + 1
            FROM sub JOIN issues c ON c.parent_id = sub.id

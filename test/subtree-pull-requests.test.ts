@@ -119,24 +119,50 @@ describe("a parent's subtree pull requests", () => {
     store.db.close();
   });
 
-  it("orders children made in the same millisecond by their number, not their random id", () => {
+  it("orders children made in the same millisecond by their number, not their random id or insertion order", () => {
     const { store, link } = setup();
     const epic = store.createIssue({ title: "Epic" });
     // Burn numbers so the children are SUB-9 and SUB-10: a text sort of identifiers would swap them.
     for (let n = 0; n < 7; n++) store.createIssue({ title: `Filler ${n}` });
-    // Made first but with the larger id: a tie-break on id would put it last.
-    const first = store.createIssue({ title: "First", parent: epic.id }, { id: "ffffffff-0000-4000-8000-000000000000" });
-    const second = store.createIssue({ title: "Second", parent: epic.id }, { id: "00000000-0000-4000-8000-000000000000" });
-    const grandchild = store.createIssue({ title: "Grandchild", parent: second.id }, { id: "11111111-0000-4000-8000-000000000000" });
-    expect([first.identifier, second.identifier]).toEqual(["SUB-9", "SUB-10"]);
-    store.db.prepare("UPDATE issues SET created_at = ? WHERE id IN (?, ?, ?)").run("2026-11-27T12:00:00.000Z", first.id, second.id, grandchild.id);
-    link(second.identifier, 61);
-    link(grandchild.identifier, 62);
-    link(first.identifier, 60);
+    // Inserted first, with the larger id and, after the swap below, the larger number: a tie-break
+    // on id or on local insertion order (rowid, which differs between devices) would put it first.
+    const ten = store.createIssue({ title: "Ten", parent: epic.id }, { id: "ffffffff-0000-4000-8000-000000000000" });
+    const nine = store.createIssue({ title: "Nine", parent: epic.id }, { id: "00000000-0000-4000-8000-000000000000" });
+    expect([ten.identifier, nine.identifier]).toEqual(["SUB-9", "SUB-10"]);
+    const renumber = store.db.prepare("UPDATE issues SET identifier = ? WHERE id = ?");
+    renumber.run("SUB-swap", ten.id);
+    renumber.run("SUB-9", nine.id);
+    renumber.run("SUB-10", ten.id);
+    // Two grandchildren under SUB-9 tie too, the later-made one with the smaller id.
+    const g1 = store.createIssue({ title: "G1", parent: nine.id }, { id: "eeeeeeee-0000-4000-8000-000000000000" });
+    const g2 = store.createIssue({ title: "G2", parent: nine.id }, { id: "11111111-0000-4000-8000-000000000000" });
+    store.db.prepare("UPDATE issues SET created_at = ? WHERE parent_id IN (?, ?)").run("2026-11-27T12:00:00.000Z", epic.id, nine.id);
+    link(ten.id, 60);
+    link(g2.id, 63);
+    link(g1.id, 62);
+    link(nine.id, 61);
     expect(keysOf(subtreePullRequests(store, epic.id))).toEqual([
-      ["team/repo#60", false, [first.identifier]],
-      ["team/repo#61", false, [second.identifier]],
-      ["team/repo#62", false, [grandchild.identifier]],
+      ["team/repo#61", false, ["SUB-9"]],
+      ["team/repo#62", false, [g1.identifier]],
+      ["team/repo#63", false, [g2.identifier]],
+      ["team/repo#60", false, ["SUB-10"]],
+    ]);
+    store.db.close();
+  });
+
+  it("orders a sync stand-in among same-millisecond siblings by its number, not its suffix", () => {
+    const { store, link } = setup();
+    const epic = store.createIssue({ title: "Epic" });
+    const seven = store.createIssue({ title: "Seven", parent: epic.id }, { id: "ffffffff-0000-4000-8000-000000000000" });
+    const standIn = store.createIssue({ title: "Stand-in", parent: epic.id }, { id: "00000000-0000-4000-8000-000000000000" });
+    store.db.prepare("UPDATE issues SET identifier = ? WHERE id = ?").run("SUB-8+1", standIn.id);
+    store.db.prepare("UPDATE issues SET identifier = ? WHERE id = ?").run("SUB-7", seven.id);
+    store.db.prepare("UPDATE issues SET created_at = ? WHERE parent_id = ?").run("2026-11-27T12:00:00.000Z", epic.id);
+    link(standIn.id, 71);
+    link(seven.id, 70);
+    expect(keysOf(subtreePullRequests(store, epic.id))).toEqual([
+      ["team/repo#70", false, ["SUB-7"]],
+      ["team/repo#71", false, ["SUB-8+1"]],
     ]);
     store.db.close();
   });
