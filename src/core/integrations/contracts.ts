@@ -28,11 +28,23 @@ export interface ResolvedExternalItem {
   url: string;
 }
 
+/** The workflow category a provider files a state under: Linear's state type. */
+export const EXTERNAL_STATUS_CATEGORIES = ["triage", "backlog", "unstarted", "started", "completed", "canceled"] as const;
+export type ExternalStatusCategory = typeof EXTERNAL_STATUS_CATEGORIES[number];
+export function isExternalStatusCategory(value: unknown): value is ExternalStatusCategory {
+  return (EXTERNAL_STATUS_CATEGORIES as readonly unknown[]).includes(value);
+}
+
+/**
+ * Native state; do not coerce a provider's workflow into GitHub open/closed. `category` is present
+ * only when the provider files its states under one (Linear); GitHub's open/closed/merged has none.
+ */
+export interface ExternalStatus { id: string; name: string; category?: ExternalStatusCategory }
+
 export interface ExternalItem extends ResolvedExternalItem {
   title: string;
   body: string | null;
-  /** Native state; do not coerce a provider's workflow into GitHub open/closed. */
-  status: { id: string; name: string } | null;
+  status: ExternalStatus | null;
   /** When the source was actually read, not when the local ticket was modified. */
   fetchedAt: string;
   /** Linear only, when the issue belongs to a project: the project, for project-mapped scopes. */

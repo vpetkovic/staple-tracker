@@ -46,6 +46,21 @@ describe("external resource persistence", () => {
     expect(links.resource(linked.resource.id).body).toBe("Remote context");
   });
 
+  it("keeps a status category through the saved copy and a refresh, and a GitHub status stays without one", () => {
+    const { links, first } = setup();
+    const linear = (category: string | undefined, fetchedAt: string): ExternalItem => ({ ...source(),
+      ref: { providerId: "linear", host: "linear.app", scopeId: "org", containerId: "team", id: "issue-1", kind: "issue" },
+      key: "ENG-1", url: "https://linear.app/acme/issue/ENG-1",
+      status: { id: "state-1", name: "In review", ...(category ? { category } : {}) } as ExternalItem["status"], fetchedAt });
+    const linked = links.link(first.id, linear("started", "2026-11-23T12:00:00Z"), "ada");
+    expect(links.resource(linked.resource.id).status).toEqual({ id: "state-1", name: "In review", category: "started" });
+    links.remember(linear("completed", "2026-11-23T13:00:00Z"));
+    expect(links.list(first.id)[0]?.resource.status).toEqual({ id: "state-1", name: "In review", category: "completed" });
+    expect(() => links.remember(linear("paused", "2026-11-23T14:00:00Z"))).toThrow(/invalid status/);
+    const github = links.link(first.id, source(), "ada");
+    expect(links.resource(github.resource.id).status).toEqual({ id: "open", name: "Open" });
+  });
+
   it("does not persist transport, credentials or unknown adapter fields", () => {
     const { links, first, store } = setup();
     links.link(first.id, { ...source(), connection: { token: "synthetic-secret" } } as ExternalItem, "ada");

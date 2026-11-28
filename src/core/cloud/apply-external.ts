@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import { externalLinkId, externalResourceId, resourcePayload, type ResourceRow } from "../integrations/link-store.js";
+import { EXTERNAL_STATUS_CATEGORIES } from "../integrations/contracts.js";
 import { StapleError } from "../types.js";
 import { ReferentMissing, type ApplyInput } from "./apply.js";
 
@@ -10,7 +11,8 @@ const resourceSchema = z.object({
   providerId: text, host: text, scopeId: text, containerId: text, remoteId: text,
   kind: z.enum(["issue", "pull_request"]), key: text, url: z.string().max(8192).url(),
   context: z.object({ shared: z.boolean(), title: z.string().max(8192).nullable(), body: z.string().max(256 * 1024).nullable(),
-  status: z.object({ id: z.string().max(512), name: z.string().max(512) }).nullable(), fetchedAt: timestamp.nullable() }),
+  // A category this build does not know is dropped, not refused, so a newer peer cannot stall the apply.
+  status: z.object({ id: z.string().max(512), name: z.string().max(512), category: z.enum(EXTERNAL_STATUS_CATEGORIES).optional().catch(undefined) }).nullable(), fetchedAt: timestamp.nullable() }),
   createdAt: timestamp, updatedAt: timestamp,
 });
 const linkSchema = z.object({ issueId: text, resourceId: text,
