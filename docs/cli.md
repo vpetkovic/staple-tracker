@@ -61,7 +61,7 @@ Guide: [Install and first workspace](getting-started.md).
 | Command | What it does |
 |---|---|
 | `staple` | Set this repository up if it needs it, then open the web UI. `--yes` takes the defaults. |
-| `staple init [--yes] [--slug s] [--no-planning]` | Create and register a workspace, write `.staple/AGENTS.md` for agents, and exit. `--global <slug>` makes one outside any repository. A new workspace starts with [planning](plan.md) on, its horizons Now and Next taking the first two ticket numbers; `--no-planning` starts it without. An existing workspace keeps its own setting. |
+| `staple init [--yes] [--slug s] [--no-planning]` | Create and register a workspace, write `.staple/AGENTS.md` for agents, and exit. `--global <slug>` makes one outside any repository. A new workspace starts with [planning](plan.md) on, its horizons Now and Next taking the first two ticket numbers; `--no-planning` starts it without. An existing workspace keeps its own setting. A slug another workspace already holds is refused (exit 4) before anything is written; retry with `--slug <other>`. |
 | `staple install [--yes] [--update-path]` | Install a runtime so `staple` is on your PATH. `install status` shows it; `--rollback` returns to the previous one. |
 | `staple doctor [--json] [--db <path> \| --ws <slug>]` | Check the home, config, workspace, UI port and runtime, read-only. Without `--db` or `--ws` it checks the workspace found from the current directory (`--dir` names another directory). Exits 1 when a check fails and prints the repair. |
 | `staple doctor --fix --only <check> --yes` | Apply one named repair. |
