@@ -7,6 +7,9 @@ import { createBackup, restoreFromBackup, setBackupConsent } from "../src/core/c
 import { differences, stateOf } from "./fixtures/synchronized-state.js";
 import { localInventory } from "../src/core/cloud/seed.js";
 import { subtreePullRequests } from "../src/core/subtree-pull-requests.js";
+import { resourcePayload, type ResourceRow } from "../src/core/integrations/link-store.js";
+import { applyExternal } from "../src/core/cloud/apply-external.js";
+import type { ApplyInput } from "../src/core/cloud/apply.js";
 
 const REPO = "a77a0000-0000-4000-8000-000000000501";
 const item = (id = "1", kind: "issue" | "pull_request" = "issue"): ExternalItem => ({
@@ -43,6 +46,24 @@ describe("external links across devices", () => {
     expect(a.store.externalLinks().resource(link.resource.id).body).toBe("Private source body");
     const newcomer = fleet.machine("newcomer"); await newcomer.sync();
     expect(newcomer.store.externalLinks().resource(link.resource.id).body).toBeNull();
+  }, 60_000);
+
+  it("carries a shared status category to another device, and drops a category it does not know", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const a = fleet.machine("writer"), b = fleet.machine("reader");
+    await a.sync(); await b.sync(); a.use();
+    const issue = a.store.createIssue({ title: "Linear task" });
+    const linear: ExternalItem = { ...item(), ref: { providerId: "linear", host: "linear.app", scopeId: "org", containerId: "team", id: "issue-1", kind: "issue" },
+      key: "ENG-1", url: "https://linear.app/acme/issue/ENG-1", status: { id: "state-1", name: "In review", category: "started" } };
+    const link = a.store.externalLinks().link(issue.id, linear, "writer");
+    a.store.externalLinks().shareContext(link.resource.id, true, "writer");
+    await a.sync(); await b.sync();
+    expect(b.store.externalLinks().resource(link.resource.id).status).toEqual({ id: "state-1", name: "In review", category: "started" });
+    b.use();
+    const payload: Record<string, unknown> = { ...resourcePayload(b.db.prepare("SELECT * FROM external_resources WHERE id=?").get(link.resource.id) as unknown as ResourceRow), updatedAt: "2026-11-23T15:00:00.000Z" };
+    (payload.context as { status: Record<string, unknown> }).status.category = "paused";
+    applyExternal(b.db, { entity: "externalResource", entityId: link.resource.id, verb: "update", payload, actor: "reader", at: "2026-11-23T15:00:00.000Z", deviceId: "d", opId: "o" } satisfies ApplyInput);
+    expect(b.store.externalLinks().resource(link.resource.id).status).toEqual({ id: "state-1", name: "In review" });
   }, 60_000);
 
   it("hydrates explicit stacks and permits unlink/relink without duplicate pairs", async () => {

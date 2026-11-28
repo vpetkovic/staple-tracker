@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { WorkspaceStore } from "../store.js";
 import { StapleError, nowIso } from "../types.js";
-import type { ExternalItem, ExternalItemRef, PullRequestChecks, PullRequestDetails, ResolvedExternalItem } from "./contracts.js";
+import { isExternalStatusCategory, type ExternalItem, type ExternalItemRef, type PullRequestChecks, type PullRequestDetails, type ResolvedExternalItem } from "./contracts.js";
 import { externalItemKey } from "./provider.js";
 
 /** The event an unlink records, so `integrations discover` never links the same pull request to the ticket again. */
@@ -92,14 +92,14 @@ export function resourceFromRow(row: ResourceRow): ExternalResource {
  */
 function statusJson(item: Pick<ExternalItem, "status" | "spaceId" | "listIds" | "pullRequest">): string | null {
   if (!item.status) return null;
-  return JSON.stringify({ id: item.status.id, name: item.status.name,
+  return JSON.stringify({ id: item.status.id, name: item.status.name, ...(item.status.category ? { category: item.status.category } : {}),
     ...(item.spaceId ? { spaceId: item.spaceId } : {}), ...(item.listIds?.length ? { listIds: item.listIds } : {}),
     ...(item.pullRequest ? { pullRequest: item.pullRequest } : {}) });
 }
 function readStatus(json: string | null): ExternalItem["status"] {
   if (json === null) return null;
-  const { id, name } = JSON.parse(json) as { id: string; name: string };
-  return { id, name };
+  const { id, name, category } = JSON.parse(json) as { id: string; name: string; category?: unknown };
+  return { id, name, ...(isExternalStatusCategory(category) ? { category } : {}) };
 }
 function readExtras(json: string | null): Pick<ExternalResource, "spaceId" | "listIds" | "pullRequest"> {
   if (json === null) return {};
@@ -160,7 +160,8 @@ export class ExternalLinkStore {
       throw new StapleError("validation", "External context needs a title, optional body and valid read timestamp");
     }
     if (full && (input.title.length > 8192 || Buffer.byteLength(input.body ?? "") > 256 * 1024
-      || (input.status !== null && (!input.status || typeof input.status !== "object" || typeof input.status.id !== "string" || typeof input.status.name !== "string" || input.status.id.length > 512 || input.status.name.length > 512)))) {
+      || (input.status !== null && (!input.status || typeof input.status !== "object" || typeof input.status.id !== "string" || typeof input.status.name !== "string" || input.status.id.length > 512 || input.status.name.length > 512
+        || (input.status.category !== undefined && !isExternalStatusCategory(input.status.category)))))) {
       throw new StapleError("validation", "External context exceeds its size limits or has an invalid status");
     }
     if (full && ((input.spaceId !== undefined && (typeof input.spaceId !== "string" || input.spaceId.length > 64))

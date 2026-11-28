@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { StapleError } from "../types.js";
 import { healthFromError } from "./health.js";
+import { isExternalStatusCategory } from "./contracts.js";
 import type { ConnectionHealth, ContainerKind, ExternalContainer, ExternalItem, ExternalItemRef, ExternalLocator, ExternalSearch, IntegrationAdapter, ProviderReadOptions } from "./contracts.js";
 
 const uuid = z.string().uuid().toLowerCase();
@@ -17,11 +18,11 @@ const identity = { viewer: z.object({ id: uuid, name: z.string().max(256).option
 const team = z.object({ id: uuid, key: slug, name: z.string().max(8192), organization: z.object({ id: uuid }) });
 const issue = z.object({ id: uuid, identifier: z.string().regex(/^[A-Za-z][A-Za-z0-9_]*-[1-9][0-9]*$/),
   title: z.string().max(8192), description: z.string().max(1_000_000).nullable(), url: z.string().max(8192),
-  state: z.object({ id: uuid, name: z.string().max(8192) }), team, project: z.object({ id: uuid }).nullable().optional() });
+  state: z.object({ id: uuid, name: z.string().max(8192), type: z.unknown().optional() }), team, project: z.object({ id: uuid }).nullable().optional() });
 const project = z.object({ id: uuid, name: z.string().max(8192), url: z.string().max(8192) });
 const pageInfo = z.object({ hasNextPage: z.boolean(), endCursor: z.string().min(1).max(2048).nullable() });
 const IDENTITY = "viewer { id name } organization { id urlKey name }";
-const FIELDS = "id identifier title description url state { id name } team { id key name organization { id } } project { id }";
+const FIELDS = "id identifier title description url state { id name type } team { id key name organization { id } } project { id }";
 const PAGE_SIZE = 50;
 const MAX_BYTES = 2_000_000;
 const TIMEOUT_MS = 15_000;
@@ -160,7 +161,10 @@ export class LinearApiAdapter implements IntegrationAdapter {
         || !(url.pathname === prefix || new RegExp(`^${prefix}/[A-Za-z0-9_-]+/?$`).test(url.pathname))) throw new Error();
     } catch { throw new StapleError("unavailable", "Linear returned an unexpected issue URL"); }
     return { ref: { ...this.scope, containerId: source.team.id, id: source.id, kind: "issue" }, key: source.identifier,
-      url: url.href, title: source.title, body: source.description, status: source.state, fetchedAt: this.now().toISOString(),
+      url: url.href, title: source.title, body: source.description,
+      // A state type Linear adds later reads as a state without a category, not a failed read.
+      status: { id: source.state.id, name: source.state.name, ...(isExternalStatusCategory(source.state.type) ? { category: source.state.type } : {}) },
+      fetchedAt: this.now().toISOString(),
       ...(source.project ? { projectId: source.project.id } : {}) };
   }
   private projectUrl(input: string): string {
