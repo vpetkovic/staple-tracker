@@ -152,3 +152,36 @@ describe("on a narrow pane each entry is a card with every control at thumb size
     expect(statuses).toContain('data-reorder-layout="rows"');
   });
 });
+
+describe("an entry's inline content (error, glyph picker, remove confirmation) lines up with its entry", () => {
+  /** The padding on the element `ReorderList` wraps the `todo` row's below-content in. */
+  const belowOffset = (markup: string) => {
+    const row = markup.indexOf('data-reorder-row="todo"');
+    const next = markup.indexOf("data-reorder-row=", row + 1);
+    const rowMarkup = markup.slice(row, next < 0 ? undefined : next);
+    const tags = rowMarkup.match(/<div[^>]*style="[^"]*padding-left:[^"]*"[^>]*>/g) ?? [];
+    expect(tags.length).toBeLessThanOrEqual(1);
+    return Number(/padding-left:\s*(\d+)px/.exec(tags[0] ?? "")?.[1] ?? 0);
+  };
+
+  it("in the table it starts under the entry's fields, past the drag handle", () => {
+    expect(statuses).toContain('aria-label="Drag Todo to reorder"');
+    expect(belowOffset(statuses)).toBe(30);
+  });
+
+  it("on a card, which has no drag handle, it starts at the card's own edge", () => {
+    const cards = renderToStaticMarkup(
+      <VocabularyList
+        target="statuses"
+        rows={statusRows(SEED_SETTINGS.statuses)}
+        usage={{ todo: 3, done: 0 }}
+        categories={SEED_SETTINGS.categories}
+        requiredCategories={SEED_SETTINGS.requiredCategories}
+        write={write}
+        layout="cards"
+      />,
+    );
+    expect(cards).not.toContain("Drag Todo to reorder");
+    expect(belowOffset(cards)).toBe(0);
+  });
+});
