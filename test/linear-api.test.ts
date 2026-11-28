@@ -9,7 +9,7 @@ const other = "55555555-5555-4555-8555-555555555555";
 const config: LinearApiConnection = { id:"linear-work", providerId:"linear", mode:"api", host:"linear.app", account, scopeId:org, credentialEnv:"STAPLE_LINEAR_API_KEY" };
 const identity = { viewer:{id:account,name:"Ada Lovelace"},organization:{id:org,urlKey:"acme",name:"Acme"} };
 const team = { id:teamId,key:"ENG",name:"Engineering",organization:{id:org} };
-const issue = { id:issueId,identifier:"ENG-12",title:"Issue title",description:"Source context",url:"https://linear.app/acme/issue/ENG-12/issue-title",state:{id:other,name:"In review"},team };
+const issue = { id:issueId,identifier:"ENG-12",title:"Issue title",description:"Source context",url:"https://linear.app/acme/issue/ENG-12/issue-title",state:{id:other,name:"In review",type:"started"},team };
 const pageInfo = {hasNextPage:false,endCursor:null};
 function setup(respond: (body: {query:string;variables:Record<string,unknown>}) => Record<string, unknown> = () => ({issue})) {
   const fetch = vi.fn(async (_url: unknown, request: RequestInit | undefined) => {
@@ -36,6 +36,16 @@ describe("read-only Linear API adapter",()=>{
     expect(fetch.mock.calls.every(([,r])=>!String(r?.body).includes("mutation"))).toBe(true);
     expect(reader.capabilities).toEqual({readPullRequests:false,searchPullRequests:false,discoverPullRequests:false});
     await expect(reader.search("pull_request",{text:""})).rejects.toMatchObject({code:"protocol_unsupported"});
+  });
+  it("reads the workflow state's type as the status category, and omits a type it does not know",async()=>{
+    const ref={providerId:"linear",host:"linear.app",scopeId:org,containerId:teamId,id:issueId,kind:"issue"} as const;
+    const {adapter,fetch}=setup();
+    expect((await adapter.readIssue(ref)).status).toEqual({id:other,name:"In review",category:"started"});
+    expect(JSON.parse(fetch.mock.calls.at(-1)![1]!.body as string).query).toContain("state { id name type }");
+    for(const type of ["triage","backlog","unstarted","completed","canceled"])
+      expect((await setup(()=>({issue:{...issue,state:{id:other,name:"S",type}}})).adapter.readIssue(ref)).status).toEqual({id:other,name:"S",category:type});
+    for(const state of [{id:other,name:"Odd",type:"paused"},{id:other,name:"Odd"},{id:other,name:"Odd",type:null},{id:other,name:"Odd",type:7},{id:other,name:"Odd",type:"x".repeat(100)}])
+      expect((await setup(()=>({issue:{...issue,state}})).adapter.readIssue(ref)).status).toEqual({id:other,name:"Odd"});
   });
   it("normalizes equivalent uppercase configured and returned UUIDs",async()=>{
     const account="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",scopeId="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";

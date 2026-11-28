@@ -182,8 +182,12 @@ staple integrations refresh --ws my-workspace --resource RESOURCE_ID --json
 Paste an exact issue URL in the link dialog, or type to search the mapped teams and projects,
 most recently updated first, with **Show more** for further pages. An empty field lists recent
 issues. Linear preserves native workflow states and uses organization, team and issue UUIDs for
-identity. Issue identifiers and URL slugs are display context. Linear has no PR capability; GitHub
-PRs can coexist with Linear issues on the same Staple ticket, and the **Pull requests** filter
+identity. A Linear status also carries its workflow category (`triage`, `backlog`, `unstarted`,
+`started`, `completed` or `canceled`, from the state's type) as `status.category`, in the saved copy
+and in shared context; GitHub statuses have no category. A machine on an earlier Staple version
+keeps only the state's id and name, so context it shares arrives without a category until a
+newer machine reads the issue again. Issue identifiers and URL slugs are display context. Linear
+has no PR capability; GitHub PRs can coexist with Linear issues on the same Staple ticket, and the **Pull requests** filter
 skips Linear sources.
 
 Requests use the fixed `https://api.linear.app/graphql` endpoint, a 15-second timeout, a 2 MB
