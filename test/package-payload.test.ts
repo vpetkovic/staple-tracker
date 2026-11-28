@@ -89,4 +89,29 @@ describe("the suite's packaged payload (STA-250)", () => {
       .map((file) => relative(REPO_ROOT, file));
     expect(offenders).toEqual([]);
   });
+
+  it("is the only payload built while the suite runs: no other test file rebuilds one", () => {
+    // The test above covers reads. This one covers writes. The race this arrangement
+    // ended was `package-tarball` calling `buildPackage()` in its own `beforeAll`
+    // while `install-real-package` read the result from another worker: the two
+    // files shared a directory that one of them was writing. The payload every
+    // package suite reads is still one directory, so a build started from a test
+    // file that lands there, or anywhere else a test reads, brings the race back.
+    // Only the globalSetup builds the suite's payload. Two test files also build,
+    // each into a scratch directory of its own that nothing else reads: the
+    // builder's own tests, and this file, which runs the globalSetup again above.
+    // A new builder has to be added here on purpose.
+    const builds =
+      /\bbuildPackage\b|scripts\/build-package|build-package\.(?:js|ts)\b|\bbuild:package\b|from\s+["'][^"']*setup\/package-payload(?:\.js)?["']/;
+    const allowed = ["test/build-package.test.ts", "test/package-payload.test.ts", "test/setup/package-payload.ts"];
+    const testFiles = [
+      ...sourceFiles(join(REPO_ROOT, "test")),
+      ...sourceFiles(join(REPO_ROOT, "src")).filter((file) => /\.test\.tsx?$/.test(file)),
+    ];
+    const builders = testFiles
+      .filter((file) => builds.test(readCode(file)))
+      .map((file) => relative(REPO_ROOT, file))
+      .filter((file) => !allowed.includes(file));
+    expect(builders).toEqual([]);
+  });
 });
