@@ -1,5 +1,5 @@
 import type { ExternalLink, ExternalRowSummary } from "../../../../core/integrations/link-store.js";
-import type { RowPullRequestCounts } from "../../../../core/integrations/pr-discovery.js";
+import type { BranchDiscoveryNotice, RowPullRequestCounts } from "../../../../core/integrations/pr-discovery.js";
 import type { SubtreePullRequest } from "../../../../core/subtree-pull-requests.js";
 import type { TicketBranch } from "../../../../core/ticket-branch.js";
 import type { HorizonData, IdeaData, IdeaDetailData, PlanStepData } from "./plan-types.js";
@@ -1156,6 +1156,12 @@ export interface IssueDetail {
   externalLinks?: ExternalLink[];
   /** The branch the work lives on (`staple branch`), else the newest branch-pointer comment; null when neither. */
   branch?: TicketBranch | null;
+  /**
+   * Why the branch has no pull request, from the web UI poll's last discovery run: its note
+   * (nothing mapped) and failures (signed out, forbidden), each with the connection's action.
+   * Both empty when the branch was read and none was found; absent when there is nothing to say.
+   */
+  pullRequestDiscovery?: BranchDiscoveryNotice;
   /**
    * A parent's pull requests and every descendant's (core/subtree-pull-requests.ts): its own
    * first, then its descendants' in tree order, each once with the tickets it is linked on.

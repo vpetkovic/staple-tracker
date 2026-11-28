@@ -1,3 +1,4 @@
+import { BranchDiscoveryNote } from "@/integrations/BranchDiscoveryNote";
 import { ExternalLinkAdd, ExternalPropertySummary } from "@/integrations/ExternalPropertySummary";
 import { ideaPlanHref } from "./PlannedIdeaLinks";
 import { ProvenanceChips } from "./Provenance";
@@ -775,6 +776,7 @@ function Properties({
               {detail.branch.base ? <span className="text-text-tertiary">{` · base ${detail.branch.base}`}</span> : null}
               {detail.branch.source === "comment" ? <span className="text-text-tertiary"> · from a comment</span> : null}
             </span>
+            {detail.pullRequestDiscovery ? <BranchDiscoveryNote notice={detail.pullRequestDiscovery} /> : null}
           </PropertyRow>
         ) : null}
         {!phone ? (

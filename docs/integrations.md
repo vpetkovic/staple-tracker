@@ -92,7 +92,9 @@ It only reads. It never unlinks, never writes to GitHub, and never changes a tic
 
 A `gh` that is not signed in, a connection in another failing state, or a workspace with no
 GitHub repository mapped finds nothing: the answer names the connection's state and what to do,
-and the connection's status in Settings shows the same. A repository outside the workspace's
+and the connection's status in Settings shows the same. When the web UI's last lookup found no
+pull request for a ticket's branch, the detail says so in a line under **Branch**, with the
+reason and the action (for example `Run gh auth login --hostname github.com ...`). A repository outside the workspace's
 mapping is never read, and a branch of the same name in a fork does not count.
 
 Check results come from both places GitHub keeps them: every check run on the head commit

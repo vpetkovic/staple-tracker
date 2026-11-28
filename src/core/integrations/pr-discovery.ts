@@ -217,6 +217,30 @@ export async function discoverPullRequests(deps: DiscoveryDependencies, refs?: r
   return finish();
 }
 
+/** Why a ticket's branch has no pull request, from a discovery run: the `note` and `failures` that run reported. */
+export interface BranchDiscoveryNotice {
+  note: string | null;
+  failures: Array<Pick<DiscoveryFailure, "message" | "action">>;
+}
+
+/**
+ * What `report` says about a ticket's branch that has no pull request linked: its note and
+ * failures, or neither when the branch was read and none was open from it. Null when there is
+ * nothing to explain: no report yet, no branch, a pull request linked, or a branch the run did
+ * not look for (recorded or renamed since).
+ */
+export function branchDiscoveryNotice(
+  report: DiscoveryReport | undefined,
+  ref: string,
+  branch: TicketBranch | null,
+  linkedPullRequests: number,
+): BranchDiscoveryNotice | null {
+  if (!report || !branch || linkedPullRequests > 0) return null;
+  const looked = report.tickets.find((ticket) => ticket.ref === ref && ticket.branch.name === branch.name);
+  if (!looked || looked.pullRequests.length > 0) return null;
+  return { note: report.note, failures: report.failures.map(({ message, action }) => ({ message, action })) };
+}
+
 /**
  * When each workspace's discovery last ran in this process, keyed by its database. The web UI's
  * poll asks every 1.5 s; this holds a run for the health poll interval and never runs two at once.

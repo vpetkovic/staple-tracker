@@ -8,9 +8,9 @@ import type { GhRunner } from "../src/core/integrations/gh-process.js";
 import { GitHubCliAdapter } from "../src/core/integrations/github-cli.js";
 import { ProbeCache } from "../src/core/integrations/health.js";
 import { IntegrationOperations } from "../src/core/integrations/operations.js";
-import { rowPullRequests } from "../src/core/integrations/pr-discovery.js";
+import { branchDiscoveryNotice, type DiscoveryReport, rowPullRequests } from "../src/core/integrations/pr-discovery.js";
 import { subtreePullRequests } from "../src/core/subtree-pull-requests.js";
-import { setTicketBranch } from "../src/core/ticket-branch.js";
+import { setTicketBranch, ticketBranch } from "../src/core/ticket-branch.js";
 import { StapleError } from "../src/core/types.js";
 import { initWorkspace } from "../src/core/workspace.js";
 
@@ -211,6 +211,57 @@ describe("finding the pull requests opened for a ticket's branch", () => {
     const report = (await service.execute({ action: "discover" })) as { refreshed: number };
     expect(report.refreshed).toBe(0);
     expect(details).not.toHaveBeenCalled();
+    store.db.close();
+  });
+});
+
+describe("why a ticket's branch has no pull request", () => {
+  const notice = (store: Awaited<ReturnType<typeof setup>>["store"], report: DiscoveryReport, id: string) =>
+    branchDiscoveryNotice(report, store.getIssue(id).identifier, ticketBranch(store, id), (store.externalLinks().pullRequests().get(id) ?? []).length);
+
+  it("says nothing is mapped, from the run's note", async () => {
+    const { store, service } = await setup(() => [pr(4, "open")]);
+    const task = store.createIssue({ title: "Unmapped" });
+    setTicketBranch(store, task.id, { branch: "feat/x" }, "ada");
+    const report = (await service.execute({ action: "discover" })) as DiscoveryReport;
+    expect(notice(store, report, task.id)).toEqual({ note: expect.stringMatching(/^No GitHub repository is mapped to this workspace/), failures: [] });
+    store.db.close();
+  });
+
+  it("names a repository the account cannot read, with the connection's action, and says nothing once a pull request is linked", async () => {
+    const { store, service, forBranches } = await setup(() => []);
+    await service.execute({ action: "map", connectionId: "work", containerId: "41", actor: "ada" });
+    await service.execute({ action: "map", connectionId: "work", containerId: "42", actor: "ada" });
+    const task = store.createIssue({ title: "Forbidden" });
+    setTicketBranch(store, task.id, { branch: "feat/x" }, "ada");
+    forBranches.mockImplementation(async (container: string) => {
+      if (container === "41") throw new StapleError("forbidden", "GitHub denied access; check repository permissions and organization SSO");
+      return [];
+    });
+    const report = (await service.execute({ action: "discover" })) as DiscoveryReport;
+    expect(notice(store, report, task.id)).toEqual({
+      note: null,
+      failures: [{ message: "GitHub denied access; check repository permissions and organization SSO", action: "Check this account's repository access and organization SSO authorization." }],
+    });
+    store.externalLinks().link(task.id, pr(7, "open"), "ada");
+    expect(notice(store, report, task.id)).toBeNull();
+    store.db.close();
+  });
+
+  it("says only that none was found when the branch was read; nothing for a branch the run did not look for", async () => {
+    const { store, service } = await setup(() => [pr(4, "open", "feat/other")]);
+    await service.execute({ action: "map", connectionId: "work", containerId: "42", actor: "ada" });
+    const task = store.createIssue({ title: "Quiet" });
+    const later = store.createIssue({ title: "Branch recorded after the run" });
+    setTicketBranch(store, task.id, { branch: "feat/x" }, "ada");
+    const report = (await service.execute({ action: "discover" })) as DiscoveryReport;
+    expect(notice(store, report, task.id)).toEqual({ note: null, failures: [] });
+    setTicketBranch(store, later.id, { branch: "feat/later" }, "ada");
+    expect(notice(store, report, later.id)).toBeNull();
+    // Renamed since the run: the run's answer was about the old name.
+    setTicketBranch(store, task.id, { branch: "feat/renamed" }, "ada");
+    expect(notice(store, report, task.id)).toBeNull();
+    expect(branchDiscoveryNotice(undefined, task.identifier, ticketBranch(store, task.id), 0)).toBeNull();
     store.db.close();
   });
 });
