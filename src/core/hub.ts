@@ -414,36 +414,46 @@ export class Hub {
     throw new StapleError("conflict", `Could not allocate a unique prefix for "${slug}"`);
   }
 
+  /**
+   * Throw the refusal {@link register} would throw for this entry, and write nothing.
+   *
+   * `initWorkspace` asks this before it creates a database, so a refused init leaves no
+   * file behind for the retry to mistake for an existing workspace. `register` asks it
+   * again inside its transaction, so the checks live in one place.
+   */
+  assertRegistrable(entry: { slug: string; prefix: string; path: string }): void {
+    const existing = this.db
+      .prepare("SELECT slug, prefix, path, repository_id FROM workspaces WHERE slug = ?")
+      .get(entry.slug) as
+      | { slug: string; prefix: string; path: string; repository_id: string | null }
+      | undefined;
+    if (existing && existing.prefix !== entry.prefix) {
+      throw new StapleError(
+        "conflict",
+        `Workspace "${entry.slug}" is registered with prefix ${existing.prefix}, not ${entry.prefix}`,
+      );
+    }
+    /**
+     * The upsert in {@link register} keys on the slug and never looks at identity, which
+     * is right for a row that already has a path: that is the same workspace moving. It
+     * is wrong for an absent row. That row is a registry entry for a repository this
+     * machine has not got, and `staple init` or `staple add` in a different repository
+     * that happens to share the slug and prefix used to take it over. The caller then
+     * recorded the newcomer's id over the one the registry holds. Every register goes
+     * through here, so the refusal can't be skipped by a door that forgot to ask.
+     */
+    if (existing && existing.path === ABSENT_PATH) {
+      const refusal = absentRowRefusal(
+        { slug: existing.slug, repositoryId: existing.repository_id },
+        entry.path,
+      );
+      if (refusal !== null) throw new StapleError("conflict", refusal, { absentRow: existing.slug });
+    }
+  }
+
   register(entry: { slug: string; prefix: string; path: string; kind: string }): void {
     tx(this.db, () => {
-      const existing = this.db
-        .prepare("SELECT slug, prefix, path, repository_id FROM workspaces WHERE slug = ?")
-        .get(entry.slug) as
-        | { slug: string; prefix: string; path: string; repository_id: string | null }
-        | undefined;
-      if (existing && existing.prefix !== entry.prefix) {
-        throw new StapleError(
-          "conflict",
-          `Workspace "${entry.slug}" is registered with prefix ${existing.prefix}, not ${entry.prefix}`,
-        );
-      }
-      /**
-       * The upsert below keys on the slug and never looks at identity, which is right
-       * for a row that already has a path: that is the same workspace moving. It is
-       * wrong for an absent row. That row is a registry entry for a repository this
-       * machine has not got, and `staple init` or `staple add` in a different
-       * repository that happens to share the slug and prefix used to take it over. The
-       * caller then recorded the newcomer's id over the one the registry holds. Every
-       * register goes through here, so the refusal can't be skipped by a door that
-       * forgot to ask.
-       */
-      if (existing && existing.path === ABSENT_PATH) {
-        const refusal = absentRowRefusal(
-          { slug: existing.slug, repositoryId: existing.repository_id },
-          entry.path,
-        );
-        if (refusal !== null) throw new StapleError("conflict", refusal, { absentRow: existing.slug });
-      }
+      this.assertRegistrable(entry);
       this.db
         .prepare(
           `INSERT INTO workspaces (slug, prefix, path, kind, added_at, last_seen_at)
