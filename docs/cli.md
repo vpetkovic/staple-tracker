@@ -143,7 +143,7 @@ Guides: [Plans become tickets](plans-to-tickets.md),
 |---|---|
 | `staple new <title> --kind epic` | File an epic; give tickets `--parent` to put them under it. |
 | `staple blocked-by <ref> R1,R2` | Replace a ticket's blockers. Only `--none` clears them; a missing or empty list is refused (exit 2). |
-| `staple block <ref> --owner O --action TEXT` | Mark a ticket blocked on a person, saying who and what. |
+| `staple block <ref> --owner O --action TEXT` | Mark a ticket blocked on a person, saying who and what. Both flags are required and non-blank; a missing or blank one is refused (exit 2) and nothing is written. There is no partial update: re-run `block` with both to change the descriptor. |
 | `staple link <blocker> <blocked>` | Make a ticket wait on a ticket in another repository. |
 
 ### Approval gates

@@ -80,7 +80,7 @@ function deriveFrom(statuses: readonly IssueStatus[]): string {
   const { epic, children } = epicWith(statuses.length, `Epic ${deriveSeq}`);
   statuses.forEach((status, i) => {
     if (status === "backlog") return; // already there
-    move(children[i]!.identifier, status, status === "blocked" ? { unblockOwner: "VP" } : {});
+    move(children[i]!.identifier, status, status === "blocked" ? { unblockOwner: "VP", unblockAction: "decide" } : {});
   });
   return statusOf(epic.identifier);
 }
@@ -142,7 +142,7 @@ describe("blocked is exclusive — Refinement 1", () => {
   it("1 blocked + 1 todo child does NOT derive blocked", () => {
     const { epic, children } = epicWith(2);
     move(children[1]!.identifier, "todo");
-    move(children[0]!.identifier, "blocked", { unblockOwner: "VP" });
+    move(children[0]!.identifier, "blocked", { unblockOwner: "VP", unblockAction: "decide" });
 
     expect(statusOf(epic.identifier)).not.toBe("blocked");
   });
@@ -170,8 +170,8 @@ describe("derivation un-derives when the child landscape changes", () => {
 
   it("blocked child COMPLETES -> epic leaves derived blocked too", () => {
     const { epic, children } = epicWith(2);
-    move(children[0]!.identifier, "blocked", { unblockOwner: "VP" });
-    move(children[1]!.identifier, "blocked", { unblockOwner: "VP" });
+    move(children[0]!.identifier, "blocked", { unblockOwner: "VP", unblockAction: "decide" });
+    move(children[1]!.identifier, "blocked", { unblockOwner: "VP", unblockAction: "decide" });
     expect(statusOf(epic.identifier)).toBe("blocked");
 
     // One blocked child is finished outright rather than unblocked.
@@ -259,7 +259,7 @@ describe("derivation may only change what derivation set", () => {
     store.checkoutIssue(epic.identifier, "human"); // a genuine claim ON the epic
     expect(store.getIssue(epic.identifier).checkoutAgent).toBe("human");
 
-    move(children[0]!.identifier, "blocked", { unblockOwner: "VP" });
+    move(children[0]!.identifier, "blocked", { unblockOwner: "VP", unblockAction: "decide" });
 
     const after = store.getIssue(epic.identifier);
     expect(after.status).toBe("in_progress");
@@ -503,7 +503,7 @@ describe("the closing rungs obey the SAME reversibility law as every other rung"
     const { epic, children } = epicWith(1);
     store.updateIssue(epic.identifier, { status: "cancelled" }, "human");
 
-    move(children[0]!.identifier, "blocked", { unblockOwner: "VP" });
+    move(children[0]!.identifier, "blocked", { unblockOwner: "VP", unblockAction: "decide" });
 
     expect(statusOf(epic.identifier)).toBe("cancelled");
   });
@@ -590,7 +590,7 @@ describe("the cascade is multi-level", () => {
     const root = store.createIssue({ title: "Root" });
     const mid = store.createIssue({ title: "Mid", parent: root.identifier });
     const leaf = store.createIssue({ title: "Leaf", parent: mid.identifier });
-    move(leaf.identifier, "blocked", { unblockOwner: "VP" });
+    move(leaf.identifier, "blocked", { unblockOwner: "VP", unblockAction: "decide" });
     expect(statusOf(root.identifier)).toBe("blocked");
 
     store.checkoutIssue(leaf.identifier, "agent-a");
@@ -680,7 +680,7 @@ describe("the cascade is multi-level", () => {
       parent = store.createIssue({ title: `n${i}`, parent: parent.identifier });
     }
 
-    move(parent.identifier, "blocked", { unblockOwner: "VP" });
+    move(parent.identifier, "blocked", { unblockOwner: "VP", unblockAction: "decide" });
 
     expect(statusOf(root.identifier)).toBe("blocked");
   });
@@ -694,7 +694,7 @@ describe("a derivation is a report, not a claim (STA-79's exemption, generalized
       const child = store2.createIssue({ title: "Child", parent: epic.identifier });
       if (status === "in_progress") store2.checkoutIssue(child.identifier, "agent-a");
       else if (status === "blocked") {
-        store2.updateIssue(child.identifier, { status, unblockOwner: "VP" }, "agent-a");
+        store2.updateIssue(child.identifier, { status, unblockOwner: "VP", unblockAction: "decide" }, "agent-a");
       } else store2.updateIssue(child.identifier, { status }, "agent-a");
 
       const derived = store2.getIssue(epic.identifier);
@@ -736,7 +736,7 @@ describe("a derivation is a report, not a claim (STA-79's exemption, generalized
 describe("the derived event payload", () => {
   it("reuses status_changed and names the rule and the trigger", () => {
     const { epic, children } = epicWith(1);
-    move(children[0]!.identifier, "blocked", { unblockOwner: "VP", actor: "agent-a" });
+    move(children[0]!.identifier, "blocked", { unblockOwner: "VP", unblockAction: "decide", actor: "agent-a" });
 
     expect(eventsFor(epic.identifier).map((e) => e.kind)).toEqual(["issue_created", "status_changed"]);
     const event = statusEventsFor(epic.identifier).at(-1)!;
@@ -760,7 +760,7 @@ describe("the derived event payload", () => {
       const store2 = memStore();
       store = store2;
       const { epic, children } = epicWith(1);
-      move(children[0]!.identifier, childStatus, { unblockOwner: "VP" });
+      move(children[0]!.identifier, childStatus, { unblockOwner: "VP", unblockAction: "decide" });
       const event = statusEventsFor(epic.identifier).at(-1)!;
       expect(event.payload.derived, `${childStatus} -> ${marker}`).toBe(marker);
     }
@@ -804,6 +804,7 @@ describe("every hook site fires the recompute", () => {
       parent: epic.identifier,
       status: "blocked",
       unblockOwner: "VP",
+      unblockAction: "decide",
       createdBy: "agent-a",
     });
     expect(statusOf(epic.identifier)).toBe("blocked");
@@ -872,7 +873,7 @@ describe("pickup semantics: a derived-blocked epic behaves like blocked", () => 
 
   it("returns to the ready list once the child unblocks", () => {
     const { epic, children } = epicWith(1);
-    move(children[0]!.identifier, "blocked", { unblockOwner: "VP" });
+    move(children[0]!.identifier, "blocked", { unblockOwner: "VP", unblockAction: "decide" });
     move(children[0]!.identifier, "todo");
 
     const inbox = store.inbox();
@@ -919,7 +920,7 @@ describe("blockingChildrenOf — what the UI renders on a derived-blocked parent
   it("omits resolved children and children that are not blocked", () => {
     const { epic, children } = epicWith(3);
     move(children[0]!.identifier, "done");
-    move(children[1]!.identifier, "blocked", { unblockOwner: "VP" });
+    move(children[1]!.identifier, "blocked", { unblockOwner: "VP", unblockAction: "decide" });
     move(children[2]!.identifier, "todo");
 
     const epicId = store.getIssue(epic.identifier).id;
@@ -936,8 +937,8 @@ describe("blockingChildrenOf — what the UI renders on a derived-blocked parent
   it("batches: one call answers for many parents", () => {
     const a = epicWith(1, "Alpha");
     const b = epicWith(1, "Beta");
-    move(a.children[0]!.identifier, "blocked", { unblockOwner: "VP" });
-    move(b.children[0]!.identifier, "blocked", { unblockOwner: "ops" });
+    move(a.children[0]!.identifier, "blocked", { unblockOwner: "VP", unblockAction: "decide" });
+    move(b.children[0]!.identifier, "blocked", { unblockOwner: "ops", unblockAction: "decide" });
 
     const ids = [store.getIssue(a.epic.identifier).id, store.getIssue(b.epic.identifier).id];
     const found = store.blockingChildrenOf(ids);
