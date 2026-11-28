@@ -13,7 +13,7 @@ import { present, resolveScope, storedMapping, TargetNames, writeMapping, type M
 import { MAPPING_LIMIT, targetKey, type StoredTarget } from "./mapping-format.js";
 import { ExternalWork } from "./external-work.js";
 import { ClickUpApiAdapter, discoverClickUp, type ClickUpIdentity } from "./clickup-api.js";
-import { LinearApiAdapter } from "./linear-api.js";
+import { checkLinearIdentity, discoverLinear, LinearApiAdapter, type LinearIdentity } from "./linear-api.js";
 import { EXTERNAL_UNLINKED_EVENT, externalResourceId, type ExternalResource } from "./link-store.js";
 import { insertEvent } from "../event-log.js";
 import { IntegrationReader } from "./provider.js";
@@ -61,10 +61,32 @@ export class IntegrationOperations {
     /** Every workspace on this machine, for All workspaces and for unmapped workspaces. Defaults to this one. */
     workspaces?:()=>WorkspaceHandle[];
     /** Reads which ClickUp user a token belongs to and that it sees the workspace, for configure to bind. */
-    discoverClickUp?:(scopeId:string,credentialEnv:string)=>Promise<ClickUpIdentity>}={}) {
+    discoverClickUp?:(scopeId:string,credentialEnv:string)=>Promise<ClickUpIdentity>;
+    /** Reads which Linear user and organization an API key belongs to, for configure to bind. */
+    discoverLinear?:(credentialEnv:string)=>Promise<LinearIdentity>}={}) {
     this.connections = new IntegrationConnections(options.home);
     this.names = new TargetNames(`${this.connections.directory}/names`);
     this.caches = options.caches ?? processCaches;
+  }
+  /**
+   * The key says whose it is: the person names its variable and Staple reads the user and
+   * organization once. Ids the caller gives are checked against the key, never trusted. A
+   * refusal carries the health state and action the saved connection would show.
+   */
+  private async configureLinear(c:IntegrationCommand):Promise<ProviderConnection> {
+    const credentialEnv=need(c.credentialEnv,"credential environment variable name");
+    const expected={account:linearUuid(c.account,"Linear user id"),scopeId:linearUuid(c.scopeId,"Linear organization id")};
+    if (this.options.liveReadsAvailable===false) throw new StapleError("unavailable","Cached-only session. Connect Linear on the machine running Staple.");
+    const candidate={id:c.connectionId ?? "linear",providerId:"linear" as const,mode:"api" as const,host:"linear.app" as const,account:expected.account ?? "",scopeId:expected.scopeId ?? "",credentialEnv};
+    try {
+      const found=await (this.options.discoverLinear ?? discoverLinear)(credentialEnv);
+      checkLinearIdentity({viewer:{id:found.account,...(found.login ? {name:found.login} : {})},organization:{id:found.scopeId}},expected,credentialEnv);
+      return this.connections.save({...candidate,id:c.connectionId,account:found.account,scopeId:found.scopeId});
+    } catch (error) {
+      if (!(error instanceof StapleError) || error.code==="validation") throw error;
+      const refused=snapshot(candidate,healthFromError(error),new Date());
+      throw new StapleError(error.code,error.message,{...error.detail,state:refused.state,action:refused.action});
+    }
   }
   /** Connections, health and containers belong to the computer; everything else needs a workspace. */
   private get store():WorkspaceStore {
@@ -237,8 +259,7 @@ export class IntegrationOperations {
           if (c.account && c.account.toLowerCase()!==bound.account.toLowerCase()) throw new StapleError("auth",`The token in ${credentialEnv} belongs to a different Azure DevOps user than the one expected.`,{reason:"account_mismatch"});
           return this.connections.save({id:c.connectionId,providerId:"azure_devops",mode:"api",host,organization,account:bound.account,scopeId:bound.scopeId,credentialEnv});
         }
-        if(c.providerId === "linear") return this.connections.save({id:c.connectionId,providerId:"linear",mode:"api",host:"linear.app",
-          account:need(c.account,"expected Linear user UUID"),scopeId:need(c.scopeId,"Linear organization UUID"),credentialEnv:need(c.credentialEnv,"credential environment variable name")});
+        if(c.providerId === "linear") return this.configureLinear(c);
         if(c.providerId === "clickup") {
           const scopeId=need(c.scopeId,"ClickUp workspace id"),credentialEnv=need(c.credentialEnv,"credential environment variable name");
           if (this.options.liveReadsAvailable===false) throw new StapleError("unavailable","Cached-only session. Connect ClickUp on the machine running Staple.");
@@ -436,6 +457,13 @@ export class IntegrationOperations {
   private decorate(item:ExternalItem|ExternalResource) {
     return {item,associations:this.store.externalLinks().associations(externalResourceId(item.ref))};
   }
+}
+/** An optional Linear id the caller typed: absent when blank, refused when it is not a UUID. */
+function linearUuid(value:string|undefined,label:string):string|undefined {
+  const typed=value?.trim();
+  if (!typed) return undefined;
+  if (!z.string().uuid().safeParse(typed).success) throw new StapleError("validation",`The ${label} must be a UUID; leave it out to read it from the API key`);
+  return typed.toLowerCase();
 }
 function need(value:string|undefined,label:string):string {
   if(!value?.trim()) throw new StapleError("validation",`This integration operation needs a ${label}`);

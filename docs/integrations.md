@@ -153,10 +153,18 @@ teams you want to use. Set it in the environment of the process running Staple, 
 process. For a background service, configure its environment privately. Never pass the key as a
 CLI argument or paste it into a connection form.
 
-Use [Linear's GraphQL explorer](https://studio.apollographql.com/public/Linear-API/variant/current/explorer)
-to run `query { viewer { id } organization { id urlKey } }` with that key to find your user and
-organization ids. In **Settings → Integrations**, choose **Set up** on the Linear row (or **Add
-connection → Linear workspace**), enter the environment variable name and the two ids, and save.
+From the CLI or an agent, name only the variable: Staple reads the key's user and organization once
+with Linear's `viewer` and `organization` query and saves their ids. The key never leaves the
+process running Staple. You can still pass `--account USER_UUID` and `--scope ORGANIZATION_UUID`
+(MCP `account` and `scopeId`); they are checked against the key, and a key that answers for a
+different user or organization is refused. A missing or rejected key is refused with the same
+message and action that connection health would show, in the error's `detail.state` and
+`detail.action`, and nothing is saved. Configure needs a live session, because it reads the key.
+
+In **Settings → Integrations**, choose **Set up** on the Linear row (or **Add connection → Linear
+workspace**), enter the environment variable name and the two ids, and save. To find the ids, run
+`query { viewer { id } organization { id urlKey } }` with the key in
+[Linear's GraphQL explorer](https://studio.apollographql.com/public/Linear-API/variant/current/explorer).
 Then add teams or projects to a workspace under **Workspaces**. Staple checks the key's user and
 organization on every response. A revoked key or changed account fails without replacing the
 saved copy.
@@ -167,6 +175,8 @@ UUIDs scope team preferences; old GitHub repository preferences and browser defa
 
 ```sh
 # Connections belong to this computer; every workspace uses them.
+staple integrations configure --provider linear --credential-env STAPLE_LINEAR_API_KEY --json
+# Or say who you expect, and have the key checked against it:
 staple integrations configure --provider linear \
   --account USER_UUID --scope ORGANIZATION_UUID --credential-env STAPLE_LINEAR_API_KEY --json
 staple integrations containers --connection CONNECTION_ID --json                          # teams
