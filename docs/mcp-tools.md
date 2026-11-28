@@ -76,7 +76,7 @@ epic.
 | `request_changes` | Send a held epic back with a note | `staple request-changes` | yes |
 | `list_queue` | The pickup plan, and the order agents receive | `staple queue` | no |
 | `next_task` | The one ticket to take next, and what it skipped | `staple queue next` | no |
-| `enqueue_task` | Add a ticket, epic or milestone to the plan | `staple queue add` | yes |
+| `enqueue_task` | Add a ticket, epic or milestone to the plan; with `queue.requireEstimate` on, unestimated work is refused unless a person passes `override_reason` | `staple queue add` | yes |
 | `dequeue_task` | Take an entry out of the plan | `staple queue rm` | yes |
 | `move_queue_entry` | Move one entry | `staple queue mv` | yes |
 | `reorder_queue` | Set the whole order | `staple queue reorder` | yes |

@@ -121,9 +121,34 @@ The claim goes through, the reason is recorded on the ticket, and the plan is
 unchanged: the next agent still gets APP-10 first. An override never gets past a
 blocker, a gate or another agent's claim.
 
+## 7. Queue only estimated work
+
+To keep unsized work out of the plan, turn on `queue.requireEstimate`:
+
+```bash
+staple settings set queue.requireEstimate true     # MCP set_setting
+```
+
+From then on `queue add` refuses a ticket with no estimate, and an epic or milestone
+whose open tickets include one with no estimate, naming each:
+
+```text
+error(validation): APP-7 has open work with no estimate: APP-9, APP-12. queue.requireEstimate is on; estimate them first (staple estimate, MCP set_estimate), or ask a person to queue it anyway with an override and a reason.
+```
+
+The check runs when work is added. Entries already in the plan stay, and a ticket
+added later under a queued epic is not checked. To queue unsized work anyway, give a
+reason from the CLI or MCP (the web UI shows the refusal and offers no override):
+
+```bash
+staple queue add APP-7 --override -m "Sizing it after the spike"
+```
+
+The reason becomes the entry's note, and the ticket's history records who did it.
+
 ## Next
 
 - [Milestones and goals](milestones.md): queue a dated plan that spans several epics.
 - [Autopilot runs](runs.md): let one agent work the queue ticket after ticket.
 - [Planning](plan.md): queue a whole horizon and set how far agents take it.
-- [Configuration](configuration.md): the `queue.policy` setting.
+- [Configuration](configuration.md): the `queue.policy` and `queue.requireEstimate` settings.
