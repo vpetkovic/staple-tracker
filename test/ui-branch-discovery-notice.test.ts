@@ -11,7 +11,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import type { IntegrationAdapter } from "../src/core/integrations/contracts.js";
+import type { ExternalItem, IntegrationAdapter } from "../src/core/integrations/contracts.js";
 import { IntegrationOperations } from "../src/core/integrations/operations.js";
 import { setTicketBranch } from "../src/core/ticket-branch.js";
 import { StapleError } from "../src/core/types.js";
@@ -28,7 +28,7 @@ let finished: string;
 
 // The words gh-process.ts maps a signed-out gh to.
 const SIGNED_OUT = "Sign in to GitHub CLI on this machine for the configured host";
-const forBranches = vi.fn(async () => {
+const forBranches = vi.fn(async (): Promise<ExternalItem[]> => {
   throw new StapleError("auth", SIGNED_OUT);
 });
 const adapter: IntegrationAdapter = {
