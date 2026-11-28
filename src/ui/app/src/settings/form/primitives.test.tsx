@@ -228,6 +228,41 @@ describe("ReorderList", () => {
   });
 });
 
+describe("ReorderList content below a row lines up with the row", () => {
+  const items = [{ id: "a", label: "Alpha" }];
+  const render = (cards: boolean) =>
+    renderToStaticMarkup(
+      <ReorderList
+        items={items}
+        getId={(i) => i.id}
+        getLabel={(i) => i.label}
+        onMove={() => {}}
+        renderItem={(i) => <span>{i.label}</span>}
+        renderBelow={(i) => <p data-below={i.id}>below {i.label}</p>}
+        cards={cards}
+      />,
+    );
+  /** The opening tag of the element that directly wraps what `renderBelow` returned. */
+  const belowWrapper = (html: string) => {
+    const at = html.indexOf('<p data-below="a">');
+    if (at < 0) throw new Error("renderBelow was not rendered");
+    return html.slice(html.lastIndexOf("<div", at), at);
+  };
+  const offsetPx = (tag: string) => Number(/padding-left:\s*(\d+)px/.exec(tag)?.[1] ?? 0);
+
+  it("as rows, indents it past the drag handle so it starts where the row's content starts", () => {
+    const html = render(false);
+    expect(html).toContain('aria-label="Drag Alpha to reorder"');
+    expect(offsetPx(belowWrapper(html))).toBe(30);
+  });
+
+  it("as cards, where there is no drag handle, does not indent it at all", () => {
+    const html = render(true);
+    expect(html).not.toContain("to reorder");
+    expect(offsetPx(belowWrapper(html))).toBe(0);
+  });
+});
+
 describe("the action bar stays reachable", () => {
   it("sticks to the foot of the section's scroll pane, on a surface of its own, with a place for Saved", () => {
     const html = renderToStaticMarkup(
