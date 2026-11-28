@@ -467,3 +467,65 @@ describe("fresh pickup contract", () => {
     expect((await cli("checkout", "QUE-4", "--agent", "agent-1", "--ws", WS)).status).toBe(0);
   });
 });
+
+describe("queue.requireEstimate refuses and overrides the same way on every surface", () => {
+  let unestimated: string[] = [];
+  beforeAll(async () => {
+    for (const title of ["Unsized one", "Unsized two", "Unsized three", "Unsized four"]) {
+      const created = await cliJson("new", title, "--ws", WS);
+      unestimated.push((created.issue as { identifier: string } | undefined)?.identifier ?? String(created.identifier));
+    }
+    expect((await cli("settings", "set", "queue.requireEstimate", "true", "--ws", WS)).status).toBe(0);
+  });
+  afterAll(async () => {
+    expect((await cli("settings", "set", "queue.requireEstimate", "false", "--ws", WS)).status).toBe(0);
+    unestimated = [];
+  });
+
+  it("refuses an unestimated ticket with one validation triple naming it", async () => {
+    const [ref] = unestimated;
+    const expected = { code: "validation", retryable: false, detail: { identifier: ref, unestimated: [ref] } };
+    const fromCli = await cli("queue", "add", ref!, "--ws", WS, "--json");
+    expect(fromCli.status).toBe(CLI_EXIT_CODES.validation);
+    expect(tripleOf(cliEnvelope(fromCli))).toEqual(expected);
+    expect(cliEnvelope(fromCli).message).toContain(`${ref} has no estimate`);
+    expect(tripleOf(mcpEnvelope(await mcp.call("enqueue_task", { ws: WS, ref })))).toEqual(expected);
+    const { status, body } = await http("/api/queue/enqueue", { ref });
+    expect(status).toBe(httpStatusFor("validation"));
+    expect(tripleOf(body)).toEqual(expected);
+    expect((await everySurface())[0]!.entries).not.toContain(ref);
+  });
+
+  it("queue add --override without -m is refused", async () => {
+    const result = await cli("queue", "add", unestimated[0]!, "--override", "--ws", WS, "--json");
+    expect(result.status).toBe(CLI_EXIT_CODES.validation);
+    expect(cliEnvelope(result).message).toContain("An override needs a reason");
+    expect((await cli("queue", "rm", unestimated[0]!, "--override", "--ws", WS)).status).toBe(CLI_EXIT_CODES.validation);
+  });
+
+  it("an override queues it on every surface and records who and why", async () => {
+    const [, viaCli, viaMcp, viaHttp] = unestimated;
+    expect((await cli("queue", "add", viaCli!, "--override", "-m", "size after the spike", "--ws", WS)).status).toBe(0);
+    const fromMcp = await mcp.call("enqueue_task", { ws: WS, ref: viaMcp, override_reason: "mcp reason" });
+    expect(fromMcp.isError, JSON.stringify(fromMcp.content)).toBeFalsy();
+    expect((await http("/api/queue/enqueue", { ref: viaHttp, overrideReason: "http reason" })).status).toBe(200);
+
+    const entries = (await cliJson("queue", "--ws", WS)).entries as Array<{ identifier: string; note: string | null }>;
+    expect(entries.filter((entry) => [viaCli, viaMcp, viaHttp].includes(entry.identifier))).toEqual([
+      expect.objectContaining({ identifier: viaCli, note: "size after the spike" }),
+      expect.objectContaining({ identifier: viaMcp, note: "mcp reason" }),
+      expect.objectContaining({ identifier: viaHttp, note: "http reason" }),
+    ]);
+    const log = await cli("events", "--ws", WS, "--json");
+    const overridden = log.stdout
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { kind: string; actor: string | null; payload: Record<string, unknown> })
+      .filter((event) => event.kind === "queue_estimate_overridden");
+    expect(overridden.map((event) => [event.actor, event.payload.identifier, event.payload.reason])).toEqual([
+      [CONTRACT_AGENT, viaCli, "size after the spike"],
+      [CONTRACT_AGENT, viaMcp, "mcp reason"],
+      [CONTRACT_AGENT, viaHttp, "http reason"],
+    ]);
+  });
+});

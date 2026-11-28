@@ -3,7 +3,7 @@
  *
  *   queue [ls] [--all] [--effective] [--actor A]
  *   queue next [--actor A] [--scope <ref>] [--any-assignee]
- *   queue add <ref> [--before R | --after R | --at N] [--base N] [-m note]
+ *   queue add <ref> [--before R | --after R | --at N] [--base N] [-m note] [--override -m why]
  *   queue rm <ref> [--base N]
  *   queue mv <ref> (--before R | --after R | --at N) [--base N]
  *   queue reorder <r1,r2,…> [--base N]
@@ -45,7 +45,7 @@ agents take next, independent of status, priority and display grouping.
 
   queue [ls] [--all] [--effective] [--actor A]
   queue next [--actor A] [--scope <ref>] [--any-assignee]
-  queue add <ref> [--before R | --after R | --at N] [--base N] [-m note]
+  queue add <ref> [--before R | --after R | --at N] [--base N] [-m note] [--override -m why]
   queue rm <ref> [--base N]
   queue mv <ref> (--before R | --after R | --at N) [--base N]
   queue reorder <r1,r2,...> [--base N]
@@ -90,6 +90,15 @@ out_of_order (exit 10), naming what to take instead — it is neither conflict
 (exit 4, somebody got there first) nor gated (exit 9, a human must act), and
 retrying clears none of the three. A human steps over the plan on the record
 with "staple checkout <ref> --override -m <why>".
+
+ESTIMATES. With queue.requireEstimate on (off by default), "queue add" refuses
+work that has no estimate, with validation (exit 2): a task by its own
+estimate, an epic, a milestone or any parent by the open tasks queueing it
+would hand to agents. The refusal names every unestimated ticket (in --json,
+detail.unestimated). A replay or a move of a queued entry is never judged. A
+person queues it anyway with "queue add <ref> --override -m <why>": the reason
+becomes the entry's note and a queue_estimate_overridden event records who and
+why. An empty reason is refused.
 
 SHARED WORKSPACES. With a member list on this machine (staple cloud members),
 "queue next" also skips a ticket assigned to ANOTHER member, as
@@ -189,6 +198,7 @@ export function runQueueCommand(rest: string[]): void {
       at: { type: "string" },
       base: { type: "string" },
       note: { type: "string", short: "m" },
+      override: { type: "boolean" },
     },
   });
   const [sub = "ls", first] = positionals;
@@ -200,6 +210,9 @@ export function runQueueCommand(rest: string[]): void {
   // ignored it would read as though it had been honoured.
   if (values["any-assignee"] === true && sub !== "next") {
     throw new StapleError("validation", `--any-assignee applies to "queue next" only, not "queue ${sub}".`);
+  }
+  if (values.override === true && sub !== "add") {
+    throw new StapleError("validation", `--override applies to "queue add" only, not "queue ${sub}".`);
   }
   if (values.scope !== undefined && sub !== "next") {
     throw new StapleError("validation", `--scope applies to "queue next" only, not "queue ${sub}".`);
@@ -214,6 +227,8 @@ export function runQueueCommand(rest: string[]): void {
     at: integerOption(values.at, "--at"),
     baseRevision: integerOption(values.base, "--base"),
     note: values.note ?? null,
+    // The human override of queue.requireEstimate: -m is its reason, and the entry's note.
+    overrideReason: values.override === true ? (values.note ?? "") : undefined,
     all: values.all === true,
   };
 

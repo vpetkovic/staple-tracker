@@ -5839,6 +5839,7 @@ export function startUiServer(options: UiOptions): UiHandle {
               at: body.at as number | undefined,
               baseRevision: body.baseRevision as number | undefined,
               note: (body.note as string | undefined) ?? null,
+              overrideReason: body.overrideReason === undefined ? undefined : String(body.overrideReason),
               all: body.all === true,
               // The answer is drawn by the page that sent the write, so it is read the way
               // that page reads (`pickup=1` on its GET): with the member rung when asked.

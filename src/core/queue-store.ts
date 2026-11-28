@@ -451,9 +451,16 @@ export class QueueStore {
    */
   enqueue(
     ref: string,
-    options: QueuePosition & { baseRevision?: number; note?: string | null } = {},
+    options: QueuePosition & { baseRevision?: number; note?: string | null; overrideReason?: string } = {},
     actor: string | null = null,
   ): QueuePlan & { replayed: boolean } {
+    const overrideReason = options.overrideReason === undefined ? undefined : options.overrideReason.trim();
+    if (overrideReason !== undefined && overrideReason.length === 0) {
+      throw new StapleError(
+        "validation",
+        "An override needs a reason. Pass a non-empty reason (CLI `queue add --override -m \"<why>\"`, MCP `override_reason`, HTTP `overrideReason`).",
+      );
+    }
     const issue = this.requireIssue(ref);
     // Ideas and horizons are plans above the tracker; nothing queues them (design/plan.md).
     if (this.store.isPlanIssue(issue.kind)) throw planKindRefusal(issue, "queued");
@@ -469,11 +476,24 @@ export class QueueStore {
         this.moveEntry(issue, current, options, actor);
         return { ...this.plan(), replayed: false };
       }
+      // Only a NEW entry is judged: a replay or a move of a queued row adds no work to the plan.
+      const unestimated = this.store.getSetting("queue.requireEstimate") === true ? this.unestimatedLeaves(issue.id) : [];
+      const steppedOver = unestimated.length > 0;
+      if (steppedOver && overrideReason === undefined) {
+        throw new StapleError(
+          "validation",
+          unestimated.length === 1 && unestimated[0] === issue.identifier
+            ? `${issue.identifier} has no estimate, and queue.requireEstimate is on. Estimate it first (staple estimate ${issue.identifier} <duration>), or ask a person to queue it anyway with --override -m "<why>".`
+            : `${issue.identifier} has open work with no estimate: ${unestimated.join(", ")}. queue.requireEstimate is on; estimate them first, or ask a person to queue it anyway with --override -m "<why>".`,
+          { identifier: issue.identifier, unestimated },
+        );
+      }
       const rank = this.rankFor(options);
       this.insert(issue.id, rank, {
         addedBy: actor ?? "user",
         addedAt: nowIso(),
-        note: options.note ?? null,
+        // The reason is the entry's note when none was given, so the plan listing shows why it is there.
+        note: options.note ?? (steppedOver ? overrideReason! : null),
       });
       const revision = this.bumpRevision();
       this.emit("queue_enqueued", issue.id, actor, {
@@ -482,11 +502,47 @@ export class QueueStore {
         position: this.positionOf(issue.id),
         revision,
       });
+      // The audit trail of the override, written only when it stepped over something.
+      if (steppedOver) {
+        this.emit("queue_estimate_overridden", issue.id, actor, {
+          identifier: issue.identifier,
+          reason: overrideReason!,
+          unestimated,
+        });
+      }
       // After the replay guard, so re-enqueueing a queued issue with no position
       // returns `replayed: true` above and mints no second operation.
       this.recordPlan(actor ?? null);
       return { ...this.plan(), replayed: false };
     });
+  }
+
+  /**
+   * The open leaves `issueId` stands for that have no estimate, as identifiers, for
+   * `queue.requireEstimate`. "Leaf" is the resolver's word, so the rule judges exactly the
+   * rows queueing the issue would hand to agents: a leaf (no open child, not a milestone)
+   * is itself, and a container is every open row its scoped answer holds. A resolved leaf
+   * has nothing left to estimate.
+   */
+  private unestimatedLeaves(issueId: string): string[] {
+    const node = this.store.getIssue(issueId);
+    const openChild = this.db
+      .prepare("SELECT status FROM issues WHERE parent_id = ?")
+      .all(issueId) as Array<{ status: string }>;
+    const container = node.kind === MILESTONE_KIND || openChild.some((row) => !this.store.isResolvedStatus(row.status));
+    const leaves = container
+      ? this.effectiveQueue({ scope: node.identifier, crossBlockers: new Map() })
+          .rows.filter((row) => !this.store.isResolvedStatus(row.status))
+          .map((row) => row.issueId)
+      : this.store.isResolvedStatus(node.status)
+        ? []
+        : [node.id];
+    if (leaves.length === 0) return [];
+    const estimate = this.db.prepare("SELECT identifier, estimated_seconds FROM issues WHERE id = ?");
+    return leaves
+      .map((id) => estimate.get(id) as { identifier: string; estimated_seconds: number | null })
+      .filter((row) => row.estimated_seconds === null)
+      .map((row) => row.identifier);
   }
 
   /** Take an issue out of the plan; the others keep their ranks (sparse, so no renumber). */
@@ -1111,7 +1167,7 @@ export class QueueStore {
     let replayed = false;
     switch (verb) {
       case "add":
-        replayed = this.enqueue(ref(), { ...position, baseRevision, note: input.note }, actor).replayed;
+        replayed = this.enqueue(ref(), { ...position, baseRevision, note: input.note, overrideReason: input.overrideReason }, actor).replayed;
         break;
       case "rm":
         this.dequeue(ref(), { baseRevision }, actor);
@@ -1256,6 +1312,11 @@ export interface QueueMutationInput extends QueuePosition {
   order?: readonly string[];
   baseRevision?: number;
   note?: string | null;
+  /**
+   * `add` only: a person queues work `queue.requireEstimate` would refuse, for this reason.
+   * Recorded as `queue_estimate_overridden`; an empty reason is refused.
+   */
+  overrideReason?: string;
   /** Passed through to the view: show resolved entries too. */
   all?: boolean;
   /** Passed through to the view: the member rung, as a pickup answer applies it. */

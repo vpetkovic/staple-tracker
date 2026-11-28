@@ -164,7 +164,7 @@ Guide: [The pickup queue](queue.md).
 |---|---|
 | `staple queue` | The plan as you ordered it. `--effective` shows the order agents receive. |
 | `staple queue next` | The one ticket to take next, and what it skipped and why. `--scope <ref>` stays inside one epic or milestone. |
-| `staple queue add <ref>` | Queue a ticket, an epic or a milestone. `--before R`, `--after R`, `--at N` place it. |
+| `staple queue add <ref>` | Queue a ticket, an epic or a milestone. `--before R`, `--after R`, `--at N` place it. With `queue.requireEstimate` on, work with no estimate is refused, naming each unestimated ticket (an epic or milestone is judged by its open tickets); a person queues it anyway with `--override -m "<why>"`, recorded as a `queue_estimate_overridden` event with the reason as the entry's note. |
 | `staple queue mv <ref> --at N` | Move an entry. `queue reorder r1,r2,…` sets the whole order. |
 | `staple queue rm <ref>` | Take an entry out. `queue prune` drops the finished ones. |
 | `staple start <ref> --override -m <why>` | Take a ticket out of turn when `queue.policy` is `strict`. Recorded with your reason. |
