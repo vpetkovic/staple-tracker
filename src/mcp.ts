@@ -4001,12 +4001,18 @@ server.registerTool(
   "enqueue_task",
   {
     description:
-      "Put an issue in the plan at a position, or append it. Queueing an epic or a milestone is how a human says \"this whole thing next\" — a container is never picked up itself, it expands to its open leaf work. An issue already in the plan with no position is an idempotent replay (`replayed: true`, nothing written); with a position it is a move. A foreign workspace's identifier is refused with validation. Reordering the plan is a HUMAN's job — do not reorder work you were told to do.",
+      "Put an issue in the plan at a position, or append it. Queueing an epic or a milestone is how a human says \"this whole thing next\" — a container is never picked up itself, it expands to its open leaf work. An issue already in the plan with no position is an idempotent replay (`replayed: true`, nothing written); with a position it is a move. A foreign workspace's identifier is refused with validation. With queue.requireEstimate on (off by default), a new entry with no estimate is refused with validation naming it (detail.unestimated): a task by its own estimate, a container by the open leaves it expands to; estimate them (set_estimate) and retry. Reordering the plan is a HUMAN's job — do not reorder work you were told to do.",
     inputSchema: {
       ref: refSchema,
       ...memberPositionShape,
       base_revision: baseRevisionSchema,
       note: z.string().optional(),
+      override_reason: z
+        .string()
+        .optional()
+        .describe(
+          "HUMAN OVERRIDE — do not send this on your own initiative. Queues work queue.requireEstimate would refuse for having no estimate, recording who did it and why in a `queue_estimate_overridden` event; the reason is also the entry's note when none is given. The reason is mandatory (an empty one is refused). If you hit the refusal, estimate the named tickets or let a person decide to override.",
+        ),
       all: z.boolean().optional(),
       actor: actorSchema,
       ws: wsSchema,
@@ -4014,11 +4020,11 @@ server.registerTool(
     outputSchema: { ...queueViewShape, replayed: z.boolean() },
     annotations: { title: "Enqueue task", ...queueWriteAnnotations, idempotentHint: true },
   },
-  ({ ref, before, after, at, base_revision, note, all, actor, ws }) =>
+  ({ ref, before, after, at, base_revision, note, override_reason, all, actor, ws }) =>
     run(() =>
       storeFor(ws)
         .queue()
-        .mutate("add", { ref, before, after, at, baseRevision: base_revision, note, all }, requireActor(actor)),
+        .mutate("add", { ref, before, after, at, baseRevision: base_revision, note, overrideReason: override_reason, all }, requireActor(actor)),
     ),
 );
 

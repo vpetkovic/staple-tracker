@@ -475,6 +475,7 @@ describe("registered settings on /api/settings", () => {
       "machine.port:global",
       "queue.silentClaimMinutes:workspace",
       "machine.setupComplete:global",
+      "queue.requireEstimate:workspace",
       "machine.humanName:global",
     ]);
   });
@@ -489,6 +490,7 @@ describe("registered settings on /api/settings", () => {
       "kinds.appearance": { key: "kinds.appearance", scope: "workspace", value: {}, source: "default", version: 1 },
       "queue.policy": { key: "queue.policy", scope: "workspace", value: "advisory", source: "default", version: 1 },
       "queue.silentClaimMinutes": { key: "queue.silentClaimMinutes", scope: "workspace", value: 30, source: "default", version: 1 },
+      "queue.requireEstimate": { key: "queue.requireEstimate", scope: "workspace", value: false, source: "default", version: 1 },
       // The Analytics cost model (STA-575): its values are served, its definitions are not (edited on the ROI page).
       ...Object.fromEntries(
         (["roles", "roleMapping", "scenario", "solo", "company"] as const).map((part) => [
