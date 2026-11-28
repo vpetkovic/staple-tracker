@@ -32,7 +32,7 @@ The prefix is the first three letters of the directory name, in capitals: ticket
 a repository called `app` are `APP-1`, `APP-2`, and in `payments-service` they are
 `PAY-1`, `PAY-2`. [Planning](plan.md)'s horizons Now and Next take the first two numbers,
 so the first ticket you file is `APP-3`. If another repository on this machine already has
-a workspace called `app`, `init --yes` stops with a `conflict`. Name this one yourself with
+a workspace called `app`, `init --yes` stops with a `conflict` and writes nothing. Name this one yourself with
 `staple init --yes --slug <name>`, and staple picks a prefix no other workspace uses
 (`APPA`, for example).
 

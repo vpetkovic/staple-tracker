@@ -1,4 +1,5 @@
-import { existsSync } from "node:fs";
+import { existsSync, rmSync, rmdirSync } from "node:fs";
+import type { DatabaseSync } from "node:sqlite";
 import { basename, dirname, join, resolve } from "node:path";
 import { stapleHome } from "../config/home.js";
 import { openDb } from "./db.js";
@@ -126,6 +127,115 @@ export function findWorkspaceDb(startDir: string): string | null {
 }
 
 /**
+ * The slug and prefix a workspace that carries no stamp yet will claim: the registry row its
+ * manifest names, when that row is a placeholder, or a freshly allocated prefix. Reads only.
+ *
+ * A CLONE OF A WORKSPACE THE REGISTRY ALREADY LISTS TAKES THAT ROW, rather than
+ * minting a second identity for it (STA-283).
+ *
+ * ## The dead end this closes, which is the acceptance criterion's last step
+ *
+ * `adoptRegistry` lands a placeholder row for every listed workspace whose database is
+ * not here: real slug, real prefix, real `repository_id`, `path` absent. Getting the
+ * repository back is then `git clone` — and a clone carries the TRACKED
+ * `.staple/repository.json` and NOT the gitignored database, so the person runs
+ * `staple init` in it. Before this block, both of the things they could try failed:
+ *
+ *   - same-named clone: `allocatePrefix("website")` saw WEB held by the placeholder,
+ *     returned WEBA, and `register` then refused —
+ *     `error(conflict): Workspace "website" is registered with prefix WEB, not WEBA`.
+ *     A hard dead end, in the COMMON case.
+ *   - differently-named clone: init succeeded and minted prefix TRAA as a THIRD row, so
+ *     the machine held `tracker` (no database) and `tracker-checkout` (the real one)
+ *     for one repository — a duplicated identity, which `diffRegistry` then correctly
+ *     parks and refuses to publish.
+ *
+ * Measured, both of them, by running the whole path against a real Worker rather than
+ * by reasoning about it. `staple hub registry locate` cannot help here either: it
+ * repoints an EXISTING database, and a fresh clone does not have one.
+ *
+ * ## Why the manifest is the right key, and why this is not a guess
+ *
+ * The identity comes from `.staple/repository.json`, which `repo-identity.ts` is
+ * emphatic is the copy that survives cloning — so "this directory is that registry
+ * entry" is a fact read off a tracked file, not an inference from a name. The row is
+ * only taken when it has NO database of its own, which is what makes it a placeholder
+ * rather than a live workspace; a second live clone still gets its own row and is
+ * reported as a duplicate identity, exactly as before.
+ *
+ * The prefix in particular must come from here rather than from allocation: it is
+ * stamped into every `PREFIX-N` the lost machine ever wrote, and the whole registry
+ * refuses to renumber for that reason. Allocating a fresh one would silently orphan
+ * every identifier in the issue history.
+ */
+function identityToClaim(
+  hub: Hub,
+  dbPath: string,
+  slug: string,
+  explicitSlug: string | undefined,
+): { slug: string; prefix: string } {
+  const cloned = readWorkspaceManifest(dbPath)?.repositoryId ?? null;
+  const listed = cloned === null ? undefined : hub.findByRepositoryId(cloned);
+  if (listed && isAbsentRow(listed)) {
+    /**
+     * An explicit `--slug` that disagrees is REFUSED, not quietly overridden.
+     *
+     * Taking the row's name would ignore what they typed; taking their name would need
+     * the row's prefix under a different slug, which is the collision that started
+     * this. So it says which row it found and names both ways forward.
+     */
+    if (explicitSlug !== undefined && slugify(explicitSlug) !== listed.slug) {
+      throw new StapleError(
+        "conflict",
+        `This repository is already in the hub as "${listed.slug}" (prefix ${listed.prefix}), ` +
+          `listed by a registry this machine adopted, and you asked for ` +
+          `"${slugify(explicitSlug)}". Its identifiers are all ${listed.prefix}-N, so it ` +
+          `cannot be renumbered. Run \`staple init\` with no --slug to take that row, or ` +
+          `\`staple hub unregister ${listed.slug}\` first if you really want a new name — ` +
+          "which leaves the published entry pointing at a workspace this machine no longer has.",
+      );
+    }
+    return { slug: listed.slug, prefix: listed.prefix };
+  }
+  return { slug, prefix: hub.allocatePrefix(slug) };
+}
+
+/** What creating the database at `dbPath` will add to the disk, recorded before it does. */
+interface CreatedPaths {
+  /** The database and whichever of its SQLite side files are not already there. */
+  files: string[];
+  /** The directories `openDb`'s `mkdir -p` will make, deepest first. */
+  dirs: string[];
+}
+
+function pathsCreatedBy(dbPath: string): CreatedPaths {
+  const files = ["", "-wal", "-shm", "-journal"].map((suffix) => `${dbPath}${suffix}`).filter((f) => !existsSync(f));
+  const dirs: string[] = [];
+  for (let d = dirname(resolve(dbPath)); !existsSync(d) && dirname(d) !== d; d = dirname(d)) dirs.push(d);
+  return { files, dirs };
+}
+
+/**
+ * Remove exactly what creating a database added, each directory only if it is empty. Best
+ * effort: the error being thrown is the one that matters.
+ */
+function discardCreatedDatabase(db: DatabaseSync, made: CreatedPaths): void {
+  try {
+    db.close();
+  } catch {
+    // already closed
+  }
+  for (const file of made.files) rmSync(file, { force: true });
+  for (const dir of made.dirs) {
+    try {
+      rmdirSync(dir);
+    } catch {
+      break;
+    }
+  }
+}
+
+/**
  * Initialize a workspace: create the db, mint a hub-unique identifier prefix,
  * register it in the hub, and (repo workspaces only) drop the AGENTS.md protocol
  * guide beside the db. Idempotent — re-running refreshes registration and never
@@ -225,113 +335,77 @@ export function initWorkspace(options: {
     }
 
     const created = !existsSync(dbPath);
+    /**
+     * A NEW database is not made until the hub would take it. The registration refusal used to
+     * come after `openDb`, so a refused init left `.staple/staple.db` behind, and the retry the
+     * refusal invites (`--slug <other>`) found an existing file: it reported "Opened" and, with
+     * `created` false, never turned planning on. Asking first makes the refusal write nothing.
+     */
+    let claim: { slug: string; prefix: string } | null = null;
+    if (created) {
+      claim = identityToClaim(hub, dbPath, slug, options.slug);
+      hub.assertRegistrable({ slug: claim.slug, prefix: claim.prefix, path: dbPath });
+    }
+    const made = created ? pathsCreatedBy(dbPath) : null;
     const db = openDb(dbPath);
-    migrateWorkspace(db);
-    const probe = new WorkspaceStore(db, slug, "");
-
-    let prefix = readMeta(probe, "prefix");
-    let storedSlug = readMeta(probe, "slug") ?? slug;
-
-    /**
-     * A CLONE OF A WORKSPACE THE REGISTRY ALREADY LISTS TAKES THAT ROW, rather than
-     * minting a second identity for it (STA-283).
-     *
-     * ## The dead end this closes, which is the acceptance criterion's last step
-     *
-     * `adoptRegistry` lands a placeholder row for every listed workspace whose database is
-     * not here: real slug, real prefix, real `repository_id`, `path` absent. Getting the
-     * repository back is then `git clone` — and a clone carries the TRACKED
-     * `.staple/repository.json` and NOT the gitignored database, so the person runs
-     * `staple init` in it. Before this block, both of the things they could try failed:
-     *
-     *   - same-named clone: `allocatePrefix("website")` saw WEB held by the placeholder,
-     *     returned WEBA, and `register` then refused —
-     *     `error(conflict): Workspace "website" is registered with prefix WEB, not WEBA`.
-     *     A hard dead end, in the COMMON case.
-     *   - differently-named clone: init succeeded and minted prefix TRAA as a THIRD row, so
-     *     the machine held `tracker` (no database) and `tracker-checkout` (the real one)
-     *     for one repository — a duplicated identity, which `diffRegistry` then correctly
-     *     parks and refuses to publish.
-     *
-     * Measured, both of them, by running the whole path against a real Worker rather than
-     * by reasoning about it. `staple hub registry locate` cannot help here either: it
-     * repoints an EXISTING database, and a fresh clone does not have one.
-     *
-     * ## Why the manifest is the right key, and why this is not a guess
-     *
-     * The identity comes from `.staple/repository.json`, which `repo-identity.ts` is
-     * emphatic is the copy that survives cloning — so "this directory is that registry
-     * entry" is a fact read off a tracked file, not an inference from a name. The row is
-     * only taken when it has NO database of its own, which is what makes it a placeholder
-     * rather than a live workspace; a second live clone still gets its own row and is
-     * reported as a duplicate identity, exactly as before.
-     *
-     * The prefix in particular must come from here rather than from allocation: it is
-     * stamped into every `PREFIX-N` the lost machine ever wrote, and the whole registry
-     * refuses to renumber for that reason. Allocating a fresh one would silently orphan
-     * every identifier in the issue history.
-     */
-    if (!prefix) {
-      const cloned = readWorkspaceManifest(dbPath)?.repositoryId ?? null;
-      const listed = cloned === null ? undefined : hub.findByRepositoryId(cloned);
-      if (listed && isAbsentRow(listed)) {
-        /**
-         * An explicit `--slug` that disagrees is REFUSED, not quietly overridden.
-         *
-         * Taking the row's name would ignore what they typed; taking their name would need
-         * the row's prefix under a different slug, which is the collision that started
-         * this. So it says which row it found and names both ways forward.
-         */
-        if (options.slug !== undefined && slugify(options.slug) !== listed.slug) {
-          throw new StapleError(
-            "conflict",
-            `This repository is already in the hub as "${listed.slug}" (prefix ${listed.prefix}), ` +
-              `listed by a registry this machine adopted, and you asked for ` +
-              `"${slugify(options.slug)}". Its identifiers are all ${listed.prefix}-N, so it ` +
-              `cannot be renumbered. Run \`staple init\` with no --slug to take that row, or ` +
-              `\`staple hub unregister ${listed.slug}\` first if you really want a new name — ` +
-              "which leaves the published entry pointing at a workspace this machine no longer has.",
-          );
-        }
-        storedSlug = listed.slug;
-        prefix = listed.prefix;
-      }
-    }
-
-    if (!prefix) {
-      prefix = hub.allocatePrefix(storedSlug);
-    }
-    /**
-     * The stamp is ROLLED BACK if the registration refuses, or the directory becomes
-     * permanently un-initable.
-     *
-     * Pre-existing, and found while working here. The stamp lands in the workspace database
-     * and the registration in the hub, so a refusal used to leave the database carrying
-     * `slug`/`prefix` with no hub row — and the next `staple init` READS that stamp
-     * (`readMeta(probe, "prefix")`), so it re-offers the same losing pair and gets the same
-     * refusal. `staple init --slug anything-else` returns the identical original error,
-     * because the stored slug beats the argument. Reproduced on master: the database left
-     * holding `[('prefix','FIRA'), ('slug','first')]` and no way back except deleting it by
-     * hand.
-     *
-     * A compensating delete rather than one transaction, because there is no transaction
-     * that could span both: `probe.db` is the workspace's file and `hub` is a different
-     * database. So the rule is "only un-write what this call wrote" — `stampedHere` is
-     * false for a database that already carried a prefix, and those are left exactly alone.
-     */
-    const stampedHere = readMeta(probe, "prefix") === null;
-    if (stampedHere) {
-      writeMetaPairs(probe, [
-        ["slug", storedSlug],
-        ["prefix", prefix],
-      ]);
-    }
+    let prefix: string | null;
+    let storedSlug: string;
+    let probe: WorkspaceStore;
     try {
-      hub.register({ slug: storedSlug, prefix, path: dbPath, kind });
-    } catch (error) {
-      if (stampedHere) {
-        probe.db.prepare("DELETE FROM meta WHERE key IN ('slug', 'prefix')").run();
+      migrateWorkspace(db);
+      probe = new WorkspaceStore(db, slug, "");
+
+      prefix = readMeta(probe, "prefix");
+      storedSlug = readMeta(probe, "slug") ?? slug;
+
+      if (!prefix) {
+        // A database with no stamp: either the one this call just made (claimed above) or one
+        // that predates the stamp. See `identityToClaim` for the clone case.
+        const claimed = claim ?? identityToClaim(hub, dbPath, storedSlug, options.slug);
+        storedSlug = claimed.slug;
+        prefix = claimed.prefix;
       }
+      /**
+       * The stamp is ROLLED BACK if the registration refuses, or the directory becomes
+       * permanently un-initable.
+       *
+       * Pre-existing, and found while working here. The stamp lands in the workspace database
+       * and the registration in the hub, so a refusal used to leave the database carrying
+       * `slug`/`prefix` with no hub row — and the next `staple init` READS that stamp
+       * (`readMeta(probe, "prefix")`), so it re-offers the same losing pair and gets the same
+       * refusal. `staple init --slug anything-else` returns the identical original error,
+       * because the stored slug beats the argument. Reproduced on master: the database left
+       * holding `[('prefix','FIRA'), ('slug','first')]` and no way back except deleting it by
+       * hand.
+       *
+       * A compensating delete rather than one transaction, because there is no transaction
+       * that could span both: `probe.db` is the workspace's file and `hub` is a different
+       * database. So the rule is "only un-write what this call wrote" — `stampedHere` is
+       * false for a database that already carried a prefix, and those are left exactly alone.
+       */
+      const stampedHere = readMeta(probe, "prefix") === null;
+      if (stampedHere) {
+        writeMetaPairs(probe, [
+          ["slug", storedSlug],
+          ["prefix", prefix],
+        ]);
+      }
+      try {
+        hub.register({ slug: storedSlug, prefix, path: dbPath, kind });
+      } catch (error) {
+        if (stampedHere) {
+          probe.db.prepare("DELETE FROM meta WHERE key IN ('slug', 'prefix')").run();
+        }
+        throw error;
+      }
+    } catch (error) {
+      /**
+       * The safety net behind the check above, for a refusal it could not see coming (another
+       * process registering the slug in between, a migration that fails): a database this call
+       * made is removed with everything it brought, so the next init creates afresh. One that
+       * already existed is never touched here; the stamp rollback above is all it gets.
+       */
+      if (made) discardCreatedDatabase(db, made);
       throw error;
     }
     /**
