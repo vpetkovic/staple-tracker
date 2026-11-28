@@ -135,6 +135,9 @@ export class ProbeCache<T> {
 
   delete(key: string) { this.entries.delete(key); }
 
+  /** The next unforced check probes again; one already running is still the one answered. */
+  expire(key: string) { const entry = this.entries.get(key); if (entry) entry.probedAt = -Infinity; }
+
   private entry(key: string): Entry<T> {
     let entry = this.entries.get(key);
     if (!entry) this.entries.set(key, entry = { value: null, probedAt: -Infinity, inflight: null });

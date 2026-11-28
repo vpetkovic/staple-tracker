@@ -8,7 +8,7 @@ import type { GhRunner } from "../src/core/integrations/gh-process.js";
 import { GitHubCliAdapter } from "../src/core/integrations/github-cli.js";
 import { ProbeCache } from "../src/core/integrations/health.js";
 import { IntegrationOperations } from "../src/core/integrations/operations.js";
-import { branchDiscoveryNotice, type DiscoveryReport, rowPullRequests } from "../src/core/integrations/pr-discovery.js";
+import { branchDiscoveryNotice, discoveryOutcome, type DiscoveryReport, rowPullRequests } from "../src/core/integrations/pr-discovery.js";
 import { subtreePullRequests } from "../src/core/subtree-pull-requests.js";
 import { setTicketBranch, ticketBranch } from "../src/core/ticket-branch.js";
 import { StapleError } from "../src/core/types.js";
@@ -262,6 +262,37 @@ describe("why a ticket's branch has no pull request", () => {
     setTicketBranch(store, task.id, { branch: "feat/renamed" }, "ada");
     expect(notice(store, report, task.id)).toBeNull();
     expect(branchDiscoveryNotice(undefined, task.identifier, ticketBranch(store, task.id), 0)).toBeNull();
+    store.db.close();
+  });
+
+  it("does not blame a branch for another ticket's pull request that failed to read again", async () => {
+    const { store, service, details } = await setup(() => []);
+    await service.execute({ action: "map", connectionId: "work", containerId: "42", actor: "ada" });
+    const mine = store.createIssue({ title: "Mine" });
+    const other = store.createIssue({ title: "Linked by hand" });
+    setTicketBranch(store, mine.id, { branch: "feat/mine" }, "ada");
+    store.externalLinks().link(other.id, { ref: ref(12), key: "team/repo#12", url: "https://github.com/team/repo/pull/12" }, "ada");
+    details.mockRejectedValueOnce(new StapleError("unavailable", "GitHub resource is unavailable or not accessible"));
+    const report = (await service.execute({ action: "discover" })) as DiscoveryReport;
+    expect(report.failures).toHaveLength(1);
+    expect(notice(store, report, mine.id)).toEqual({ note: null, failures: [] });
+    store.db.close();
+  });
+
+  it("has an outcome that holds across runs that explain the same thing, and moves when the reason does", async () => {
+    const { store, service, forBranches } = await setup(() => []);
+    const task = store.createIssue({ title: "Outcome" });
+    setTicketBranch(store, task.id, { branch: "feat/x" }, "ada");
+    const unmapped = (await service.execute({ action: "discover" })) as DiscoveryReport;
+    await service.execute({ action: "map", connectionId: "work", containerId: "42", actor: "ada" });
+    const first = (await service.execute({ action: "discover" })) as DiscoveryReport;
+    const second = (await service.execute({ action: "discover" })) as DiscoveryReport;
+    expect(second).not.toBe(first);
+    expect(discoveryOutcome(second)).toBe(discoveryOutcome(first));
+    expect(discoveryOutcome(unmapped)).not.toBe(discoveryOutcome(first));
+    forBranches.mockRejectedValueOnce(new StapleError("forbidden", "GitHub denied access; check repository permissions and organization SSO"));
+    const denied = (await service.execute({ action: "discover" })) as DiscoveryReport;
+    expect(discoveryOutcome(denied)).not.toBe(discoveryOutcome(first));
     store.db.close();
   });
 });

@@ -51,17 +51,17 @@ describe("the line under a branch with no pull request", () => {
       branch,
       pullRequestDiscovery: {
         note: null,
-        failures: [{ message: "GitHub CLI is not signed in to github.com", action: "Run gh auth login --hostname github.com on the computer running Staple." }],
+        failures: [{ message: "Sign in to GitHub CLI on this machine for the configured host", action: "Run gh auth login --hostname github.com on the computer running Staple." }],
       },
     });
-    const expected = "No pull requests found for this branch. GitHub CLI is not signed in to github.com. Run gh auth login --hostname github.com on the computer running Staple.";
+    const expected = "No pull requests found for this branch. Sign in to GitHub CLI on this machine for the configured host. Run gh auth login --hostname github.com on the computer running Staple.";
     expect(line(render(d))).toBe(expected);
     expect(line(render(d, "sheet"))).toBe(expected);
   });
 
-  it("says nothing is mapped from the note, names a forbidden repository's action, and says only none was found otherwise", () => {
+  it("says only the note when nothing is mapped (it already says none was looked for), names a forbidden repository's action, and says only none was found otherwise", () => {
     const note = "No GitHub repository is mapped to this workspace, so no pull requests were looked for. Map one in Settings > Integrations.";
-    expect(line(render(detail({ branch, pullRequestDiscovery: { note, failures: [] } })))).toBe(`No pull requests found for this branch. ${note}`.replace(">", "&gt;"));
+    expect(line(render(detail({ branch, pullRequestDiscovery: { note, failures: [] } })))).toBe(note.replace(">", "&gt;"));
     const forbidden = detail({
       branch,
       pullRequestDiscovery: { note: null, failures: [{ message: "GitHub denied access; check repository permissions and organization SSO", action: "Check this account's repository access and organization SSO authorization." }] },

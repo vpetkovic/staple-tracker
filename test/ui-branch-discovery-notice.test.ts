@@ -24,8 +24,10 @@ let ui: UiHandle;
 let origin: string;
 let withBranch: string;
 let withoutBranch: string;
+let finished: string;
 
-const SIGNED_OUT = "GitHub CLI is not signed in to github.com.";
+// The words gh-process.ts maps a signed-out gh to.
+const SIGNED_OUT = "Sign in to GitHub CLI on this machine for the configured host";
 const forBranches = vi.fn(async () => {
   throw new StapleError("auth", SIGNED_OUT);
 });
@@ -53,6 +55,8 @@ beforeAll(async () => {
   try {
     withBranch = store.createIssue({ title: "Has a branch" }).identifier;
     withoutBranch = store.createIssue({ title: "No branch" }).identifier;
+    finished = store.createIssue({ title: "Finished on a branch" }).identifier;
+    setTicketBranch(store, finished, { branch: "feat/finished" }, CONTRACT_AGENT);
     store.updateIssue(withBranch, { status: "in_progress", assignee: CONTRACT_AGENT }, CONTRACT_AGENT);
     setTicketBranch(store, withBranch, { branch: "feat/notice" }, CONTRACT_AGENT);
     const ops = new IntegrationOperations(store, { home, factories });
@@ -89,8 +93,49 @@ describe("the ticket detail when no pull request was found for its branch", () =
     expect((await http("/api/poll")).fingerprint).toBe(after);
   });
 
-  it("says nothing on a ticket with no branch", async () => {
+  it("says nothing on a ticket with no branch, nor on one finished since the run", async () => {
     const detail = await http(`/api/issue?ws=app&ref=${withoutBranch}`);
     expect(detail).not.toHaveProperty("pullRequestDiscovery");
+    expect((await http(`/api/issue?ws=app&ref=${finished}`)).pullRequestDiscovery).toMatchObject({ failures: [{ message: SIGNED_OUT }] });
+    const done = await fetch(`${origin}/api/action`, {
+      method: "POST",
+      headers: { "x-staple-token": ui.token, "content-type": "application/json" },
+      body: JSON.stringify({ ws: "app", ref: finished, type: "status", status: "done", actor: CONTRACT_AGENT }),
+    });
+    expect(done.status, await done.text()).toBe(200);
+    expect(await http(`/api/issue?ws=app&ref=${finished}`)).not.toHaveProperty("pullRequestDiscovery");
+  });
+
+  it("looks again on the next poll once the connection is checked again, and the signed-out line goes", { timeout: 30_000 }, async () => {
+    forBranches.mockResolvedValue([]);
+    // A forced check younger than HEALTH_FORCE_FLOOR_MS (5 s) is answered from the cache; a
+    // person signing in to gh first is well past it.
+    await new Promise((resolve) => setTimeout(resolve, 5_100));
+    const checked = await fetch(`${origin}/api/integrations/read`, {
+      method: "POST",
+      headers: { "x-staple-token": ui.token, "content-type": "application/json" },
+      body: JSON.stringify({ ws: "app", action: "health", connectionId: "work", force: true }),
+    });
+    expect(checked.status, await checked.text()).toBe(200);
+    await http("/api/poll");
+    await vi.waitFor(async () => {
+      expect((await http(`/api/issue?ws=app&ref=${withBranch}`)).pullRequestDiscovery).toEqual({ note: null, failures: [] });
+    }, { timeout: 10_000, interval: 100 });
+    expect(forBranches).toHaveBeenCalledTimes(2);
+  });
+
+  it("holds the fingerprint across a run that explains the same thing again", async () => {
+    const mapped = await fetch(`${origin}/api/integrations/write`, {
+      method: "POST",
+      headers: { "x-staple-token": ui.token, "content-type": "application/json" },
+      body: JSON.stringify({ ws: "app", action: "map", connectionId: "work", containerId: "43", actor: "ada" }),
+    });
+    expect(mapped.status, await mapped.text()).toBe(200);
+    // This poll starts the run the mapping asked for; its fingerprint already carries the mapping.
+    const before = (await http("/api/poll")).fingerprint as string;
+    await vi.waitFor(() => expect(forBranches).toHaveBeenCalledTimes(4), { timeout: 10_000, interval: 50 });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect((await http("/api/issue?ws=app&ref=" + withBranch)).pullRequestDiscovery).toEqual({ note: null, failures: [] });
+    expect((await http("/api/poll")).fingerprint).toBe(before);
   });
 });
