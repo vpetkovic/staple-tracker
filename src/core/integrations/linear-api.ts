@@ -18,7 +18,7 @@ const identity = { viewer: z.object({ id: uuid, name: z.string().max(256).option
 const team = z.object({ id: uuid, key: slug, name: z.string().max(8192), organization: z.object({ id: uuid }) });
 const issue = z.object({ id: uuid, identifier: z.string().regex(/^[A-Za-z][A-Za-z0-9_]*-[1-9][0-9]*$/),
   title: z.string().max(8192), description: z.string().max(1_000_000).nullable(), url: z.string().max(8192),
-  state: z.object({ id: uuid, name: z.string().max(8192), type: z.string().max(64).optional() }), team, project: z.object({ id: uuid }).nullable().optional() });
+  state: z.object({ id: uuid, name: z.string().max(8192), type: z.unknown().optional() }), team, project: z.object({ id: uuid }).nullable().optional() });
 const project = z.object({ id: uuid, name: z.string().max(8192), url: z.string().max(8192) });
 const pageInfo = z.object({ hasNextPage: z.boolean(), endCursor: z.string().min(1).max(2048).nullable() });
 const IDENTITY = "viewer { id name } organization { id urlKey name }";

@@ -44,7 +44,7 @@ describe("read-only Linear API adapter",()=>{
     expect(JSON.parse(fetch.mock.calls.at(-1)![1]!.body as string).query).toContain("state { id name type }");
     for(const type of ["triage","backlog","unstarted","completed","canceled"])
       expect((await setup(()=>({issue:{...issue,state:{id:other,name:"S",type}}})).adapter.readIssue(ref)).status).toEqual({id:other,name:"S",category:type});
-    for(const state of [{id:other,name:"Odd",type:"paused"},{id:other,name:"Odd"}])
+    for(const state of [{id:other,name:"Odd",type:"paused"},{id:other,name:"Odd"},{id:other,name:"Odd",type:null},{id:other,name:"Odd",type:7},{id:other,name:"Odd",type:"x".repeat(100)}])
       expect((await setup(()=>({issue:{...issue,state}})).adapter.readIssue(ref)).status).toEqual({id:other,name:"Odd"});
   });
   it("normalizes equivalent uppercase configured and returned UUIDs",async()=>{
