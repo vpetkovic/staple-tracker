@@ -90,19 +90,25 @@ describe("the suite's packaged payload (STA-250)", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("is the only payload built while the suite runs: no other test file rebuilds one", () => {
-    // The test above covers reads. This one covers writes. The race this arrangement
-    // ended was `package-tarball` calling `buildPackage()` in its own `beforeAll`
-    // while `install-real-package` read the result from another worker: the two
-    // files shared a directory that one of them was writing. The payload every
-    // package suite reads is still one directory, so a build started from a test
-    // file that lands there, or anywhere else a test reads, brings the race back.
-    // Only the globalSetup builds the suite's payload. Two test files also build,
-    // each into a scratch directory of its own that nothing else reads: the
-    // builder's own tests, and this file, which runs the globalSetup again above.
-    // A new builder has to be added here on purpose.
+  it("is the only payload built while the suite runs: no other test file starts a package or views build", () => {
+    // The test above covers reads. This one covers writes. The package suites used to
+    // fail on a shifting subset of cases because one test file rebuilt the shared
+    // `dist-package/` while another read it from a parallel worker. Every package suite
+    // still reads one directory, the payload this run's globalSetup built. A package
+    // or views build started from a test file, landing there or anywhere else a test
+    // reads, would bring the race back.
+    //
+    // Three files start such a build on purpose:
+    //   - the globalSetup itself;
+    //   - the builder's own tests, each building into a scratch directory nothing else reads;
+    //   - this file, which runs the globalSetup again above. That builds a payload of
+    //     its own and rebuilds the views in place, which is safe only because the views
+    //     build replaces each file by rename, so a reader never sees half a file.
+    // A new builder has to be added here on purpose. This is a source scan: it sees
+    // the builders' names and the module paths that reach them, not every way a test
+    // could write into a directory.
     const builds =
-      /\bbuildPackage\b|scripts\/build-package|build-package\.(?:js|ts)\b|\bbuild:package\b|from\s+["'][^"']*setup\/package-payload(?:\.js)?["']/;
+      /\bbuild(?:Package|Views)\b|scripts\/build-(?:package|views)\b|["']build-(?:package|views)(?:\.[cm]?[jt]s)?["']|["']build:(?:package|views)["']|setup\/package-payload(?:\.[cm]?[jt]s)?["']/;
     const allowed = ["test/build-package.test.ts", "test/package-payload.test.ts", "test/setup/package-payload.ts"];
     const testFiles = [
       ...sourceFiles(join(REPO_ROOT, "test")),
@@ -112,6 +118,6 @@ describe("the suite's packaged payload (STA-250)", () => {
       .filter((file) => builds.test(readCode(file)))
       .map((file) => relative(REPO_ROOT, file))
       .filter((file) => !allowed.includes(file));
-    expect(builders).toEqual([]);
+    expect(builders, "these test files name a package or views builder; see the comment above").toEqual([]);
   });
 });
