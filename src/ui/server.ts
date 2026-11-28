@@ -1073,10 +1073,12 @@ export function startUiServer(options: UiOptions): UiHandle {
    * fingerprint carries the revision and an open detail refetches when the reason appears.
    */
   const lastDiscovery = new Map<string, { report: DiscoveryReport | undefined; outcome: string; revision: number }>();
+  // Before any run, nothing is explained: a first run that explains nothing leaves the fingerprint alone.
+  const NOTHING_EXPLAINED = discoveryOutcome({ tickets: [], linked: [], refreshed: 0, failures: [], note: null });
   function rememberDiscovery(dbPath: string, report: DiscoveryReport | undefined): void {
-    const outcome = report ? discoveryOutcome(report) : "";
-    const previous = lastDiscovery.get(dbPath);
-    lastDiscovery.set(dbPath, { report, outcome, revision: previous?.outcome === outcome ? previous.revision : (previous?.revision ?? 0) + 1 });
+    const outcome = report ? discoveryOutcome(report) : NOTHING_EXPLAINED;
+    const previous = lastDiscovery.get(dbPath) ?? { outcome: NOTHING_EXPLAINED, revision: 0 };
+    lastDiscovery.set(dbPath, { report, outcome, revision: previous.outcome === outcome ? previous.revision : previous.revision + 1 });
   }
   function forgetDiscovery(dbPath: string): void {
     if (lastDiscovery.get(dbPath)?.report) rememberDiscovery(dbPath, undefined);

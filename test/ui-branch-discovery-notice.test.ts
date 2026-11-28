@@ -57,7 +57,6 @@ beforeAll(async () => {
     withoutBranch = store.createIssue({ title: "No branch" }).identifier;
     finished = store.createIssue({ title: "Finished on a branch" }).identifier;
     setTicketBranch(store, finished, { branch: "feat/finished" }, CONTRACT_AGENT);
-    store.updateIssue(withBranch, { status: "in_progress", assignee: CONTRACT_AGENT }, CONTRACT_AGENT);
     setTicketBranch(store, withBranch, { branch: "feat/notice" }, CONTRACT_AGENT);
     const ops = new IntegrationOperations(store, { home, factories });
     await ops.execute({ action: "configure", connectionId: "work", host: "github.com", account: "ada" });
